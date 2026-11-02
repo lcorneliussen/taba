@@ -90,48 +90,49 @@ func openReviewRepo(c *wtc.Context, name string) (dir, slug, forge string, err e
 }
 
 func openReviewBundleRange(c *wtc.Context) (openReviewRange, bool, error) {
-	root := filepath.Join(c.Collection, ".wtc-reviews")
-	if info, err := os.Lstat(root); err == nil && !info.IsDir() {
-		return openReviewRange{}, false, errors.New("review bundle root must be a local directory")
-	}
-	entries, err := os.ReadDir(root)
-	if os.IsNotExist(err) {
-		return openReviewRange{}, false, nil
-	}
-	if err != nil {
-		return openReviewRange{}, false, err
-	}
 	type candidate struct {
 		m         wtc.ReviewManifest
 		modified  time.Time
 		dir, name string
 	}
 	latest := map[string]candidate{}
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	for _, root := range wtc.ReviewBundleRoots(c.Collection) {
+		if info, err := os.Lstat(root); err == nil && !info.IsDir() {
+			return openReviewRange{}, false, errors.New("review bundle root must be a local directory")
+		}
+		entries, err := os.ReadDir(root)
+		if os.IsNotExist(err) {
 			continue
 		}
-		path := filepath.Join(root, entry.Name(), "manifest.json")
-		info, err := os.Lstat(path)
-		if err != nil || !info.Mode().IsRegular() {
-			continue
+		if err != nil {
+			return openReviewRange{}, false, err
 		}
-		data, err := os.ReadFile(path)
-		var m wtc.ReviewManifest
-		if err != nil || json.Unmarshal(data, &m) != nil || m.Collection != filepath.Base(c.Collection) {
-			continue
-		}
-		dir, slug, forge, err := openReviewRepo(c, m.Repo)
-		if err != nil || !strings.EqualFold(m.Slug, slug) || m.Forge != forge {
-			continue
-		}
-		branch, err := openReviewGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
-		if err != nil || branch == "" || branch != m.HeadBranch {
-			continue
-		}
-		prior, ok := latest[dir]
-		if !ok || info.ModTime().After(prior.modified) || info.ModTime().Equal(prior.modified) && entry.Name() > prior.name {
-			latest[dir] = candidate{m, info.ModTime(), dir, entry.Name()}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(root, entry.Name(), "manifest.json")
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			data, err := os.ReadFile(path)
+			var m wtc.ReviewManifest
+			if err != nil || json.Unmarshal(data, &m) != nil || m.Collection != filepath.Base(c.Collection) {
+				continue
+			}
+			dir, slug, forge, err := openReviewRepo(c, m.Repo)
+			if err != nil || !strings.EqualFold(m.Slug, slug) || m.Forge != forge {
+				continue
+			}
+			branch, err := openReviewGit(dir, "symbolic-ref", "--quiet", "--short", "HEAD")
+			if err != nil || branch == "" || branch != m.HeadBranch {
+				continue
+			}
+			prior, ok := latest[dir]
+			if !ok || info.ModTime().After(prior.modified) || info.ModTime().Equal(prior.modified) && entry.Name() > prior.name {
+				latest[dir] = candidate{m, info.ModTime(), dir, entry.Name()}
+			}
 		}
 	}
 	if len(latest) > 1 {

@@ -196,7 +196,7 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 	}
 	if cid != "" {
 		for _, verdict := range []string{"pass", "pass-with-notes", "changes-requested", "error", "pending"} {
-			_ = os.Remove(reviewReceiptPath(c.Collection, manifest.Forge, manifest.Slug, manifest.PR, manifest.HeadSHA, cid, verdict))
+			removeReviewReceipts(c.Collection, manifest.Forge, manifest.Slug, manifest.PR, manifest.HeadSHA, cid, verdict)
 		}
 	}
 	body = reviewModeBody(body, manifest)

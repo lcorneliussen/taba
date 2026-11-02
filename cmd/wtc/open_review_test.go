@@ -476,3 +476,33 @@ func TestOpenIdleReviewRequiresExplicitRequest(t *testing.T) {
 		t.Fatalf("explicit review request lost its error: %v", err)
 	}
 }
+
+func TestOpenReviewPicksTheNewestBundleAcrossBothRoots(t *testing.T) {
+	c, _, _, _, _ := openTestFixture(t)
+	_, base, head := openReviewTestRepo(t, c)
+	legacy := openReviewTestBundle(t, c, "legacy", base, base)
+	if err := os.Chtimes(legacy, time.Unix(1, 0), time.Unix(1, 0)); err != nil {
+		t.Fatal(err)
+	}
+	moved := filepath.Join(c.Collection, ".taba-reviews", "alternate")
+	if err := os.MkdirAll(filepath.Dir(moved), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Dir(openReviewTestBundle(t, c, "alternate", base, head)), moved); err != nil {
+		t.Fatal(err)
+	}
+	r, found, err := openReviewBundleRange(c)
+	if err != nil || !found || !strings.Contains(r.source, "alternate") {
+		t.Fatalf("newest bundle not selected: %+v %v %v", r, found, err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(c.Collection, "elsewhere")); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(filepath.Dir(moved))
+	if err := os.Rename(filepath.Join(c.Collection, "elsewhere"), filepath.Dir(moved)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := openReviewBundleRange(c); err == nil {
+		t.Fatal("followed an external alternate bundle root")
+	}
+}

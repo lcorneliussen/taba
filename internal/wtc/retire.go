@@ -342,6 +342,7 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 		".wtc-catch-up.json", ".wtc-catch-up.json.md", ReviewModeFile,
 		".taba-prs", ".last-taba-status.yml", ".taba-status.json", ".taba-status.md",
 		".taba-catch-up.json", ".taba-catch-up.json.md",
+		".taba-review-mode", ".taba-runtime.lock", ".taba-status-watchers.lock",
 	}
 	if adHoc {
 		// An ad-hoc registry is remembered per user. Hand-written local
@@ -376,10 +377,6 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 				return err
 			}
 		}
-		// The pre-push hook of a review-only collection.
-		if err := os.RemoveAll(filepath.Join(wtcDir, "review-hooks")); err != nil {
-			return err
-		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
@@ -394,7 +391,8 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 		if !info.IsDir() {
 			continue // Linked roots and unknown files stay for inspection.
 		}
-		for _, generated := range []string{"instructions", "skills", "dev"} {
+		// review-hooks holds the pre-push hook of a review-only collection.
+		for _, generated := range []string{"instructions", "skills", "dev", "review-hooks"} {
 			if err := os.RemoveAll(filepath.Join(root, generated)); err != nil {
 				return err
 			}

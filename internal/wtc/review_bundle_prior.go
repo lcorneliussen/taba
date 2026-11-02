@@ -10,14 +10,14 @@ import (
 
 // copyReviewPrior supplies earlier rounds. Public bundles exclude private
 // rounds, while private bundles can use either kind as context.
-func copyReviewPrior(dir, root string, current ReviewManifest) error {
+func copyReviewPrior(dir, root string, current ReviewManifest, alternates ...string) error {
 	type previous struct {
 		path  string
 		round int
 	}
 	var earlier []previous
 	seenDirs := map[string]bool{}
-	for _, scan := range []string{root, filepath.Dir(dir)} {
+	for _, scan := range append(append([]string{root}, alternates...), filepath.Dir(dir)) {
 		if seenDirs[scan] {
 			continue
 		}

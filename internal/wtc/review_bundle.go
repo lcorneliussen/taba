@@ -289,7 +289,8 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	if err != nil {
 		return ReviewBundle{}, err
 	}
-	root := filepath.Join(c.Collection, ".wtc-reviews")
+	roots := ReviewBundleRoots(c.Collection)
+	root := roots[0]
 	customParent := ""
 	if opt.Dir != "" {
 		absoluteDir, err := filepath.Abs(opt.Dir)
@@ -300,7 +301,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	}
 	round := opt.Round
 	if round == 0 {
-		round = nextReviewRound(root, opt.Repo, opt.PR, branch, customParent)
+		round = nextReviewRound(root, opt.Repo, opt.PR, branch, customParent, roots[1])
 	}
 	if round < 1 {
 		return ReviewBundle{}, fmt.Errorf("round must be positive")
@@ -360,7 +361,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	if err != nil {
 		return ReviewBundle{}, err
 	}
-	if err := copyReviewPrior(dir, root, manifest); err != nil {
+	if err := copyReviewPrior(dir, root, manifest, roots[1]); err != nil {
 		return ReviewBundle{}, err
 	}
 	copyPublicReviewComments(dir, manifest)
@@ -373,6 +374,12 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	}
 	files := len(changedPaths)
 	return ReviewBundle{Dir: dir, Manifest: manifest, Files: files, Concerns: concerns, Related: related}, nil
+}
+
+// ReviewBundleRoots lists both bundle directories, the one new bundles use
+// first. Rounds and earlier reviews continue across them.
+func ReviewBundleRoots(collection string) []string {
+	return []string{filepath.Join(collection, ".wtc-reviews"), filepath.Join(collection, ".taba-reviews")}
 }
 
 func nextReviewRound(root, repo, pr, branch string, extra ...string) int {

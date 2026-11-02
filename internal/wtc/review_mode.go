@@ -16,6 +16,11 @@ import (
 // (resolving threads, undrafting) to the author.
 const ReviewModeFile = ".wtc-review-mode"
 
+// A marker under either spelling makes a collection review-only, and an
+// unreadable legacy marker falls through to the alternate. New markers use the
+// legacy name.
+var reviewModeNames = []string{ReviewModeFile, ".taba-review-mode"}
+
 // reviewPushPrefix is prepended to every push URL of a review-only worktree.
 // The rewritten URL names a path under /dev/null, so a push fails locally,
 // before any network access, with the reason in git's own error.
@@ -39,13 +44,16 @@ type ReviewMode struct {
 // ReadReviewMode reports the review mode of a collection. A marker that
 // cannot be parsed still makes the collection review-only.
 func ReadReviewMode(collection string) (ReviewMode, bool) {
-	data, err := os.ReadFile(filepath.Join(collection, ReviewModeFile))
-	if err != nil {
-		return ReviewMode{}, false
+	for _, name := range reviewModeNames {
+		data, err := os.ReadFile(filepath.Join(collection, name))
+		if err != nil {
+			continue
+		}
+		var mode ReviewMode
+		_ = json.Unmarshal(data, &mode)
+		return mode, true
 	}
-	var mode ReviewMode
-	_ = json.Unmarshal(data, &mode)
-	return mode, true
+	return ReviewMode{}, false
 }
 
 func writeReviewMode(collection string, mode ReviewMode) error {
