@@ -6,12 +6,17 @@ import (
 	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 )
 
 // RetiredMarkerFile marks a folder that retire emptied of worktrees but could
 // not delete. Other commands treat it as leftovers, never as a collection.
 const RetiredMarkerFile = ".wtc-retired"
+
+// Either spelling retires a folder: a marker must never fail open. Phase 0
+// still writes the legacy name.
+var retiredMarkerNames = []string{RetiredMarkerFile, ".taba-retired"}
 
 // CLIVersion is the running CLI's version, recorded in retire markers.
 var CLIVersion = "dev"
@@ -25,20 +30,33 @@ type RetiredMarker struct {
 
 // RetiredFolder reports whether dir carries a retire marker.
 func RetiredFolder(dir string) bool {
-	info, err := os.Lstat(filepath.Join(dir, RetiredMarkerFile))
-	return err == nil && info.Mode().IsRegular()
+	return retiredMarkerPath(dir) != ""
+}
+
+func retiredMarkerPath(dir string) string {
+	for _, name := range retiredMarkerNames {
+		path := filepath.Join(dir, name)
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			return path
+		}
+	}
+	return ""
 }
 
 // ReadRetiredMarker reads the marker of a retired folder. A marker that
 // cannot be parsed still marks the folder; its fields are then empty.
 func ReadRetiredMarker(dir string) (RetiredMarker, error) {
 	var marker RetiredMarker
-	data, err := os.ReadFile(filepath.Join(dir, RetiredMarkerFile))
+	path := retiredMarkerPath(dir)
+	if path == "" {
+		path = filepath.Join(dir, RetiredMarkerFile)
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return marker, err
 	}
 	if err := json.Unmarshal(data, &marker); err != nil {
-		return RetiredMarker{}, fmt.Errorf("unreadable %s: %w", RetiredMarkerFile, err)
+		return RetiredMarker{}, fmt.Errorf("unreadable %s: %w", filepath.Base(path), err)
 	}
 	return marker, nil
 }
@@ -82,7 +100,7 @@ func retireLeftovers(dir string) ([]string, error) {
 	}
 	leftovers := []string{}
 	for _, entry := range entries {
-		if entry.Name() != RetiredMarkerFile {
+		if !slices.Contains(retiredMarkerNames, entry.Name()) {
 			leftovers = append(leftovers, entry.Name())
 		}
 	}
@@ -130,8 +148,10 @@ func (c *Context) finishRetiredFolderLocked(target string) (RetireResult, error)
 		return result, err
 	}
 	if len(leftovers) == 0 {
-		if err := os.Remove(filepath.Join(target, RetiredMarkerFile)); err != nil {
-			return result, err
+		for _, name := range retiredMarkerNames {
+			if err := os.Remove(filepath.Join(target, name)); err != nil && !os.IsNotExist(err) {
+				return result, err
+			}
 		}
 		if err := os.Remove(target); err != nil {
 			// The folder survives, so it must stay marked as leftovers.

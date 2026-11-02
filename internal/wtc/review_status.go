@@ -110,7 +110,7 @@ func ParseReviewStatusComments(data []byte, pr int, head, forge, slug, collectio
 		}
 	}
 	if trusted && status.State == "current" {
-		if _, err := os.Stat(reviewReceiptPath(collection, forge, slug, strconv.Itoa(pr), status.ReviewHead, status.CommentID, status.Verdict)); err != nil {
+		if !reviewReceiptExists(collection, forge, slug, strconv.Itoa(pr), status.ReviewHead, status.CommentID, status.Verdict) {
 			status.State = "untrusted"
 		}
 	}
@@ -131,13 +131,35 @@ func SameReviewSHA(local, remote string) bool {
 	return len(local) >= 12 && len(remote) >= 12 && strings.HasPrefix(local, remote)
 }
 
-func reviewReceiptPath(collection string, fields ...string) string {
+// reviewReceiptPaths lists a receipt's location under each spelling, the one
+// phase 0 writes first. Either proves the post; revoking must clear both.
+func reviewReceiptPaths(collection string, fields ...string) []string {
 	h := sha256.New()
 	for _, field := range fields {
 		h.Write([]byte(field))
 		h.Write([]byte{0})
 	}
-	return filepath.Join(collection, ".wtc-review-posted", hex.EncodeToString(h.Sum(nil)))
+	name := hex.EncodeToString(h.Sum(nil))
+	return []string{filepath.Join(collection, ".wtc-review-posted", name), filepath.Join(collection, ".taba-review-posted", name)}
+}
+
+func reviewReceiptPath(collection string, fields ...string) string {
+	return reviewReceiptPaths(collection, fields...)[0]
+}
+
+func removeReviewReceipts(collection string, fields ...string) {
+	for _, path := range reviewReceiptPaths(collection, fields...) {
+		_ = os.Remove(path)
+	}
+}
+
+func reviewReceiptExists(collection string, fields ...string) bool {
+	for _, path := range reviewReceiptPaths(collection, fields...) {
+		if _, err := os.Stat(path); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Context) ReviewRepo(repo string) (worktree, slug, forge string, err error) {

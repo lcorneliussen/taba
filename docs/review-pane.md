@@ -11,14 +11,14 @@ After the viewer exits, `--add review` starts it again with a freshly resolved
 range; plain `wtc open` leaves the idle review pane at its prompt.
 
 The viewer prefers the newest applicable native `manifest.json` under the
-collection's `.wtc-reviews/` directory (manifest modification time, with directory
+collection's `.wtc-reviews/` or `.taba-reviews/` directory (manifest modification time, with directory
 name as a deterministic tie breaker). It must identify this collection, a
 checked-out sibling, the sibling's forge/repository, and its current branch.
 The manifest's source directory is ignored. The pinned base and head must be
 full commit IDs available locally; a matching bundle with unavailable objects
 produces an error. Other branches and foreign or malformed manifests are ignored.
 Bundles for multiple current siblings are ambiguous and produce an error.
-Custom bundle locations outside `.wtc-reviews/` are not searched.
+Custom bundle locations outside those directories are not searched.
 
 Without an applicable bundle, open reads current PR metadata for checked-out
 branches. Local enlistment selects a PR when present; otherwise the forge is

@@ -34,9 +34,31 @@ Catch-up has no cached-report reader: its default output remains
 Retirement recognizes both report names, `.taba-status.md`, and the alternate
 PR/status files as disposable collection state.
 
+## Review, retirement and watcher state
+
+| State | Legacy name | Alternate name | Rule |
+| --- | --- | --- | --- |
+| Review-only marker | `.wtc-review-mode` | `.taba-review-mode` | Either makes the collection review-only |
+| Retirement marker | `.wtc-retired` | `.taba-retired` | Either marks the folder retired |
+| Review bundles | `.wtc-reviews/` | `.taba-reviews/` | Both are read; new bundles go to the legacy directory |
+| Posted-review receipts | `.wtc-review-posted/` | `.taba-review-posted/` | Either proves a post; revoking clears both |
+| Status watcher leases | `.wtc-status-watchers/` | `.taba-status-watchers/` | Retirement stops both; new leases use the legacy directory |
+
+The two markers keep the safe outcome. A marker under either name takes effect,
+and an unparseable marker still counts. A broken legacy review marker falls
+through to the alternate, because either result stays review-only.
+
+Review rounds and earlier-round context continue across both bundle directories,
+and the review pane picks the newest applicable bundle from either. Retired
+folders also recognize `.taba-review-mode`, `.taba/review-hooks` and the
+alternate lock names as disposable.
+
+**Locks do not fork.** `.wtc-status-watchers.lock` stays the single lock every
+client takes, so old and new binaries exclude each other. A later rename phase
+must not move it while any supported client still uses it.
+
 [Collection directory inputs](rename-collection-directories.md) cover ad-hoc
 configuration, dev-build lookup and generated skill/instruction links under
-`.taba/`. Live runner identity, runtime and watcher locks, review-mode markers,
-review bundles and posted-review receipts remain separate phase-0 work. Skill
+`.taba/`. Runtime and local service state remain separate phase-0 work. Skill
 names, executable packaging and automatic migration belong to later rename
 phases.

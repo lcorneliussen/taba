@@ -13,6 +13,10 @@ import (
 
 const statusWatcherDir = ".wtc-status-watchers"
 
+// Retirement stops leases under either spelling. Phase 0 still registers under
+// the legacy name, and every client keeps sharing .wtc-status-watchers.lock.
+var statusWatcherDirs = []string{statusWatcherDir, ".taba-status-watchers"}
+
 // RegisterStatusWatcher binds a live view to its resolved collection, even when
 // launched from elsewhere or through a relative executable. Retirement marks
 // its lease to request cancellation and waits for cleanup to release the lock.
@@ -97,17 +101,31 @@ func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
 }
 
 func stopRegisteredStatusWatchers(target string) error {
-	dir := filepath.Join(target, statusWatcherDir)
-	info, err := os.Lstat(dir)
-	if os.IsNotExist(err) {
-		return nil
+	// Check every registry first, so a bad one stops nothing halfway.
+	var dirs []string
+	for _, name := range statusWatcherDirs {
+		dir := filepath.Join(target, name)
+		info, err := os.Lstat(dir)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("status watcher registry must be a directory")
+		}
+		dirs = append(dirs, dir)
 	}
-	if err != nil {
-		return err
+	for _, dir := range dirs {
+		if err := stopStatusWatcherRegistry(dir); err != nil {
+			return err
+		}
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("status watcher registry must be a directory")
-	}
+	return nil
+}
+
+func stopStatusWatcherRegistry(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
