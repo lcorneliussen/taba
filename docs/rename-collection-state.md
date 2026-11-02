@@ -58,8 +58,22 @@ writes those two lock names yet.
 client takes, so old and new binaries exclude each other. A later rename phase
 must not move it while any supported client still uses it.
 
+## Runtime and local services
+
+A collection has one runtime home holding its manifest, logs and local service
+declarations together. `.wtc/runtime` and `.wtc/svc` are selected when either
+holds state; otherwise `.taba/runtime` and `.taba/svc` are, when either does.
+A fresh collection uses `.wtc`. Empty directories do not count.
+
+State under both refuses runtime commands and retirement, because the other side
+may be a live runner, or services the selected side would hide. Retirement
+refuses before hooks run. Keep one side before continuing.
+
+`.wtc-runtime.lock` stays the one lock every client takes, wherever the state
+lives. A later rename phase must not move it while any supported client uses it.
+Retirement removes managed runtime and service state under either name.
+
 [Collection directory inputs](rename-collection-directories.md) cover ad-hoc
 configuration, dev-build lookup and generated skill/instruction links under
-`.taba/`. Runtime and local service state remain separate phase-0 work. Skill
-names, executable packaging and automatic migration belong to later rename
-phases.
+`.taba/`. Skill names, executable packaging and automatic migration belong to
+later rename phases.

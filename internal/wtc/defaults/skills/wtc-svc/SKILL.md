@@ -36,10 +36,10 @@ otherwise use `<repo>/web`.
    wtc svc add web --port-env WIDGET_PORT -- npm run dev
    ```
 
-   This writes this collection's `.wtc/svc/<repo>.yaml`, which is never
-   committed. Add `--shared` only when the user wants the service in the
-   repository for everyone; that changes `.harness/dekit.tasks.yaml`, a file
-   to commit and review like any other.
+   This writes `svc/<repo>.yaml` in this collection's runtime home, usually
+   `.wtc`, which is never committed. Add `--shared` only when the user wants
+   the service in the repository for everyone; that changes
+   `.harness/dekit.tasks.yaml`, a file to commit and review like any other.
 4. The command must read the port from that variable (or be given it); check
    the URL answers before reporting it.
 

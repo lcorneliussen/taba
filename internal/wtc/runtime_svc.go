@@ -185,6 +185,9 @@ func runtimeAddTask(tasks *yaml.Node, name string, value map[string]any) error {
 // runtimeChange edits a task file, checks that the collection's services
 // still render, and puts the file back when they do not.
 func (c *Context) runtimeChange(path string, edit func(tasks *yaml.Node) error) error {
+	if err := c.runtimeConflict(); err != nil {
+		return err
+	}
 	before, readErr := os.ReadFile(path)
 	if err := runtimeEditFragment(path, edit); err != nil {
 		return err
@@ -271,6 +274,9 @@ func (c *Context) AddService(opt ServiceOptions) (RuntimeResult, error) {
 // change.
 func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, error) {
 	defer c.signalServicesChanged()
+	if err := c.runtimeConflict(); err != nil {
+		return RuntimeResult{}, err
+	}
 	repo, name, err := c.runtimeServiceRepo(service, true)
 	if err != nil {
 		return RuntimeResult{}, err

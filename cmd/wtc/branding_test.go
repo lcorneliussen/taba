@@ -39,7 +39,7 @@ func TestInvocationBrandingAtCLIEntryPoint(t *testing.T) {
 				{[]string{"--help"}, []string{invocation.name + " [command]"}},
 				{[]string{"--version"}, []string{invocation.name + " version 0.1.60"}},
 				{[]string{"svc", "add", "--help"}, []string{
-					invocation.name + " svc add", invocation.name + " svc tunnel", ".wtc/svc/<repo>.yaml",
+					invocation.name + " svc add", invocation.name + " svc tunnel", "svc/<repo>.yaml",
 					invocation.name + " svc add web --port-env PORT -- npm run dev",
 					invocation.name + " svc add ext.app/api --port-env API_PORT --shared -- ./bin/dev",
 					invocation.name + ` svc add worker --ready-log "worker started" -- mise run worker`,

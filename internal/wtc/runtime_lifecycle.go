@@ -41,6 +41,7 @@ func runtimeDependencies(m *runtimeManifest, selected []runtimeTask) []runtimeTa
 	return result
 }
 
+// Every client takes the legacy lock, whichever namespace holds the runtime.
 func (c *Context) withRuntimeLock(fn func() error) error {
 	path := filepath.Join(c.Collection, ".wtc-runtime.lock")
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
@@ -657,6 +658,9 @@ func runtimeURLReachable(url string, budget time.Duration) bool {
 // An unconfirmed shutdown or failed teardown keeps the worktrees and record.
 func (c *Context) RetireRuntime() error {
 	defer c.signalServicesChanged()
+	if err := c.runtimeConflict(); err != nil {
+		return err
+	}
 	if _, err := os.Lstat(filepath.Join(c.runtimeRoot(), "manifest.json")); os.IsNotExist(err) {
 		return nil
 	}
