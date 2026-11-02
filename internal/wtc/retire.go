@@ -364,22 +364,6 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 	if err := removeManagedCollectionEntry(target); err != nil {
 		return err
 	}
-	wtcDir := filepath.Join(target, ".wtc")
-	if info, err := os.Lstat(wtcDir); err == nil && info.IsDir() {
-		if info, err := os.Lstat(filepath.Join(wtcDir, "runtime", "manifest.json")); err == nil && info.Mode().IsRegular() {
-			if err := os.RemoveAll(filepath.Join(wtcDir, "runtime")); err != nil {
-				return err
-			}
-		}
-		// Services enlisted with wtc svc belong to this collection alone.
-		if info, err := os.Lstat(filepath.Join(wtcDir, "svc")); err == nil && info.IsDir() {
-			if err := os.RemoveAll(filepath.Join(wtcDir, "svc")); err != nil {
-				return err
-			}
-		}
-	} else if err != nil && !os.IsNotExist(err) {
-		return err
-	}
 	for _, name := range []string{".wtc", ".taba"} {
 		root := filepath.Join(target, name)
 		info, err := os.Lstat(root)
@@ -390,6 +374,17 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 		}
 		if !info.IsDir() {
 			continue // Linked roots and unknown files stay for inspection.
+		}
+		if info, err := os.Lstat(filepath.Join(root, "runtime", "manifest.json")); err == nil && info.Mode().IsRegular() {
+			if err := os.RemoveAll(filepath.Join(root, "runtime")); err != nil {
+				return err
+			}
+		}
+		// Services enlisted with wtc svc belong to this collection alone.
+		if info, err := os.Lstat(filepath.Join(root, "svc")); err == nil && info.IsDir() {
+			if err := os.RemoveAll(filepath.Join(root, "svc")); err != nil {
+				return err
+			}
 		}
 		// review-hooks holds the pre-push hook of a review-only collection.
 		for _, generated := range []string{"instructions", "skills", "dev", "review-hooks"} {

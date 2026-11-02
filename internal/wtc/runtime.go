@@ -153,7 +153,50 @@ func (c *Context) runtimeRoot() string {
 	if resolved, err := filepath.EvalSymlinks(collection); err == nil {
 		collection = resolved
 	}
-	return filepath.Join(collection, ".wtc", "runtime")
+	return filepath.Join(collection, runtimeHome(collection), "runtime")
+}
+
+var runtimeNamespaces = []string{".wtc", ".taba"}
+
+// runtimeHome selects one namespace for the manifest, logs and local service
+// declarations together, so a collection has one runner. A fresh collection
+// uses the legacy name.
+func runtimeHome(collection string) string {
+	for _, namespace := range runtimeNamespaces {
+		if runtimeStateIn(collection, namespace) {
+			return namespace
+		}
+	}
+	return runtimeNamespaces[0]
+}
+
+// An empty directory holds no state: removing the last service leaves one.
+func runtimeStateIn(collection, namespace string) bool {
+	for _, name := range []string{"runtime", "svc"} {
+		path := filepath.Join(collection, namespace, name)
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil || !info.IsDir() {
+			return true
+		}
+		if entries, err := os.ReadDir(path); err != nil || len(entries) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimeConflict refuses state in both namespaces: the other side may be a
+// live runner or services the selected side would silently hide.
+func (c *Context) runtimeConflict() error {
+	for _, namespace := range runtimeNamespaces {
+		if !runtimeStateIn(c.Collection, namespace) {
+			return nil
+		}
+	}
+	return fmt.Errorf("runtime state exists under both %s and %s in %s; keep one before continuing", runtimeNamespaces[0], runtimeNamespaces[1], c.Collection)
 }
 
 func runtimeRegular(path string) error {
@@ -168,7 +211,10 @@ func runtimeRegular(path string) error {
 }
 
 func (c *Context) runtimePathsSafe() error {
-	for _, path := range []string{filepath.Join(c.Collection, ".wtc"), c.runtimeRoot()} {
+	if err := c.runtimeConflict(); err != nil {
+		return err
+	}
+	for _, path := range []string{filepath.Dir(c.runtimeRoot()), c.runtimeRoot()} {
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {
 			continue

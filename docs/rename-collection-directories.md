@@ -42,8 +42,6 @@ keep the collection discoverable. Registry leaf links are removed locally;
 their targets, hand-written configuration and other namespaces are retained.
 Ad-hoc folders retain their existing reuse policy without a retirement marker.
 
-Runtime and service roots are not renamed or migrated by this increment; they
-still need coordinated compatibility work before phase 0 is complete. Review,
-retirement and watcher state are covered in
+Runtime, service, review, retirement and watcher state are covered in
 [collection state](rename-collection-state.md). Default-name migration and
 command packaging remain later phases.

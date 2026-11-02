@@ -173,7 +173,7 @@ func (c *Context) InspectRetirement(name string, transcripts []string) (Retireme
 	if len(report.Repos) == 0 {
 		report.Assessment.Unknowns = append(report.Assessment.Unknowns, "No inspectable Git worktrees found.")
 	}
-	for _, rel := range []string{"HANDOFF.md", ".wtc/runtime/manifest.json", ".wtc/svc", ".harness-backups"} {
+	for _, rel := range []string{"HANDOFF.md", ".wtc/runtime/manifest.json", ".wtc/svc", ".taba/runtime/manifest.json", ".taba/svc", ".harness-backups"} {
 		present, e := retirementMetadata(target, rel)
 		if e != nil {
 			report.Assessment.Unknowns = append(report.Assessment.Unknowns, "Cannot inspect local metadata: "+rel)
