@@ -14,8 +14,7 @@ import (
 // not delete. Other commands treat it as leftovers, never as a collection.
 const RetiredMarkerFile = ".wtc-retired"
 
-// Either spelling retires a folder: a marker must never fail open. Phase 0
-// still writes the legacy name.
+// Either spelling retires a folder. New markers use the legacy name.
 var retiredMarkerNames = []string{RetiredMarkerFile, ".taba-retired"}
 
 // CLIVersion is the running CLI's version, recorded in retire markers.
@@ -89,7 +88,15 @@ func retiredAncestor(dir string) string {
 }
 
 func retiredFolderError(dir string) error {
-	return fmt.Errorf(branding.Text("%s holds the leftovers of a retired collection (see %s); run `{{command}} retire %s` once they are gone"), dir, RetiredMarkerFile, filepath.Base(dir))
+	return fmt.Errorf(branding.Text("%s holds the leftovers of a retired collection (see %s); run `{{command}} retire %s` once they are gone"), dir, retiredMarkerName(dir), filepath.Base(dir))
+}
+
+// retiredMarkerName names the marker a diagnostic should point at.
+func retiredMarkerName(dir string) string {
+	if path := retiredMarkerPath(dir); path != "" {
+		return filepath.Base(path)
+	}
+	return RetiredMarkerFile
 }
 
 // retireLeftovers lists what keeps a folder alive, except the marker itself.
@@ -130,11 +137,11 @@ func (c *Context) finishRetiredFolderLocked(target string) (RetireResult, error)
 		return result, err
 	}
 	if _, err := os.Lstat(filepath.Join(target, ".git")); err == nil {
-		return result, fmt.Errorf("%s carries %s but is a Git checkout itself; inspect it before retiring", target, RetiredMarkerFile)
+		return result, fmt.Errorf("%s carries %s but is a Git checkout itself; inspect it before retiring", target, retiredMarkerName(target))
 	}
 	for _, entry := range entries {
 		if _, err := os.Lstat(filepath.Join(target, entry.Name(), ".git")); entry.Name() == "harness" || err == nil {
-			return result, fmt.Errorf("%s carries %s but holds %s again; inspect it before retiring", target, RetiredMarkerFile, entry.Name())
+			return result, fmt.Errorf("%s carries %s but holds %s again; inspect it before retiring", target, retiredMarkerName(target), entry.Name())
 		}
 	}
 	if err := stopRetiredStatusWatchers(target); err != nil {

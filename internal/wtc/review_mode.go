@@ -16,9 +16,9 @@ import (
 // (resolving threads, undrafting) to the author.
 const ReviewModeFile = ".wtc-review-mode"
 
-// Either spelling makes a collection review-only, and a broken legacy marker
-// may fall through to the alternate: both directions keep the mode closed.
-// Phase 0 still writes the legacy name.
+// A marker under either spelling makes a collection review-only, and an
+// unreadable legacy marker falls through to the alternate. New markers use the
+// legacy name.
 var reviewModeNames = []string{ReviewModeFile, ".taba-review-mode"}
 
 // reviewPushPrefix is prepended to every push URL of a review-only worktree.

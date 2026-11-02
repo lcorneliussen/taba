@@ -132,7 +132,7 @@ func SameReviewSHA(local, remote string) bool {
 }
 
 // reviewReceiptPaths lists a receipt's location under each spelling, the one
-// phase 0 writes first. Either proves the post; revoking must clear both.
+// new receipts use first. Either proves the post; revoking must clear both.
 func reviewReceiptPaths(collection string, fields ...string) []string {
 	h := sha256.New()
 	for _, field := range fields {

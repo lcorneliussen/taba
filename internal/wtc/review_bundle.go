@@ -376,7 +376,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	return ReviewBundle{Dir: dir, Manifest: manifest, Files: files, Concerns: concerns, Related: related}, nil
 }
 
-// ReviewBundleRoots lists both bundle directories, the one phase 0 writes
+// ReviewBundleRoots lists both bundle directories, the one new bundles use
 // first. Rounds and earlier reviews continue across them.
 func ReviewBundleRoots(collection string) []string {
 	return []string{filepath.Join(collection, ".wtc-reviews"), filepath.Join(collection, ".taba-reviews")}

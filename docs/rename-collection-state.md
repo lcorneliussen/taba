@@ -44,14 +44,15 @@ PR/status files as disposable collection state.
 | Posted-review receipts | `.wtc-review-posted/` | `.taba-review-posted/` | Either proves a post; revoking clears both |
 | Status watcher leases | `.wtc-status-watchers/` | `.taba-status-watchers/` | Retirement stops both; new leases use the legacy directory |
 
-The two markers keep the safe outcome. A marker under either name takes effect,
-and an unparseable marker still counts. A broken legacy review marker falls
-through to the alternate, because either result stays review-only.
+A marker under either name takes effect, and an unparseable marker still
+counts. An unreadable legacy review marker falls through to the alternate.
+With no readable marker at all, a collection is not review-only, as before.
 
 Review rounds and earlier-round context continue across both bundle directories,
 and the review pane picks the newest applicable bundle from either. Retired
-folders also recognize `.taba-review-mode`, `.taba/review-hooks` and the
-alternate lock names as disposable.
+folders also treat `.taba-review-mode`, `.taba/review-hooks`,
+`.taba-status-watchers.lock` and `.taba-runtime.lock` as disposable. Nothing
+writes those two lock names yet.
 
 **Locks do not fork.** `.wtc-status-watchers.lock` stays the single lock every
 client takes, so old and new binaries exclude each other. A later rename phase

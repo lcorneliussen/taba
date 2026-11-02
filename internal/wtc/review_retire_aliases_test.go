@@ -3,6 +3,7 @@ package wtc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -58,6 +59,9 @@ func TestRetiredMarkerUnderEitherName(t *testing.T) {
 	}
 	if marker, err := ReadRetiredMarker(dir); err != nil || marker.CLIVersion != "alias" {
 		t.Fatalf("alternate marker unread: %+v %v", marker, err)
+	}
+	if err := retiredFolderError(dir); !strings.Contains(err.Error(), ".taba-retired") {
+		t.Fatalf("diagnostic must name the marker found: %v", err)
 	}
 	if leftovers, err := retireLeftovers(dir); err != nil || len(leftovers) != 0 {
 		t.Fatalf("a marker is no leftover: %v %v", leftovers, err)

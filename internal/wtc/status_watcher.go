@@ -13,8 +13,8 @@ import (
 
 const statusWatcherDir = ".wtc-status-watchers"
 
-// Retirement stops leases under either spelling. Phase 0 still registers under
-// the legacy name, and every client keeps sharing .wtc-status-watchers.lock.
+// Retirement stops leases under either spelling. New leases use the legacy
+// name, and every client keeps sharing .wtc-status-watchers.lock.
 var statusWatcherDirs = []string{statusWatcherDir, ".taba-status-watchers"}
 
 // RegisterStatusWatcher binds a live view to its resolved collection, even when
@@ -101,7 +101,7 @@ func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
 }
 
 func stopRegisteredStatusWatchers(target string) error {
-	// Check every registry first, so a bad one stops nothing halfway.
+	// Reject a malformed registry before stopping any lease.
 	var dirs []string
 	for _, name := range statusWatcherDirs {
 		dir := filepath.Join(target, name)
