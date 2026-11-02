@@ -62,7 +62,7 @@ func addRuntimeCommands(root *cobra.Command, asJSON *bool) {
 their tunnels and resources, run by this collection's dekit runner.
 
 A repository shares services in its committed .harness/dekit.tasks.yaml. {{command}} svc
-add and {{command}} svc tunnel write this collection's own .wtc/svc/<repo>.yaml unless
+add and {{command}} svc tunnel write svc/<repo>.yaml in this collection's runtime home unless
 --shared is given; that file is never committed and goes with the collection.
 
   {{command}} svc                          list services, tunnels and resources

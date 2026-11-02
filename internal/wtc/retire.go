@@ -199,6 +199,10 @@ func (c *Context) retirePreflight(opt RetireOptions) (RetireResult, []retireWork
 		return result, nil, err
 	}
 	result.Collection = target
+	// Refuse before hooks run or the workspace closes.
+	if err := targetContext.runtimeConflict(); err != nil {
+		return result, nil, err
+	}
 	worktrees, problems, err := inspectRetireWorktrees(target)
 	if err != nil {
 		return result, nil, err

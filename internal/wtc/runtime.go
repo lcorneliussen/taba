@@ -170,7 +170,8 @@ func runtimeHome(collection string) string {
 	return runtimeNamespaces[0]
 }
 
-// An empty directory holds no state: removing the last service leaves one.
+// An empty directory holds no state: rolling back a refused first service
+// leaves one.
 func runtimeStateIn(collection, namespace string) bool {
 	for _, name := range []string{"runtime", "svc"} {
 		path := filepath.Join(collection, namespace, name)

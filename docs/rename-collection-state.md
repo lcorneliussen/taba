@@ -66,8 +66,8 @@ holds state; otherwise `.taba/runtime` and `.taba/svc` are, when either does.
 A fresh collection uses `.wtc`. Empty directories do not count.
 
 State under both refuses runtime commands and retirement, because the other side
-may be a live runner, or services the selected side would hide. Keep one side
-before continuing. Runtime commands name the affected collection.
+may be a live runner, or services the selected side would hide. Retirement
+refuses before hooks run. Keep one side before continuing.
 
 `.wtc-runtime.lock` stays the one lock every client takes, wherever the state
 lives. A later rename phase must not move it while any supported client uses it.
@@ -75,5 +75,5 @@ Retirement removes managed runtime and service state under either name.
 
 [Collection directory inputs](rename-collection-directories.md) cover ad-hoc
 configuration, dev-build lookup and generated skill/instruction links under
-`.taba/`. Skill names, executable packaging and automatic migration belong to later rename
-phases.
+`.taba/`. Skill names, executable packaging and automatic migration belong to
+later rename phases.

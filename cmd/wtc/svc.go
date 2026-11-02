@@ -37,8 +37,8 @@ func addServiceCommands(svc *cobra.Command, asJSON *bool) {
 	add := &cobra.Command{Use: "add <service> -- <command>...", Short: "Enlist a service and start it",
 		Long: branding.Text(`Enlist a long-running command as a service of a repository and start it.
 
-The service goes into this collection's .wtc/svc/<repo>.yaml, which is never
-committed; --shared writes the repository's .harness/dekit.tasks.yaml instead,
+The service goes into svc/<repo>.yaml in this collection's runtime home, which is
+never committed; --shared writes the repository's .harness/dekit.tasks.yaml instead,
 for everyone who works on it. The command runs in the repository with the
 collection environment. Give the variable holding its port with --port-env:
 status then shows its local URL, it counts as ready once the port answers,

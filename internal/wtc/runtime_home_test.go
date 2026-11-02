@@ -107,3 +107,40 @@ func TestRuntimeRunsAndRetiresFromAlternateHome(t *testing.T) {
 		t.Fatalf("alternate runtime survived retirement: %v", err)
 	}
 }
+
+func TestRetirementRefusesBothRuntimeHomesBeforeHooks(t *testing.T) {
+	c, target := retirementFixture(t)
+	fixtureFile(t, filepath.Join(target, ".wtc/svc/app.yaml"), "tasks: {}\n", 0644)
+	fixtureFile(t, filepath.Join(target, ".taba/runtime/manifest.json"), "{}", 0644)
+	if _, _, err := c.retirePreflight(RetireOptions{Name: filepath.Base(target), Force: true}); err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("preflight accepted two runtime homes: %v", err)
+	}
+}
+
+func TestRetirementAssessmentReportsAlternateRuntimeState(t *testing.T) {
+	c, target := retirementFixture(t)
+	fixtureFile(t, filepath.Join(target, ".taba/svc/app.yaml"), "tasks: {}\n", 0644)
+	report, err := c.InspectRetirement(filepath.Base(target), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(report.Assessment.Unknowns, " "), ".taba/svc") {
+		t.Fatalf("alternate services unreported: %+v", report.Assessment)
+	}
+}
+
+func TestRetirementCleanupCoversBothRuntimeHomes(t *testing.T) {
+	target := t.TempDir()
+	for _, namespace := range runtimeNamespaces {
+		fixtureFile(t, filepath.Join(target, namespace, "runtime", "manifest.json"), "{}", 0644)
+		fixtureFile(t, filepath.Join(target, namespace, "svc", "app.yaml"), "tasks: {}\n", 0644)
+	}
+	if err := removeRetiredGeneratedFiles(target, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, namespace := range runtimeNamespaces {
+		if _, err := os.Lstat(filepath.Join(target, namespace)); !os.IsNotExist(err) {
+			t.Fatalf("%s survived: %v", namespace, err)
+		}
+	}
+}

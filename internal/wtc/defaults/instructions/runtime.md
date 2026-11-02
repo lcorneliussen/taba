@@ -105,8 +105,9 @@ letter for status). WTC strips that metadata before passing the task to dekit;
 dekit does not expand shell variables in argv or a literal `ready.http` string.
 
 A collection can add its own services and tunnels without changing the
-repository: `wtc svc add` and `wtc svc tunnel` write `.wtc/svc/<repo>.yaml` at
-the collection root, read together with the committed file and never
+repository: `wtc svc add` and `wtc svc tunnel` write `svc/<repo>.yaml` in the
+collection's runtime home (`.wtc`, or `.taba` where it already holds this
+state), read together with the committed file and never
 committed. `--shared` writes the committed file instead.
 
 WTC prefixes paths with the worktree directory: `widget/web/server` and
