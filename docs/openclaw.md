@@ -696,16 +696,20 @@ gateway's container: it exits non-zero when a required check fails.
 
 ## Upgrade
 
-In place, on the gateway's host: no new gateway, no restart, and the
-configuration and people's connected accounts stay as they are. A gateway
-built by CI/CD upgrades with a new image instead (above).
+Upgrade in place on the gateway's host. Keep the existing gateway,
+configuration and people's connected accounts; the plugin normally reloads
+without a gateway restart. A gateway built by CI/CD upgrades with a new
+image instead (above).
 
 1. **`wtc`**: replace the binary the way it was installed, with the new
    release.
 2. **Its plugin**: `wtc openclaw install` again. It replaces the plugin with
-   the one embedded in the new `wtc` and reloads it in the running gateway.
-   Reload open Control UI tabs to get the new card. Until this step, the
-   Collection panel says that the plugin and the gateway's `wtc` differ.
+   the one embedded in the new `wtc` and normally reloads it in the running
+   gateway. If it reports that installation succeeded but the gateway did
+   not reload the plugin, follow its instruction to restart the gateway.
+   In either case, reload open Control UI tabs to get the new card. Until
+   this step, the Collection panel says that the plugin and the gateway's
+   `wtc` differ.
 3. **openclaw-bitbucket**, when its release notes call for it: install the new
    tag over the old one and reload it.
 
