@@ -274,6 +274,9 @@ func (c *Context) AddService(opt ServiceOptions) (RuntimeResult, error) {
 // change.
 func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, error) {
 	defer c.signalServicesChanged()
+	if err := c.runtimeConflict(); err != nil {
+		return RuntimeResult{}, err
+	}
 	repo, name, err := c.runtimeServiceRepo(service, true)
 	if err != nil {
 		return RuntimeResult{}, err

@@ -266,9 +266,9 @@ terminal colors are disabled.
 No `wtc start` runtime command is introduced; the session orientation skill
 keeps its existing meaning.
 
-Service logs are append files under `.wtc/runtime/logs/<repo>/<task>.log`,
-available after `down`. Hook logs live under
-`.wtc/runtime/hook-logs/<repo>/provision.log` and `teardown.log`; agents can read
+Service logs are append files under `runtime/logs/<repo>/<task>.log` in the
+runtime home, available after `down`. Hook logs live under
+`runtime/hook-logs/<repo>/provision.log` and `teardown.log` there; agents can read
 those files directly. They can contain application secrets, so keep them local.
 For the native interactive console, run `wtc svc dekit -- attach`; it uses
 the pinned binary, this collection's runner and its environment. Native `why`

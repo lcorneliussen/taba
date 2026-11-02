@@ -144,3 +144,20 @@ func TestRetirementCleanupCoversBothRuntimeHomes(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceRemovalRefusesBothRuntimeHomesBeforeEditing(t *testing.T) {
+	c := runtimeFixture(t)
+	shared := filepath.Join(c.Collection, "widget", ".harness", "dekit.tasks.yaml")
+	before, err := os.ReadFile(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, filepath.Join(c.Collection, ".wtc/svc/widget.yaml"), "tasks: {}\n", 0644)
+	fixtureFile(t, filepath.Join(c.Collection, ".taba/runtime/manifest.json"), "{}", 0644)
+	if _, err := c.RemoveService("web", true); err == nil || !strings.Contains(err.Error(), "both") {
+		t.Fatalf("removal accepted two runtime homes: %v", err)
+	}
+	if after, _ := os.ReadFile(shared); string(after) != string(before) {
+		t.Fatal("refused removal edited the task file")
+	}
+}
