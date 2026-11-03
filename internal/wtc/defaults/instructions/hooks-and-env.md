@@ -104,7 +104,7 @@ agent shell command sees repo-pinned tools on PATH, independent of cwd:
 | `wtc agent-env` | trusts sibling `mise.toml` files, caches bins as `.env.toolchain`, prints `export PATH=…` |
 | `hooks/agent-env.json` | SessionStart refreshes the cache; PreToolUse wraps `Bash` / `run_terminal_command` with inline exports from `wtc agent-env --wrap` |
 | collection-root `.envrc` | Grok `load_envrc` (and direnv) prepend PATH without needing project hook trust |
-| `wtc open` | new herdr workspaces get `WTC_TOOLCHAIN_PATH` at create time |
+| `wtc open` | new herdr workspaces get `WTC_TOOLCHAIN_PATH` and `TABA_TOOLCHAIN_PATH` at create time |
 
 ### Why the toolchain is applied after shell startup
 

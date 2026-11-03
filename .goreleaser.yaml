@@ -28,3 +28,26 @@ archives:
     name_template: 'taba_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 checksum:
   name_template: checksums.txt
+# `brew install lcorneliussen/taba/taba` installs both names. The release
+# workflow pushes the formula to the tap over SSH with a write deploy key.
+brews:
+  - name: taba
+    ids: [taba]
+    repository:
+      owner: lcorneliussen
+      name: homebrew-taba
+      git:
+        url: git@github.com:lcorneliussen/homebrew-taba.git
+        private_key: "{{ .Env.HOMEBREW_TAP_SSH_PRIVATE_KEY }}"
+    directory: Formula
+    # A prerelease tag must not replace the stable formula.
+    skip_upload: auto
+    homepage: https://taba.sh
+    description: "Worktree collections for working across repositories, with agents or your editor (formerly wtc)"
+    license: MIT
+    install: |
+      bin.install "taba"
+      bin.install "wtc"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/taba --version")
+      assert_match version.to_s, shell_output("#{bin}/wtc --version")
