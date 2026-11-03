@@ -28,10 +28,25 @@ For example, where a command currently reads `WTC_FORGE_CACHE_AGE`, it also acce
 - In settings files, the last assignment of each spelling wins. The files remain literal assignment files; shell substitutions are never executed by these readers.
 - When both spellings in a source are set differently, the process warns once per setting, naming the variables and the chosen spelling. Warnings go to stderr and never include values. JSON output stays on stdout.
 
-New-prefix defaults can be written in the existing `wtc.env` file. A separate [configuration-input increment](rename-config-inputs.md) accepts `taba.env` when `wtc.env` is absent; the same source and variable precedence rules apply. The generated `.env.collection` reader also recognizes `TABA_CONFIG_ROOT`, although generation continues to emit `WTC_CONFIG_ROOT`.
+New-prefix defaults can be written in the existing `wtc.env` file. A separate [configuration-input increment](rename-config-inputs.md) accepts `taba.env` when `wtc.env` is absent; the same source and variable precedence rules apply. The generated `.env.collection` reader also recognizes `TABA_CONFIG_ROOT`.
 
-## This increment keeps existing output names
+## Generated environments carry both names
 
-Generated environments, hook variables, toolchain caches, internal gateway/retirement transport, and review-statistics transport continue to use their existing names. Development controls (`WTC_DEV_*`) and test controls (`WTC_TEST_*`) are not aliased. No directories, harness pins, skills, binaries, repositories, or plugin IDs are renamed by this change.
+From the first taba release ([#202](https://github.com/lcorneliussen/wtc-cli/issues/202)), every generated `WTC_` setting is also written as `TABA_` with the same value:
 
-Persistent [configuration inputs](rename-config-inputs.md) and [collection-state readers](rename-collection-state.md) now have dual-name selection, and [invocation-aware command names](rename-invocation.md) prepare help and diagnostics for the second executable name. Runtime and other generated-state namespaces remain further phase-0 work. Emitting both environment prefixes belongs to the first taba release, as tracked in [#202](https://github.com/lcorneliussen/wtc-cli/issues/202).
+- `.env.collection`: `COLLECTION`, `AGENT_NAME` and `CONFIG_ROOT`, legacy spelling first;
+- `.env.toolchain` and the `wtc agent-env` shell snippet that agent hooks prepend: `TOOLCHAIN_PATH`;
+- harness and status-build hooks: `COLLECTION` and `CONFIG_ROOT`;
+- new herdr workspaces: `AGENT_NAME` and `TOOLCHAIN_PATH`.
+
+`COLLECTION_PORT_BASE` and `<REPO>_PORT` have no product prefix and are unchanged. Child processes get both spellings because readers prefer `TABA_`: a `TABA_COLLECTION` inherited from another collection's shell must not outlive the fresh `WTC_COLLECTION`.
+
+To override a generated value in `.env.collection.local`, set both spellings. A local `WTC_CONFIG_ROOT` alone is shadowed by the generated `TABA_CONFIG_ROOT`, and the CLI warns that the two differ.
+
+An older client that regenerates `.env.collection` writes only the `WTC_` lines again; this is harmless, as every reader accepts either spelling.
+
+## Names that stay
+
+The `WTC_AGENT_ENV=1` marker in the `wtc agent-env` snippet, hook payload fields, internal gateway/retirement transport (`WTC_RETIRE_*`) and review-statistics transport (`WTC_REVIEW_STATS_FILE`) keep their existing names; they pass between processes of one client and are not settings. Development controls (`WTC_DEV_*`) and test controls (`WTC_TEST_*`) are not aliased. No directories, harness pins, skills, repositories or plugin IDs are renamed by this change.
+
+Persistent [configuration inputs](rename-config-inputs.md) and [collection-state readers](rename-collection-state.md) have dual-name selection, and [invocation names](rename-invocation.md) cover the `taba` executable.

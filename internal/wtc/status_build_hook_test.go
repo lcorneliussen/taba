@@ -14,7 +14,9 @@ func TestStatusBuildHookAddsTipAndProductionFacts(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(hook), 0755); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("TABA_COLLECTION", "inherited-from-another-collection")
 	script := `#!/bin/sh
+[ -n "$WTC_COLLECTION" ] && [ "$TABA_COLLECTION" = "$WTC_COLLECTION" ] && [ "$TABA_CONFIG_ROOT" = "$WTC_CONFIG_ROOT" ] || exit 4
 body=$(cat)
 case "$body" in
   *'"tier":"tip"'*) printf '{"branch":"main","checks":"SUCCESS","build":"123","url":"https://example.invalid/123"}\n' ;;

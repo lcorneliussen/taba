@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/lcorneliussen/wtc-cli/internal/branding"
+	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +49,7 @@ func (c *Context) RunHook(event string, values map[string]string) error {
 	}
 	command := exec.Command(path)
 	command.Dir = c.Collection
-	command.Env = append(os.Environ(), "WTC_COLLECTION="+filepath.Base(c.Collection), "WTC_CONFIG_ROOT="+c.ConfigRoot)
+	command.Env = append(append(os.Environ(), envcompat.Both("WTC_COLLECTION", filepath.Base(c.Collection))...), envcompat.Both("WTC_CONFIG_ROOT", c.ConfigRoot)...)
 	command.Stdin = bytes.NewReader(payload)
 	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr

@@ -80,6 +80,17 @@ func Assignments(data []byte) map[string]string {
 	return values
 }
 
+// Both returns a generated setting under its legacy WTC_ name and its TABA_
+// name, legacy first. Generated environments and child processes carry both
+// spellings with one value: readers prefer TABA_, so a stale TABA_ value
+// inherited from another collection must never outlive a fresh WTC_ one.
+func Both(legacy, value string) []string {
+	if !strings.HasPrefix(legacy, "WTC_") {
+		panic("envcompat.Both: " + legacy + " is not a WTC_ setting")
+	}
+	return []string{legacy + "=" + value, "TABA_" + strings.TrimPrefix(legacy, "WTC_") + "=" + value}
+}
+
 // LookupMap reads settings previously parsed by Assignments.
 func LookupMap(name string, values map[string]string) (string, bool) {
 	return Lookup(name, func(key string) (string, bool) { value, ok := values[key]; return value, ok })
