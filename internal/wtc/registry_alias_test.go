@@ -228,3 +228,55 @@ func TestCheckoutPointsRenamedOwnerAtNewRemote(t *testing.T) {
 		t.Fatalf("checkout left origin at %s", got)
 	}
 }
+
+// In a sweep, a collection whose registry predates the rename must not keep
+// origin from following a later collection's renamed entry, and a selector
+// with the new name must still pick up an old alias folder.
+func TestCatchUpAllFollowsRenameAcrossCollections(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	t.Setenv("WTC_CONFIG_ROOT", c.ConfigRoot)
+	forge := filepath.Join(c.Workspace, "forge")
+	for _, name := range []string{"widget", "gadget"} {
+		fixtureGit(t, "clone", "-q", "--bare", filepath.Join(c.Workspace, "source-widget"), filepath.Join(forge, name))
+	}
+	owner := filepath.Join(c.Workspace, ".bare", "widget.git")
+	fixtureGit(t, "--git-dir="+owner, "remote", "set-url", "origin", "file://"+filepath.Join(forge, "widget"))
+	older, err := c.NewCollection(NewOptions{Slug: "a-older", Repos: []string{"widget"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := c.NewCollection(NewOptions{Slug: "b-newer", Repos: []string{"widget"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a-older keeps the registry from before the rename; it sorts first.
+	fixtureFile(t, filepath.Join(older.Collection, "harness", ".harness-repos.yml"), strings.ReplaceAll(string(mustRead(t, filepath.Join(older.Collection, "harness", ".harness-repos.yml"))), filepath.Join(c.Workspace, "source-widget"), "file://"+filepath.Join(forge, "widget")), 0644)
+	renameWidget(t, newer.Collection, "file://"+filepath.Join(forge, "gadget"))
+	renameWidget(t, c.Collection, "file://"+filepath.Join(forge, "gadget"))
+	main, err := OpenCollection(c.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixture's init hook leaves an untracked file, so the sweep reports
+	// the folder for its owner; that still counts as selected.
+	report, _ := main.CatchUp(CatchUpOptions{All: true, Repos: []string{"gadget"}})
+	if got := fixtureGit(t, "--git-dir="+owner, "remote", "get-url", "origin"); got != "file://"+filepath.Join(forge, "gadget") {
+		t.Fatalf("origin = %s after the sweep", got)
+	}
+	swept := false
+	for _, row := range report.Outcomes {
+		swept = swept || row.Kind == "repo" && row.Collection == "b-newer" && row.Repo == "widget"
+	}
+	if !swept {
+		t.Fatalf("--repos gadget skipped the alias folder: %+v", report.Outcomes)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
