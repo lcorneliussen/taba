@@ -117,16 +117,37 @@ func (c *Context) bareFor(name string) (string, error) {
 	return filepath.Join(c.Workspace, ".bare", repo.Name+".git"), nil
 }
 
-// syncOwnerOrigin points a shared owner's origin at the registry remote when
-// they name different repositories, as after a forge rename. Spelling
-// differences of one repository (SSH or HTTPS, a .git suffix) are left alone.
-// It reports whether origin changed.
+// remoteRepoParts splits a URL-form remote into its host and owner path and
+// the repository name. Local paths and unrecognised forms are not split.
+func remoteRepoParts(remote string) (place, name string, ok bool) {
+	remote = strings.TrimSpace(remote)
+	if !strings.Contains(remote, "://") && !scpRemote.MatchString(remote) {
+		return "", "", false
+	}
+	normalized := normalizeCatchUpRemote(remote)
+	i := strings.LastIndex(normalized, "/")
+	if i <= 0 || i == len(normalized)-1 {
+		return "", "", false
+	}
+	return strings.ToLower(normalized[:i]), normalized[i+1:], true
+}
+
+// syncOwnerOrigin points a shared owner's origin at the registry remote after
+// a forge rename: both are URLs on the same host and owner, and only the
+// repository name differs. Spellings of one repository (SSH or HTTPS, a .git
+// suffix) and deliberate differences such as a fork, a mirror or a local path
+// are left alone. It reports whether origin changed.
 func syncOwnerOrigin(owner string, repo Repo) (bool, error) {
 	if repo.Remote == "" || repo.Owner != "" {
 		return false, nil
 	}
 	current, err := gitOutput("--git-dir="+owner, "remote", "get-url", "origin")
-	if err != nil || normalizeCatchUpRemote(current) == normalizeCatchUpRemote(repo.Remote) {
+	if err != nil {
+		return false, nil
+	}
+	fromPlace, fromName, fromOK := remoteRepoParts(current)
+	toPlace, toName, toOK := remoteRepoParts(repo.Remote)
+	if !fromOK || !toOK || fromPlace != toPlace || strings.EqualFold(fromName, toName) {
 		return false, nil
 	}
 	if _, err := gitOutput("--git-dir="+owner, "remote", "set-url", "origin", repo.Remote); err != nil {

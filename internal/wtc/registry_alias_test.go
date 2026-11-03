@@ -34,8 +34,9 @@ func TestRegistryAliasKeepsRenamedRepositoryWorking(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The forge repository moves: same history, new remote.
-	moved := filepath.Join(c.Workspace, "source-gadget")
-	fixtureGit(t, "clone", "-q", filepath.Join(c.Workspace, "source-widget"), moved)
+	moved := "file://" + filepath.Join(c.Workspace, "source-gadget")
+	fixtureGit(t, "clone", "-q", filepath.Join(c.Workspace, "source-widget"), strings.TrimPrefix(moved, "file://"))
+	fixtureGit(t, "--git-dir="+filepath.Join(c.Workspace, ".bare", "widget.git"), "remote", "set-url", "origin", "file://"+filepath.Join(c.Workspace, "source-widget"))
 	renameWidget(t, old.Collection, moved)
 	renameWidget(t, c.Collection, moved)
 	configRoot := c.ConfigRoot
@@ -147,4 +148,27 @@ func sameFile(a, b string) bool {
 	x, errX := os.Stat(a)
 	y, errY := os.Stat(b)
 	return errX == nil && errY == nil && os.SameFile(x, y)
+}
+
+func TestOwnerOriginFollowsOnlyARenameInPlace(t *testing.T) {
+	for _, c := range []struct {
+		from, to string
+		want     bool
+	}{
+		{"git@github.com:org/wtc-site.git", "git@github.com:org/taba-site.git", true},
+		{"https://github.com/org/wtc-site", "git@github.com:org/taba-site.git", true},
+		{"git@github.com:org/taba-site.git", "https://github.com/org/taba-site", false},
+		{"git@github.com:fork/widget.git", "git@github.com:org/widget.git", false},
+		{"git@github.com:org/widget.git", "git@gitlab.com:org/gadget.git", false},
+		{"/srv/mirror/widget", "git@github.com:org/gadget.git", false},
+		{"git@github.com:org/widget.git", "/srv/gadget", false},
+	} {
+		owner := filepath.Join(t.TempDir(), "o.git")
+		fixtureGit(t, "init", "-q", "--bare", owner)
+		fixtureGit(t, "--git-dir="+owner, "remote", "add", "origin", c.from)
+		changed, err := syncOwnerOrigin(owner, Repo{Name: "x", Remote: c.to})
+		if err != nil || changed != c.want {
+			t.Errorf("%s -> %s: changed=%t err=%v, want %t", c.from, c.to, changed, err, c.want)
+		}
+	}
 }

@@ -71,8 +71,10 @@ forge repository moved:
 
 Existing collections keep their `wtc-cli/` folder, and every command accepts
 either name. The owner cloned as `.bare/wtc-cli.git` keeps serving all
-collections; it is never cloned again or moved. The next catch-up or checkout
-points its `origin` at the new remote and reports it once. Port variables are
+collections; it is never cloned again or moved. After a rename on the same
+forge host and owner, the next catch-up or checkout points its `origin` at the
+new remote and reports it once; a transfer to another owner needs a manual
+`git remote set-url`. Port variables are
 emitted under both names (`TABA_PORT` and `WTC_CLI_PORT`). New collections
 check the repository out as `taba/`, and `wtc status` marks old folders
 "renamed to taba". Remove an alias only when no collection uses the old folder
