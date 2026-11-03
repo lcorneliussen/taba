@@ -86,7 +86,7 @@ func TestReadDevBuildOnlyTrustsPrivateExecutables(t *testing.T) {
 
 func TestDevBuildSourceFindsWtcCheckout(t *testing.T) {
 	collection := t.TempDir()
-	for name, module := range map[string]string{"harness": "", "app": "example.invalid/app", "ext.wtc-cli": wtcModule} {
+	for name, module := range map[string]string{"harness": "", "app": "example.invalid/app", "ext.wtc-cli": cliModules[0]} {
 		dir := filepath.Join(collection, name)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)

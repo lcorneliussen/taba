@@ -1,0 +1,260 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"taba.sh/taba/internal/next"
+	"taba.sh/taba/internal/wtc"
+)
+
+func TestStatusNextActions(t *testing.T) {
+	r := wtc.StatusRepo{Collection: "task", Dir: "api", Worktree: "/synthetic/task/api", Next: &next.Step{Step: "return-to-tip", By: next.ByWTC, Key: "k", Reason: "The pull request merged", Command: []string{"wtc", "catch-up", "task", "--repos", "api"}}}
+	snapshot := wtc.StatusSnapshot{Collection: "task", Repos: []wtc.StatusRepo{r}}
+	if text := statusTable(snapshot, true, 100); !strings.Contains(text, "Return to tip") || !strings.Contains(text, r.Next.Reason) {
+		t.Fatal(text)
+	}
+	if _, err := statusNextCurrent(r, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	changed := r
+	changed.Next = nil
+	if _, err := statusNextCurrent(r, wtc.StatusSnapshot{Repos: []wtc.StatusRepo{changed}}); err == nil {
+		t.Fatal("a stale action ran after the checkout became dirty")
+	}
+	argv, ok := statusNextCommand(r)
+	if !ok || strings.Join(argv, " ") != "catch-up task --repos api --clean-only --idle-only" {
+		t.Fatal(argv, ok)
+	}
+	registered := r
+	registered.Repo = "service"
+	s := *r.Next
+	s.Command = []string{"wtc", "catch-up", "task", "--repos", "service"}
+	registered.Next = &s
+	if _, ok := statusNextCommand(registered); !ok {
+		t.Fatal("registry names can differ from sibling directories")
+	}
+	for _, approval := range []string{next.ApproveAgent, next.ApprovePerson} {
+		s := *r.Next
+		s.Approve = approval
+		changed.Next = &s
+		if _, ok := statusNextCommand(changed); ok {
+			t.Fatal("executed without required approval", approval)
+		}
+		if _, err := statusNextCurrent(r, wtc.StatusSnapshot{Repos: []wtc.StatusRepo{changed}}); err == nil {
+			t.Fatal("an approval change was not rechecked")
+		}
+	}
+	m := statusTUIModel{snapshot: snapshot, width: 100, height: 30}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	m = updated.(statusTUIModel)
+	if !m.showNext || !strings.Contains(m.View().Content, "Enter run or ask agent") {
+		t.Fatal(m.View().Content)
+	}
+	m.nextRunning = true
+	if _, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd != nil {
+		t.Fatal("a second execution started while the first was running")
+	}
+}
+
+func TestStatusNextExecution(t *testing.T) {
+	collection := filepath.Join(t.TempDir(), "task")
+	if err := os.MkdirAll(filepath.Join(collection, "harness"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(collection, "harness", ".harness-repos.yml"), []byte("repos:\n  - name: api\n    remote: https://github.com/example/api.git\n    default_ref: origin/main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := wtc.OpenCollection(collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := wtc.StatusRepo{Collection: "task", Dir: "api", Worktree: filepath.Join(collection, "api"), Next: &next.Step{Step: "catch-up", By: next.ByWTC, Key: "k", Command: []string{"wtc", "catch-up", "task", "--repos", "api"}}}
+	for _, state := range []string{"", "working", "blocked", "unknown"} {
+		t.Run("catch-up/"+state, func(t *testing.T) {
+			executed := false
+			run := statusNextRunner{
+				readStatus: func(*wtc.Context) (wtc.StatusSnapshot, error) {
+					return wtc.StatusSnapshot{Repos: []wtc.StatusRepo{r}}, nil
+				},
+				busy: func(*wtc.Context) (string, error) {
+					if state == "unknown" {
+						return "", errors.New("cannot read agent state")
+					}
+					return state, nil
+				},
+				command: func(owner *wtc.Context, argv []string) (string, error) {
+					executed = true
+					if owner.Collection != collection || strings.Join(argv, " ") != "catch-up task --repos api --clean-only --idle-only" {
+						t.Fatal(owner.Collection, argv)
+					}
+					return "caught up", nil
+				},
+			}
+			result := statusNextRunWith(c, r, run)().(statusNextDoneMsg)
+			if executed != (state == "") || (result.err == nil) != (state == "") {
+				t.Fatal(executed, result)
+			}
+			// Changing facts, even with the old key still selected, must
+			// reject the step before any execution or owner lookup.
+			run.readStatus = func(*wtc.Context) (wtc.StatusSnapshot, error) { return wtc.StatusSnapshot{}, nil }
+			executed = false
+			if result := statusNextRunWith(c, r, run)().(statusNextDoneMsg); result.err == nil || executed {
+				t.Fatal(result, executed)
+			}
+		})
+	}
+	for _, state := range []string{"idle", "working", "blocked", "unavailable"} {
+		t.Run("agent/"+state, func(t *testing.T) {
+			agent := r
+			agent.Next = &next.Step{Step: "fix-checks", By: next.ByAgent, Key: "agent", Skill: "wtc-follow", Reason: "checks failed"}
+			prompted := false
+			run := statusNextRunner{
+				readStatus: func(*wtc.Context) (wtc.StatusSnapshot, error) {
+					return wtc.StatusSnapshot{Repos: []wtc.StatusRepo{agent}}, nil
+				},
+				herdr: func(_ string, argv ...string) (openHerdrResponse, error) {
+					var response openHerdrResponse
+					if state == "unavailable" {
+						return response, errors.New("no herdr")
+					}
+					switch argv[0] {
+					case "workspace":
+						response.Result.Workspaces = []openWorkspaceInfo{{Label: "another", ID: "w0"}, {Label: "task", ID: "w1"}}
+					case "pane":
+						if argv[3] != "w1" {
+							t.Fatal(argv)
+						}
+						response.Result.Panes = []openPaneInfo{{Label: "agent", ID: "p1", Agent: "codex", AgentStatus: state}}
+					case "agent":
+						prompted = true
+						if argv[2] != "p1" || !strings.HasPrefix(argv[3], "/skill wtc-follow api:") {
+							t.Fatal(argv)
+						}
+					default:
+						t.Fatal(argv)
+					}
+					return response, nil
+				},
+			}
+			result := statusNextRunWith(c, agent, run)().(statusNextDoneMsg)
+			if result.err != nil || prompted != (state == "idle") || (!prompted && !strings.Contains(result.text, "/skill wtc-follow api:")) {
+				t.Fatal(result, prompted)
+			}
+		})
+	}
+	pr := r
+	pr.Next = &next.Step{Step: "merge-pr", By: next.ByPerson, Key: "pr"}
+	pr.PR = &wtc.StatusPRFacts{URL: "https://example.invalid/pr/1"}
+	opened := ""
+	run := statusNextRunner{
+		readStatus: func(*wtc.Context) (wtc.StatusSnapshot, error) {
+			return wtc.StatusSnapshot{Repos: []wtc.StatusRepo{pr}}, nil
+		},
+		openURL: func(url string) error { opened = url; return nil },
+	}
+	if result := statusNextRunWith(c, pr, run)().(statusNextDoneMsg); result.err != nil || opened != pr.PR.URL {
+		t.Fatal(result, opened)
+	}
+	pr.PR.URL, opened = "file:///synthetic/private", ""
+	if result := statusNextRunWith(c, pr, run)().(statusNextDoneMsg); result.err == nil || opened != "" {
+		t.Fatal(result, opened)
+	}
+	if result := statusNextRun(nil, r)().(statusNextDoneMsg); result.err == nil {
+		t.Fatal("nil context accepted")
+	}
+
+	m := statusTUIModel{snapshot: wtc.StatusSnapshot{Repos: []wtc.StatusRepo{r, r}}, selectedNext: 1, nextRunning: true}
+	updated, refresh := m.Update(statusNextDoneMsg{text: "caught up"})
+	m = updated.(statusTUIModel)
+	if m.nextRunning || !m.refreshing || refresh == nil || m.nextNotice != "caught up" {
+		t.Fatal(m, refresh)
+	}
+	updated, _ = m.Update(statusLoadedMsg{snapshot: wtc.StatusSnapshot{Repos: []wtc.StatusRepo{r}}})
+	if updated.(statusTUIModel).selectedNext != 0 {
+		t.Fatal("selection did not follow shrinking action list")
+	}
+}
+
+func TestStatusNextHandoffDestination(t *testing.T) {
+	c, rows := batchFixture(t)
+	author := openPaneInfo{ID: "author", Label: "agent", Agent: "codex", AgentStatus: "idle"}
+	reviewer := openPaneInfo{ID: "reviewer", Label: "review", Agent: "claude", AgentStatus: "idle", Focused: true}
+	for _, tc := range []struct {
+		name  string
+		panes []openPaneInfo
+		sent  bool
+		want  string
+	}{
+		{"focused reviewer", []openPaneInfo{reviewer, author}, true, "Sent to task / codex (author); completion pending"},
+		{"reviewer only", []openPaneInfo{reviewer}, false, "Cannot identify one author agent pane"},
+		{"ambiguous authors", []openPaneInfo{author, {ID: "second", Label: "agent", Agent: "claude", AgentStatus: "idle"}}, false, "Cannot identify one author agent pane"},
+		{"busy author", []openPaneInfo{{ID: "author", Label: "agent", Agent: "codex", AgentStatus: "working"}, reviewer}, false, "Author agent task / codex (author) is working"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sent := false
+			run := statusNextRunner{readStatus: func(*wtc.Context) (wtc.StatusSnapshot, error) { return wtc.StatusSnapshot{Repos: rows}, nil },
+				herdr: func(_ string, args ...string) (openHerdrResponse, error) {
+					var out openHerdrResponse
+					switch args[0] {
+					case "workspace":
+						out.Result.Workspaces = []openWorkspaceInfo{{ID: "w", Label: "task"}}
+					case "pane":
+						out.Result.Panes = tc.panes
+					case "agent":
+						if args[2] != "author" {
+							t.Fatal("wrong destination", args)
+						}
+						sent = true
+					default:
+						t.Fatal(args)
+					}
+					return out, nil
+				}}
+			result := statusNextBatch(context.Background(), c, rows[:2], run)().(statusNextDoneMsg)
+			if result.err != nil || sent != tc.sent || !strings.Contains(result.text, tc.want) {
+				t.Fatal(sent, result)
+			}
+			if !tc.sent && (len(result.pending) != 0 || strings.Contains(result.text, "handoff pending") || !strings.Contains(result.text, "Not sent")) {
+				t.Fatal("unsent work reported as pending", result)
+			}
+		})
+	}
+}
+
+func TestStatusNextCompactHintAndScrolling(t *testing.T) {
+	var rows []wtc.StatusRepo
+	for i := 0; i < 8; i++ {
+		rows = append(rows, wtc.StatusRepo{Collection: "task", Dir: fmt.Sprintf("repo%d", i), Next: &next.Step{Step: "commit", By: next.ByAgent, Key: fmt.Sprint(i), Reason: fmt.Sprintf("intended changes %d", i)}})
+	}
+	m := statusTUIModel{snapshot: wtc.StatusSnapshot{Collection: "task", Repos: rows}, width: 100, height: 12}
+	idle := ansi.Strip(strings.Join(m.contentLines(), "\n"))
+	if !strings.Contains(idle, "[n] Next · repo0: Commit changes") || strings.Contains(idle, "intended changes") || strings.Contains(idle, "Next actions") {
+		t.Fatal(idle)
+	}
+	updated, _ := m.Update(tea.KeyPressMsg(tea.Key{Code: 'n', Text: "n"}))
+	m = updated.(statusTUIModel)
+	if text := ansi.Strip(strings.Join(m.contentLines(), "\n")); !strings.Contains(text, "Local steps run here") || !strings.Contains(text, "owning collection's idle agent pane") {
+		t.Fatal(text)
+	}
+	for i := 1; i < len(rows); i++ {
+		updated, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+		m = updated.(statusTUIModel)
+		visible := ansi.Strip(m.View().Content)
+		if !strings.Contains(visible, fmt.Sprintf("› [ ] repo%d", i)) || !strings.Contains(visible, fmt.Sprintf("intended changes %d", i)) {
+			t.Fatalf("selected row %d hidden: %s", i, visible)
+		}
+	}
+	m.showNext = false
+	m.snapshot.ShowCollectionColumn = true
+	if text := ansi.Strip(strings.Join(m.contentLines(), "\n")); !strings.Contains(text, "task/repo0: Commit changes") {
+		t.Fatal(text)
+	}
+}

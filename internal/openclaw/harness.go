@@ -3,11 +3,11 @@ package openclaw
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"taba.sh/taba/internal/branding"
 )
 
 // PluginConfigKey is where the gateway keeps the wtc plugin's config.

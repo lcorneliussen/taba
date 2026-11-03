@@ -4,10 +4,10 @@
 
 Git worktree collections for working across repositories, with agents or your favorite editor.
 
-[![Latest release](https://img.shields.io/github/v/release/lcorneliussen/wtc-cli?label=release)](https://github.com/lcorneliussen/wtc-cli/releases)
-[![CI](https://github.com/lcorneliussen/wtc-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/lcorneliussen/wtc-cli/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/lcorneliussen/taba?label=release)](https://github.com/lcorneliussen/taba/releases)
+[![CI](https://github.com/lcorneliussen/taba/actions/workflows/ci.yml/badge.svg)](https://github.com/lcorneliussen/taba/actions/workflows/ci.yml)
 
-[Website and handbook](https://wtc.sh/) · [Getting started](https://wtc.sh/docs/getting-started/) · [Command reference](docs/commands.md) · [Releases](https://github.com/lcorneliussen/wtc-cli/releases)
+[Website and handbook](https://wtc.sh/) · [Getting started](https://wtc.sh/docs/getting-started/) · [Command reference](docs/commands.md) · [Releases](https://github.com/lcorneliussen/taba/releases)
 
 A **worktree collection** puts the repositories needed for one task in a single
 folder: your API, frontend, shared library, and optionally a project-owned
@@ -20,10 +20,10 @@ editor are optional.
 
 ## Install and try it
 
-You need Git and macOS or Linux. Download a [published binary](https://github.com/lcorneliussen/wtc-cli/releases), or use mise:
+You need Git and macOS or Linux. Download a [published binary](https://github.com/lcorneliussen/taba/releases), or use mise:
 
 ```sh
-mise use -g github:lcorneliussen/wtc-cli@0.1.60
+mise use -g github:lcorneliussen/taba@0.1.60
 wtc --version
 ```
 
@@ -68,4 +68,4 @@ Real commands against synthetic local repositories:
 | Understand a release or upgrade | [Release notes and upgrades](docs/release-notes.md), `wtc release-notes --since <old-pin>` |
 | Prepare for the taba rename | [Environment compatibility](docs/rename-compatibility.md), [configuration inputs](docs/rename-config-inputs.md), [command names](docs/rename-invocation.md), [rename announcement](https://taba.sh/wtc-is-now-taba/) |
 | Build, test, or contribute | [Development and validation](docs/development.md) |
-| Report a bug | [Issues](https://github.com/lcorneliussen/wtc-cli/issues) — include version, host mode, and a redacted reproduction |
+| Report a bug | [Issues](https://github.com/lcorneliussen/taba/issues) — include version, host mode, and a redacted reproduction |

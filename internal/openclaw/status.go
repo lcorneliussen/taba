@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/next"
+	"taba.sh/taba/internal/next"
 )
 
 // CollectionSchema names the JSON that describes a collection's checkouts. A

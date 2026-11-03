@@ -11,10 +11,10 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+	"taba.sh/taba/internal/branding"
 )
 
 // The unreleased directory always holds README.md, so the pattern matches

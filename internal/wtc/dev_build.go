@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
+	"taba.sh/taba/internal/branding"
 )
 
 // A collection may carry its own build of wtc, made from the wtc-cli checkout
@@ -20,7 +20,28 @@ import (
 // code under development without PATH changes, and fall back to the pinned
 // release once that has moved past the build.
 
-const wtcModule = "github.com/lcorneliussen/wtc-cli"
+// cliModules are the CLI's module paths: taba.sh/taba, and the path before
+// the rename for checkouts of older branches.
+var cliModules = []string{"taba.sh/taba", "github.com/lcorneliussen/wtc-cli"}
+
+func cliModule(gomod string) bool {
+	module := goModule(gomod)
+	for _, m := range cliModules {
+		if module == m {
+			return true
+		}
+	}
+	return false
+}
+
+// cliPackage is the main package to build: cmd/taba, or cmd/wtc before the
+// rename.
+func cliPackage(source string) string {
+	if info, err := os.Stat(filepath.Join(source, "cmd", "taba")); err == nil && info.IsDir() {
+		return "./cmd/taba"
+	}
+	return "./cmd/wtc"
+}
 
 // DevBuildDelegatedEnv is set on the dev build's environment when another wtc
 // handed over to it. It carries the version that stepped aside and prevents a
@@ -147,7 +168,7 @@ func DevBuildSource(collection string) (string, error) {
 			continue
 		}
 		dir := filepath.Join(collection, entry.Name())
-		if goModule(filepath.Join(dir, "go.mod")) == wtcModule {
+		if cliModule(filepath.Join(dir, "go.mod")) {
 			found = append(found, dir)
 		}
 	}
@@ -178,7 +199,7 @@ func goModule(path string) string {
 // InstallDevBuild builds source into the collection's dev build slot. The
 // binary is replaced atomically, so a running pane is never left without one.
 func InstallDevBuild(collection, source string) (*DevBuild, error) {
-	if goModule(filepath.Join(source, "go.mod")) != wtcModule {
+	if !cliModule(filepath.Join(source, "go.mod")) {
 		return nil, fmt.Errorf("%s is not a wtc-cli checkout", source)
 	}
 	describe, err := gitOutput("-C", source, "describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
@@ -197,7 +218,7 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 		return nil, err
 	}
 	tmp := filepath.Join(dir, ".wtc.tmp")
-	build := exec.Command("go", "build", "-ldflags", "-X main.version="+version, "-o", tmp, "./cmd/wtc")
+	build := exec.Command("go", "build", "-ldflags", "-X main.version="+version, "-o", tmp, cliPackage(source))
 	build.Dir = source
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
 	if err := build.Run(); err != nil {

@@ -14,14 +14,17 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
+	"taba.sh/taba/internal/branding"
 )
 
 // cliReleaseRepo is the GitHub repository that publishes wtc releases, and
 // cliMiseTool the mise tool a harness pin renders to.
 const (
-	cliReleaseRepo = "lcorneliussen/wtc-cli"
+	cliReleaseRepo = "lcorneliussen/taba"
 	cliMiseTool    = "github:" + cliReleaseRepo
+	// legacyCLIMiseTool is the pin key before the repository rename; GitHub
+	// redirects it, and 0.1.x binaries still render it.
+	legacyCLIMiseTool = "github:lcorneliussen/wtc-cli"
 )
 
 // UpgradeOptions selects the release a harness moves its pin to. An empty

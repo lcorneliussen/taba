@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/envcompat"
 )
 
 func statusBBMergeEventTime(raw []byte) string {

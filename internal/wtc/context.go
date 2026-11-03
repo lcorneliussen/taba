@@ -9,9 +9,9 @@ import (
 	"sort"
 
 	"github.com/BurntSushi/toml"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
 	"gopkg.in/yaml.v3"
+	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/envcompat"
 )
 
 // Repo is one registry entry. Aliases are earlier names of a renamed

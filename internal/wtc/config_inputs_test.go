@@ -67,7 +67,7 @@ func TestTabaHarnessConfigAndPinInputs(t *testing.T) {
 		t.Fatalf("alias config did not load: %v, %v", opened, err)
 	}
 	data, err := opened.RenderMise()
-	if err != nil || !strings.Contains(string(data), `"github:lcorneliussen/wtc-cli" = "0.1.54"`) {
+	if err != nil || !strings.Contains(string(data), `"github:lcorneliussen/taba" = "0.1.54"`) {
 		t.Fatalf("alias pin did not render: %s, %v", data, err)
 	}
 	for _, name := range []string{"wtc.toml", ".wtc-cli-version"} {
@@ -82,7 +82,7 @@ func TestTabaHarnessConfigAndPinInputs(t *testing.T) {
 		t.Fatalf("legacy config did not stay authoritative: %v, %v", opened, err)
 	}
 	data, err = opened.RenderMise()
-	if err != nil || !strings.Contains(string(data), `"github:lcorneliussen/wtc-cli" = "0.1.9"`) {
+	if err != nil || !strings.Contains(string(data), `"github:lcorneliussen/taba" = "0.1.9"`) {
 		t.Fatalf("legacy pin did not stay authoritative: %s, %v", data, err)
 	}
 }

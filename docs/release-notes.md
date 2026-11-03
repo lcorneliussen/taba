@@ -42,7 +42,7 @@ release. Run the **target binary** with `release-notes --since <old-pin>`: an
 old binary only contains its own archive and cannot fetch future notes.
 Download the published target binary without changing the harness pin first.
 For a binary that predates this command, read its [GitHub release
-notes](https://github.com/lcorneliussen/wtc-cli/releases).
+notes](https://github.com/lcorneliussen/taba/releases).
 
 Use the notes to decide which features need local adoption and which contract
 changes need tests. Compare local skills and instructions with the target's

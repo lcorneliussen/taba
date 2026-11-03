@@ -3,10 +3,10 @@ package envcompat
 
 import (
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"os"
 	"strings"
 	"sync"
+	"taba.sh/taba/internal/branding"
 )
 
 type lookupFunc func(string) (string, bool)

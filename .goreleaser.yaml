@@ -6,7 +6,7 @@ project_name: taba
 builds:
   - &build
     id: taba
-    main: ./cmd/wtc
+    main: ./cmd/taba
     binary: taba
     env:
       - CGO_ENABLED=0

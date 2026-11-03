@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/lcorneliussen/wtc-cli/internal/next"
+	"taba.sh/taba/internal/next"
 )
 
 // A local row's facts become its next step: pushing is the agent's here,

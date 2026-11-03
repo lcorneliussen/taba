@@ -2,9 +2,9 @@ package wtc
 
 import (
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"sort"
 	"strings"
+	"taba.sh/taba/internal/branding"
 )
 
 // StatusPRsByPriority keeps enlisted order within each visible group while
