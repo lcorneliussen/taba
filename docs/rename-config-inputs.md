@@ -32,7 +32,7 @@ An explicit `wtc upgrade` updates the selected pin and configuration **in place*
 
 For user config/data roots, the existing legacy directory likewise wins over an alternate directory. If neither exists, the default stays `wtc`; lookup does not create either directory. Explicit root overrides remain available when a particular location must be selected.
 
-Toolchain caches fingerprint the selected config path and contents, so switching filenames or selecting an older file cannot retain stale tool paths. Older caches without a fingerprint are rebuilt once. The generated `.env.toolchain` filename and `WTC_TOOLCHAIN_PATH` variable stay the same.
+Toolchain caches fingerprint the selected config path and contents, so switching filenames or selecting an older file cannot retain stale tool paths. Older caches without a fingerprint are rebuilt once. The generated `.env.toolchain` filename stays the same; from the first taba release it carries `TABA_TOOLCHAIN_PATH` beside `WTC_TOOLCHAIN_PATH`.
 
 ## Later increments
 

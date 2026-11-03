@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lcorneliussen/wtc-cli/internal/branding"
+	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
 	"github.com/lcorneliussen/wtc-cli/internal/wtc"
 )
 
@@ -195,9 +196,13 @@ func openCreateWorkspace(target *wtc.Context, session, name string) error {
 	}
 	path, err := target.AgentToolchainPath(true)
 	if err == nil && path != "" {
-		args = append(args, "--env", "WTC_TOOLCHAIN_PATH="+path)
+		for _, setting := range envcompat.Both("WTC_TOOLCHAIN_PATH", path) {
+			args = append(args, "--env", setting)
+		}
 	}
-	args = append(args, "--env", "WTC_AGENT_NAME="+openAgentName(session, name))
+	for _, setting := range envcompat.Both("WTC_AGENT_NAME", openAgentName(session, name)) {
+		args = append(args, "--env", setting)
+	}
 	_, err = openHerdr(session, args...)
 	return err
 }
