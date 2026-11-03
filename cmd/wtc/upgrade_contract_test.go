@@ -21,8 +21,10 @@ import (
 //     --since <from> --json` and decodes `{"data": [...]}` from stdout.
 //
 // Steps 1 and 2 reach GitHub through the old repository name, which works
-// only through GitHub's rename redirect and can only be checked against a
-// published release (see the release checklist). These tests pin what the
+// only through GitHub's rename redirect and stays unproven until a release is
+// published. Check it then with `gh api repos/<owner>/<old-repo>/releases/latest`
+// and `mise install github:<owner>/<old-repo>@<version>`, which must put both
+// `wtc` and `taba` on PATH. These tests pin what the
 // release itself must provide: an archive per OS and architecture whose root
 // holds `wtc` and `taba`, and a `wtc release-notes --json` that answers as
 // 0.1.x expects, on stdout, with nothing else there.
