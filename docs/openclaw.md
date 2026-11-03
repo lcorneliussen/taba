@@ -34,6 +34,14 @@ conversation per repository, for swarming, is an explicit choice:
 The branch prefix is fixed by OpenClaw. The name must be lowercase letters,
 digits and hyphens, at most 64 characters.
 
+## Host compatibility
+
+The plugin supports OpenClaw 2026.10.2 and later. On hosts with the asynchronous
+session SDK, collection discovery, PR watching and sandbox git authorization
+await `listSessionEntriesAsync` and `getSessionEntryAsync`. Older hosts use the
+legacy readers only when the corresponding async method is absent. A failed
+async read never retries synchronously or authorizes an action from stale data.
+
 ## What the agent runs
 
 | To | The agent runs | And then |
