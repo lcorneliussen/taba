@@ -199,6 +199,15 @@ func (c *Context) retirePreflight(opt RetireOptions) (RetireResult, []retireWork
 		return result, nil, err
 	}
 	result.Collection = target
+	// Harness-based leftovers need a guard after teardown; ad-hoc folders do not.
+	if !targetContext.AdHoc {
+		path := filepath.Join(target, RetiredMarkerFile)
+		if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+			return result, nil, fmt.Errorf("retirement blocked: %s is not a regular marker file", path)
+		} else if err != nil && !os.IsNotExist(err) {
+			return result, nil, err
+		}
+	}
 	// Refuse before hooks run or the workspace closes.
 	if err := targetContext.runtimeConflict(); err != nil {
 		return result, nil, err

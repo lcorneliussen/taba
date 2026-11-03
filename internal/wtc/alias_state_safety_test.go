@@ -54,7 +54,7 @@ func aliasSafetySnapshot(t *testing.T, root string) map[string]string {
 
 func TestAliasSafetyMalformedRetirementMarkersKeepGuard(t *testing.T) {
 	for _, valid := range retiredMarkerNames {
-		for _, kind := range []string{"directory", "symlink"} {
+		for _, kind := range []string{"directory", "empty-directory", "symlink"} {
 			t.Run(valid+"/"+kind, func(t *testing.T) {
 				target := filepath.Join(t.TempDir(), "retired")
 				fixtureFile(t, filepath.Join(target, valid), "{}", 0600)
@@ -64,8 +64,13 @@ func TestAliasSafetyMalformedRetirementMarkersKeepGuard(t *testing.T) {
 				}
 				outside := t.TempDir()
 				fixtureFile(t, filepath.Join(outside, "keep"), "untouched", 0600)
-				if kind == "directory" {
-					fixtureFile(t, filepath.Join(target, malformed, "keep"), "leftover", 0600)
+				if kind == "directory" || kind == "empty-directory" {
+					if err := os.MkdirAll(filepath.Join(target, malformed), 0755); err != nil {
+						t.Fatal(err)
+					}
+					if kind == "directory" {
+						fixtureFile(t, filepath.Join(target, malformed, "keep"), "leftover", 0600)
+					}
 				} else if err := os.Symlink(outside, filepath.Join(target, malformed)); err != nil {
 					t.Fatal(err)
 				}
@@ -205,5 +210,85 @@ func TestAliasSafetyNotifierRejectsLinkedMarker(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAliasSafetyFirstRetirementMarkerSlots(t *testing.T) {
+	for _, marker := range retiredMarkerNames {
+		for _, kind := range []string{"directory", "symlink", "dangling"} {
+			for _, force := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/force=%v", marker, kind, force), func(t *testing.T) {
+					c, target := retirementFixture(t)
+					outside := t.TempDir()
+					fixtureFile(t, filepath.Join(outside, "keep"), "untouched", 0600)
+					slot := filepath.Join(target, marker)
+					if kind == "directory" {
+						fixtureFile(t, filepath.Join(slot, "keep"), "leftover", 0600)
+					} else {
+						link := outside
+						if kind == "dangling" {
+							link = filepath.Join(outside, "missing")
+						}
+						if err := os.Symlink(link, slot); err != nil {
+							t.Fatal(err)
+						}
+					}
+					beforeSlot, beforeOutside := aliasSafetySnapshot(t, slot), aliasSafetySnapshot(t, outside)
+					opt := RetireOptions{Name: filepath.Base(target), Force: force}
+					if marker == RetiredMarkerFile {
+						before := retirementTree(t, c.Workspace)
+						self, err := OpenCollection(target)
+						if err != nil {
+							t.Fatal(err)
+						}
+						for name, operation := range map[string]func() error{
+							"preflight": func() error { _, err := c.RetirePreflight(opt); return err },
+							"retire":    func() error { _, err := c.RetireCollection(opt); return err },
+							"self-preflight": func() error {
+								_, err := self.RetirePreflight(RetireOptions{Name: opt.Name, Force: force, Self: true})
+								return err
+							},
+						} {
+							if err := operation(); err == nil {
+								t.Fatalf("%s accepted a blocked first marker", name)
+							}
+						}
+						if !reflect.DeepEqual(before, retirementTree(t, c.Workspace)) {
+							t.Fatal("refusal changed the active collection or owner")
+						}
+					} else {
+						if _, err := c.RetirePreflight(opt); err != nil {
+							t.Fatalf("free legacy slot was refused: %v", err)
+						}
+						if err := writeRetiredMarker(target, []string{marker}); err != nil {
+							t.Fatal(err)
+						}
+						if retiredMarkerPath(target) != filepath.Join(target, RetiredMarkerFile) {
+							t.Fatal("new guard did not use legacy slot")
+						}
+					}
+					if !reflect.DeepEqual(beforeSlot, aliasSafetySnapshot(t, slot)) || !reflect.DeepEqual(beforeOutside, aliasSafetySnapshot(t, outside)) {
+						t.Fatal("malformed marker or linked target changed")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestAliasSafetyAdHocRetirementDoesNotRequireMarkerSlot(t *testing.T) {
+	root := adHocFixture(t)
+	c := initAdHoc(t, filepath.Join(root, "task"))
+	outside := t.TempDir()
+	fixtureFile(t, filepath.Join(outside, "keep"), "untouched", 0600)
+	if err := os.Symlink(outside, filepath.Join(c.Collection, RetiredMarkerFile)); err != nil {
+		t.Fatal(err)
+	}
+	before := retirementTree(t, root)
+	if _, err := c.RetirePreflight(RetireOptions{Name: "task", Self: true, InPlace: true}); err != nil {
+		t.Fatalf("ad-hoc marker policy changed: %v", err)
+	}
+	if !reflect.DeepEqual(before, retirementTree(t, root)) {
+		t.Fatal("ad-hoc preflight changed state")
 	}
 }
