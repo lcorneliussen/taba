@@ -119,10 +119,10 @@ export function startSandboxGit({ host, port, run, openclaw, listSessionEntries,
     const id = projectionWorktreeId(container.workspaceDir);
     const agentId = String(container.sessionKey ?? "").match(/^agent:([^:]+):.+$/)?.[1];
     if (!id || !agentId) return { error: "this sandbox works on no managed worktree" };
-    const owners = [...listSessionEntries({ agentId })].filter((s) => s.entry?.worktree?.id === id);
+    const owners = [...(await listSessionEntries({ agentId }))].filter((s) => s.entry?.worktree?.id === id);
     if (owners.length !== 1) return { error: "no single session owns this sandbox's worktree" };
     const self = owners[0];
-    const { children } = collectionOf(agentId, self.sessionKey);
+    const { children } = await collectionOf(agentId, self.sessionKey);
     const repos = new Map();
     for (const { entry } of [self, ...children]) {
       const dir = worktreeOf(entry);

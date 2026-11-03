@@ -87,11 +87,11 @@ test("a sandbox container is served its session, cannot push, and delivers its b
       return { code: 1, stdout: "", stderr: "unexpected" };
     },
     openclaw: ["openclaw"],
-    listSessionEntries: ({ agentId }) => (agentId === "dev" ? [
+    listSessionEntries: async ({ agentId }) => (agentId === "dev" ? [
       { sessionKey: "s1", entry: { worktree: { id: "w1", branch: "openclaw/x" }, projectId: "api", workspaceDir: "/wt/api" } },
       { sessionKey: "s2", entry: { worktree: { id: "w2", branch: "openclaw/y" }, projectId: "api", workspaceDir: "/wt/other" } },
     ] : []),
-    collectionOf: () => ({ children: [] }),
+    collectionOf: async () => ({ children: [] }),
     worktreeOf: (entry) => entry?.workspaceDir ?? null,
   });
   try {
@@ -234,7 +234,7 @@ test("discovery refuses a container without an authenticated agent identity", as
 });
 
 test("discovery hides identity-provider diagnostics", async (t) => {
-  const fixture = projectService(t, { projectsByAgent: { dev: ["platform"] }, listSessionEntries: () => { throw new Error("credential=secret /fixture/private-config"); } });
+  const fixture = projectService(t, { projectsByAgent: { dev: ["platform"] }, listSessionEntries: async () => { throw new Error("credential=secret /fixture/private-config"); } });
   const response = await fetch(`${await fixture.url()}/wtc/projects`);
   assert.equal(response.status, 503);
   assert.deepEqual(await response.json(), { error: "gateway project metadata unavailable" });

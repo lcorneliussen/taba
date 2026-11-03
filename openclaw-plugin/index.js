@@ -375,13 +375,21 @@ export default {
       return { code: r.code ?? r.exitCode ?? null, stdout: String(r.stdout ?? ""), stderr: String(r.stderr ?? "") };
     };
 
+    // Older supported hosts expose only the legacy readers. Select by
+    // capability; a failed async read must never retry synchronously.
+    const sessions = api.runtime.agent.session;
+    const getSessionEntry = async (params) => typeof sessions.getSessionEntryAsync === "function"
+      ? sessions.getSessionEntryAsync(params) : sessions.getSessionEntry(params);
+    const listSessionEntries = async (params) => typeof sessions.listSessionEntriesAsync === "function"
+      ? sessions.listSessionEntriesAsync(params) : sessions.listSessionEntries(params);
+
     // The collection around a session: itself when it has repository
     // children; otherwise its parent's when it is a repository's own session
     // (it has a worktree). A new conversation has a parent too (the
     // dashboard's, often the main session) and no repositories yet: it is a
     // collection of its own, still empty.
-    const collectionOf = (agentId, sessionKey) => {
-      const all = [...api.runtime.agent.session.listSessionEntries({ agentId })];
+    const collectionOf = async (agentId, sessionKey) => {
+      const all = await listSessionEntries({ agentId });
       const entryOf = new Map(all.map((s) => [s.sessionKey, s.entry]));
       const childrenOf = (key) => all.filter((s) => s.entry?.parentSessionKey === key && worktreeOf(s.entry));
       let parentKey = sessionKey;
@@ -428,7 +436,6 @@ export default {
     };
 
     const stateDir = api.runtime.state.resolveStateDir(process.env);
-    const getSessionEntry = async (params) => api.runtime.agent.session.getSessionEntry(params);
 
     // Repositories from the accounts the person connected that the gateway
     // has no search for itself. GitHub's is the gateway's projects.searchRemote.
@@ -558,7 +565,7 @@ export default {
 
     // The collection a session is in, with what wtc status says about it.
     const loadCollection = async (agentId, sessionKey) => {
-      const { parentKey, parent, children } = collectionOf(agentId, sessionKey);
+      const { parentKey, parent, children } = await collectionOf(agentId, sessionKey);
       const result = {
         schema: "wtc.collection/v1",
         collection: { sessionKey: parentKey, label: parent?.label ?? parent?.displayName ?? null },
@@ -697,10 +704,13 @@ export default {
       polling = true;
       try {
         for (const c of watch.open()) {
-          const known = api.runtime.agent.session.listSessionEntries({ agentId: c.agentId }).some((s) => s.sessionKey === c.sessionKey);
+          const known = (await listSessionEntries({ agentId: c.agentId })).some((s) => s.sessionKey === c.sessionKey);
           if (!known) watch.forget(c.agentId, c.sessionKey);
           else await loadCollection(c.agentId, c.sessionKey).catch(() => {});
         }
+      } catch {
+        // Preserve watch membership when the session store is unavailable.
+        api.logger?.warn?.("wtc: pull-request watch could not read sessions; will retry next interval");
       } finally {
         polling = false;
       }
@@ -731,7 +741,7 @@ export default {
       if (op === "tunnel" && !group) return { ok: false, error: "name the service to tunnel to" };
       if (op === "tunnel" && !TUNNEL_PROGRAMS[provider]) return { ok: false, error: `the provider is one of ${Object.keys(TUNNEL_PROGRAMS).join(", ")}` };
       if (!action.sessionKey || !action.agentId) return { ok: false, error: "sessionKey and agentId are required" };
-      const { children } = collectionOf(action.agentId, action.sessionKey);
+      const { children } = await collectionOf(action.agentId, action.sessionKey);
       const name = op === "logs" ? collectionIdentity(children).task : children.map((c) => String(c.entry.worktree?.branch ?? "").replace(/^openclaw\//, "")).find(Boolean);
       if (!name) return { ok: false, error: "this session has no collection" };
       const argv = ["wtc", "svc", op, ...(group ? [group] : [])];
@@ -787,7 +797,7 @@ export default {
             projectsByAgent: sandboxGit.projectsByAgent,
             run,
             openclaw: onPath("openclaw") ? ["openclaw"] : [process.execPath, path.resolve(process.argv[1] ?? "")],
-            listSessionEntries: (params) => api.runtime.agent.session.listSessionEntries(params),
+            listSessionEntries,
             collectionOf,
             worktreeOf,
             logger: api.logger,
