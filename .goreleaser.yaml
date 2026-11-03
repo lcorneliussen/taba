@@ -1,9 +1,13 @@
 version: 2
-project_name: wtc
+project_name: taba
+# One program under two names: `taba`, and `wtc` for scripts, mise pins and
+# older `wtc upgrade` runs that still call it. The binary picks its display
+# name from argv[0] (internal/branding).
 builds:
-  - id: wtc
+  - &build
+    id: taba
     main: ./cmd/wtc
-    binary: wtc
+    binary: taba
     env:
       - CGO_ENABLED=0
     goos:
@@ -14,9 +18,13 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}}
+  - <<: *build
+    id: wtc
+    binary: wtc
 archives:
-  - id: wtc
+  - id: taba
+    ids: [taba, wtc]
     formats: [tar.gz]
-    name_template: 'wtc_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    name_template: 'taba_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 checksum:
   name_template: checksums.txt

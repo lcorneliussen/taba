@@ -35,6 +35,7 @@ func emit(v envelope, asJSON bool) error {
 }
 func main() {
 	handOverToDevBuild()
+	printRenameNotice(os.Stderr)
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, branding.Text("{{command}}:"), err)
 		os.Exit(1)

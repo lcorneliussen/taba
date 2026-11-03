@@ -8,7 +8,8 @@ took and why before changing anything.
 Read this from the binary you will run, `wtc docs setup.md`, so that it
 matches that version. Without wtc yet, install a
 [release](https://github.com/lcorneliussen/wtc-cli/releases) first: the
-`wtc_<version>_<os>_<arch>.tar.gz` for the machine, checked against
+`taba_<version>_<os>_<arch>.tar.gz` for the machine (`wtc_…` before the
+taba releases; it holds both `taba` and `wtc`), checked against
 `checksums.txt`, or `mise use -g github:lcorneliussen/wtc-cli@<version>`.
 
 ## 1. Where does wtc run?
