@@ -23,9 +23,10 @@ type renameNoticeInput struct {
 	hasTaba   bool
 }
 
-// renameNotice returns the one-line notice for a person typing `wtc`, or "".
-// Scripts, hooks, agents and machine-readable output never see it: it needs
-// stderr to be a terminal, and --json and shell completion skip it.
+// renameNotice returns the one-line notice for `wtc` run on a terminal, or "".
+// It needs stderr to be a terminal, so piped and captured runs skip it, as do
+// --json and shell completion. A hook run from an interactive command shares
+// that terminal; printRenameNotice keeps such nested calls quiet.
 func renameNotice(in renameNoticeInput) string {
 	if len(in.argv) == 0 || !in.stderrTTY {
 		return ""
@@ -55,12 +56,16 @@ func renameNotice(in renameNoticeInput) string {
 // printRenameNotice shows the notice at most once per command tree: hooks,
 // services and nested calls started from here inherit the silencing variable.
 func printRenameNotice(w io.Writer) {
+	printRenameNoticeFor(w, os.Args, term.IsTerminal(os.Stderr.Fd()))
+}
+
+func printRenameNoticeFor(w io.Writer, argv []string, stderrTTY bool) {
 	defer func() { _ = os.Setenv(RenameNoticeEnv, "1") }()
 	_, err := exec.LookPath("taba")
 	notice := renameNotice(renameNoticeInput{
-		argv:      os.Args,
+		argv:      argv,
 		getenv:    os.Getenv,
-		stderrTTY: term.IsTerminal(os.Stderr.Fd()),
+		stderrTTY: stderrTTY,
 		hasTaba:   err == nil,
 	})
 	if notice != "" {

@@ -597,7 +597,8 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
 
 1. **`wtc`** on the `PATH` of the gateway and of the agents' shells: a
    [release](https://github.com/lcorneliussen/wtc-cli/releases)'s
-   `wtc_<version>_linux_<arch>.tar.gz` unpacked into `/usr/local/bin`, or
+   `taba_<version>_linux_<arch>.tar.gz` (`wtc_…` before the taba releases)
+   unpacked into `/usr/local/bin`, or
    `mise use -g github:lcorneliussen/wtc-cli@<version>`.
 2. **Git 2.42 or newer and the GitHub CLI.** OpenClaw 2026.10.2 checks Git
    attributes with `git var GIT_ATTR_GLOBAL` before it publishes; its image
@@ -663,9 +664,9 @@ In the image, with the versions pinned as build arguments:
 ```dockerfile
 ARG WTC_VERSION=<version>
 ARG OPENCLAW_BITBUCKET_TAG=<tag>
-RUN curl -fsSLO "https://github.com/lcorneliussen/wtc-cli/releases/download/v${WTC_VERSION}/wtc_${WTC_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
+RUN curl -fsSLO "https://github.com/lcorneliussen/wtc-cli/releases/download/v${WTC_VERSION}/taba_${WTC_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
  && curl -fsSL "https://github.com/lcorneliussen/wtc-cli/releases/download/v${WTC_VERSION}/checksums.txt" | grep "linux_$(dpkg --print-architecture)" | sha256sum -c - \
- && tar -xzf wtc_*.tar.gz -C /usr/local/bin wtc && rm wtc_*.tar.gz \
+ && tar -xzf taba_*.tar.gz -C /usr/local/bin taba wtc && rm taba_*.tar.gz \
  && wtc openclaw install --dir /opt/wtc-plugin
 # Only with Bitbucket repositories:
 RUN git clone --depth 1 --branch "${OPENCLAW_BITBUCKET_TAG}" https://github.com/lcorneliussen/openclaw-bitbucket.git /opt/bitbucket-plugin
