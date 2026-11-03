@@ -69,7 +69,17 @@ func writeRetiredMarker(dir string, blocking []string) error {
 	if err != nil {
 		return err
 	}
-	return writeCatchUpFile(filepath.Join(dir, RetiredMarkerFile), append(data, '\n'))
+	path := filepath.Join(dir, RetiredMarkerFile)
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		// Preserve an unexpected legacy entry; refresh only an existing guard.
+		path = retiredMarkerPath(dir)
+		if path == "" {
+			return fmt.Errorf("cannot write %s over a nonregular entry", RetiredMarkerFile)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return writeCatchUpFile(path, append(data, '\n'))
 }
 
 // retiredAncestor returns the nearest of dir and its ancestors that carries a

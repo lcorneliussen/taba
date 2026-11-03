@@ -70,12 +70,19 @@ func TestAliasSafetyMalformedRetirementMarkersKeepGuard(t *testing.T) {
 					t.Fatal(err)
 				}
 				before := aliasSafetySnapshot(t, outside)
-				result, err := (&Context{}).finishRetiredFolder(target)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if result.FolderRemoved || !RetiredFolder(target) || !strings.Contains(strings.Join(result.Leftovers, " "), malformed) {
-					t.Fatalf("lost retirement guard or malformed leftover: %+v", result)
+				malformedPath := filepath.Join(target, malformed)
+				beforeMalformed := aliasSafetySnapshot(t, malformedPath)
+				for attempt := 0; attempt < 2; attempt++ {
+					result, err := (&Context{}).finishRetiredFolder(target)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if result.FolderRemoved || !RetiredFolder(target) || !strings.Contains(strings.Join(result.Leftovers, " "), malformed) {
+						t.Fatalf("lost retirement guard or malformed leftover: %+v", result)
+					}
+					if !reflect.DeepEqual(beforeMalformed, aliasSafetySnapshot(t, malformedPath)) {
+						t.Fatal("guard refresh replaced the malformed marker")
+					}
 				}
 				if !reflect.DeepEqual(before, aliasSafetySnapshot(t, outside)) {
 					t.Fatal("cleanup followed malformed marker")
