@@ -145,7 +145,8 @@ func TestRegistryAliasKeepsRenamedRepositoryWorking(t *testing.T) {
 		t.Fatalf("secret under the alias was not linked: %v", err)
 	}
 
-	// The registry edit stands in for a harness commit; it is the only change.
+	// Force skips the uncommitted-change check: the registry edit stands in for
+	// a harness commit, and the fixture's init hook leaves an untracked file.
 	retired, err := c.RetireCollection(RetireOptions{Name: "before", Force: true})
 	if err != nil {
 		t.Fatal(err)
