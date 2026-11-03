@@ -36,11 +36,11 @@ digits and hyphens, at most 64 characters.
 
 ## Host compatibility
 
-The plugin supports OpenClaw 2026.10.2 and later. On hosts with the asynchronous
-session SDK, collection discovery, PR watching and sandbox git authorization
-await `listSessionEntriesAsync`; session-owner lookups use `getSessionEntryAsync`.
-Older hosts use legacy readers only when the corresponding async method is absent. A failed
-async read never retries synchronously or authorizes an action from stale data.
+The plugin supports OpenClaw 2026.10.2 and later. Session reads await
+`listSessionEntriesAsync` and `getSessionEntryAsync` when the host exposes them.
+Older hosts use a legacy reader only when its corresponding async method is
+absent. A failed async read never retries synchronously or authorizes an action
+from stale data.
 
 ## What the agent runs
 
