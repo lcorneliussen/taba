@@ -47,8 +47,13 @@ func (c *Context) RefreshRegistry() (RegistryRefresh, error) {
 	sort.Strings(report.BareOwners)
 	registered := map[string]bool{}
 	for _, repo := range c.Registry.Repos {
-		registered[repo.Name] = true
-		if _, ok := paths[repo.Name]; !ok {
+		present := false
+		for _, name := range repo.Names() {
+			registered[name] = true
+			_, ok := paths[name]
+			present = present || ok
+		}
+		if !present {
 			report.Missing = append(report.Missing, repo.Name)
 		}
 	}

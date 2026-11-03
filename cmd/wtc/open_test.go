@@ -32,7 +32,7 @@ func TestOpenCreatesWideWorkspaceWithoutStartingDisabledProcesses(t *testing.T) 
 	if strings.Count(calls, "pane split ") != 3 || !strings.Contains(calls, "workspace create --cwd "+collection) || !strings.Contains(calls, "--env WTC_COLLECTION='sample'") {
 		t.Fatalf("incorrect workspace setup:\n%s", calls)
 	}
-	if !strings.Contains(calls, "--env WTC_TOOLCHAIN_PATH=") || strings.Contains(calls, "BASH_ENV=") {
+	if !strings.Contains(calls, "--env WTC_TOOLCHAIN_PATH=") || !strings.Contains(calls, "--env TABA_TOOLCHAIN_PATH=") || !strings.Contains(calls, "--env WTC_AGENT_NAME=") || !strings.Contains(calls, "--env TABA_AGENT_NAME=") || strings.Contains(calls, "BASH_ENV=") {
 		t.Fatalf("workspace depends on a shell entry point:\n%s", calls)
 	}
 	if strings.Contains(calls, "agent start") || strings.Contains(calls, "pane run") {

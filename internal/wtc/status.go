@@ -36,6 +36,7 @@ type StatusRepo struct {
 	Collection    string         `json:"collection"`
 	Dir           string         `json:"dir"`
 	Repo          string         `json:"repo"`
+	RenamedTo     string         `json:"renamed_to,omitempty"` // current name when Dir is an alias
 	Worktree      string         `json:"worktree"`
 	Slug          string         `json:"slug"`
 	Forge         string         `json:"forge,omitempty"`
@@ -188,7 +189,7 @@ func statusCount(worktree, rangeSpec string) (int, error) {
 func statusLocalRepo(t catchUpTarget) (StatusRepo, error) {
 	dir := filepath.Base(t.path)
 	row := StatusRepo{Collection: t.collection, Dir: dir, Repo: t.repo,
-		Worktree: t.path, Tree: "clean", baseRef: t.ref}
+		Worktree: t.path, Tree: "clean", baseRef: t.ref, RenamedTo: t.renamed}
 	remote, err := statusGit(t.path, "remote", "get-url", "origin")
 	if err == nil {
 		row.Slug, row.Forge = catchUpForge(remote)

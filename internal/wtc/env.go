@@ -157,15 +157,19 @@ func (c *Context) RenderEnv() ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", entry.key, err)
 		}
-		fmt.Fprintf(&b, "%s=%s\n", entry.key, q)
+		for _, line := range envcompat.Both(entry.key, q) {
+			fmt.Fprintln(&b, line)
+		}
 	}
 	fmt.Fprintf(&b, "COLLECTION_PORT_BASE=%d\n", base)
 	for _, r := range c.Registry.Repos {
 		if r.PortOffset == nil {
 			continue
 		}
-		key := portKey(r.Name)
-		fmt.Fprintf(&b, "%s=%d\n", key, base+*r.PortOffset)
+		// Aliases keep the port variable a renamed repository had before.
+		for _, name := range r.Names() {
+			fmt.Fprintf(&b, "%s=%d\n", portKey(name), base+*r.PortOffset)
+		}
 	}
 	gh := filepath.Join(c.ConfigRoot, "gh")
 	jira := filepath.Join(c.ConfigRoot, "jira")

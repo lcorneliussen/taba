@@ -49,6 +49,9 @@ func TestAgentToolchainPathOrdersSiblingPinsAndKeepsCache(t *testing.T) {
 	if path := readToolchainCache(filepath.Join(c.Collection, ".env.toolchain")); path != want {
 		t.Fatalf("cache = %q", path)
 	}
+	if path := readToolchainCacheField(filepath.Join(c.Collection, ".env.toolchain"), "TABA_TOOLCHAIN_PATH="); path != want {
+		t.Fatalf("TABA_ cache = %q", path)
+	}
 	t.Setenv("PATH", root) // no mise; a valid cache remains useful
 	again, err := c.AgentToolchainPath(false)
 	if err != nil || again != want {
@@ -119,7 +122,7 @@ func TestAgentToolchainPathConfiguredBinsAndConfigRefresh(t *testing.T) {
 
 func TestAgentEnvEvalAndWrap(t *testing.T) {
 	eval := AgentEnvEval("/tmp/a'b:/tmp/c")
-	if !strings.Contains(eval, "WTC_TOOLCHAIN_PATH='/tmp/a'\\''b:/tmp/c'") || !strings.Contains(eval, "export WTC_AGENT_ENV") {
+	if !strings.Contains(eval, "WTC_TOOLCHAIN_PATH='/tmp/a'\\''b:/tmp/c'") || !strings.Contains(eval, "export WTC_AGENT_ENV") || !strings.Contains(eval, "TABA_TOOLCHAIN_PATH=\"$WTC_TOOLCHAIN_PATH\"") {
 		t.Fatalf("unsafe or incomplete eval: %s", eval)
 	}
 	raw := []byte(`{"toolInput":{"command":"ruby -v","other":1}}`)

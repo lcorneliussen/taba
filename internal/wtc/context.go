@@ -14,6 +14,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Repo is one registry entry. Aliases are earlier names of a renamed
+// repository: existing folders, bare owners, enlistments and service files
+// under an alias keep working.
 type Repo struct {
 	Name          string         `yaml:"name" json:"name"`
 	Remote        string         `yaml:"remote" json:"remote"`
@@ -27,8 +30,28 @@ type Repo struct {
 	IDE           string         `yaml:"ide" json:"ide,omitempty"`
 	MergeStrategy string         `yaml:"merge_strategy" json:"merge_strategy,omitempty"`
 	Owner         string         `yaml:"owner" json:"owner,omitempty"` // ad-hoc only: an existing checkout's Git dir
+	Aliases       []string       `yaml:"aliases" json:"aliases,omitempty"`
 	Extra         map[string]any `yaml:",inline" json:"extra,omitempty"`
 }
+
+// Answers reports whether name is this repository's name or one of its aliases.
+func (r Repo) Answers(name string) bool {
+	if r.Name == name {
+		return true
+	}
+	for _, alias := range r.Aliases {
+		if alias == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Names lists the repository's name first, then its aliases.
+func (r Repo) Names() []string {
+	return append([]string{r.Name}, r.Aliases...)
+}
+
 type Registry struct {
 	SchemaVersion int               `yaml:"schema_version" json:"schema_version"`
 	Repos         []Repo            `yaml:"repos" json:"repos"`
@@ -217,15 +240,23 @@ func (c *Context) load() error {
 			return fmt.Errorf("invalid or repeated repository name %q", r.Name)
 		}
 		seen[r.Name] = true
+		for _, alias := range r.Aliases {
+			if !validRepoName.MatchString(alias) || alias == "harness" || seen[alias] {
+				return fmt.Errorf("invalid or repeated alias %q of %s", alias, r.Name)
+			}
+			seen[alias] = true
+		}
 		if r.PortOffset != nil {
 			if *r.PortOffset < 0 || *r.PortOffset >= 100 {
 				return fmt.Errorf("port_offset outside collection block for %s", r.Name)
 			}
-			key := portKey(r.Name)
-			if portKeys[key] {
-				return fmt.Errorf("duplicate port variable %s", key)
+			for _, name := range r.Names() {
+				key := portKey(name)
+				if portKeys[key] {
+					return fmt.Errorf("duplicate port variable %s", key)
+				}
+				portKeys[key] = true
 			}
-			portKeys[key] = true
 		}
 		// Preserve harness-specific metadata for commands that understand it.
 		// Unrecognized fields do not make basic env/doctor operations unusable.

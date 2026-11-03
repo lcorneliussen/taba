@@ -81,6 +81,9 @@ type catchUpTarget struct {
 	// the secret linker would reject its directory name. Hooks re-resolve it
 	// from the current registry, since a harness self-update may change it.
 	managed bool
+	// renamed is the repository's current name when this sibling's folder
+	// still uses an alias from before a rename.
+	renamed string
 	// noRemote records an owner without any remote. Its own branches
 	// are the only truth it has, so development refs resolve locally.
 	noRemote bool
@@ -300,16 +303,20 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 				repoName = harnessRepo
 			}
 			if len(selectors) != 0 {
-				_, selectedByLabel := selectors[label]
-				_, selectedByRepo := selectors[repoName]
-				if !selectedByLabel && !selectedByRepo {
+				// A selector may name the repository or any of its aliases.
+				names := []string{label, repoName}
+				if entry, err := target.Repository(repoName); err == nil {
+					names = append(names, entry.Names()...)
+				}
+				selected := false
+				for _, candidate := range names {
+					if _, ok := selectors[candidate]; ok {
+						selectors[candidate] = true
+						selected = true
+					}
+				}
+				if !selected {
 					continue
-				}
-				if selectedByLabel {
-					selectors[label] = true
-				}
-				if selectedByRepo {
-					selectors[repoName] = true
 				}
 			}
 			owner, err := gitOutput("-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir")
@@ -329,6 +336,9 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			remotes, remoteErr := gitOutput("--git-dir="+owner, "remote")
 			t := catchUpTarget{collection: name, path: path, repo: repoName, owner: owner,
 				harness: label == "harness", managed: repoErr == nil || label == "harness", noRemote: remoteErr == nil && remotes == ""}
+			if repoErr == nil && label != "harness" && repo.Name != repoName {
+				t.renamed = repo.Name
+			}
 			t.ref = catchUpLocalRef(t, ref)
 			targets = append(targets, t)
 		}

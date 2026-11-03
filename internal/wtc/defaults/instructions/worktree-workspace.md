@@ -58,6 +58,28 @@ git --git-dir=.bare/<repo>.git fetch --all --prune
 Then add the repo to `.harness-repos.yml` (tracked) and rerun
 `wtc registry refresh` to update the local `.harness-repos`.
 
+## Renaming a repository
+
+Rename the entry and keep the old name as an alias; update `remote` if the
+forge repository moved:
+
+```yaml
+  - name: taba
+    aliases: [wtc-cli]
+    remote: git@github.com:<org>/taba.git
+```
+
+Existing collections keep their `wtc-cli/` folder, and every command accepts
+either name. The owner cloned as `.bare/wtc-cli.git` keeps serving all
+collections; it is never cloned again or moved. After a rename on the same
+forge host and owner, the next catch-up or checkout points its `origin` at the
+new remote and reports it once; a transfer to another owner needs a manual
+`git remote set-url`. Port variables are
+emitted under both names (`TABA_PORT` and `WTC_CLI_PORT`). New collections
+check the repository out as `taba/`, and `wtc status` marks old folders
+"renamed to taba". Remove an alias only when no collection uses the old folder
+any more.
+
 ## Unmanaged siblings (`ext.`)
 
 Sometimes a collection needs a repo the workspace should **not** adopt: a
