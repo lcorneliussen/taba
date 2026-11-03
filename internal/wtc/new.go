@@ -95,7 +95,7 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 		if opt.Review {
 			result.Source = fmt.Sprintf("Review-only wtc for %s#%s: review someone else's PR without writing to it.", slug, parts[1])
 		}
-		primary, primaryBranch, prID, prHead = parts[0], details.HeadRefName, parts[1], details.HeadRefOID
+		primary, primaryBranch, prID, prHead = repo.Name, details.HeadRefName, parts[1], details.HeadRefOID
 		prTitle, prWebURL = details.Title, url
 		if details.IsCrossRepository {
 			if !githubSlugPattern.MatchString(details.HeadRepository.NameWithOwner) {
@@ -151,9 +151,11 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 		if name == "harness" || name == harnessRepo {
 			continue
 		}
-		if _, err := c.Repository(name); err != nil {
+		repo, err := c.Repository(name)
+		if err != nil {
 			return result, err
 		}
+		name = repo.Name // new collections use the current name
 		found := false
 		for _, existing := range result.Repositories {
 			found = found || existing == name

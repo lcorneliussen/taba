@@ -100,7 +100,8 @@ first — or at minimum returning to the tip before starting.
 
 `.env.collection` at the collection root carries `WTC_COLLECTION`,
 `WTC_AGENT_NAME`, `COLLECTION_PORT_BASE`, `WTC_CONFIG_ROOT`, and a
-`<REPO>_PORT` per serving repo. A mise-activated shell already has them;
+`<REPO>_PORT` per serving repo; each `WTC_` variable is also emitted as
+`TABA_`. A mise-activated shell already has them;
 otherwise:
 
 ```bash

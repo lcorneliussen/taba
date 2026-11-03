@@ -70,17 +70,28 @@ func (c *Context) AddRepositories(opt AddRepoOptions) (AddRepoResult, error) {
 			result.Skipped = append(result.Skipped, name)
 			continue
 		}
-		if seen[name] {
-			return result, fmt.Errorf("repository %q was requested more than once", name)
-		}
-		seen[name] = true
-		if _, err := target.Repository(name); err != nil {
+		repo, err := target.Repository(name)
+		if err != nil {
 			return result, err
 		}
-		if _, err := os.Lstat(filepath.Join(target.Collection, name)); err == nil {
-			return result, fmt.Errorf("worktree path already exists: %s", filepath.Join(target.Collection, name))
-		} else if !os.IsNotExist(err) {
-			return result, err
+		if seen[repo.Name] {
+			return result, fmt.Errorf("repository %q was requested more than once", repo.Name)
+		}
+		seen[repo.Name] = true
+		// A sibling checked out under an earlier name is the same repository.
+		for _, candidate := range repo.Names() {
+			if _, err := os.Lstat(filepath.Join(target.Collection, candidate)); err == nil {
+				return result, fmt.Errorf("worktree path already exists: %s", filepath.Join(target.Collection, candidate))
+			} else if !os.IsNotExist(err) {
+				return result, err
+			}
+		}
+	}
+	// New checkouts use the current name, even when requested by an alias.
+	opt.Repos = append([]string(nil), opt.Repos...)
+	for i, name := range opt.Repos {
+		if repo, err := target.Repository(name); err == nil && name != "harness" && name != harnessRepo {
+			opt.Repos[i] = repo.Name
 		}
 	}
 	toAdd := make([]string, 0, len(seen))

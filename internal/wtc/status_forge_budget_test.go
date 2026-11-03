@@ -5,13 +5,25 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestMain(m *testing.M) {
+	unsetTabaEnvironment()
 	statusTurnOffSharedForgeBudgetAndAudit()
 	os.Exit(m.Run())
+}
+
+// A collection shell carries generated TABA_ variables, and readers prefer
+// them; tests that set only a WTC_ name must not read the developer's values.
+func unsetTabaEnvironment() {
+	for _, setting := range os.Environ() {
+		if name, _, _ := strings.Cut(setting, "="); strings.HasPrefix(name, "TABA_") {
+			os.Unsetenv(name)
+		}
+	}
 }
 
 func statusTurnOffSharedForgeBudgetAndAudit() {

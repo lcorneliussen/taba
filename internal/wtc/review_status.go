@@ -166,13 +166,13 @@ func (c *Context) ReviewRepo(repo string) (worktree, slug, forge string, err err
 	if !prRepoName.MatchString(repo) || repo == "." || repo == ".." || strings.Contains(repo, "..") {
 		return "", "", "", fmt.Errorf("invalid repository name %q", repo)
 	}
-	worktree = filepath.Join(c.Collection, repo)
+	worktree = c.WorktreeDir(repo)
 	if _, err := os.Stat(filepath.Join(worktree, ".git")); err != nil {
 		return "", "", "", fmt.Errorf("no worktree for %s", repo)
 	}
 	remote := ""
 	for _, r := range c.Registry.Repos {
-		if r.Name == repo || repo == "harness" && r.Name == c.Config.Harness.Name {
+		if r.Answers(repo) || repo == "harness" && r.Name == c.Config.Harness.Name {
 			remote = r.Remote
 			break
 		}
@@ -200,7 +200,7 @@ func (c *Context) ReviewRepo(repo string) (worktree, slug, forge string, err err
 }
 
 func (c *Context) EnlistedReviewPR(repo string) (string, error) {
-	worktree := filepath.Join(c.Collection, repo)
+	worktree := c.WorktreeDir(repo)
 	branchBytes, err := exec.Command("git", "-C", worktree, "branch", "--show-current").Output()
 	if err != nil {
 		return "", err

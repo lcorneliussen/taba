@@ -29,7 +29,7 @@ func (c *Context) statusReadOnlyPRForge(repos prRepositories, record PRRecord) (
 	// validator cannot classify a registry remote. Recheck the raw registry
 	// identity here using forge path rules before accepting that fallback.
 	for _, registered := range c.Registry.Repos {
-		if registered.Name == repo.name {
+		if registered.Answers(repo.name) {
 			if raw := statusPRForgeIdentity(registered.Remote); raw != "" && raw != identity {
 				return "", "", fmt.Errorf("registry and checkout repository identities disagree")
 			}

@@ -37,8 +37,8 @@ func TestTabaEnvironmentConflictKeepsJSONOutputClean(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("env preview failed: %v, %s", err, &stderr)
 	}
-	if !json.Valid(stdout.Bytes()) || !strings.Contains(stdout.String(), current) || !strings.Contains(stdout.String(), "WTC_CONFIG_ROOT") || strings.Contains(stdout.String(), "TABA_CONFIG_ROOT") {
-		t.Fatalf("JSON output or phase-0 environment spelling changed: %s", &stdout)
+	if !json.Valid(stdout.Bytes()) || !strings.Contains(stdout.String(), current) || !strings.Contains(stdout.String(), "WTC_CONFIG_ROOT='"+current+"'") || !strings.Contains(stdout.String(), "TABA_CONFIG_ROOT='"+current+"'") || strings.Contains(stdout.String(), legacy) {
+		t.Fatalf("JSON output should carry the selected root under both spellings: %s", &stdout)
 	}
 	if strings.Count(stderr.String(), "TABA_CONFIG_ROOT and WTC_CONFIG_ROOT differ; using TABA_CONFIG_ROOT") != 1 || strings.Contains(stderr.String(), legacy) || strings.Contains(stderr.String(), current) {
 		t.Fatalf("expected one value-free stderr warning: %s", &stderr)
