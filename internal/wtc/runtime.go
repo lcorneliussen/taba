@@ -215,7 +215,7 @@ func (c *Context) runtimePathsSafe() error {
 	if err := c.runtimeConflict(); err != nil {
 		return err
 	}
-	for _, path := range []string{filepath.Dir(c.runtimeRoot()), c.runtimeRoot()} {
+	for _, path := range []string{filepath.Dir(c.runtimeRoot()), c.runtimeRoot(), filepath.Join(filepath.Dir(c.runtimeRoot()), "svc")} {
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {
 			continue

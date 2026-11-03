@@ -96,6 +96,9 @@ func (c *Context) runtimeBinary() (string, error) {
 // runtimePlan copies native dekit task definitions, rebasing only filesystem
 // paths and dependency names. It neither runs hooks nor writes generated files.
 func (c *Context) runtimePlan(binary string) (*runtimeManifest, []byte, error) {
+	if err := c.runtimePathsSafe(); err != nil {
+		return nil, nil, err
+	}
 	if c.Config.Runtime.Backend != "dekit" {
 		return nil, nil, fmt.Errorf("enable [runtime] backend = \"dekit\" in harness/wtc.toml")
 	}

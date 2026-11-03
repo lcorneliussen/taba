@@ -107,9 +107,12 @@ func retireLeftovers(dir string) ([]string, error) {
 	}
 	leftovers := []string{}
 	for _, entry := range entries {
-		if !slices.Contains(retiredMarkerNames, entry.Name()) {
-			leftovers = append(leftovers, entry.Name())
+		if slices.Contains(retiredMarkerNames, entry.Name()) {
+			if info, err := entry.Info(); err == nil && info.Mode().IsRegular() {
+				continue
+			}
 		}
+		leftovers = append(leftovers, entry.Name())
 	}
 	return leftovers, nil
 }
@@ -155,22 +158,23 @@ func (c *Context) finishRetiredFolderLocked(target string) (RetireResult, error)
 		return result, err
 	}
 	if len(leftovers) == 0 {
-		for _, name := range retiredMarkerNames {
-			if err := os.Remove(filepath.Join(target, name)); err != nil && !os.IsNotExist(err) {
-				return result, err
-			}
-		}
-		if err := os.Remove(target); err != nil {
-			// The folder survives, so it must stay marked as leftovers.
-			removeErr := fmt.Errorf("remove collection folder: %w", err)
+		preserveGuard := func(removeErr error) error {
 			current, listErr := retireLeftovers(target)
 			if listErr == nil {
 				listErr = writeRetiredMarker(target, current)
 			}
 			if listErr != nil {
-				return result, fmt.Errorf("%w; restoring %s failed: %v", removeErr, RetiredMarkerFile, listErr)
+				return fmt.Errorf("%w; restoring %s failed: %v", removeErr, RetiredMarkerFile, listErr)
 			}
-			return result, removeErr
+			return removeErr
+		}
+		for _, name := range retiredMarkerNames {
+			if err := os.Remove(filepath.Join(target, name)); err != nil && !os.IsNotExist(err) {
+				return result, preserveGuard(err)
+			}
+		}
+		if err := os.Remove(target); err != nil {
+			return result, preserveGuard(fmt.Errorf("remove collection folder: %w", err))
 		}
 		result.FolderRemoved = true
 		return result, nil

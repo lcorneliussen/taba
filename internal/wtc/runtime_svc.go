@@ -185,7 +185,7 @@ func runtimeAddTask(tasks *yaml.Node, name string, value map[string]any) error {
 // runtimeChange edits a task file, checks that the collection's services
 // still render, and puts the file back when they do not.
 func (c *Context) runtimeChange(path string, edit func(tasks *yaml.Node) error) error {
-	if err := c.runtimeConflict(); err != nil {
+	if err := c.runtimePathsSafe(); err != nil {
 		return err
 	}
 	before, readErr := os.ReadFile(path)
@@ -530,16 +530,24 @@ func (c *Context) statusSignalPath() string {
 }
 
 func (c *Context) signalServicesChanged() {
-	// Only a collection that has services: retiring one without them must
-	// not leave a file behind.
-	if _, err := os.Stat(c.runtimeRoot()); err != nil {
+	// Deferred callers also reach here after refusal or partial failure.
+	// Notify safe partial changes without writing through unsafe state.
+	if c.runtimePathsSafe() != nil {
+		return
+	}
+	if _, err := os.Lstat(c.runtimeRoot()); err != nil {
 		return
 	}
 	path := c.statusSignalPath()
-	now := time.Now()
-	if err := os.Chtimes(path, now, now); os.IsNotExist(err) {
-		_ = os.WriteFile(path, nil, 0644)
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return
+		}
+	} else if !os.IsNotExist(err) {
+		return
 	}
+	// Replacing the timestamp file does not follow an existing link.
+	_ = writeCatchUpFile(path, nil)
 }
 
 // ServicesChangedAt is when a wtc svc action last finished, or zero.

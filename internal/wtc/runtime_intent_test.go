@@ -313,8 +313,14 @@ func TestTunnelIntentStopAllContinuesAfterProviderFailure(t *testing.T) {
 		}
 	}
 	fixtureFile(t, filepath.Join(c.runtimeRoot(), "fail-action"), "veto widget/web/tunnel", 0600)
+	if err := os.Remove(c.statusSignalPath()); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.Tunnel(TunnelOptions{Service: "web", Stop: true}); err == nil {
 		t.Fatal("provider stop failure hidden")
+	}
+	if c.ServicesChangedAt().IsZero() {
+		t.Fatal("partial provider stop failed to notify status")
 	}
 	m, err := c.runtimeManifest()
 	if err != nil {
