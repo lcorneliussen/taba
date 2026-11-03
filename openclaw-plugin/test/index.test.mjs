@@ -6,11 +6,22 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-test("next actions recheck membership and state, preserve approvals and use only supported gateway commands", async () => {
+for (const host of ["legacy", "async-only", "both"]) test(`next actions recheck membership, state and approvals on ${host} hosts`, async () => {
   const actions = new Map();
   const owner = "agent:main:repo:api";
   const entry = { parentSessionKey: "agent:main:c", projectId: "api", label: "test api", worktree: { branch: "openclaw/test" }, workspaceDir: "/worktrees/api" };
   const commands = [];
+  const reads = {
+    listSessionEntries: () => [{ sessionKey: "agent:main:c", entry: {} }, { sessionKey: owner, entry }],
+    getSessionEntry: ({ sessionKey }) => sessionKey === owner ? entry : undefined,
+  };
+  if (host !== "legacy") for (const name of ["listSessionEntries", "getSessionEntry"]) {
+    const read = reads[name];
+    reads[`${name}Async`] = async (params) => { await new Promise(setImmediate); return read(params); };
+    if (host === "async-only") delete reads[name];
+    else reads[name] = () => { throw new Error("deprecated read must not be used"); };
+  }
+
   const step = { step: "return-to-tip", by: "wtc", key: "api:tip:abc", reason: "merged", command: ["wtc", "catch-up"] };
   let row = { path: entry.workspaceDir, repo: "api", next: step };
   let release;
@@ -19,10 +30,7 @@ test("next actions recheck membership and state, preserve approvals and use only
     pluginConfig: {},
     runtime: {
       state: { resolveStateDir: () => mkdtempSync(path.join(os.tmpdir(), "wtc-next-")) },
-      agent: { session: {
-        listSessionEntries: () => [{ sessionKey: "agent:main:c", entry: {} }, { sessionKey: owner, entry }],
-        getSessionEntry: async ({ sessionKey }) => sessionKey === owner ? entry : undefined,
-      } },
+      agent: { session: reads },
       system: { runCommandWithTimeout: async (argv, opts) => {
         if (argv[1] === "status") return { code: 0, stdout: JSON.stringify({ test: { repos: [row] } }) };
         if (argv[1] === "--version") return { code: 0, stdout: "wtc version dev" };
@@ -300,6 +308,8 @@ test("the collection's conversation hears what changed, and is woken for it", as
   const events = [];
   const wakes = [];
   let pr = null;
+  let readFailure = false;
+  const warnings = [];
   const entries = [
     { sessionKey: "agent:main:c", entry: {} },
     { sessionKey: "agent:main:repo:site", entry: { parentSessionKey: "agent:main:c", projectId: "site", worktree: { id: "w1", branch: "openclaw/9-x" }, workspaceDir: "/worktrees/w1" } },
@@ -308,7 +318,11 @@ test("the collection's conversation hears what changed, and is woken for it", as
     pluginConfig,
     runtime: {
       state: { resolveStateDir: () => state },
-      agent: { session: { listSessionEntries: () => entries, getSessionEntry: async () => undefined } },
+      agent: { session: { listSessionEntries: () => { throw new Error("deprecated list called"); }, listSessionEntriesAsync: async () => {
+        await new Promise(setImmediate);
+        if (readFailure) throw new Error("session store unavailable");
+        return entries;
+      }, getSessionEntry: async () => undefined } },
       system: {
         runCommandWithTimeout: async (argv) => argv[1] === "status"
           ? { code: 0, stdout: JSON.stringify({ "9-x": { repos: [{ path: "/worktrees/w1", repo: "site", pullRequest: pr }] } }), stderr: "" }
@@ -321,7 +335,7 @@ test("the collection's conversation hears what changed, and is woken for it", as
     registerService: (s) => services.push(s),
     registerHttpRoute() {},
     on() {},
-    logger: {},
+    logger: { warn: (message) => warnings.push(message) },
   });
   register({});
   const look = () => actions.get("collection").handler({ sessionKey: "agent:main:repo:site", agentId: "main", payload: {} });
@@ -336,6 +350,14 @@ test("the collection's conversation hears what changed, and is woken for it", as
   const { mock } = await import("node:test");
   mock.timers.enable({ apis: ["setInterval"] });
   services.at(-1).start();
+  readFailure = true;
+  const priorEvents = events.length;
+  mock.timers.tick(5 * 60000);
+  await new Promise(setImmediate);
+  await new Promise(setImmediate);
+  assert.equal(events.length, priorEvents, "failed reads do not publish or forget the watched collection");
+  assert.equal(warnings.length, 1);
+  readFailure = false;
   mock.timers.tick(5 * 60000);
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
@@ -718,4 +740,28 @@ test("without wtc's labels the collection is the name others extend, then the mo
   assert.deepEqual(await pick([child("a", "9-x--docs"), child("b", "9-x--docs"), child("c", "9-x")]), ["docs"]);
   // A label without a project: the one that starts with its name.
   assert.deepEqual(await pick([child("a", "9-x", "9-x site"), child("b", "nav", "helper")]), ["nav"]);
+});
+
+test("failed async session reads never retry legacy reads or execute an action", async () => {
+  for (const method of ["getSessionEntry", "listSessionEntries"]) {
+    const actions = new Map();
+    const error = new Error("session store unavailable");
+    let commands = 0, legacy = 0;
+    plugin.register({
+      runtime: {
+        state: { resolveStateDir: () => "/nonexistent" },
+        agent: { session: {
+          [method]: () => { legacy++; return []; },
+          [`${method}Async`]: async () => { throw error; },
+        } },
+        system: { runCommandWithTimeout: async () => { commands++; return {}; } },
+      },
+      session: { controls: { registerSessionAction: a => actions.set(a.id, a), registerControlUiDescriptor() {} } },
+      registerHttpRoute() {}, on() {}, logger: {},
+    });
+    const action = method === "getSessionEntry" ? "catch-up" : "collection";
+    await assert.rejects(actions.get(action).handler({ agentId: "main", sessionKey: "agent:main:c" }), e => e === error);
+    assert.equal(legacy, 0);
+    assert.equal(commands, 0);
+  }
 });
