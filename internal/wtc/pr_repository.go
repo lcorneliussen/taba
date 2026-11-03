@@ -71,8 +71,10 @@ func (c *Context) prRepositories(names ...string) prRepositories {
 	registered := map[string]*prRepository{}
 	for _, repo := range c.Registry.Repos {
 		identity := &prRepository{name: repo.Name, remote: repo.Remote}
-		registered[repo.Name] = identity
-		repos.add(repo.Name, identity)
+		for _, name := range repo.Names() {
+			registered[name] = identity
+			repos.add(name, identity)
+		}
 	}
 	harness, _ := c.catchUpHarnessRepo()
 	if repo := registered[harness]; !c.AdHoc && repo != nil {

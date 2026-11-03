@@ -156,6 +156,9 @@ func (c *Context) ListSecrets(repoFilter string) (SecretInventory, error) {
 			worktreeName = "harness"
 		}
 		worktree := filepath.Join(c.Collection, worktreeName)
+		if worktreeName != "harness" {
+			worktree = c.WorktreeDir(worktreeName)
+		}
 		machineConfig := name == "gh" || name == "jira" || name == "certificates"
 		checkedOut := !machineConfig && validRepoName.MatchString(name) && validInventoryWorktree(worktree)
 		err := filepath.WalkDir(sourceRoot, func(source string, item fs.DirEntry, walkErr error) error {

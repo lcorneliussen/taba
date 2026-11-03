@@ -44,6 +44,20 @@ func (c *Context) catchUpDefaultRef(t catchUpTarget) (string, error) {
 	return catchUpLocalRef(t, repo.DefaultRef), nil
 }
 
+// catchUpOriginRepo is the registry entry whose remote a shared owner should
+// follow. Ad-hoc collections and unmanaged siblings are left alone.
+func (c *Context) catchUpOriginRepo(t catchUpTarget) (Repo, bool) {
+	if !t.managed {
+		return Repo{}, false
+	}
+	target, err := OpenCollection(filepath.Join(c.Workspace, t.collection))
+	if err != nil || target.AdHoc {
+		return Repo{}, false
+	}
+	repo, err := target.Repository(t.repo)
+	return repo, err == nil
+}
+
 // catchUpFetch fetches origin into an owner and reduces a failure to git's
 // own cause line, which says why the configured remote cannot be reached.
 func catchUpFetch(owner string) error {
@@ -600,6 +614,22 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 		}
 		return report, inventoryErr
 	}
+	// Every collection sharing an owner gets a say before the fetch: one whose
+	// registry predates a rename cannot repoint origin, so a later one with the
+	// alias must still be asked. Once origin moved, the others are no-ops.
+	if !opt.DryRun {
+		for _, t := range targets {
+			repo, ok := c.catchUpOriginRepo(t)
+			if !ok || t.noRemote {
+				continue
+			}
+			if changed, err := syncOwnerOrigin(t.owner, repo); err != nil {
+				report.add("origin", t.collection, t.repo, "failed", err.Error(), "", "", "")
+			} else if changed {
+				report.add("origin", t.collection, t.repo, "updated", "origin now follows the registry remote "+repo.Remote, "", "", "")
+			}
+		}
+	}
 	fetched := map[string]string{}
 	for _, t := range targets {
 		if _, ok := fetched[t.owner]; ok {
@@ -610,7 +640,8 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 			// Reported on its own outcome, which callers may treat as they
 			// choose; it does not fail the sweep by itself.
 			state, reason = "no-remote", "no remote; reconciling against local branches"
-		} else if !opt.DryRun {
+		}
+		if !t.noRemote && !opt.DryRun {
 			if err := catchUpFetch(t.owner); err != nil {
 				state, reason = "failed", err.Error()
 			} else {

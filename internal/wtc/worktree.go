@@ -24,11 +24,41 @@ func gitOutput(args ...string) (string, error) {
 
 func (c *Context) Repository(name string) (Repo, error) {
 	for _, repo := range c.Registry.Repos {
-		if repo.Name == name {
+		if repo.Answers(name) {
 			return repo, nil
 		}
 	}
 	return Repo{}, fmt.Errorf("repository %q is not in the registry", name)
+}
+
+// sameRepository reports whether two names are one registry repository, by
+// name or alias, or are equal.
+func (c *Context) sameRepository(a, b string) bool {
+	if a == b {
+		return true
+	}
+	repo, err := c.Repository(a)
+	return err == nil && repo.Answers(b)
+}
+
+// WorktreeDir is the sibling folder for a repository name or alias: the
+// folder of that exact name when present, else the first present folder under
+// the repository's name or aliases, else the folder for the name as given.
+// Collections created before a rename keep their folder under the old name.
+func (c *Context) WorktreeDir(name string) string {
+	exact := filepath.Join(c.Collection, name)
+	if _, err := os.Lstat(exact); err == nil {
+		return exact
+	}
+	if repo, err := c.Repository(name); err == nil {
+		for _, candidate := range repo.Names() {
+			path := filepath.Join(c.Collection, candidate)
+			if _, err := os.Lstat(path); err == nil {
+				return path
+			}
+		}
+	}
+	return exact
 }
 
 // HarnessRepoName resolves the registry identity of harness/, which need not
@@ -76,15 +106,76 @@ func (c *Context) bareFor(name string) (string, error) {
 	if err != nil && !os.IsNotExist(err) {
 		return "", err
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, name+"=") {
-			path := strings.TrimPrefix(line, name+"=")
-			if path != "" {
-				return path, nil
+	for _, candidate := range repo.Names() {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, candidate+"=") {
+				path := strings.TrimPrefix(line, candidate+"=")
+				if path != "" {
+					return path, nil
+				}
 			}
 		}
 	}
-	return filepath.Join(c.Workspace, ".bare", name+".git"), nil
+	// A renamed repository keeps using the owner cloned under an earlier name:
+	// worktrees in every collection link into it, so it is never moved.
+	for _, candidate := range repo.Names() {
+		path := filepath.Join(c.Workspace, ".bare", candidate+".git")
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	return filepath.Join(c.Workspace, ".bare", repo.Name+".git"), nil
+}
+
+// remoteRepoParts splits a URL-form remote (scheme://, including file://, or
+// scp-style user@host:path) into its host and owner path and the repository
+// name. Plain filesystem paths and unrecognised forms are not split.
+func remoteRepoParts(remote string) (place, name string, ok bool) {
+	remote = strings.TrimSpace(remote)
+	if !strings.Contains(remote, "://") && !scpRemote.MatchString(remote) {
+		return "", "", false
+	}
+	normalized := normalizeCatchUpRemote(remote)
+	i := strings.LastIndex(normalized, "/")
+	if i <= 0 || i == len(normalized)-1 {
+		return "", "", false
+	}
+	return strings.ToLower(normalized[:i]), normalized[i+1:], true
+}
+
+// syncOwnerOrigin points a shared owner's origin at the registry remote after
+// a forge rename: both are URLs on the same host and owner, origin still names
+// the repository by its registry name or an alias, and the registry remote
+// uses a new name. Everything else is left alone: spellings of one repository
+// (SSH or HTTPS, a .git suffix), forks and transfers, other repositories of
+// the same owner such as a renamed mirror, and plain filesystem paths (a
+// file:// URL is a URL and follows the rule). A collection on an
+// older registry revision does not set it back, since the new name is not one
+// of its names. It reports whether origin changed.
+func syncOwnerOrigin(owner string, repo Repo) (bool, error) {
+	if repo.Remote == "" || repo.Owner != "" {
+		return false, nil
+	}
+	current, err := gitOutput("--git-dir="+owner, "remote", "get-url", "origin")
+	if err != nil {
+		return false, nil
+	}
+	fromPlace, fromName, fromOK := remoteRepoParts(current)
+	toPlace, toName, toOK := remoteRepoParts(repo.Remote)
+	if !fromOK || !toOK || fromPlace != toPlace || strings.EqualFold(fromName, toName) {
+		return false, nil
+	}
+	known := false
+	for _, name := range repo.Names() {
+		known = known || strings.EqualFold(fromName, name)
+	}
+	if !known {
+		return false, nil
+	}
+	if _, err := gitOutput("--git-dir="+owner, "remote", "set-url", "origin", repo.Remote); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *Context) ensureBare(repo Repo) (string, error) {
@@ -108,6 +199,14 @@ func (c *Context) ensureBare(repo Repo) (string, error) {
 		}
 	} else if err != nil {
 		return "", err
+	} else if !c.AdHoc {
+		changed, err := syncOwnerOrigin(bare, repo)
+		if err != nil {
+			return "", err
+		}
+		if changed {
+			fmt.Fprintf(os.Stderr, "%s: origin now follows the registry remote %s\n", repo.Name, repo.Remote)
+		}
 	}
 	if _, err := gitOutput("--git-dir="+bare, "fetch", "--prune", "origin"); err != nil {
 		return "", err
