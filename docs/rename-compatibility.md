@@ -35,7 +35,7 @@ New-prefix defaults can be written in the existing `wtc.env` file. A separate [c
 From the first taba release ([#202](https://github.com/lcorneliussen/wtc-cli/issues/202)), every `WTC_` variable that the CLI generates is also written as `TABA_` with the same value:
 
 - `.env.collection`: `COLLECTION`, `AGENT_NAME` and `CONFIG_ROOT`, legacy spelling first;
-- `.env.toolchain`: `TOOLCHAIN_PATH`;
+- `.env.toolchain` and the `wtc agent-env` shell snippet that agent hooks prepend: `TOOLCHAIN_PATH`;
 - harness and status-build hooks: `COLLECTION` and `CONFIG_ROOT`;
 - new herdr workspaces: `AGENT_NAME` and `TOOLCHAIN_PATH`.
 
