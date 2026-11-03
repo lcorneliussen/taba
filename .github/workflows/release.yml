@@ -35,9 +35,10 @@ jobs:
             echo "::error::HOMEBREW_TAP_SSH_PRIVATE_KEY is not set. Add a write deploy key on lcorneliussen/homebrew-taba and store the private key as this Actions secret."
             exit 1
           fi
-      - uses: goreleaser/goreleaser-action@v7
+      # Pinned: this step receives the tap's write deploy key.
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
-          version: '~> v2'
+          version: 'v2.19.0'
           args: release --clean --release-notes=${{ steps.notes.outputs.path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

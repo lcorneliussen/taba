@@ -40,6 +40,8 @@ brews:
         url: git@github.com:lcorneliussen/homebrew-taba.git
         private_key: "{{ .Env.HOMEBREW_TAP_SSH_PRIVATE_KEY }}"
     directory: Formula
+    # A prerelease tag must not replace the stable formula.
+    skip_upload: auto
     homepage: https://taba.sh
     description: "Worktree collections for working across repositories, with agents or your editor (formerly wtc)"
     license: MIT
