@@ -61,6 +61,9 @@ func (c *Context) LinkSecrets(opt SecretLinkOptions) (SecretLinkResult, error) {
 			worktreeName = "harness"
 		}
 		worktree := filepath.Join(c.Collection, worktreeName)
+		if worktreeName != "harness" {
+			worktree = c.WorktreeDir(worktreeName)
+		}
 		info, err := os.Stat(worktree)
 		if os.IsNotExist(err) {
 			continue

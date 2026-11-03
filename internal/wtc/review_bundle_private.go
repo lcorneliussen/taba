@@ -76,7 +76,7 @@ func (c *Context) reviewBranchIsEnlisted(repo, branch string) bool {
 
 func (c *Context) reviewRegistryRepo(name string) (Repo, bool) {
 	for _, repo := range c.Registry.Repos {
-		if repo.Name == name || name == "harness" && repo.Name == c.Config.Harness.Name {
+		if repo.Answers(name) || name == "harness" && repo.Name == c.Config.Harness.Name {
 			return repo, true
 		}
 	}
@@ -129,7 +129,7 @@ func (c *Context) snapshotReviewRepository(dir, kind, name string) (bool, error)
 	if !ok {
 		return false, nil
 	}
-	worktree := filepath.Join(c.Collection, name)
+	worktree := c.WorktreeDir(name)
 	if name == c.Config.Harness.Name {
 		worktree = c.Harness
 	}
@@ -291,7 +291,7 @@ func (c *Context) copyRelatedReviewPatches(dir, reviewed, number string) (int, e
 		if record.Repo == reviewed && record.Number == number || record.Branch == "" || !prRepoName.MatchString(record.Repo) || !prNumber.MatchString(record.Number) {
 			continue
 		}
-		worktree := filepath.Join(c.Collection, record.Repo)
+		worktree := c.WorktreeDir(record.Repo)
 		if record.Repo == "harness" || record.Repo == c.Config.Harness.Name {
 			worktree = c.Harness
 		}

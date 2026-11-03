@@ -81,6 +81,9 @@ type catchUpTarget struct {
 	// the secret linker would reject its directory name. Hooks re-resolve it
 	// from the current registry, since a harness self-update may change it.
 	managed bool
+	// renamed is the repository's current name when this sibling's folder
+	// still uses an alias from before a rename.
+	renamed string
 	// noRemote records an owner without any remote. Its own branches
 	// are the only truth it has, so development refs resolve locally.
 	noRemote bool
@@ -329,6 +332,9 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			remotes, remoteErr := gitOutput("--git-dir="+owner, "remote")
 			t := catchUpTarget{collection: name, path: path, repo: repoName, owner: owner,
 				harness: label == "harness", managed: repoErr == nil || label == "harness", noRemote: remoteErr == nil && remotes == ""}
+			if repoErr == nil && label != "harness" && repo.Name != repoName {
+				t.renamed = repo.Name
+			}
 			t.ref = catchUpLocalRef(t, ref)
 			targets = append(targets, t)
 		}

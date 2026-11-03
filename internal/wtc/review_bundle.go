@@ -251,7 +251,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	if baseRef == "" {
 		baseRef = "origin/main"
 		for _, r := range c.Registry.Repos {
-			if r.Name == opt.Repo || opt.Repo == "harness" && r.Name == c.Config.Harness.Name {
+			if r.Answers(opt.Repo) || opt.Repo == "harness" && r.Name == c.Config.Harness.Name {
 				if r.DefaultRef != "" {
 					baseRef = r.DefaultRef
 				}

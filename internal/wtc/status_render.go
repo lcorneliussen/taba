@@ -135,6 +135,9 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			name = row.Collection + "/" + row.Dir
 		}
 		parts := []string{fmt.Sprintf("**%s** (`%s`) — %s", name, branch, tree)}
+		if row.RenamedTo != "" {
+			parts = append(parts, "renamed to "+row.RenamedTo)
+		}
 		if row.Runtime != "" {
 			parts = append(parts, "runtime "+row.Runtime)
 		}
