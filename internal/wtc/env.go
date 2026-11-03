@@ -157,7 +157,9 @@ func (c *Context) RenderEnv() ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", entry.key, err)
 		}
-		fmt.Fprintf(&b, "%s=%s\n", entry.key, q)
+		for _, line := range envcompat.Both(entry.key, q) {
+			fmt.Fprintln(&b, line)
+		}
 	}
 	fmt.Fprintf(&b, "COLLECTION_PORT_BASE=%d\n", base)
 	for _, r := range c.Registry.Repos {
