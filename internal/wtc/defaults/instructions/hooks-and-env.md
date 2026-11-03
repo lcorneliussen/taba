@@ -61,7 +61,8 @@ version of the same "run it again" tool, and catch-up runs it too.
 `42000 + 100·n` across existing collections — and writes two generated,
 uncommitted files at the collection root:
 
-- `.env.collection` — `WTC_COLLECTION`, `WTC_AGENT_NAME`
+- `.env.collection` — each `WTC_` variable also appears as `TABA_` with
+  the same value. `WTC_COLLECTION`, `WTC_AGENT_NAME`
   (`<herdr-session>--<collection>`, what `wtc-open` passes to
   `herdr agent start`), `WTC_CONFIG_ROOT`, `COLLECTION_PORT_BASE`, and one
   `<REPO>_PORT` per registry repo with a `port_offset` (e.g. `api` offset 1 →
