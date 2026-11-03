@@ -22,7 +22,7 @@ jobs:
           mkdir -p "$runtime_dir"
           tar -xzf "$runtime_archive" -C "$runtime_dir" dekit
           docker pull postgres@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
-      - run: go test ./...
+      - run: go test -timeout 20m ./...
         env:
           WTC_TEST_REQUIRE_RUNTIME: "1"
           WTC_TEST_DEKIT: ${{ runner.temp }}/dekit/dekit
@@ -43,5 +43,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go test ./...
+      # internal/wtc takes 5–8 minutes on macOS runners; the 10m default fails on slow runners.
+      - run: go test -timeout 20m ./...
       - run: go build ./cmd/wtc
