@@ -27,9 +27,18 @@ jobs:
           go run ./tools/release-notes check
           go test ./internal/wtc -run '^TestEmbeddedReleaseNotes$'
           echo "path=$notes" >> "$GITHUB_OUTPUT"
+      - name: Check Homebrew tap SSH key
+        env:
+          HOMEBREW_TAP_SSH_PRIVATE_KEY: ${{ secrets.HOMEBREW_TAP_SSH_PRIVATE_KEY }}
+        run: |
+          if [ -z "$HOMEBREW_TAP_SSH_PRIVATE_KEY" ]; then
+            echo "::error::HOMEBREW_TAP_SSH_PRIVATE_KEY is not set. Add a write deploy key on lcorneliussen/homebrew-taba and store the private key as this Actions secret."
+            exit 1
+          fi
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
           args: release --clean --release-notes=${{ steps.notes.outputs.path }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_SSH_PRIVATE_KEY: ${{ secrets.HOMEBREW_TAP_SSH_PRIVATE_KEY }}
