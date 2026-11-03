@@ -32,7 +32,6 @@ func TestTabaConfigRootEnvironmentAndGeneratedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Phase 1 writes the selected value under both spellings.
 	if !strings.Contains(string(data), "WTC_CONFIG_ROOT='"+newRoot+"'\nTABA_CONFIG_ROOT='"+newRoot+"'\n") {
 		t.Fatalf("generated environment should carry the selected root under both spellings: %s", data)
 	}
