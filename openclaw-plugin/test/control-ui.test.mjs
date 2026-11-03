@@ -232,7 +232,7 @@ const busy = collection([
 // The card's cells, row by row: a table is a grid of a header and rows of
 // as many cells.
 const tables = (node) => [...node.all()].filter((n) => n.className === "wtc-table").map((t) => {
-  const cells = t.children;
+  const cells = t.children.filter(n => !n.attributes["data-service-tunnels"]);
   const width = Number(t.attributes["data-columns"]);
   const rows = [];
   for (let i = 0; i < cells.length; i += width) rows.push(cells.slice(i, i + width).map((c) => {
@@ -985,8 +985,8 @@ test("panel: a new tunnel, and one whose client is missing", async () => {
   // The gateway's portal first; without tunnel clients, the others are
   // installed first, and Tailscale is not offered on a personal tailnet.
   assert.deepEqual(pick.children.map((o) => o.value), ["gateway", "cloudflare", "ngrok", "devtunnel"]);
-  assert.equal(pick.children[0].ariaLabel, "gateway · OpenClaw portal");
-  assert.equal(pick.children[1].ariaLabel, "cloudflare · public link · install first");
+  assert.equal(pick.children[0].ariaLabel, "Gateway · OpenClaw portal");
+  assert.equal(pick.children[1].ariaLabel, "Cloudflare · public link · install first");
   // Only reachable on the gateway: the port, not a link.
   assert.ok(texts(host).includes(":42201"));
   calls.length = 0;
@@ -1013,18 +1013,18 @@ test("panel: the ways to a service", async () => {
   const team = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["tailscale", "cloudflare"], teamTailnet: true });
   const pick = [...team.host.all()].find((n) => n.role === "menu");
   assert.deepEqual(pick.children.map((o) => o.ariaLabel),
-    ["gateway · OpenClaw portal", "cloudflare · public link", "ngrok · public link · install first", "devtunnel · your account · install first", "tailscale · team tailnet"]);
+    ["Gateway · OpenClaw portal", "Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Tailscale · team tailnet"]);
   team.view.dispose();
   // Without portal ingress, the gateway's portal comes last, marked.
   const bare = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["cloudflare"], portalIngress: false });
   const choice = [...bare.host.all()].find((n) => n.role === "menu");
   assert.deepEqual(choice.children.map((o) => o.ariaLabel),
-    ["cloudflare · public link", "ngrok · public link · install first", "devtunnel · your account · install first", "gateway · OpenClaw portal · needs ingress"]);
+    ["Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Gateway · OpenClaw portal · needs ingress"]);
   bare.view.dispose();
   // With every other way taken, the one left is named.
   const tunnels = ["cloudflare", "ngrok", "devtunnel"].map((p) => ({ group: "api/web", path: `api/web/${p}`, repo: "api", kind: "endpoint", provider: p, state: "idle" }));
   const last = await mount("panel", { ...collection([repo("api")], [web, ...tunnels]), tunnelProviders: [] });
-  assert.ok([...last.host.all()].some((n) => n.tagName === "BUTTON" && n.title.startsWith("Open gateway (OpenClaw portal)")), "one way left: no choice to make");
+  assert.ok([...last.host.all()].some((n) => n.tagName === "BUTTON" && n.title.startsWith("Open Gateway (OpenClaw portal)")), "one way left: no choice to make");
   last.view.dispose();
 });
 
