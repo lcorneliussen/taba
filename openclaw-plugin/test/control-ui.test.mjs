@@ -1048,7 +1048,7 @@ test("composer: collapsed, the same facts summed", async () => {
   const { host, view } = await mount("composer", busy);
   const card = [...host.all()].find((n) => n.className === "wtc-collection-card");
   const summary = card.children.find((n) => n.tagName === "SUMMARY");
-  assert.equal([...summary.all()].find(n => n.className === "wtc-summary-facts").textContent, "±1↑ 2↓ 3PR1 ✗svc▶1/2");
+  assert.equal([...summary.all()].find(n => n.className === "wtc-summary-facts").textContent, "±1↑ 2↓ 3PR1 ✗svc1/2");
   // ↑ pushes every repository, ↓ catches every one up.
   assert.ok(titled(summary, "Push api, each to its pull request or a new draft one"));
   assert.ok([...summary.all()].some((n) => n.tagName === "BUTTON" && /^Catch up api \(3\)/.test(n.title)));

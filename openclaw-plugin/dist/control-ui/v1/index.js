@@ -434,8 +434,8 @@ const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${
 // as small, that is also its state: ■ stops a running one, ▶ starts a
 // stopped one, ↻ restarts a failed one.
 function stateGlyph(glyph, title, tone, run) {
-  const b = css(el("button", { type: "button", textContent: glyph, title, ariaLabel: title }),
-    `flex:none;box-sizing:border-box;width:var(--wtc-state-size,14px);height:var(--wtc-state-size,14px);display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:${tone};cursor:pointer;font-size:${glyph === "↻" ? 13 : 10}px;line-height:1;padding:0`);
+  const b = css(el("button", { type: "button", className: glyph === "▶" ? "wtc-service-play" : "", title, ariaLabel: title }, glyph === "▶" ? controlIcon(glyph) : glyph),
+    `flex:none;box-sizing:border-box;width:var(--wtc-state-size,14px);height:var(--wtc-state-size,14px);display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:var(--wtc-service-play-bg,transparent);color:var(--wtc-service-play-color,${tone});cursor:pointer;font-size:${glyph === "↻" ? 13 : 10}px;line-height:1;padding:0`);
   b.onclick = (e) => { e?.preventDefault(); e?.stopPropagation(); return run(); };
   return b;
 }
@@ -556,9 +556,9 @@ function newTunnel(g, svc, data = {}, { compact = false } = {}) {
   return pick;
 }
 
-// Geometric header glyphs avoid font-dependent centres and spinning hit targets.
+// Geometric control glyphs avoid font-dependent centres and spinning hit targets.
 const controlIcon = glyph => {
-  const paths = { "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
+  const paths = { "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg"), path = document.createElementNS(ns, "path");
   for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "14", height: "14", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
   svg.setAttribute("class", "wtc-header-glyph"); svg.style.cssText = "display:block;transform-box:fill-box;transform-origin:center";
@@ -650,6 +650,8 @@ const repositoryColumns = (narrow) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }]
   : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "108px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
+.wtc-service-play:is(:hover,:focus-visible) { --wtc-service-play-bg:var(--bg-hover,rgba(128,128,128,.12));--wtc-service-play-color:var(--text-strong,var(--text,inherit)); }
+
 .wtc-service-label:disabled { cursor:default !important;text-decoration:none !important; }
 .wtc-next-step { width:${REPO_NEXT_WIDTH}px;justify-content:flex-start !important; }
 .wtc-next-step>:first-child { width:104px;flex:0 0 104px; }
