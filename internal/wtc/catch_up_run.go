@@ -614,6 +614,22 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 		}
 		return report, inventoryErr
 	}
+	// Every collection sharing an owner gets a say before the fetch: one whose
+	// registry predates a rename cannot repoint origin, so a later one with the
+	// alias must still be asked. Once origin moved, the others are no-ops.
+	if !opt.DryRun {
+		for _, t := range targets {
+			repo, ok := c.catchUpOriginRepo(t)
+			if !ok || t.noRemote {
+				continue
+			}
+			if changed, err := syncOwnerOrigin(t.owner, repo); err != nil {
+				report.add("origin", t.collection, t.repo, "failed", err.Error(), "", "", "")
+			} else if changed {
+				report.add("origin", t.collection, t.repo, "updated", "origin now follows the registry remote "+repo.Remote, "", "", "")
+			}
+		}
+	}
 	fetched := map[string]string{}
 	for _, t := range targets {
 		if _, ok := fetched[t.owner]; ok {
@@ -624,12 +640,6 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 			// Reported on its own outcome, which callers may treat as they
 			// choose; it does not fail the sweep by itself.
 			state, reason = "no-remote", "no remote; reconciling against local branches"
-		} else if repo, ok := c.catchUpOriginRepo(t); ok && !opt.DryRun {
-			if changed, err := syncOwnerOrigin(t.owner, repo); err != nil {
-				report.add("origin", t.collection, t.repo, "failed", err.Error(), "", "", "")
-			} else if changed {
-				report.add("origin", t.collection, t.repo, "updated", "origin now follows the registry remote "+repo.Remote, "", "", "")
-			}
 		}
 		if !t.noRemote && !opt.DryRun {
 			if err := catchUpFetch(t.owner); err != nil {

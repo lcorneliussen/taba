@@ -66,8 +66,13 @@ func TestRegistryAliasKeepsRenamedRepositoryWorking(t *testing.T) {
 	if refresh, err := target.RefreshRegistry(); err != nil || len(refresh.Missing) != 0 || len(refresh.Unlisted) != 0 {
 		t.Fatalf("registry refresh should count the alias owner: %+v, %v", refresh, err)
 	}
-	if worktree, _, _, err := target.ReviewRepo("gadget"); worktree != filepath.Join(old.Collection, "widget") && (err == nil || strings.Contains(err.Error(), "no worktree")) {
-		t.Fatalf("review should find the alias folder: %s, %v", worktree, err)
+	// The file:// fixture is no supported forge, so finding the folder ends at
+	// the forge check; a missing folder would fail earlier with "no worktree".
+	if _, _, _, err := target.ReviewRepo("gadget"); err == nil || !strings.Contains(err.Error(), "unsupported forge remote for gadget") {
+		t.Fatalf("review should reach the alias folder: %v", err)
+	}
+	if report, err := target.CatchUp(CatchUpOptions{Repos: []string{"gadget"}, DryRun: true}); err != nil {
+		t.Fatalf("--repos should accept the new name for an alias folder: %v %+v", err, report.Outcomes)
 	}
 	env, err := target.RenderEnv()
 	if err != nil {

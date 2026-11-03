@@ -127,8 +127,9 @@ func (c *Context) bareFor(name string) (string, error) {
 	return filepath.Join(c.Workspace, ".bare", repo.Name+".git"), nil
 }
 
-// remoteRepoParts splits a URL-form remote into its host and owner path and
-// the repository name. Local paths and unrecognised forms are not split.
+// remoteRepoParts splits a URL-form remote (scheme://, including file://, or
+// scp-style user@host:path) into its host and owner path and the repository
+// name. Plain filesystem paths and unrecognised forms are not split.
 func remoteRepoParts(remote string) (place, name string, ok bool) {
 	remote = strings.TrimSpace(remote)
 	if !strings.Contains(remote, "://") && !scpRemote.MatchString(remote) {
@@ -147,7 +148,8 @@ func remoteRepoParts(remote string) (place, name string, ok bool) {
 // the repository by its registry name or an alias, and the registry remote
 // uses a new name. Everything else is left alone: spellings of one repository
 // (SSH or HTTPS, a .git suffix), forks and transfers, other repositories of
-// the same owner such as a renamed mirror, and local paths. A collection on an
+// the same owner such as a renamed mirror, and plain filesystem paths (a
+// file:// URL is a URL and follows the rule). A collection on an
 // older registry revision does not set it back, since the new name is not one
 // of its names. It reports whether origin changed.
 func syncOwnerOrigin(owner string, repo Repo) (bool, error) {
