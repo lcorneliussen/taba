@@ -64,7 +64,7 @@ or the complete embedded instruction fallback.
 ```sh
 taba harness init agent-harness \
   --remote git@github.com:example-org/agent-harness.git \
-  --cli-version 0.1.59
+  --cli-version 0.2.0
 ```
 
 The command requires an explicit version, creates six files, and refuses to
