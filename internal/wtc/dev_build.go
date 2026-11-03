@@ -14,7 +14,7 @@ import (
 	"taba.sh/taba/internal/branding"
 )
 
-// A collection may carry its own build of wtc, made from the wtc-cli checkout
+// A collection may carry its own build of wtc, made from the CLI checkout
 // beside the harness. Any wtc started inside that collection hands over to it
 // when it is the same version or newer, so panes, agents and hooks all run the
 // code under development without PATH changes, and fall back to the pinned
@@ -156,7 +156,8 @@ func DevVersion(describe string) (string, error) {
 	return fmt.Sprintf("%s.%s.%d-dev.%s+%s", m[1], m[2], patch+1, m[4], meta), nil
 }
 
-// DevBuildSource finds the wtc-cli checkout among the collection's siblings.
+// DevBuildSource finds the CLI checkout (either module path) among the
+// collection's siblings.
 func DevBuildSource(collection string) (string, error) {
 	entries, err := os.ReadDir(collection)
 	if err != nil {

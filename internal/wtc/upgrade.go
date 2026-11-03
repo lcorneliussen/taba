@@ -22,8 +22,9 @@ import (
 const (
 	cliReleaseRepo = "lcorneliussen/taba"
 	cliMiseTool    = "github:" + cliReleaseRepo
-	// legacyCLIMiseTool is the pin key before the repository rename; GitHub
-	// redirects it, and 0.1.x binaries still render it.
+	// legacyCLIMiseTool is the pin key before the repository rename. 0.1.x
+	// binaries still render it; GitHub's rename redirect is expected to keep it
+	// installable, which is checked once a release is published.
 	legacyCLIMiseTool = "github:lcorneliussen/wtc-cli"
 )
 
