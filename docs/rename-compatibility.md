@@ -32,7 +32,7 @@ New-prefix defaults can be written in the existing `wtc.env` file. A separate [c
 
 ## Generated environments carry both names
 
-From the first taba release ([#202](https://github.com/lcorneliussen/wtc-cli/issues/202)), every `WTC_` variable that the CLI generates is also written as `TABA_` with the same value:
+From the first taba release ([#202](https://github.com/lcorneliussen/wtc-cli/issues/202)), every generated `WTC_` setting is also written as `TABA_` with the same value:
 
 - `.env.collection`: `COLLECTION`, `AGENT_NAME` and `CONFIG_ROOT`, legacy spelling first;
 - `.env.toolchain` and the `wtc agent-env` shell snippet that agent hooks prepend: `TOOLCHAIN_PATH`;
@@ -47,6 +47,6 @@ An older client that regenerates `.env.collection` writes only the `WTC_` lines 
 
 ## Names that stay
 
-Hook payload fields, internal gateway/retirement transport (`WTC_RETIRE_*`) and review-statistics transport (`WTC_REVIEW_STATS_FILE`) keep their existing names; they pass between processes of one client and are not settings. Development controls (`WTC_DEV_*`) and test controls (`WTC_TEST_*`) are not aliased. No directories, harness pins, skills, repositories or plugin IDs are renamed by this change.
+The `WTC_AGENT_ENV=1` marker in the `wtc agent-env` snippet, hook payload fields, internal gateway/retirement transport (`WTC_RETIRE_*`) and review-statistics transport (`WTC_REVIEW_STATS_FILE`) keep their existing names; they pass between processes of one client and are not settings. Development controls (`WTC_DEV_*`) and test controls (`WTC_TEST_*`) are not aliased. No directories, harness pins, skills, repositories or plugin IDs are renamed by this change.
 
 Persistent [configuration inputs](rename-config-inputs.md) and [collection-state readers](rename-collection-state.md) have dual-name selection, and [invocation names](rename-invocation.md) cover the `taba` executable.
