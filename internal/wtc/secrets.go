@@ -53,7 +53,7 @@ func (c *Context) LinkSecrets(opt SecretLinkOptions) (SecretLinkResult, error) {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !entry.IsDir() || !validRepoName.MatchString(name) || opt.Repo != "" && opt.Repo != name {
+		if !entry.IsDir() || !validRepoName.MatchString(name) || opt.Repo != "" && !c.sameRepository(opt.Repo, name) {
 			continue
 		}
 		worktreeName := name

@@ -31,6 +31,16 @@ func (c *Context) Repository(name string) (Repo, error) {
 	return Repo{}, fmt.Errorf("repository %q is not in the registry", name)
 }
 
+// sameRepository reports whether two names are one registry repository, by
+// name or alias, or are equal.
+func (c *Context) sameRepository(a, b string) bool {
+	if a == b {
+		return true
+	}
+	repo, err := c.Repository(a)
+	return err == nil && repo.Answers(b)
+}
+
 // WorktreeDir is the sibling folder for a repository name or alias: the
 // folder of that exact name when present, else the first present folder under
 // the repository's name or aliases, else the folder for the name as given.
@@ -133,10 +143,13 @@ func remoteRepoParts(remote string) (place, name string, ok bool) {
 }
 
 // syncOwnerOrigin points a shared owner's origin at the registry remote after
-// a forge rename: both are URLs on the same host and owner, and only the
-// repository name differs. Spellings of one repository (SSH or HTTPS, a .git
-// suffix) and deliberate differences such as a fork, a mirror or a local path
-// are left alone. It reports whether origin changed.
+// a forge rename: both are URLs on the same host and owner, origin still names
+// the repository by its registry name or an alias, and the registry remote
+// uses a new name. Everything else is left alone: spellings of one repository
+// (SSH or HTTPS, a .git suffix), forks and transfers, other repositories of
+// the same owner such as a renamed mirror, and local paths. A collection on an
+// older registry revision does not set it back, since the new name is not one
+// of its names. It reports whether origin changed.
 func syncOwnerOrigin(owner string, repo Repo) (bool, error) {
 	if repo.Remote == "" || repo.Owner != "" {
 		return false, nil
@@ -148,6 +161,13 @@ func syncOwnerOrigin(owner string, repo Repo) (bool, error) {
 	fromPlace, fromName, fromOK := remoteRepoParts(current)
 	toPlace, toName, toOK := remoteRepoParts(repo.Remote)
 	if !fromOK || !toOK || fromPlace != toPlace || strings.EqualFold(fromName, toName) {
+		return false, nil
+	}
+	known := false
+	for _, name := range repo.Names() {
+		known = known || strings.EqualFold(fromName, name)
+	}
+	if !known {
 		return false, nil
 	}
 	if _, err := gitOutput("--git-dir="+owner, "remote", "set-url", "origin", repo.Remote); err != nil {

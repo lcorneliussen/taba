@@ -14,23 +14,24 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Repo is one registry entry. Aliases are earlier names of a renamed
+// repository: existing folders, bare owners, enlistments and service files
+// under an alias keep working.
 type Repo struct {
-	Name          string   `yaml:"name" json:"name"`
-	Remote        string   `yaml:"remote" json:"remote"`
-	DefaultRef    string   `yaml:"default_ref" json:"default_ref"`
-	PortOffset    *int     `yaml:"port_offset" json:"port_offset,omitempty"`
-	Role          string   `yaml:"role" json:"role,omitempty"`
-	IssuesPrefix  string   `yaml:"issues_prefix" json:"issues_prefix,omitempty"`
-	ProductionRef string   `yaml:"production_ref" json:"production_ref,omitempty"`
-	ReleaseRef    string   `yaml:"release_ref" json:"release_ref,omitempty"`
-	ProdPaths     []string `yaml:"prod_paths" json:"prod_paths,omitempty"`
-	IDE           string   `yaml:"ide" json:"ide,omitempty"`
-	MergeStrategy string   `yaml:"merge_strategy" json:"merge_strategy,omitempty"`
-	Owner         string   `yaml:"owner" json:"owner,omitempty"` // ad-hoc only: an existing checkout's Git dir
-	// Aliases are earlier names of a renamed repository. Existing folders,
-	// bare owners, enlistments and service files under an alias keep working.
-	Aliases []string       `yaml:"aliases" json:"aliases,omitempty"`
-	Extra   map[string]any `yaml:",inline" json:"extra,omitempty"`
+	Name          string         `yaml:"name" json:"name"`
+	Remote        string         `yaml:"remote" json:"remote"`
+	DefaultRef    string         `yaml:"default_ref" json:"default_ref"`
+	PortOffset    *int           `yaml:"port_offset" json:"port_offset,omitempty"`
+	Role          string         `yaml:"role" json:"role,omitempty"`
+	IssuesPrefix  string         `yaml:"issues_prefix" json:"issues_prefix,omitempty"`
+	ProductionRef string         `yaml:"production_ref" json:"production_ref,omitempty"`
+	ReleaseRef    string         `yaml:"release_ref" json:"release_ref,omitempty"`
+	ProdPaths     []string       `yaml:"prod_paths" json:"prod_paths,omitempty"`
+	IDE           string         `yaml:"ide" json:"ide,omitempty"`
+	MergeStrategy string         `yaml:"merge_strategy" json:"merge_strategy,omitempty"`
+	Owner         string         `yaml:"owner" json:"owner,omitempty"` // ad-hoc only: an existing checkout's Git dir
+	Aliases       []string       `yaml:"aliases" json:"aliases,omitempty"`
+	Extra         map[string]any `yaml:",inline" json:"extra,omitempty"`
 }
 
 // Answers reports whether name is this repository's name or one of its aliases.

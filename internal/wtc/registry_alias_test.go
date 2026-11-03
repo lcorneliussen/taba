@@ -34,9 +34,13 @@ func TestRegistryAliasKeepsRenamedRepositoryWorking(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The forge repository moves: same history, new remote.
-	moved := "file://" + filepath.Join(c.Workspace, "source-gadget")
-	fixtureGit(t, "clone", "-q", filepath.Join(c.Workspace, "source-widget"), strings.TrimPrefix(moved, "file://"))
-	fixtureGit(t, "--git-dir="+filepath.Join(c.Workspace, ".bare", "widget.git"), "remote", "set-url", "origin", "file://"+filepath.Join(c.Workspace, "source-widget"))
+	// The forge serves the repository as forge/widget, then as forge/gadget.
+	forge := filepath.Join(c.Workspace, "forge")
+	fixtureGit(t, "clone", "-q", "--bare", filepath.Join(c.Workspace, "source-widget"), filepath.Join(forge, "widget"))
+	fixtureGit(t, "clone", "-q", "--bare", filepath.Join(c.Workspace, "source-widget"), filepath.Join(forge, "gadget"))
+	moved := "file://" + filepath.Join(forge, "gadget")
+	fixtureGit(t, "--git-dir="+filepath.Join(c.Workspace, ".bare", "widget.git"), "remote", "set-url", "origin", "file://"+filepath.Join(forge, "widget"))
+	fixtureFile(t, filepath.Join(c.ConfigRoot, "widget", "secrets.txt"), "synthetic fixture\n", 0600)
 	renameWidget(t, old.Collection, moved)
 	renameWidget(t, c.Collection, moved)
 	configRoot := c.ConfigRoot
@@ -58,6 +62,12 @@ func TestRegistryAliasKeepsRenamedRepositoryWorking(t *testing.T) {
 	}
 	if bare, err := target.bareFor("gadget"); err != nil || bare != owner {
 		t.Fatalf("owner = %s, %v", bare, err)
+	}
+	if refresh, err := target.RefreshRegistry(); err != nil || len(refresh.Missing) != 0 || len(refresh.Unlisted) != 0 {
+		t.Fatalf("registry refresh should count the alias owner: %+v, %v", refresh, err)
+	}
+	if worktree, _, _, err := target.ReviewRepo("gadget"); worktree != filepath.Join(old.Collection, "widget") && (err == nil || strings.Contains(err.Error(), "no worktree")) {
+		t.Fatalf("review should find the alias folder: %s, %v", worktree, err)
 	}
 	env, err := target.RenderEnv()
 	if err != nil {
@@ -118,6 +128,17 @@ func TestRegistryAliasKeepsRenamedRepositoryWorking(t *testing.T) {
 	if common := fixtureGit(t, "-C", filepath.Join(fresh.Collection, "gadget"), "rev-parse", "--path-format=absolute", "--git-common-dir"); !sameFile(common, owner) {
 		t.Fatalf("new checkout owner = %s, want %s", common, owner)
 	}
+	// Secrets kept under the old name link into the new folder. The fixture
+	// registry edit is uncommitted, so the new harness needs it too.
+	renameWidget(t, fresh.Collection, moved)
+	if after, err := OpenCollection(fresh.Collection); err != nil {
+		t.Fatal(err)
+	} else if _, err := after.LinkSecrets(SecretLinkOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(filepath.Join(fresh.Collection, "gadget", "secrets.txt")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("secret under the alias was not linked: %v", err)
+	}
 
 	// The registry edit stands in for a harness commit; it is the only change.
 	retired, err := c.RetireCollection(RetireOptions{Name: "before", Force: true})
@@ -151,24 +172,54 @@ func sameFile(a, b string) bool {
 }
 
 func TestOwnerOriginFollowsOnlyARenameInPlace(t *testing.T) {
+	site := Repo{Name: "wtc-site", Remote: "git@github.com:org/taba-site.git"}
+	gadget := Repo{Name: "gadget", Aliases: []string{"widget"}, Remote: "git@github.com:org/gadget.git"}
+	older := Repo{Name: "widget", Remote: "git@github.com:org/widget.git"} // registry before the rename
 	for _, c := range []struct {
-		from, to string
-		want     bool
+		from string
+		repo Repo
+		want bool
 	}{
-		{"git@github.com:org/wtc-site.git", "git@github.com:org/taba-site.git", true},
-		{"https://github.com/org/wtc-site", "git@github.com:org/taba-site.git", true},
-		{"git@github.com:org/taba-site.git", "https://github.com/org/taba-site", false},
-		{"git@github.com:fork/widget.git", "git@github.com:org/widget.git", false},
-		{"git@github.com:org/widget.git", "git@gitlab.com:org/gadget.git", false},
-		{"/srv/mirror/widget", "git@github.com:org/gadget.git", false},
-		{"git@github.com:org/widget.git", "/srv/gadget", false},
+		{"git@github.com:org/wtc-site.git", site, true},
+		{"https://github.com/org/wtc-site", site, true},
+		{"git@github.com:org/widget.git", gadget, true},
+		{"git@github.com:org/taba-site.git", Repo{Name: "taba-site", Remote: "https://github.com/org/taba-site"}, false},
+		{"git@github.com:fork/widget.git", gadget, false},
+		{"git@gitlab.com:org/widget.git", gadget, false},
+		{"git@github.com:org/widget-mirror.git", gadget, false},
+		{"git@github.com:org/gadget.git", older, false},
+		{"/srv/mirror/widget", gadget, false},
+		{"git@github.com:org/widget.git", Repo{Name: "gadget", Aliases: []string{"widget"}, Remote: "/srv/gadget"}, false},
 	} {
 		owner := filepath.Join(t.TempDir(), "o.git")
 		fixtureGit(t, "init", "-q", "--bare", owner)
 		fixtureGit(t, "--git-dir="+owner, "remote", "add", "origin", c.from)
-		changed, err := syncOwnerOrigin(owner, Repo{Name: "x", Remote: c.to})
+		changed, err := syncOwnerOrigin(owner, c.repo)
 		if err != nil || changed != c.want {
-			t.Errorf("%s -> %s: changed=%t err=%v, want %t", c.from, c.to, changed, err, c.want)
+			t.Errorf("%s -> %s: changed=%t err=%v, want %t", c.from, c.repo.Remote, changed, err, c.want)
 		}
+	}
+}
+
+func TestCheckoutPointsRenamedOwnerAtNewRemote(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	forge := filepath.Join(c.Workspace, "forge")
+	for _, name := range []string{"widget", "gadget"} {
+		fixtureGit(t, "clone", "-q", "--bare", filepath.Join(c.Workspace, "source-widget"), filepath.Join(forge, name))
+	}
+	owner := filepath.Join(c.Workspace, ".bare", "widget.git")
+	fixtureGit(t, "--git-dir="+owner, "remote", "set-url", "origin", "file://"+filepath.Join(forge, "widget"))
+	renameWidget(t, c.Collection, "file://"+filepath.Join(forge, "gadget"))
+	configRoot := c.ConfigRoot
+	c, err := OpenCollection(c.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.ConfigRoot = configRoot
+	if _, err := c.NewCollection(NewOptions{Slug: "fresh", Repos: []string{"gadget"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixtureGit(t, "--git-dir="+owner, "remote", "get-url", "origin"); got != "file://"+filepath.Join(forge, "gadget") {
+		t.Fatalf("checkout left origin at %s", got)
 	}
 }
