@@ -1,7 +1,7 @@
 import {readFile,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {resolve} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {pathToFileURL,fileURLToPath} from 'node:url';
 // Run against a separately installed Playwright/Chromium; all data is synthetic.
 // Usage: node openclaw-plugin/tools/check-control-stability.mjs <playwright module> <output directory>
 const [playwrightPath,outputPath]=process.argv.slice(2);
@@ -29,5 +29,5 @@ try{for(const width of [390,1100])for(const state of ['suggestion','collapsed','
  const fact=await target.evaluate(n=>({connected:window.originalTarget.isConnected,same:n===window.originalTarget,focused:document.activeElement===n,leaves:window.leaves,statusCalls:window.statusCalls}));
  assert(fact.connected&&fact.same&&fact.focused);assert.equal(fact.leaves,0);assert.equal(fact.statusCalls,2,'one initial load and one explicit simulated status tick');
  if(state!=='suggestion'){assert.equal(tick.busyAtStart,'true');assert.equal(await target.getAttribute('aria-busy'),'false');}if(['collapsed','expanded'].includes(state))assert.equal(tick.title,tick.originalTitle,'hovered refresh tooltip must not be rewritten');if(state==='sidebar'){assert(await page.evaluate(()=>window.originalAge.isConnected&&window.originalAge===document.querySelector('.wtc-time-label')));assert(tick.ages.includes('Updated 1m ago'));assert.equal(await root.locator('.wtc-time-label').first().innerText(),'Updated just now');}assert.deepEqual(await target.boundingBox(),before);assert.deepEqual(errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
- await page.screenshot({path:new URL(`${state}-${width}.png`,out).pathname});results.push({state,width,...fact,ageTick:tick.ages,refreshBusyStart:tick.busyAtStart,errors});await page.close();
+ await page.screenshot({path:fileURLToPath(new URL(`${state}-${width}.png`,out))});results.push({state,width,...fact,ageTick:tick.ages,refreshBusyStart:tick.busyAtStart,errors});await page.close();
 }await writeFile(new URL('browser-stability.json',out),JSON.stringify(results,null,2));console.log(`${results.length} hover/focus/update/tick cases passed`);}finally{await browser.close()}
