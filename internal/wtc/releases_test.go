@@ -22,7 +22,7 @@ func TestEmbeddedReleaseNotes(t *testing.T) {
 	for i, note := range notes {
 		// Notes before 0.2.0 keep their original "# wtc" heading.
 		header := "# " + branding.Product + " " + note.Version + "\n"
-		if v, err := releaseVersion(note.Version); err == nil && v.LessThan(semver.MustParse("0.2.0")) {
+		if v, err := releaseVersion(note.Version); err == nil && v.LessThan(semver.MustParse("0.2.0-0")) {
 			header = "# wtc " + note.Version + "\n"
 		}
 		if !strings.HasPrefix(note.Content, header) || strings.TrimSpace(strings.TrimPrefix(note.Content, header)) == "" {

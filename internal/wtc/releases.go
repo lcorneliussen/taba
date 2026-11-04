@@ -281,8 +281,9 @@ func visibleContent(body string) bool {
 }
 
 // AssembleReleaseNotes renders fragments as one release document headed
-// "# <branding.Product> <version>". Sections with the same heading are merged; headings keep
-// the order in which fragments, in ReadReleaseFragments order, first use them.
+// "# <branding.Product> <version>". Sections with the same heading are
+// merged; headings keep the order in which fragments, in ReadReleaseFragments
+// order, first use them.
 func AssembleReleaseNotes(version string, fragments []ReleaseFragment) string {
 	var order []string
 	bodies := map[string][]string{}
