@@ -7,6 +7,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/lcorneliussen/wtc-cli/internal/branding"
 )
 
@@ -21,7 +22,7 @@ func TestEmbeddedReleaseNotes(t *testing.T) {
 	for i, note := range notes {
 		// Notes before 0.2.0 keep their original "# wtc" heading.
 		header := "# " + branding.Product + " " + note.Version + "\n"
-		if !strings.HasPrefix(note.Content, header) {
+		if v, err := releaseVersion(note.Version); err == nil && v.LessThan(semver.MustParse("0.2.0")) {
 			header = "# wtc " + note.Version + "\n"
 		}
 		if !strings.HasPrefix(note.Content, header) || strings.TrimSpace(strings.TrimPrefix(note.Content, header)) == "" {

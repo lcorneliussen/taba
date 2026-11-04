@@ -8,7 +8,8 @@ import (
 	"strings"
 )
 
-// Product names the project in headings: release notes and status headers.
+// Product names the project in release-note headings, status headers and the
+// status snapshot's CLI line.
 // The 0.2 releases carry both names while the wtc command remains; 0.3.0
 // drops "/wtc" (#203).
 const Product = "taba/wtc"
