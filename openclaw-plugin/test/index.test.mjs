@@ -1,7 +1,7 @@
 // The gateway side of the plugin, where it needs no gateway.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import plugin, { agentGitIdentity, collectionFolder, decideProjects, matchProjects, openaiDecisions, pullRequestChanges, pullRequestWatch, versionWarning, wtcVersionOf } from "../index.js";
+import plugin, { agentGitIdentity, collectionFolder, decideProjects, matchProjects, openaiDecisions, pullRequestChanges, pullRequestWatch, repositoryOrigin, versionWarning, wtcVersionOf } from "../index.js";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -774,7 +774,7 @@ test("unavailable checkouts retain canonical identity without fetching or invent
     entry: { parentSessionKey: "agent:main:c", projectId: repo, worktree: { branch: "openclaw/test", repoRoot: `/clones/${i === 3 ? "api" : repo}` }, workspaceDir: path.join(root, repo) },
   }));
   mkdirSync(path.join(root, "web", ".git"), { recursive: true });
-  let fail = false;
+  let fail = false, taskHealthy = false;
   plugin.register({
     pluginConfig: {},
     runtime: {
@@ -784,6 +784,7 @@ test("unavailable checkouts retain canonical identity without fetching or invent
         calls.push(argv);
         if (argv[1] === "--version") return { code: 0, stdout: "wtc version dev" };
         if (argv[1] === "status") {
+          if (taskHealthy && argv[2] === "test") return { code: 0, stdout: JSON.stringify({ test: { repos: [{path: path.join(root, "api"), repo:"api", forge:"github", branch:"openclaw/test"}], subSessions:[{path:path.join(root,"worker"),repo:"api",toMerge:3,behind:2}] } }) };
           if (fail) throw new Error("status timed out");
           return { code: 0, stdout: JSON.stringify({ test: { repos: [] } }) };
         }
@@ -814,4 +815,19 @@ test("unavailable checkouts retain canonical identity without fetching or invent
   const worker = (await load()).subSessions[0].repos[0];
   assert.equal(worker.taskSessionKey, null, "display identity cannot make an unavailable checkout a merge target");
   assert.equal(worker.taskBranch, null, "catch-up cannot target an unavailable task checkout");
+  taskHealthy = true;
+  const failedWorker = (await load()).subSessions[0].repos[0];
+  assert.equal(failedWorker.taskSessionKey, null, "a healthy task cannot make a failed worker actionable");
+  assert.equal(failedWorker.taskBranch, null);
+  assert.equal(failedWorker.toMerge, null);
+  assert.equal(failedWorker.behind, null);
+});
+
+
+test("fallback repository identity accepts supported SSH origins without credentials", () => {
+  for (const url of ["bitbucket.org:example-team/docs.git", "git@bitbucket.org:example-team/docs.git", "ssh://git@bitbucket.org:22/example-team/docs.git", "https://user:secret@bitbucket.org/example-team/docs.git"]) {
+    assert.deepEqual(repositoryOrigin(url), {forge:"bitbucket",owner:"example-team",repo:"docs"});
+  }
+  assert.deepEqual(repositoryOrigin("ssh://git@github.com:22/example-org/api.git"), {forge:"github",owner:"example-org",repo:"api"});
+  for (const url of ["https://elsewhere.invalid/team/repo", "https://github.com.evil.invalid/team/repo", "file:///github.com/team/repo", "https://github.com/team/../repo", "garbage"]) assert.deepEqual(repositoryOrigin(url), {});
 });

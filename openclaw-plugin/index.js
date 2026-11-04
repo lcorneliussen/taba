@@ -68,6 +68,18 @@ export function parseBitbucketRepo(spec) {
   return { workspace: m[1], repo: m[2], cloneUrl: `https://bitbucket.org/${m[1]}/${m[2]}.git`, webUrl: `https://bitbucket.org/${m[1]}/${m[2]}` };
 }
 
+// Repository identity only: credentials, custom ports and access never leave this read.
+export function repositoryOrigin(remote) {
+  const text = String(remote ?? "").trim();
+  const scp = text.match(/^(?:[^/@:\s]+@)?(github\.com|bitbucket\.org):(.+)$/i);
+  try {
+    const url = new URL(scp ? `ssh://${scp[1]}/${scp[2]}` : text);
+    if (!["https:", "http:", "ssh:"].includes(url.protocol) || !["github.com", "bitbucket.org"].includes(url.hostname.toLowerCase())) return {};
+    const parts = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/);
+    return parts && ![parts[1], parts[2]].some(p => p === "." || p === "..") ? { forge: url.hostname.toLowerCase() === "github.com" ? "github" : "bitbucket", owner: parts[1], repo: parts[2] } : {};
+  } catch { return {}; }
+}
+
 // The person a session belongs to, as the Bitbucket plugin decides it: the
 // assigned human owner, otherwise the signed-in person who created it, for a
 // spawned session that of its parent.
@@ -574,8 +586,7 @@ export default {
       const value = run(["git", "config", "--no-includes", "--file", path.join(root, ".git", "config"), "--get", "remote.origin.url"], { timeoutMs: 5000 })
         .then(r => {
           if (r.code !== 0) return {};
-          const m = r.stdout.trim().match(/^(?:https?:\/\/(?:[^/@]+@)?|ssh:\/\/git@|git@)(github\.com|bitbucket\.org)[/:]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i);
-          return m && ![m[2], m[3]].some(p => p === "." || p === "..") ? { forge: m[1].toLowerCase() === "github.com" ? "github" : "bitbucket", owner: m[2], repo: m[3] } : {};
+          return repositoryOrigin(r.stdout);
         }, () => ({}));
       identities.set(root, { at: Date.now(), value });
       return value;
@@ -657,13 +668,13 @@ export default {
       const subs = new Map();
       for (const r of rows.filter((r) => r.sub)) {
         if (!subs.has(r.sub)) subs.set(r.sub, { name: r.sub, collection: collectionName({ worktree: { branch: r.branch } }) || r.sub, repos: [] });
-        const c = compared.get(r.path);
+        const c = r.error ? null : compared.get(r.path);
         subs.get(r.sub).repos.push({ ...r, toMerge: c?.toMerge ?? null, mergeError: c?.error ?? null,
           behind: c?.behind ?? null, uncommitted: c?.uncommitted ?? [],
           // The collection's own checkout of the repository, which a merge
           // goes into, and its branch, which ↓ merges into the sub-session.
-          taskSessionKey: result.repos.find((t) => !t.error && t.repo && t.repo === r.repo)?.sessionKey ?? null,
-          taskBranch: result.repos.find((t) => !t.error && t.repo && t.repo === r.repo)?.branch ?? null });
+          taskSessionKey: r.error ? null : result.repos.find((t) => !t.error && t.repo && t.repo === r.repo)?.sessionKey ?? null,
+          taskBranch: r.error ? null : result.repos.find((t) => !t.error && t.repo && t.repo === r.repo)?.branch ?? null });
       }
       result.subSessions = [...subs.values()].sort((a, b) => a.name.localeCompare(b.name));
       tell(agentId, parentKey, watch.observe(agentId, parentKey, result.repos));
