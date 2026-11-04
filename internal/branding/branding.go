@@ -1,5 +1,7 @@
-// Package branding identifies the invoked command without renaming on-disk or
-// protocol identifiers during the compatibility window.
+// Package branding names the command for display: Name and Text follow the
+// invoked executable, and Product is the fixed project label for headings.
+// On-disk and protocol identifiers are not renamed during the compatibility
+// window.
 package branding
 
 import (
