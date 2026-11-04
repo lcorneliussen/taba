@@ -142,23 +142,26 @@ func GatewayProjectDir(stateDir string, origin Origin) string {
 	if !validProjectOrigin(origin) {
 		return ""
 	}
-	dirs, _ := filepath.Glob(filepath.Join(stateDir, "projects", "*", origin.Repo))
-	dirs = append(dirs, filepath.Join(stateDir, "repos", origin.Repo))
-	for _, dir := range dirs {
-		if projectMatchesOrigin(dir, origin) {
-			return dir
-		}
-	}
-	var found string
-	for _, dir := range gatewayProjectDirs(stateDir) {
-		if projectMatchesOrigin(dir, origin) {
-			if found != "" && found != dir {
-				return ""
+	dirs := gatewayProjectDirs(stateDir)
+	for _, aliases := range []bool{false, true} {
+		var found string
+		for _, dir := range dirs {
+			matches := sameOrigin(GatewayProjectOrigin(dir), origin)
+			if aliases {
+				matches = projectMatchesOrigin(dir, origin)
 			}
-			found = dir
+			if matches {
+				if found != "" && found != dir {
+					return ""
+				}
+				found = dir
+			}
+		}
+		if found != "" {
+			return found
 		}
 	}
-	return found
+	return ""
 }
 
 // CheckoutsStatus describes the checkouts at paths. With pullRequests it also asks

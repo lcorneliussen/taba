@@ -512,7 +512,9 @@ reads the record without changing Git state or making forge requests.
 
 Old collections keep their older registry worktrees and conversation IDs.
 Permitted sandbox metadata reports the verified current origin as its remote,
-with logical alias names, verified origin aliases, and the stable project ID,
+while retaining the registered remote for exact-match lookup. It carries declared
+logical aliases separately from inferred origin short names and verified origin
+aliases, together with the stable project ID,
 without exposing the record or local paths. This grants no clone or publish
 permission. Ambiguous short names require an explicit registered name or URL;
 logical aliases never grant a forge URL. Exact registered remotes take precedence

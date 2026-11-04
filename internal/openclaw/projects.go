@@ -19,14 +19,15 @@ type DiscoveryProject struct {
 }
 
 type ProjectRepository struct {
-	OriginAliases []string `json:"origin_aliases,omitempty"`
-	Aliases       []string `json:"aliases,omitempty"`
-	Name          string   `json:"name"`
-	Remote        string   `json:"remote"`
-	Role          string   `json:"role,omitempty"`
-	DefaultRef    string   `json:"default_ref,omitempty"`
-	ProjectID     string   `json:"project_id,omitempty"`
-	Destination   string   `json:"destination,omitempty"`
+	RegisteredRemote string   `json:"registered_remote,omitempty"`
+	OriginAliases    []string `json:"origin_aliases,omitempty"`
+	Aliases          []string `json:"aliases,omitempty"`
+	Name             string   `json:"name"`
+	Remote           string   `json:"remote"`
+	Role             string   `json:"role,omitempty"`
+	DefaultRef       string   `json:"default_ref,omitempty"`
+	ProjectID        string   `json:"project_id,omitempty"`
+	Destination      string   `json:"destination,omitempty"`
 }
 
 // SandboxProjects contains only operator-allowed metadata. It grants no Git

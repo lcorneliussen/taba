@@ -114,3 +114,18 @@ func TestGatewayProjectOriginAliasRecordCannotFollowARepoint(t *testing.T) {
 		t.Fatal("stale identity record followed a different origin")
 	}
 }
+
+func TestGatewayProjectCurrentOriginWinsOverOldDirectoryAlias(t *testing.T) {
+	state := t.TempDir()
+	oldURL := "https://github.com/example-org/widget.git"
+	renamed := identityClone(t, state, "a", "widget", "https://github.com/example-org/gadget.git")
+	identityAliases(t, renamed, oldURL)
+	reused := identityClone(t, state, "b", "reused", "https://github.com/example-org/widget.git")
+	if got := GatewayProjectDir(state, ParseOrigin(oldURL)); got != reused {
+		t.Fatalf("alias hid current repository: %s", got)
+	}
+	identityClone(t, state, "c", "widget-copy", oldURL)
+	if got := GatewayProjectDir(state, ParseOrigin(oldURL)); got != "" {
+		t.Fatalf("duplicate current origins chose %s", got)
+	}
+}

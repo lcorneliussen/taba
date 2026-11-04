@@ -149,3 +149,61 @@ func TestOpenClawRemoteAliasesRequireVerifiedIdentityAndPreferExact(t *testing.T
 		t.Fatal("duplicate exact remotes were guessed")
 	}
 }
+
+func TestOpenClawSandboxRetainsDeclaredAliasAndRegisteredURLPrecedence(t *testing.T) {
+	state, g := harnessGateway(t)
+	withGatewayConfig(t, `{"harnesses":[{"name":"platform","remote":"https://github.com/example-org/platform-harness.git"}]}`)
+	harness := filepath.Join(state, "repos", "platform-harness")
+	registry := `schema_version: 1
+repos:
+  - name: service
+    aliases: [old-api]
+    remote: https://github.com/example-org/service.git
+  - name: backend
+    remote: https://github.com/example-org/old-api.git
+  - name: old-entry
+    remote: https://github.com/example-org/api.git
+  - name: current-entry
+    remote: https://github.com/example-org/service-api.git
+`
+	if err := os.WriteFile(filepath.Join(harness, ".harness-repos.yml"), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g(harness, "add", ".")
+	g(harness, "commit", "-qm", "registry collisions")
+	g(harness, "update-ref", "refs/remotes/origin/main", "HEAD")
+	root := filepath.Join(state, "repos", "api")
+	g(root, "remote", "set-url", "origin", "https://github.com/example-org/service-api.git")
+	data, _ := json.Marshal(map[string]any{"version": 1, "origin": "https://github.com/example-org/service-api.git", "repositoryId": "test-id", "aliases": []string{"https://github.com/example-org/api.git"}})
+	if err := os.WriteFile(filepath.Join(root, ".git", "wtc-origin-aliases.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := openclaw.Harness{Name: "platform", Remote: "https://github.com/example-org/platform-harness.git", Ref: "main"}
+	local := readHarnessRegistry(h, "alias-task")
+	p := sandboxProjectMetadata(gatewayProject{Name: h.Name, Harness: h.Remote, Ref: h.Ref}, h, local, "alias-task")
+	var snapshot openclaw.SandboxProjects
+	snapshot.Projects = []openclaw.DiscoveryProject{p}
+	snapshot.Collection = "alias-task"
+	snapshot.CollectionProject = "platform"
+	body, _ := json.Marshal(snapshot)
+	sandboxMetadataServer(t, 200, string(body))
+	_, regs, _, err := harnessProjectContext("alias-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := regs["platform"]
+	for _, r := range []harnessRegistry{local, projected} {
+		if got, ok := r.find("old-api"); !ok || got.Name != "service" {
+			t.Fatalf("inferred name shadowed declared alias: %+v %v", got, ok)
+		}
+		for remote, want := range map[string]string{"https://github.com/example-org/api.git": "old-entry", "https://github.com/example-org/service-api.git": "current-entry"} {
+			if got, ok := r.findRemote(remote); !ok || got.Name != want {
+				t.Fatalf("registered remote %s: %+v %v", remote, got, ok)
+			}
+		}
+	}
+	r := harnessRegistry{repos: []wtc.Repo{{Name: "logical", Remote: "https://github.com/example-org/Mixed-Case.git"}}}
+	if got, ok := r.find("mixed-case"); !ok || got.Name != "logical" {
+		t.Fatal("origin short names lost case-insensitive matching")
+	}
+}

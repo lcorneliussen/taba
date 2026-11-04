@@ -55,8 +55,9 @@ func localGatewayProjects(allowed []string, worktree string) ([]gatewayProject, 
 	return projects, nil
 }
 
-// sandboxProjectMetadata projects registry data without credentials, local
-// paths, arbitrary config keys, or command diagnostics. Unsupported remotes
+// sandboxProjectMetadata projects the registry, current clone origins and
+// operator-verified origin aliases without credentials, local paths, arbitrary
+// config keys, or command diagnostics. Unsupported remotes
 // make the project's registry unavailable rather than exposing filesystem data.
 func sandboxProjectMetadata(p gatewayProject, h openclaw.Harness, reg harnessRegistry, worktree string) gatewayProject {
 	var err error
@@ -83,7 +84,7 @@ func sandboxProjectMetadata(p gatewayProject, h openclaw.Harness, reg harnessReg
 			p.Repos = []gatewayProjectRepo{}
 			return p
 		}
-		repo := gatewayProjectRepo{Name: r.Name, Aliases: append([]string{}, r.Aliases...), Remote: remote, Role: r.Role, DefaultRef: r.DefaultRef}
+		repo := gatewayProjectRepo{Name: r.Name, Aliases: append([]string{}, r.Aliases...), RegisteredRemote: remote, Remote: remote, Role: r.Role, DefaultRef: r.DefaultRef}
 		if dir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(remote)); dir != "" {
 			repo.ProjectID = filepath.Base(dir)
 			repo.Destination = openclaw.ProjectDestination(dir, worktree)
@@ -98,15 +99,6 @@ func sandboxProjectMetadata(p gatewayProject, h openclaw.Harness, reg harnessReg
 			}
 			previous := openclaw.ParseOrigin(remote)
 			current := openclaw.GatewayProjectOrigin(dir)
-			for _, name := range r.Names() {
-				alias := openclaw.Origin{Forge: current.Forge, Owner: current.Owner, Repo: name}
-				if name != current.Repo && dir == openclaw.GatewayProjectDir(gatewayStateDir(), alias) && !slices.Contains(repo.Aliases, name) {
-					repo.Aliases = append(repo.Aliases, name)
-				}
-			}
-			if current.Repo != r.Name && !slices.Contains(repo.Aliases, current.Repo) {
-				repo.Aliases = append(repo.Aliases, current.Repo)
-			}
 			if current.Forge == previous.Forge {
 				host := "github.com"
 				if current.Forge == openclaw.ForgeBitbucket {
@@ -114,9 +106,7 @@ func sandboxProjectMetadata(p gatewayProject, h openclaw.Harness, reg harnessReg
 				}
 				if canonical, err := projectMetadataRemote("https://" + host + "/" + current.Owner + "/" + current.Repo + ".git"); err == nil {
 					repo.Remote = canonical
-					if previous.Repo != current.Repo && !slices.Contains(repo.Aliases, previous.Repo) {
-						repo.Aliases = append(repo.Aliases, previous.Repo)
-					}
+
 				}
 			}
 		}

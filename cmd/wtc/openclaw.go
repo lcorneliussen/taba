@@ -528,15 +528,16 @@ func unlistedError(h openclaw.Harness, worktree string, repos, unlisted []string
 // the harness at its configured ref. Local resolution retains the path;
 // sandbox snapshots carry only presence and safe metadata.
 type harnessRegistry struct {
-	originAliases map[string][]string
-	destination   string
-	destinations  map[string]string
-	hasWorktree   bool // current collection presence without exposing the gateway path
-	projectID     string
-	projectIDs    map[string]string
-	repos         []wtc.Repo
-	worktree      string
-	err           error
+	originAliases     map[string][]string
+	registeredRemotes map[string]string
+	destination       string
+	destinations      map[string]string
+	hasWorktree       bool // current collection presence without exposing the gateway path
+	projectID         string
+	projectIDs        map[string]string
+	repos             []wtc.Repo
+	worktree          string
+	err               error
 }
 
 func (r harnessRegistry) hasHarnessWorktree() bool { return r.worktree != "" || r.hasWorktree }
@@ -566,10 +567,15 @@ func (r harnessRegistry) find(name string) (wtc.Repo, bool) {
 	var found *wtc.Repo
 	for _, repo := range r.repos {
 		origin := openclaw.ParseOrigin(repo.Remote)
-		matches := origin.Forge != openclaw.ForgeUnknown && origin.Repo == name
+		matches := origin.Forge != openclaw.ForgeUnknown && strings.EqualFold(origin.Repo, name)
+		for _, remote := range r.originAliases[repo.Name] {
+			matches = matches || strings.EqualFold(openclaw.ParseOrigin(remote).Repo, name)
+		}
 		if openclaw.GatewayFromEnv(os.Getenv) == nil {
 			if dir := openclaw.GatewayProjectDir(gatewayStateDir(), origin); dir != "" {
-				matches = matches || openclaw.GatewayProjectOrigin(dir).Repo == name
+				for _, o := range openclaw.GatewayProjectOrigins(dir) {
+					matches = matches || strings.EqualFold(o.Repo, name)
+				}
 			}
 		}
 		if matches {
@@ -590,7 +596,11 @@ func (r harnessRegistry) findRemote(url string) (wtc.Repo, bool) {
 	// A registered remote takes precedence over another clone's old URL.
 	var exact *wtc.Repo
 	for _, repo := range r.repos {
-		if openclaw.SameRepository(repo.Remote, url) {
+		registered := r.registeredRemotes[repo.Name]
+		if registered == "" {
+			registered = repo.Remote
+		}
+		if openclaw.SameRepository(registered, url) {
 			if exact != nil {
 				return wtc.Repo{}, false
 			}
