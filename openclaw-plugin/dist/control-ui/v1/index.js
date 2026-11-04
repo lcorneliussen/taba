@@ -295,17 +295,21 @@ const FORGE_PATHS = {
 const FORGE_COLORS = { github: "currentColor", bitbucket: "#2684FF" };
 function forgeIcon(forge, size = 14) {
   const d = FORGE_PATHS[forge];
-  if (!d) return css(el("span"), `flex:none;align-self:center;width:${size}px;height:${size}px;border-radius:3px;background:var(--muted, #888);opacity:.4`);
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("width", String(size));
   svg.setAttribute("height", String(size));
-  svg.setAttribute("aria-label", forge === "github" ? "GitHub" : "Bitbucket");
+  svg.setAttribute("aria-label", forge === "github" ? "GitHub" : forge === "bitbucket" ? "Bitbucket" : "Repository");
   svg.style.cssText = "flex:none;align-self:center";
   const pathEl = document.createElementNS(NS, "path");
-  pathEl.setAttribute("d", d);
-  pathEl.setAttribute("fill", FORGE_COLORS[forge]);
+  pathEl.setAttribute("d", d ?? "M4 3h16v18H4zM8 3v18M11 7h6M11 11h6");
+  pathEl.setAttribute("fill", d ? FORGE_COLORS[forge] : "none");
+  if (!d) {
+    pathEl.setAttribute("stroke", "currentColor");
+    pathEl.setAttribute("stroke-width", "1.6");
+    pathEl.setAttribute("stroke-linejoin", "round");
+  }
   svg.append(pathEl);
   return svg;
 }

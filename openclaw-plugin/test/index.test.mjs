@@ -765,3 +765,49 @@ test("failed async session reads never retry legacy reads or execute an action",
     assert.equal(commands, 0);
   }
 });
+
+test("unavailable checkouts retain canonical identity without fetching or inventing status", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "wtc-identity-"));
+  const actions = new Map(), calls = [];
+  const entries = ["api", "web", "other", "api-copy"].map((repo, i) => ({
+    sessionKey: `agent:main:repo:${repo}`,
+    entry: { parentSessionKey: "agent:main:c", projectId: repo, worktree: { branch: "openclaw/test", repoRoot: `/clones/${i === 3 ? "api" : repo}` }, workspaceDir: path.join(root, repo) },
+  }));
+  mkdirSync(path.join(root, "web", ".git"), { recursive: true });
+  let fail = false;
+  plugin.register({
+    pluginConfig: {},
+    runtime: {
+      state: { resolveStateDir: () => root },
+      agent: { session: { listSessionEntries: () => entries, getSessionEntry: () => undefined } },
+      system: { runCommandWithTimeout: async argv => {
+        calls.push(argv);
+        if (argv[1] === "--version") return { code: 0, stdout: "wtc version dev" };
+        if (argv[1] === "status") {
+          if (fail) throw new Error("status timed out");
+          return { code: 0, stdout: JSON.stringify({ test: { repos: [] } }) };
+        }
+        assert.deepEqual(argv.slice(0, 4), ["git", "config", "--no-includes", "--file"]);
+        assert.equal(argv.at(-1), "remote.origin.url");
+        const remote = argv[4].includes("/api/") ? "git@github.com:example-org/api.git" : argv[4].includes("/web/") ? "https://user:secret@bitbucket.org/example-team/web.git" : "https://elsewhere.invalid/other.git";
+        return { code: 0, stdout: remote };
+      } },
+    },
+    session: { controls: { registerSessionAction: a => actions.set(a.id, a), registerControlUiDescriptor() {} } },
+    registerHttpRoute() {}, on() {}, logger: {},
+  });
+  const load = async () => (await actions.get("collection").handler({ sessionKey: "agent:main:c", agentId: "main", payload: {} })).result;
+  const first = await load();
+  const api = first.repos.find(r => r.project === "api"), web = first.repos.find(r => r.project === "web"), other = first.repos.find(r => r.project === "other");
+  assert.deepEqual([api.forge, api.owner, api.repo, api.error], ["github", "example-org", "api", "checkout unavailable"]);
+  assert.deepEqual([web.forge, web.owner, web.repo, web.error], ["bitbucket", "example-team", "web", "status unavailable"]);
+  assert.equal(other.forge, undefined, "unknown origins are never guessed from project names");
+  assert.equal(JSON.stringify(first).includes("secret"), false);
+  assert(first.repos.every(r => !r.next && !r.choices && !r.pullRequest && r.ahead === undefined));
+  assert.equal(calls.filter(a => a[0] === "git").length, 3, "shared canonical roots coalesce local config reads");
+  fail = true;
+  const second = await load();
+  assert.match(second.warnings[0], /status timed out/);
+  assert.equal(second.repos.find(r => r.project === "api").forge, "github");
+  assert.equal(calls.filter(a => a[0] === "git").length, 3, "cached identity avoids repeated reads during failures");
+});
