@@ -618,6 +618,7 @@ func (c *Context) runtimeAction(action, target string, wait time.Duration, choic
 		if m, mErr := c.runtimeManifest(); mErr == nil && m != nil {
 			for _, item := range result.Items {
 				named := strings.Contains(err.Error(), item.Path+":")
+				named = named || item.runnerStarting && strings.Contains(err.Error(), "timed out")
 				switch item.State {
 				case "exited", "failed":
 					named = true
