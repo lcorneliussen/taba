@@ -2579,3 +2579,30 @@ test("panel feedback renders once and keeps its refreshed stamp for later host u
   assert.equal(titled(host,"Refresh"),refresh);assert.equal(refresh.isConnected,true);assert.equal(document.activeElement,refresh);
  }finally{view.dispose();}
 });
+
+
+for (const kind of ["composer", "panel"]) test(`${kind}: an action refresh from a previous conversation keeps the new controls connected`, async () => {
+  const data = collection([repo("api", { behind: 3 })]);
+  const { host, view, context } = await mount(kind, data);
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  controlledCollection = params => params.sessionKey === context.props.sessionKey
+    ? pending : { ok: true, result: collections.get(params.sessionKey) };
+  try {
+    const action = [...host.all()].find(n => n.tagName === "BUTTON" && /^3 new on main/.test(n.title)).onclick();
+    await settle();
+    const nextKey = `agent:main:other:${++sessions}`;
+    collections.set(nextKey, collection([repo("web")]));
+    view.update({ ...context, props: { sessionKey: nextKey, agentId: "main" } });
+    await settle();
+    const refreshControl = () => [...host.all()].find(n => n.className === "wtc-refresh-control");
+    const refresh = refreshControl();
+    refresh.focus();
+    release({ ok: true, result: data });
+    await action;
+    await settle();
+    assert.equal(refreshControl(), refresh);
+    assert.equal(refresh.isConnected, true);
+    assert.equal(document.activeElement, refresh);
+  } finally { release({ ok: true, result: data }); controlledCollection = undefined; view.dispose(); }
+});

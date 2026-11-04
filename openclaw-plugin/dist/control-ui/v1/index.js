@@ -2035,7 +2035,7 @@ function mountComposer(container, context) {
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: () => key, agent: () => agentOf(ctx), svc, say,
     // What a push needs (the how-to of connecting GitHub) shows open.
     reveal: () => { if (!card.open) { card.open = true; remember(true); } },
-    refresh: async () => { await watch?.refresh(); if (!disposed && entry) render(entry); }, pause: () => pauseCollection(watch), rerender: () => entry && render(entry),
+    refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(entry); }, pause: () => pauseCollection(watch), rerender: () => entry && render(entry),
   });
 
   // A conversation without a collection: where the draft being typed, or
@@ -2322,7 +2322,7 @@ function mountCollection(container, context) {
     showServiceLogs: () => { focusSection = "service-logs"; },
     showActions: () => { focusSection = "actions"; render(); },
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: sessionKeyOf, agent: () => ctx.props.agentId, svc, say,
-    refresh: async () => { await watch?.refresh(); if (!disposed && entry) render(); }, pause: () => pauseCollection(watch), rerender: () => render(),
+    refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(); }, pause: () => pauseCollection(watch), rerender: () => render(),
   });
   let narrow = false, repoNarrow = false;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
