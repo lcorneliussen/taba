@@ -413,6 +413,9 @@ func TestStatusNextLogOverlayRoutesKeysToVisibleView(t *testing.T) {
 	if !m.showLog {
 		t.Fatal("refresh control did not open the log")
 	}
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "Enter run") || strings.Contains(view, "Esc back") || strings.Contains(view, "↑/↓ choose") {
+		t.Fatal("log overlay advertises hidden action bindings")
+	}
 	bottom := m.View().Content
 	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'k'})
 	if m.View().Content == bottom || m.selectedNext != 15 {
@@ -426,5 +429,54 @@ func TestStatusNextLogOverlayRoutesKeysToVisibleView(t *testing.T) {
 	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'l'})
 	if m.showLog || !strings.Contains(ansi.Strip(m.View().Content), "› [ ] repo-15") {
 		t.Fatal("leaving the log did not reveal the retained action focus")
+	}
+}
+
+func TestStatusNextRefreshRetainsNoticeReadingPosition(t *testing.T) {
+	for _, change := range []string{"removed", "reordered"} {
+		t.Run(change, func(t *testing.T) {
+			m := statusOverflowModel()
+			m.showNext = true
+			for i := range m.snapshot.Repos {
+				r := &m.snapshot.Repos[i]
+				r.Next = &next.Step{Step: "commit", By: next.ByAgent, Key: r.Dir, Reason: "Synthetic action"}
+			}
+			m.selectedNext = 7
+			selected := m.snapshot.Repos[m.selectedNext].Dir
+			var notice []string
+			for i := 0; i < 30; i++ {
+				notice = append(notice, fmt.Sprintf("notice-line-%02d", i))
+			}
+			m.nextNotice = strings.Join(notice, "\n")
+			m.revealNextNotice()
+			m.scrollBy(5)
+			firstBodyLine := func() string {
+				return strings.TrimSpace(strings.Split(ansi.Strip(m.View().Content), "\n")[m.viewport(m.contentLayout()).header])
+			}
+			if got := firstBodyLine(); got != "notice-line-05" {
+				t.Fatalf("fixture is not reading the notice: %q", got)
+			}
+			fresh := m.snapshot
+			fresh.Repos = append([]wtc.StatusRepo(nil), fresh.Repos...)
+			if change == "removed" {
+				for i := range fresh.Repos {
+					fresh.Repos[i].Next = nil
+				}
+			} else {
+				for i, j := 0, len(fresh.Repos)-1; i < j; i, j = i+1, j-1 {
+					fresh.Repos[i], fresh.Repos[j] = fresh.Repos[j], fresh.Repos[i]
+				}
+			}
+			m = statusScrollEvent(t, m, statusLoadedMsg{snapshot: fresh})
+			if got := firstBodyLine(); got != "notice-line-05" {
+				t.Fatalf("refresh %s actions skipped the notice being read: %q", change, got)
+			}
+			if change == "reordered" && statusNextRepos(m.snapshot)[m.selectedNext].Dir != selected {
+				t.Fatal("notice anchoring changed the selected action")
+			}
+			if m.nextRunning || m.nextPreview != nil || len(m.nextSelected) != 0 {
+				t.Fatal("refresh dispatched or selected an action")
+			}
+		})
 	}
 }

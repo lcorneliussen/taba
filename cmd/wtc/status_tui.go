@@ -1539,6 +1539,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			for _, paragraph := range strings.Split(m.nextNotice, "\n") {
 				lines = append(lines, strings.Split(ansi.Wrap(statusTUISafe(paragraph), width, ""), "\n")...)
 			}
+			rows = append(rows, statusTUIRow{key: "next-notice", start: noticeStart, end: len(lines)})
 		}
 		return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows, noticeStart: noticeStart}
 	}
@@ -1604,7 +1605,7 @@ func (m statusTUIModel) View() tea.View {
 	if m.procs {
 		footer = "r refresh · l log · ? help · q quit"
 	}
-	if m.showNext {
+	if m.showNext && !m.showLog {
 		footer = "↑/↓ choose · PgUp/PgDn scroll · Home/End · Enter run · Esc back"
 	} else if v.limit > 0 {
 		footer = "↑/↓ wheel · PgUp/PgDn · Home/End · n next · r refresh · ? help · q quit"
