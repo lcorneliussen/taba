@@ -91,9 +91,10 @@ type statusTUIRow struct {
 }
 
 type statusTUIContent struct {
-	lines    []string
-	rows     []statusTUIRow
-	nextRows []statusTUIRow
+	lines       []string
+	rows        []statusTUIRow
+	nextRows    []statusTUIRow
+	noticeStart int
 }
 
 type statusTUIViewport struct {
@@ -197,24 +198,14 @@ func (m statusTUIModel) selectedNextVisible() bool {
 		content.nextRows[m.selectedNext].start < v.header+v.scroll+v.body
 }
 
-func (m *statusTUIModel) pageNext(direction int) {
-	content := m.contentLayout()
-	if len(content.nextRows) == 0 {
+func (m *statusTUIModel) revealNextNotice() {
+	if !m.showNext || m.showLog || m.nextNotice == "" {
 		return
 	}
-	at := min(m.selectedNext, len(content.nextRows)-1)
-	line := content.nextRows[at].start + direction*max(1, m.viewport(content).body)
-	if direction < 0 {
-		for at > 0 && content.nextRows[at].start > line {
-			at--
-		}
-	} else {
-		for at < len(content.nextRows)-1 && content.nextRows[at].start < line {
-			at++
-		}
-	}
-	m.selectedNext = at
-	m.revealNext()
+	content := m.contentLayout()
+	v := m.viewport(content)
+	m.scroll = min(max(0, content.noticeStart-v.header), v.limit)
+	m.hover = ""
 }
 
 func (m statusTUIModel) visibleRow(x, y int) (statusTUIRow, bool) {
@@ -485,6 +476,9 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showLog = !m.showLog
 			m.scroll = 0
 			m.focusLogTail()
+			if !m.showLog && m.showNext {
+				m.revealNext()
+			}
 			return m, nil
 		}
 		if !m.noClick && !m.procs && !m.showNext {
@@ -514,12 +508,13 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.nextNotice = msg.err.Error() + "\n" + msg.text
 		}
+		m.revealNextNotice()
 		if !m.refreshing {
 			m.startRefresh()
 			return m, statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge)
 		}
 	case tea.KeyPressMsg:
-		if m.showNext && msg.String() != "q" && msg.String() != "ctrl+c" {
+		if m.showNext && !m.showLog && msg.String() != "q" && msg.String() != "ctrl+c" {
 			repos := statusNextRepos(m.snapshot)
 			switch msg.String() {
 			case "esc", "n":
@@ -531,15 +526,14 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selectedNext = min(max(0, len(repos)-1), m.selectedNext+1)
 				m.revealNext()
 			case "pgup":
-				m.pageNext(-1)
+				m.scrollBy(-max(1, m.viewport(m.contentLayout()).body))
 			case "pgdown":
-				m.pageNext(1)
+				m.scrollBy(max(1, m.viewport(m.contentLayout()).body))
 			case "home":
-				m.selectedNext = 0
-				m.revealNext()
+				m.scroll, m.hover = 0, ""
 			case "end":
-				m.selectedNext = max(0, len(repos)-1)
-				m.revealNext()
+				m.scroll = m.viewport(m.contentLayout()).limit
+				m.hover = ""
 			case "space", " ":
 				if !m.nextRunning && m.selectedNext < len(repos) {
 					if m.nextSelected == nil {
@@ -583,17 +577,20 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.nextRunning {
 					m.nextPending = nil
 					m.nextNotice = "Retry enabled. Check the author conversation before selecting unchanged work again."
+					m.revealNextNotice()
 				}
 			case "c":
 				if m.nextCancel != nil {
 					m.nextCancel()
 					m.nextNotice = "Cancelling queued actions; active work is not undone…"
+					m.revealNextNotice()
 				}
 			case "enter":
 				if !m.refreshing && !m.nextRunning && len(m.nextSelected) > 0 {
 					for _, r := range m.nextSelected {
 						if m.nextPending[statusNextPendingKey(r)] {
 							m.nextNotice = "An unchanged handoff is pending. Check the author conversation; x allows an explicit retry."
+							m.revealNextNotice()
 							return m, nil
 						}
 					}
@@ -604,6 +601,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							lines = append(lines, target.Dir+": "+statusNextLabel(target.Next))
 						}
 						m.nextNotice = "Selected single steps:\n" + strings.Join(lines, "\n") + "\nEnter confirms; Space changes selection. Publication retains its authority requirements."
+						m.revealNextNotice()
 						return m, nil
 					}
 					if m.nextPreview == nil {
@@ -613,14 +611,17 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.nextCancel = cancel
 					m.nextRunning = true
 					m.nextNotice = "Rechecking selected actions; c cancels queued work…"
+					m.revealNextNotice()
 					return m, statusNextBatch(ctx, m.context, append([]wtc.StatusRepo(nil), m.nextPreview...), statusNextDefaultRunner())
 				}
 				if !m.refreshing && !m.nextRunning && m.selectedNext < len(repos) {
 					if m.nextPending[statusNextPendingKey(repos[m.selectedNext])] {
 						m.nextNotice = "An unchanged handoff is pending. Check the author conversation; x allows an explicit retry."
+						m.revealNextNotice()
 						return m, nil
 					}
 					m.nextRunning, m.nextNotice = true, "Rechecking the selected step…"
+					m.revealNextNotice()
 					ctx, cancel := context.WithCancel(context.Background())
 					m.nextCancel = cancel
 					return m, statusNextRunInContext(ctx, m.context, repos[m.selectedNext], statusNextDefaultRunner(), false)
@@ -657,6 +658,9 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showLog = !m.showLog
 			m.scroll = 0
 			m.focusLogTail()
+			if !m.showLog && m.showNext {
+				m.revealNext()
+			}
 		case "up", "k":
 			m.scrollBy(-1)
 		case "down", "j":
@@ -1475,6 +1479,7 @@ func (m statusTUIModel) contentLines() []string {
 
 func (m statusTUIModel) contentLayout() statusTUIContent {
 	var rows, nextRows []statusTUIRow
+	noticeStart := -1
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -1511,7 +1516,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 		for _, entry := range m.progressLog {
 			lines = append(lines, strings.Split(ansi.Wrap(statusTUISafe(entry), width, ""), "\n")...)
 		}
-		return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows}
+		return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows, noticeStart: noticeStart}
 	}
 	if m.showNext {
 		lines = append(lines, "↑/↓ choose · Enter run or ask agent · Space select · → alternative · s suggested · c cancel · x allow retry · Esc back")
@@ -1530,9 +1535,12 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 		}
 		if m.nextNotice != "" {
 			lines = append(lines, "")
-			lines = append(lines, strings.Split(ansi.Wrap(statusTUISafe(m.nextNotice), width, ""), "\n")...)
+			noticeStart = len(lines)
+			for _, paragraph := range strings.Split(m.nextNotice, "\n") {
+				lines = append(lines, strings.Split(ansi.Wrap(statusTUISafe(paragraph), width, ""), "\n")...)
+			}
 		}
-		return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows}
+		return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows, noticeStart: noticeStart}
 	}
 	if m.procs {
 		lines = append(lines, strings.Split(strings.TrimSuffix(wtc.StatusProcessesText(m.processes), "\n"), "\n")...)
@@ -1578,7 +1586,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			lines = append(lines, statusTUIStyle(line, statusToneWarning))
 		}
 	}
-	return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows}
+	return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows, noticeStart: noticeStart}
 }
 
 func (m statusTUIModel) View() tea.View {
@@ -1597,9 +1605,12 @@ func (m statusTUIModel) View() tea.View {
 		footer = "r refresh · l log · ? help · q quit"
 	}
 	if m.showNext {
-		footer = "↑/↓ choose · PgUp/PgDn · Space select · Enter run · Esc back · q quit"
+		footer = "↑/↓ choose · PgUp/PgDn scroll · Home/End · Enter run · Esc back"
 	} else if v.limit > 0 {
-		footer = "↑/↓ wheel scroll · PgUp/PgDn · Home/End · " + footer
+		footer = "↑/↓ wheel · PgUp/PgDn · Home/End · n next · r refresh · ? help · q quit"
+		if m.procs || m.showLog {
+			footer = "↑/↓ wheel · PgUp/PgDn · Home/End · l log · r refresh · ? help · q quit"
+		}
 	}
 	if !m.nextRefresh.IsZero() && !m.refreshing {
 		footer += fmt.Sprintf(" · next %ds", max(0, int(time.Until(m.nextRefresh).Seconds())))
