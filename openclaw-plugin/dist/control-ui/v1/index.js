@@ -280,17 +280,20 @@ const ago = (at) => {
 
 // Clock ticks change labels, not controls: replacing a hovered or focused node
 // resets its native tooltip and can dismiss an open menu.
-const timeLabel = (at, prefix = "", updated = false) => Object.assign(el("span", { className:"wtc-time-label", textContent:prefix + ago(at) }), { wtcTimeAt:at, wtcTimePrefix:prefix, wtcUpdated:updated });
-function syncTimeLabels(root, entry, composer = false) {
+const timeLabel = (at, { prefix = "", updated = false } = {}) => Object.assign(el("span", { className:"wtc-time-label", textContent:prefix + ago(at) }), { wtcTimeAt:at, wtcTimePrefix:prefix, wtcUpdated:updated });
+const refreshTitle = (entry) => `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`;
+function syncTimeLabels(root, entry, { composer = false } = {}) {
   for (const n of root.querySelectorAll?.(".wtc-time-label") ?? []) {
     if (n.wtcUpdated) n.wtcTimeAt = entry.at;
     const text = n.wtcTimePrefix + ago(n.wtcTimeAt);
     if (n.textContent !== text) n.textContent = text;
   }
   for (const b of root.querySelectorAll?.(".wtc-refresh-control") ?? []) {
-    b.setAttribute("aria-busy", String(!!entry.inflight));
+    const busy = String(!!entry.inflight);
+    if (b.getAttribute("aria-busy") !== busy) b.setAttribute("aria-busy", busy);
+    // Changing a hovered title resets its tooltip; catch its age up when idle.
     if (composer && !b.matches(":hover,:focus-visible")) {
-      const title = `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`;
+      const title = refreshTitle(entry);
       if (b.title !== title) b.title = b.ariaLabel = title;
     }
   }
@@ -2163,7 +2166,7 @@ function mountComposer(container, context) {
       css(el("span", {}, brand("12px", entry.data.version, repoNarrow)), "flex:none;display:inline-flex;align-items:baseline"),
       feedback ?? facts,
       css(el("span", { className: "wtc-header-controls" }, tables.actionToolbar(repos, true, { failed: headerFailed, text: headerNote }),
-        iconButton("↻", `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`, () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
+        iconButton("↻", refreshTitle(entry), () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
         iconButton("⤢", "Open the taba Collection panel", () => ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) })),
         css(el("span", { ariaHidden: "true" }, controlIcon(card.open ? "⌃" : "⌄")), "display:inline-flex;align-items:center;justify-content:center;color:var(--muted,#888);padding:0 2px")), "margin-left:auto;flex:none;display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap"));
     tables.checkAccount(repos);
@@ -2201,11 +2204,16 @@ function mountComposer(container, context) {
   function show(next) {
     const changed = renderedStamp !== collectionStamp(next, key);
     entry = next;
+    if (!ctx.presented || ctx.signal.aborted) { card.remove(); extra.remove(); return; }
     if (changed) render(next);
-    else { syncTimeLabels(card, next, true); syncTimeLabels(extra, next); if (next.data && !next.data.repos?.length) void suggestFor(key); }
+    else {
+      syncTimeLabels(card, next, { composer: true }); syncTimeLabels(extra, next);
+      tables.checkAccount(next.data?.repos ?? []);
+      if (next.data && !next.data.repos?.length && !next.data.subSessions?.length) void suggestFor(key);
+    }
   }
   follow(ctx);
-  const tick = setInterval(() => { if (entry && card.isConnected) { syncTimeLabels(card, entry, true); syncTimeLabels(extra, entry); } }, 15000);
+  const tick = setInterval(() => { if (entry && card.isConnected) { syncTimeLabels(card, entry, { composer: true }); syncTimeLabels(extra, entry); tables.checkAccount(entry.data?.repos ?? []); } }, 15000);
   return {
     update(next) {
       const visibilityChanged = next.presented !== ctx.presented || next.signal?.aborted !== ctx.signal?.aborted;
@@ -2543,7 +2551,7 @@ function mountCollection(container, context) {
     }
     const toolbar = tables.actionToolbar(repos);
     header.replaceChildren(
-      row(brand("14px", data.version), css(el("span", {}, css(timeLabel(entry.at, "Updated ", true), "font-size:12px;color:var(--muted,#888)"),
+      row(brand("14px", data.version), css(el("span", {}, css(timeLabel(entry.at, { prefix: "Updated ", updated: true }), "font-size:12px;color:var(--muted,#888)"),
         iconButton("↻", "Refresh", () => trackedRefresh(watch, sessionKeyOf(), say, sessionKeyOf, () => !disposed))), "margin-left:auto;display:flex;align-items:center;gap:2px")),
       css(el("div", { textContent: data.collection.label ?? data.collection.sessionKey }), "font-size:16px;font-weight:600;color:var(--text-strong, inherit);overflow-wrap:anywhere"),
       row(data.collection.project ? muted(data.collection.project === "ad-hoc" ? "ad-hoc taba project" : `taba project ${data.collection.project}`) : null,
@@ -2597,7 +2605,7 @@ function mountCollection(container, context) {
     const changed = renderedStamp !== collectionStamp(next, sessionKeyOf());
     entry = next;
     if (changed) { renderedStamp = collectionStamp(next, sessionKeyOf()); render(); }
-    else syncTimeLabels(root, next);
+    else { syncTimeLabels(root, next); tables.checkAccount(next.data?.repos ?? []); }
     consumeServiceLogIntent();
   };
   function follow() {
@@ -2616,7 +2624,7 @@ function mountCollection(container, context) {
     watch = watchCollection(ctx.host, sessionKey, agentId, show);
   }
   follow();
-  const tick = setInterval(() => { if (entry?.data) syncTimeLabels(root, entry); }, 15000);
+  const tick = setInterval(() => { if (entry?.data) { syncTimeLabels(root, entry); tables.checkAccount(entry.data.repos ?? []); } }, 15000);
   return {
     update(next) {
       const changed = next.props?.sessionKey !== ctx.props?.sessionKey;

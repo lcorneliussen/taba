@@ -2530,7 +2530,6 @@ for(const kind of ["composer","panel"])test(`${kind}: unchanged context preserve
  }finally{view.dispose();}
 });
 
-
 test("a panel focus intent retained in host props does not rebuild its controls",async()=>{
  const {host,view,context}=await mount("panel",collection([repo("api")]),undefined,undefined,{focus:"activity"});
  try{
@@ -2538,4 +2537,32 @@ test("a panel focus intent retained in host props does not rebuild its controls"
   for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
   assert.equal(titled(host,"Refresh"),refresh);assert.equal(document.activeElement,refresh);
  }finally{view.dispose();}
+});
+
+
+for(const kind of ["composer","panel"])test(`${kind}: unchanged status still rechecks a newly connected account on its existing cadence`,async()=>{
+ const realNow=Date.now;let now=realNow();Date.now=()=>now;personal=null;
+ const {view,context}=await mount(kind,collection([repo("api",{unpublished:1})]));
+ let options=0;const request=context.host.request;
+ context.host.request=(method,params)=>{if(method==="sessions.github.options")options++;return request(method,params);};
+ try{
+  await settle();personal={state:"connected",account:{login:"demo"},generation:"new"};now+=31000;
+  view.update(context);await settle();assert.equal(options,1);
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  await settle();assert.equal(options,1,"host updates must not bypass the account-check throttle");
+ }finally{Date.now=realNow;personal=null;view.dispose();}
+});
+
+for(const mode of ["hidden","aborted","workers"])test(`unchanged ${mode} composer updates do not start suggestion reads`,async()=>{
+ const realNow=Date.now;let now=realNow();Date.now=()=>now;
+ const data=mode==="workers"?{...collection([]),subSessions:[{name:"helper",collection:"test--helper",repos:[repo("api")]}]}:collection([]);
+ const {view,context,abort}=await mount("composer",data);
+ let history=0;const request=context.host.request;
+ context.host.request=(method,params)=>{if(method==="chat.history")history++;return request(method,params);};
+ try{
+  const next=mode==="hidden"?{...context,presented:false}:context;if(mode==="aborted")abort();
+  view.update(next);now+=11000;
+  for(let i=0;i<20;i++)view.update(next);
+  await settle();assert.equal(history,0);
+ }finally{Date.now=realNow;view.dispose();}
 });
