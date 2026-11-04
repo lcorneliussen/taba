@@ -2620,10 +2620,11 @@ function mountCollection(container, context) {
   return {
     update(next) {
       const changed = next.props?.sessionKey !== ctx.props?.sessionKey;
+      const focusChanged = next.props?.focus !== ctx.props?.focus || (!!next.presented && !ctx.presented);
       ctx = next;
-      if (changed || next.props?.focus) focusSection = next.props?.focus;
+      if (changed || focusChanged) focusSection = next.props?.focus;
       if (changed) follow();
-      else if (next.props?.focus) { render(); consumeServiceLogIntent(); }
+      else if (focusChanged && next.props?.focus) { render(); consumeServiceLogIntent(); }
       else if (entry) show(entry);
     },
     dispose() {

@@ -2529,3 +2529,13 @@ for(const kind of ["composer","panel"])test(`${kind}: unchanged context preserve
   assert.equal(starter(),undefined);assert.ok([...host.all()].some(n=>n.tagName==="BUTTON"&&/Preview.*Stop it/.test(n.title)));
  }finally{view.dispose();}
 });
+
+
+test("a panel focus intent retained in host props does not rebuild its controls",async()=>{
+ const {host,view,context}=await mount("panel",collection([repo("api")]),undefined,undefined,{focus:"activity"});
+ try{
+  const refresh=titled(host,"Refresh");assert.ok(refresh);refresh.focus();
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Refresh"),refresh);assert.equal(document.activeElement,refresh);
+ }finally{view.dispose();}
+});
