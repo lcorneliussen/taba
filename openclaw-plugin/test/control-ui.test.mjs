@@ -2566,3 +2566,16 @@ for(const mode of ["hidden","aborted","workers"])test(`unchanged ${mode} compose
   await settle();assert.equal(history,0);
  }finally{Date.now=realNow;view.dispose();}
 });
+
+
+test("panel feedback renders once and keeps its refreshed stamp for later host updates",async()=>{
+ const {host,view,context}=await mount("panel",collection([repo("api")]));
+ try{
+  const input=[...host.all()].find(n=>n.tagName==="INPUT"&&n.placeholder==="Find or add a repository");
+  input.value="";input.onkeydown({key:"Enter",preventDefault(){}});
+  assert.match(readable(host),/Pick a repository from the list/);
+  const refresh=titled(host,"Refresh");refresh.focus();
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Refresh"),refresh);assert.equal(refresh.isConnected,true);assert.equal(document.activeElement,refresh);
+ }finally{view.dispose();}
+});

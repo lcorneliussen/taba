@@ -19,7 +19,7 @@ try{for(const width of [390,1100])for(const state of ['suggestion','collapsed','
  await page.addInitScript(()=>{window.routineTimers=[];const interval=window.setInterval;window.setInterval=(fn,ms,...args)=>{if(ms===15000||ms===30000)window.routineTimers.push({fn,ms});return interval(fn,ms,...args);};});
  await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):r.request().url()==='https://demo.invalid/plugin.js'?r.fulfill({contentType:'text/javascript',body:module}):r.abort());await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();await page.waitForTimeout(100);
  if(state==='expanded')await page.locator('#card details').evaluate(n=>n.open=true);
- if(state==='sidebar')await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).click();
+ if(state==='sidebar'){await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).click();await page.locator('#panel input[placeholder="Find or add a repository"]').press('Enter');}
  const root=state==='sidebar'?page.locator('#panel'):page.locator('#card');
  const target=state==='suggestion'?root.getByTitle('Ask the conversation to start this collection',{exact:true}):root.locator('.wtc-refresh-control').first();
  await target.hover();await target.focus();await target.evaluate(n=>{window.originalTarget=n;window.originalTitle=n.title;window.originalAge=document.querySelector('.wtc-time-label');window.leaves=0;n.addEventListener('pointerleave',()=>window.leaves++);});

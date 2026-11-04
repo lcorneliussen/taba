@@ -2527,6 +2527,7 @@ function mountCollection(container, context) {
   const footer = (data) => (versionText(data.version) ? muted(versionText(data.version), "font-size:11px;display:block") : null);
   let focusSection = ctx.props?.focus;
   function render() {
+    renderedStamp = collectionStamp(entry, sessionKeyOf());
     if (!entry?.data) {
       header.replaceChildren(css(el("div", { textContent: entry?.error ? `The collection could not be loaded: ${entry.error}` : "Loading…" }), "color:var(--muted, #888)"));
       body.replaceChildren();
@@ -2604,7 +2605,7 @@ function mountCollection(container, context) {
     if (ctx.signal.aborted) return;
     const changed = renderedStamp !== collectionStamp(next, sessionKeyOf());
     entry = next;
-    if (changed) { renderedStamp = collectionStamp(next, sessionKeyOf()); render(); }
+    if (changed) render();
     else { syncTimeLabels(root, next); tables.checkAccount(next.data?.repos ?? []); }
     consumeServiceLogIntent();
   };
