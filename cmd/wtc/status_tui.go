@@ -80,6 +80,157 @@ type statusTUIModel struct {
 	hover          string
 }
 
+// Row locations come from the renderers, including conditional detail lines.
+// The viewport and hit testing use this same layout.
+type statusTUIRow struct {
+	key        string
+	start, end int
+	repo       *wtc.StatusRepo
+	service    *statusRuntimeGroup
+	pr         *wtc.StatusPRRow
+}
+
+type statusTUIContent struct {
+	lines       []string
+	rows        []statusTUIRow
+	nextRows    []statusTUIRow
+	noticeStart int
+}
+
+type statusTUIViewport struct {
+	header, body, scroll, limit int
+}
+
+type statusTUIAnchor struct {
+	key    string
+	offset int
+}
+
+func (m statusTUIModel) viewport(content statusTUIContent) statusTUIViewport {
+	height := m.height
+	if height <= 0 {
+		height = 24
+	}
+	available := max(1, height-2)
+	if height <= 3 {
+		available = max(1, height-1)
+	}
+	header := min(len(content.lines), min(2, max(1, available-1)))
+	body := max(0, available-header)
+	limit := max(0, len(content.lines)-header-body)
+	if body == 0 {
+		limit = 0
+	}
+	return statusTUIViewport{header: header, body: body, scroll: min(max(0, m.scroll), limit), limit: limit}
+}
+
+func (m *statusTUIModel) scrollBy(delta int) {
+	v := m.viewport(m.contentLayout())
+	m.scroll = min(max(0, v.scroll+delta), v.limit)
+	m.hover = ""
+}
+
+func (m statusTUIModel) scrollAnchor() statusTUIAnchor {
+	content := m.contentLayout()
+	v := m.viewport(content)
+	if v.scroll == 0 {
+		return statusTUIAnchor{}
+	}
+	line := v.header + v.scroll
+	distance := func(a, b int) int { return max(a-b, b-a) }
+	var closest *statusTUIRow
+	for i := range content.rows {
+		r := &content.rows[i]
+		if closest == nil || distance(line, r.start) < distance(line, closest.start) {
+			closest = r
+		}
+	}
+	if closest != nil {
+		return statusTUIAnchor{key: closest.key, offset: line - closest.start}
+	}
+	return statusTUIAnchor{}
+}
+
+func (m *statusTUIModel) restoreScroll(anchor statusTUIAnchor) {
+	content := m.contentLayout()
+	v := m.viewport(content)
+	if anchor.key != "" {
+		for _, row := range content.rows {
+			if row.key == anchor.key {
+				m.scroll = row.start + anchor.offset - v.header
+				break
+			}
+		}
+	}
+	m.scroll = m.viewport(content).scroll
+	m.hover = ""
+}
+
+func (m *statusTUIModel) revealNext() {
+	content := m.contentLayout()
+	v := m.viewport(content)
+	if v.body == 0 || m.selectedNext >= len(content.nextRows) {
+		m.scroll = v.scroll
+		return
+	}
+	row := content.nextRows[m.selectedNext]
+	start, end := row.start-v.header, row.end-v.header
+	switch {
+	case start < v.scroll || end-start > v.body:
+		m.scroll = start
+	case end > v.scroll+v.body:
+		m.scroll = end - v.body
+	default:
+		m.scroll = v.scroll
+	}
+	m.scroll = m.viewport(content).scroll
+	m.hover = ""
+}
+
+func (m statusTUIModel) selectedNextVisible() bool {
+	if !m.showNext {
+		return false
+	}
+	content := m.contentLayout()
+	v := m.viewport(content)
+	return m.selectedNext < len(content.nextRows) &&
+		content.nextRows[m.selectedNext].start >= v.header+v.scroll &&
+		content.nextRows[m.selectedNext].start < v.header+v.scroll+v.body
+}
+
+func (m *statusTUIModel) revealNextNotice() {
+	if !m.showNext || m.showLog || m.nextNotice == "" {
+		return
+	}
+	content := m.contentLayout()
+	v := m.viewport(content)
+	m.scroll = min(max(0, content.noticeStart-v.header), v.limit)
+	m.hover = ""
+}
+
+func (m statusTUIModel) visibleRow(x, y int) (statusTUIRow, bool) {
+	content := m.contentLayout()
+	v := m.viewport(content)
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	if x < 0 || x >= width || y < v.header || y >= v.header+v.body {
+		return statusTUIRow{}, false
+	}
+	line := y + v.scroll
+	for _, row := range content.rows {
+		if line >= row.start && line < row.end {
+			return row, true
+		}
+	}
+	return statusTUIRow{}, false
+}
+
+func statusTUIRepoKey(row wtc.StatusRepo) string {
+	return "repo:" + row.Collection + "\x00" + row.Dir + "\x00" + row.Worktree
+}
+
 func statusTUITick() tea.Cmd {
 	return tea.Tick(time.Second, func(at time.Time) tea.Msg { return statusTickMsg(at) })
 }
@@ -136,11 +287,7 @@ func statusTUIProgressKey(message string) string {
 
 func (m *statusTUIModel) focusLogTail() {
 	if m.showLog {
-		height := m.height
-		if height <= 0 {
-			height = 24
-		}
-		m.scroll = max(0, len(m.contentLines())-max(1, height-2))
+		m.scroll = m.viewport(m.contentLayout()).limit
 	}
 }
 
@@ -193,7 +340,13 @@ func (m statusTUIModel) runtimeDue(now time.Time) bool {
 func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		anchor := m.scrollAnchor()
+		selectedVisible := m.selectedNextVisible()
 		m.width, m.height = msg.Width, msg.Height
+		m.restoreScroll(anchor)
+		if selectedVisible {
+			m.revealNext()
+		}
 	case tea.FocusMsg:
 		m.focused = true
 		m.nextRefresh = time.Now().Add(m.interval)
@@ -201,7 +354,9 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.focused = false
 		m.nextRefresh = time.Now().Add(m.background)
 	case statusRuntimeMsg:
+		anchor := m.scrollAnchor()
 		m.snapshot.Runtime, m.runtimeReading = msg.items, false
+		m.restoreScroll(anchor)
 		return m, statusTUIRuntimeTick()
 	case statusRuntimeTickMsg:
 		if m.context == nil {
@@ -231,6 +386,12 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.focusLogTail()
 		return m, statusTUIWait(msg.events)
 	case statusLoadedMsg:
+		anchor := m.scrollAnchor()
+		selectedVisible := m.selectedNextVisible()
+		selectedKey := ""
+		if rows := statusNextRepos(m.snapshot); m.selectedNext < len(rows) {
+			selectedKey = statusNextIdentity(rows[m.selectedNext])
+		}
 		if m.startedAt.IsZero() {
 			m.startedAt = msg.at
 		}
@@ -261,6 +422,12 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			live := m.snapshot.Runtime
 			m.snapshot = msg.snapshot
 			m.selectedNext = min(m.selectedNext, max(0, len(statusNextRepos(m.snapshot))-1))
+			for i, row := range statusNextRepos(m.snapshot) {
+				if statusNextIdentity(row) == selectedKey {
+					m.selectedNext = i
+					break
+				}
+			}
 			if live != nil && m.context != nil && !m.all && !m.procs {
 				m.snapshot.Runtime = live
 			}
@@ -268,6 +435,14 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errorText = ""
 			if msg.fetched.Failed != 0 {
 				m.errorText = fmt.Sprintf("%d ref refresh(es) failed; showing local refs", msg.fetched.Failed)
+			}
+		}
+		if m.showLog {
+			m.focusLogTail()
+		} else {
+			m.restoreScroll(anchor)
+			if selectedVisible {
+				m.revealNext()
 			}
 		}
 	case statusTickMsg:
@@ -280,6 +455,13 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.hover = ""
 		if item, ok := m.runtimeItemAt(msg.X, msg.Y); ok {
 			m.hover = statusRuntimeHover(item)
+		}
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.scrollBy(-3)
+		case tea.MouseWheelDown:
+			m.scrollBy(3)
 		}
 	case tea.MouseClickMsg:
 		header := m.headerLine()
@@ -294,6 +476,9 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showLog = !m.showLog
 			m.scroll = 0
 			m.focusLogTail()
+			if !m.showLog && m.showNext {
+				m.revealNext()
+			}
 			return m, nil
 		}
 		if !m.noClick && !m.procs && !m.showNext {
@@ -323,26 +508,32 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.nextNotice = msg.err.Error() + "\n" + msg.text
 		}
+		m.revealNextNotice()
 		if !m.refreshing {
 			m.startRefresh()
 			return m, statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge)
 		}
 	case tea.KeyPressMsg:
-		if m.showNext && msg.String() != "q" && msg.String() != "ctrl+c" {
+		if m.showNext && !m.showLog && msg.String() != "q" && msg.String() != "ctrl+c" {
 			repos := statusNextRepos(m.snapshot)
 			switch msg.String() {
 			case "esc", "n":
 				m.showNext, m.scroll = false, 0
 			case "up", "k":
 				m.selectedNext = max(0, m.selectedNext-1)
-				m.scroll = max(0, 2*m.selectedNext+8-max(1, m.height-2))
+				m.revealNext()
 			case "down", "j":
 				m.selectedNext = min(max(0, len(repos)-1), m.selectedNext+1)
-				m.scroll = max(0, 2*m.selectedNext+8-max(1, m.height-2))
+				m.revealNext()
 			case "pgup":
-				m.scroll = max(0, m.scroll-max(1, m.height/2))
+				m.scrollBy(-max(1, m.viewport(m.contentLayout()).body))
 			case "pgdown":
-				m.scroll += max(1, m.height/2)
+				m.scrollBy(max(1, m.viewport(m.contentLayout()).body))
+			case "home":
+				m.scroll, m.hover = 0, ""
+			case "end":
+				m.scroll = m.viewport(m.contentLayout()).limit
+				m.hover = ""
 			case "space", " ":
 				if !m.nextRunning && m.selectedNext < len(repos) {
 					if m.nextSelected == nil {
@@ -386,17 +577,20 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if !m.nextRunning {
 					m.nextPending = nil
 					m.nextNotice = "Retry enabled. Check the author conversation before selecting unchanged work again."
+					m.revealNextNotice()
 				}
 			case "c":
 				if m.nextCancel != nil {
 					m.nextCancel()
 					m.nextNotice = "Cancelling queued actions; active work is not undone…"
+					m.revealNextNotice()
 				}
 			case "enter":
 				if !m.refreshing && !m.nextRunning && len(m.nextSelected) > 0 {
 					for _, r := range m.nextSelected {
 						if m.nextPending[statusNextPendingKey(r)] {
 							m.nextNotice = "An unchanged handoff is pending. Check the author conversation; x allows an explicit retry."
+							m.revealNextNotice()
 							return m, nil
 						}
 					}
@@ -407,6 +601,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							lines = append(lines, target.Dir+": "+statusNextLabel(target.Next))
 						}
 						m.nextNotice = "Selected single steps:\n" + strings.Join(lines, "\n") + "\nEnter confirms; Space changes selection. Publication retains its authority requirements."
+						m.revealNextNotice()
 						return m, nil
 					}
 					if m.nextPreview == nil {
@@ -416,14 +611,17 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.nextCancel = cancel
 					m.nextRunning = true
 					m.nextNotice = "Rechecking selected actions; c cancels queued work…"
+					m.revealNextNotice()
 					return m, statusNextBatch(ctx, m.context, append([]wtc.StatusRepo(nil), m.nextPreview...), statusNextDefaultRunner())
 				}
 				if !m.refreshing && !m.nextRunning && m.selectedNext < len(repos) {
 					if m.nextPending[statusNextPendingKey(repos[m.selectedNext])] {
 						m.nextNotice = "An unchanged handoff is pending. Check the author conversation; x allows an explicit retry."
+						m.revealNextNotice()
 						return m, nil
 					}
 					m.nextRunning, m.nextNotice = true, "Rechecking the selected step…"
+					m.revealNextNotice()
 					ctx, cancel := context.WithCancel(context.Background())
 					m.nextCancel = cancel
 					return m, statusNextRunInContext(ctx, m.context, repos[m.selectedNext], statusNextDefaultRunner(), false)
@@ -441,12 +639,16 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = false
 		case "?":
 			m.showHelp = !m.showHelp
+			m.scroll = 0
 		case "n":
 			if !m.procs {
 				m.showNext, m.showLog, m.selectedNext, m.scroll = true, false, 0, 0
+				m.revealNext()
 			}
 		case "a":
+			anchor := m.scrollAnchor()
 			m.showArchived = !m.showArchived
+			m.restoreScroll(anchor)
 		case "r":
 			if !m.refreshing && !m.nextRunning {
 				m.startRefresh()
@@ -456,19 +658,22 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showLog = !m.showLog
 			m.scroll = 0
 			m.focusLogTail()
+			if !m.showLog && m.showNext {
+				m.revealNext()
+			}
 		case "up", "k":
-			if m.scroll > 0 {
-				m.scroll--
-			}
+			m.scrollBy(-1)
 		case "down", "j":
-			m.scroll++
+			m.scrollBy(1)
 		case "pgup":
-			m.scroll -= m.height / 2
-			if m.scroll < 0 {
-				m.scroll = 0
-			}
+			m.scrollBy(-max(1, m.viewport(m.contentLayout()).body))
 		case "pgdown":
-			m.scroll += m.height / 2
+			m.scrollBy(max(1, m.viewport(m.contentLayout()).body))
+		case "home":
+			m.scroll, m.hover = 0, ""
+		case "end":
+			m.scroll = m.viewport(m.contentLayout()).limit
+			m.hover = ""
 		}
 	}
 	return m, nil
@@ -762,7 +967,7 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool) string {
 	return statusTUIFitANSI(label+suffix, width)
 }
 
-func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool) []string {
+func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, position ...func(int, wtc.StatusRepo)) []string {
 	l := statusTUIRepoLayout(snapshot, width)
 	header := statusTUIFit("REPO", l.name) + " " + statusTUIFit("BRANCH", l.branch)
 	if l.showRuntime {
@@ -871,6 +1076,9 @@ func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool) []s
 				line += " " + prodCell
 			}
 		}
+		if len(position) > 0 {
+			position[0](len(lines), row)
+		}
 		lines = append(lines, line)
 	}
 	if len(snapshot.Repos) == 0 {
@@ -881,26 +1089,19 @@ func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool) []s
 
 // runtimeItemAt returns the service, tunnel or resource whose mark is at a cell.
 func (m statusTUIModel) runtimeItemAt(x, y int) (wtc.RuntimeItem, bool) {
-	width, height := m.width, m.height
+	if m.showLog || m.showNext || m.procs {
+		return wtc.RuntimeItem{}, false
+	}
+	row, ok := m.visibleRow(x, y)
+	if !ok || row.repo == nil {
+		return wtc.RuntimeItem{}, false
+	}
+	width := m.width
 	if width <= 0 {
 		width = 80
 	}
-	if height <= 0 {
-		height = 24
-	}
-	if m.showLog || m.procs || x < 0 || x >= width || y < 0 || y >= max(1, height-2) {
-		return wtc.RuntimeItem{}, false
-	}
-	base := 3
-	if m.showHelp {
-		base += 4
-	}
-	rowIndex := y + m.effectiveScroll() - base
-	if rowIndex < 0 || rowIndex >= len(m.snapshot.Repos) {
-		return wtc.RuntimeItem{}, false
-	}
 	layout := statusTUIRepoLayout(m.snapshot, width)
-	items := statusRuntimeItems(m.snapshot, m.snapshot.Repos[rowIndex])
+	items := statusRuntimeItems(m.snapshot, *row.repo)
 	slots := statusRuntimeSlots(items)
 	if index := x - layout.runtimeStart(); layout.showRuntime && index >= 0 && index < min(len(slots), layout.runtime) && slots[index].item >= 0 {
 		return items[slots[index].item], true
@@ -909,56 +1110,44 @@ func (m statusTUIModel) runtimeItemAt(x, y int) (wtc.RuntimeItem, bool) {
 }
 
 func (m statusTUIModel) buildClickTarget(x, y int) string {
-	if m.showLog || os.Getenv("TERM") == "dumb" {
+	if m.showLog || m.showNext || m.procs || os.Getenv("TERM") == "dumb" {
 		return ""
 	}
-	width, height := m.width, m.height
+	row, ok := m.visibleRow(x, y)
+	if !ok {
+		return ""
+	}
+	width := m.width
 	if width <= 0 {
 		width = 80
 	}
-	if height <= 0 {
-		height = 24
-	}
-	if x < 0 || x >= width || y < 0 || y >= max(1, height-2) {
-		return ""
-	}
-	base := 3
-	if m.showHelp {
-		base += 4
-	}
-	rowIndex := y + m.effectiveScroll() - base
-	if rowIndex < 0 {
-		return ""
-	}
-	if item, ok := m.runtimeItemAt(x, y); ok {
-		if !statusRuntimeLive(item) {
+	if row.repo != nil {
+		r := *row.repo
+		if item, ok := m.runtimeItemAt(x, y); ok {
+			if statusRuntimeLive(item) {
+				return statusTUIURL(item.URL)
+			}
 			return ""
 		}
-		return statusTUIURL(item.URL)
-	}
-	if rowIndex < len(m.snapshot.Repos) {
-		row := m.snapshot.Repos[rowIndex]
 		layout := statusTUIRepoLayout(m.snapshot, width)
 		if x < layout.name {
-			return statusTUIURL(statusTUIRepoURL(row))
+			return statusTUIURL(statusTUIRepoURL(r))
 		}
 		if x >= layout.name+1 && x < layout.name+1+layout.branch {
-			return statusTUIURL(statusTUIBranchURL(row))
+			return statusTUIURL(statusTUIBranchURL(r))
 		}
 		prStart := layout.prStart()
-		if x >= prStart && x < prStart+layout.pr && row.PR != nil {
-			return statusTUIURL(row.PR.URL)
+		if x >= prStart && x < prStart+layout.pr && r.PR != nil {
+			return statusTUIURL(r.PR.URL)
 		}
 		if !layout.showBuilds {
 			return ""
 		}
-		tipStart := layout.tipStart()
 		var build *wtc.StatusBuild
-		prodStart := layout.prodStart()
-		if layout.hasTip && x >= tipStart && x < tipStart+layout.tip {
-			build = row.Tip
-		} else if layout.hasProd && x >= prodStart && x < prodStart+layout.prod {
-			build = row.Prod
+		if start := layout.tipStart(); layout.hasTip && x >= start && x < start+layout.tip {
+			build = r.Tip
+		} else if start := layout.prodStart(); layout.hasProd && x >= start && x < start+layout.prod {
+			build = r.Prod
 		}
 		if build != nil && build.URL != nil {
 			return statusTUIURL(*build.URL)
@@ -968,35 +1157,17 @@ func (m statusTUIModel) buildClickTarget(x, y int) string {
 	if m.reposOnly || m.snapshot.ShowCollectionColumn {
 		return ""
 	}
-	// A service line opens whichever of its URLs is under the pointer.
-	if groups := statusRuntimeGroups(m.snapshot); len(groups) > 0 {
-		if index := rowIndex - max(1, len(m.snapshot.Repos)) - 3; index >= 0 && index < len(groups) {
-			return statusTUIURL(statusTUIRuntimeLayout(m.snapshot, width).urlAt(groups[index], x))
-		}
+	if row.service != nil {
+		return statusTUIURL(statusTUIRuntimeLayout(m.snapshot, width).urlAt(*row.service, x))
 	}
-	visibleIndex := rowIndex - max(1, len(m.snapshot.Repos)) - 3 - len(statusTUIRuntimeLines(m.snapshot, width, false))
-	if visibleIndex < 0 {
-		return ""
-	}
-	if x >= statusTUIPRLayout(width).number {
-		return ""
-	}
-	visible, _ := statusTUIVisiblePRs(m.snapshot, m.showArchived)
-	for _, row := range visible {
-		if visibleIndex == 0 && row.URL != nil {
-			return statusTUIURL(*row.URL)
-		}
-		visibleIndex--
+	if row.pr != nil && row.pr.URL != nil && x < statusTUIPRLayout(width).number {
+		return statusTUIURL(*row.pr.URL)
 	}
 	return ""
 }
 
 func (m statusTUIModel) effectiveScroll() int {
-	height := m.height
-	if height <= 0 {
-		height = 24
-	}
-	return min(max(0, m.scroll), max(0, len(m.contentLines())-max(1, height-2)))
+	return m.viewport(m.contentLayout()).scroll
 }
 
 func statusOpenURL(target string) tea.Cmd {
@@ -1114,7 +1285,7 @@ func statusTUIPRLayout(width int) statusPRLayout {
 	return l
 }
 
-func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styled bool) []string {
+func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styled bool, position ...func(int, wtc.StatusPRRow)) []string {
 	if snapshot.ShowCollectionColumn {
 		return nil
 	}
@@ -1201,6 +1372,9 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		line := number + " " + repo + " " + stateCell + " "
 		if l.signals {
 			line += checks + " " + merge + " " + review + " "
+		}
+		if len(position) > 0 {
+			position[0](len(lines), row)
 		}
 		lines = append(lines, line+title)
 	}
@@ -1300,6 +1474,12 @@ func statusTUIProgressLine(step string, elapsed time.Duration, width int) string
 }
 
 func (m statusTUIModel) contentLines() []string {
+	return m.contentLayout().lines
+}
+
+func (m statusTUIModel) contentLayout() statusTUIContent {
+	var rows, nextRows []statusTUIRow
+	noticeStart := -1
 	width := m.width
 	if width <= 0 {
 		width = 80
@@ -1328,35 +1508,58 @@ func (m statusTUIModel) contentLines() []string {
 		if m.procs {
 			keys = "r refresh   l log   ? help   q quit"
 		}
-		lines = append(lines, keys, "↗ link: modifier-click   PR/T/P: click   ↑/↓ scroll   PgUp/PgDn faster",
+		lines = append(lines, keys, "↗ link: modifier-click   PR/T/P: click   ↑/↓ or wheel scroll   PgUp/PgDn page   Home/End",
 			"PRs: C checks · M mergeability · R reviews", "")
 	}
 	if m.showLog {
 		lines = append(lines, statusTUIStyle("Refresh log", statusToneHeading), "")
-		lines = append(lines, m.progressLog...)
-		return lines
+		for _, entry := range m.progressLog {
+			lines = append(lines, strings.Split(ansi.Wrap(statusTUISafe(entry), width, ""), "\n")...)
+		}
+		return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows, noticeStart: noticeStart}
 	}
 	if m.showNext {
 		lines = append(lines, "↑/↓ choose · Enter run or ask agent · Space select · → alternative · s suggested · c cancel · x allow retry · Esc back")
 		selected := min(m.selectedNext, max(0, len(statusNextRepos(m.snapshot))-1))
 		lines = append(lines, statusTUIFit("Local steps run here · Agent steps → owning collection's idle agent pane", width))
-		lines = append(lines, statusNextLines(m.snapshot, width, true, selected, m.nextSelected)...)
+		base := len(lines)
+		nextLines, positions := statusNextRows(m.snapshot, width, true, selected, m.nextSelected)
+		for _, row := range positions {
+			row.start, row.end = row.start+base, row.end+base
+			nextRows = append(nextRows, row)
+		}
+		rows = append(rows, nextRows...)
+		lines = append(lines, nextLines...)
 		if len(statusNextRepos(m.snapshot)) == 0 {
 			lines = append(lines, "", "No next actions.")
 		}
 		if m.nextNotice != "" {
 			lines = append(lines, "")
-			lines = append(lines, strings.Split(ansi.Wrap(statusTUISafe(m.nextNotice), width, ""), "\n")...)
+			noticeStart = len(lines)
+			for _, paragraph := range strings.Split(m.nextNotice, "\n") {
+				lines = append(lines, strings.Split(ansi.Wrap(statusTUISafe(paragraph), width, ""), "\n")...)
+			}
+			rows = append(rows, statusTUIRow{key: "next-notice", start: noticeStart, end: len(lines)})
 		}
-		return lines
+		return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows, noticeStart: noticeStart}
 	}
 	if m.procs {
 		lines = append(lines, strings.Split(strings.TrimSuffix(wtc.StatusProcessesText(m.processes), "\n"), "\n")...)
 	} else {
-		lines = append(lines, statusTUIRepoLines(m.snapshot, width, true)...)
-		lines = append(lines, statusTUIRuntimeLines(m.snapshot, width, true)...)
+		base := len(lines)
+		lines = append(lines, statusTUIRepoLines(m.snapshot, width, true, func(line int, row wtc.StatusRepo) {
+			rows = append(rows, statusTUIRow{key: statusTUIRepoKey(row), start: base + line, end: base + line + 1, repo: &row})
+		})...)
+		base = len(lines)
+		lines = append(lines, statusTUIRuntimeLines(m.snapshot, width, true, func(line int, group statusRuntimeGroup) {
+			key := "service:" + group.members[0].Collection + "\x00" + group.members[0].Group
+			rows = append(rows, statusTUIRow{key: key, start: base + line, end: base + line + 1, service: &group})
+		})...)
 		if !m.reposOnly {
-			lines = append(lines, statusTUIPRLines(m.snapshot, width, m.showArchived, true)...)
+			base = len(lines)
+			lines = append(lines, statusTUIPRLines(m.snapshot, width, m.showArchived, true, func(line int, row wtc.StatusPRRow) {
+				rows = append(rows, statusTUIRow{key: "pr:" + row.Repo + "#" + row.Number, start: base + line, end: base + line + 1, pr: &row})
+			})...)
 		}
 		lines = append(lines, statusTUIRetiredLines(m.snapshot, width, true)...)
 		if repos := statusNextRepos(m.snapshot); len(repos) > 0 {
@@ -1379,9 +1582,12 @@ func (m statusTUIModel) contentLines() []string {
 		lines = append(lines, statusSyncNotes(m.snapshot, width)...)
 	}
 	if m.errorText != "" {
-		lines = append(lines, "", statusTUIStyle("warning: "+statusTUISafe(m.errorText), statusToneWarning))
+		lines = append(lines, "")
+		for _, line := range strings.Split(ansi.Wrap("warning: "+statusTUISafe(m.errorText), width, ""), "\n") {
+			lines = append(lines, statusTUIStyle(line, statusToneWarning))
+		}
 	}
-	return lines
+	return statusTUIContent{lines: lines, rows: rows, nextRows: nextRows, noticeStart: noticeStart}
 }
 
 func (m statusTUIModel) View() tea.View {
@@ -1393,10 +1599,19 @@ func (m statusTUIModel) View() tea.View {
 	if height <= 0 {
 		height = 24
 	}
-	lines := m.contentLines()
+	content := m.contentLayout()
+	v := m.viewport(content)
 	footer := "n next actions · r refresh · l log · a archived · ↗ link · ? help · q quit"
 	if m.procs {
 		footer = "r refresh · l log · ? help · q quit"
+	}
+	if m.showNext && !m.showLog {
+		footer = "↑/↓ choose · PgUp/PgDn scroll · Home/End · Enter run · Esc back"
+	} else if v.limit > 0 {
+		footer = "↑/↓ wheel · PgUp/PgDn · Home/End · n next · r refresh · ? help · q quit"
+		if m.procs || m.showLog {
+			footer = "↑/↓ wheel · PgUp/PgDn · Home/End · l log · r refresh · ? help · q quit"
+		}
 	}
 	if !m.nextRefresh.IsZero() && !m.refreshing {
 		footer += fmt.Sprintf(" · next %ds", max(0, int(time.Until(m.nextRefresh).Seconds())))
@@ -1404,31 +1619,34 @@ func (m statusTUIModel) View() tea.View {
 	if m.hover != "" {
 		footer = m.hover
 	}
-	bodyHeight := max(1, height-2)
-	scroll := m.effectiveScroll()
-	end := min(len(lines), scroll+bodyHeight)
-	var b strings.Builder
+	visible := append([]string(nil), content.lines[:v.header]...)
+	start := v.header + v.scroll
+	for i := 0; i < v.body; i++ {
+		line := ""
+		if start+i < len(content.lines) {
+			line = content.lines[start+i]
+		}
+		visible = append(visible, line)
+	}
+	if height > 1 {
+		visible = append(visible, statusTUIStyle(footer, statusToneDim))
+	}
 	visibleLink := false
-	for _, line := range lines[scroll:end] {
+	for i, line := range visible {
 		fitted := statusTUIFitANSI(line, width)
-		b.WriteString(fitted)
-		b.WriteByte('\n')
+		visible[i] = fitted
 		if statusTUIHasVisibleLink(fitted) {
 			visibleLink = true
 		}
 	}
-	for i := end - scroll; i < bodyHeight; i++ {
-		b.WriteByte('\n')
-	}
-	b.WriteString(statusTUIFitANSI(statusTUIStyle(footer, statusToneDim), width))
-	view := tea.NewView(b.String())
+	view := tea.NewView(strings.Join(visible, "\n"))
 	view.AltScreen = true
 	view.ReportFocus = os.Getenv("TERM") != "dumb"
-	if os.Getenv("TERM") != "dumb" && (m.refreshing || visibleLink && !m.noClick) {
+	if os.Getenv("TERM") != "dumb" && (m.refreshing || v.limit > 0 || visibleLink && !m.noClick) {
 		view.MouseMode = tea.MouseModeCellMotion
 	}
 	// Hover text for the LOCAL marks needs motion without a pressed button.
-	if os.Getenv("TERM") != "dumb" && !m.procs && statusTUIRepoLayout(m.snapshot, width).showRuntime {
+	if os.Getenv("TERM") != "dumb" && !m.procs && !m.showLog && !m.showNext && statusTUIRepoLayout(m.snapshot, width).showRuntime {
 		view.MouseMode = tea.MouseModeAllMotion
 	}
 	return view
