@@ -278,6 +278,31 @@ const ago = (at) => {
   return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
 };
 
+// Clock ticks change labels, not controls: replacing a hovered or focused node
+// resets its native tooltip and can dismiss an open menu.
+const timeLabel = (at, { prefix = "", updated = false } = {}) => Object.assign(el("span", { className:"wtc-time-label", textContent:prefix + ago(at) }), { wtcTimeAt:at, wtcTimePrefix:prefix, wtcUpdated:updated });
+const refreshTitle = (entry) => `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`;
+function syncTimeLabels(root, entry, { composer = false } = {}) {
+  for (const n of root.querySelectorAll?.(".wtc-time-label") ?? []) {
+    if (n.wtcUpdated) n.wtcTimeAt = entry.at;
+    const text = n.wtcTimePrefix + ago(n.wtcTimeAt);
+    if (n.textContent !== text) n.textContent = text;
+  }
+  for (const b of root.querySelectorAll?.(".wtc-refresh-control") ?? []) {
+    const busy = String(!!entry.inflight);
+    if (b.getAttribute("aria-busy") !== busy) b.setAttribute("aria-busy", busy);
+    // Changing a hovered title resets its tooltip; catch its age up when idle.
+    if (composer && !b.matches(":hover,:focus-visible")) {
+      const title = refreshTitle(entry);
+      if (b.title !== title) b.title = b.ariaLabel = title;
+    }
+  }
+}
+function collectionStamp(entry, sessionKey) {
+  const key = entry?.data?.collection?.sessionKey ?? sessionKey;
+  return JSON.stringify([entry?.data, entry?.error, feedbackStore.get(key), [...(activityStore.get(key)?.values() ?? [])]]);
+}
+
 const ciText = (pr) => ({ success: "CI passed", failure: `CI ${pr.failed} failed`, pending: `CI ${pr.running} running` })[pr.checks] ?? "no checks";
 // The state of an open pull request at a glance: CI, whether it merges, review.
 const prTone = (pr) => pr.mergeable === "conflicting" || pr.checks === "failure" || pr.review === "changes_requested" ? TONE.failure
@@ -1187,7 +1212,7 @@ function collectionTables(v) {
         css(el("summary", { title: item.detail ?? item.status },
           css(el("span", {}, css(el("span", { textContent: failed ? "⚠" : label === "Done" ? "✓" : "", ariaHidden: "true" }), "display:inline-block;width:14px;flex:none"), css(el("span", { textContent: `${item.repo}${item.action ? ` · ${nextLabel({ step: item.action })}` : ""}` }), "overflow:hidden;text-overflow:ellipsis;min-width:0")), "display:flex;align-items:baseline;min-width:0;overflow:hidden;white-space:nowrap"),
           css(el("span", { textContent: label }), `font-size:11px;color:${failed ? TONE.failure : "var(--muted,#888)"};white-space:nowrap`),
-          css(el("span", { textContent: ago(item.at) }), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
+          css(timeLabel(item.at), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
         css(el("div", {}, el("span", { textContent: item.detail ?? item.status }), resultAction(item.followUp, v.say)), "padding:6px 0 8px;white-space:normal;overflow-wrap:anywhere;font-size:12px;color:var(--muted,#888)")), "font-size:12px;min-width:0");
       return keepDisclosure(detail, `activity:${item.id ?? item.at}`);
     }), records.length > 3 ? nextButton(showAllActivity ? "Show latest 3" : `Earlier activity (${records.length - 3})`, "Show or hide earlier activity", () => { showAllActivity = !showAllActivity; v.rerender(); }) : null), "display:grid;gap:4px;min-width:0");
@@ -1967,6 +1992,7 @@ function mountComposer(container, context) {
   let key = null;
   let entry = null;
   let note = "";
+  let renderedStamp;
 
   const card = css(el("details", { className: "wtc-collection-card", open: remembered() }),
     "container-type:inline-size;container-name:wtc-card;box-sizing:border-box;width:calc(100% - var(--chat-composer-side-inset, 36px));max-width:var(--chat-thread-max-width, 48rem);margin:4px auto 0;background:var(--card, #fff);color:var(--text, inherit);border:1px solid var(--border, rgba(0,0,0,.08));border-radius:14px;font:inherit;font-size:14px");
@@ -2040,7 +2066,7 @@ function mountComposer(container, context) {
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: () => key, agent: () => agentOf(ctx), svc, say,
     // What a push needs (the how-to of connecting GitHub) shows open.
     reveal: () => { if (!card.open) { card.open = true; remember(true); } },
-    refresh: () => watch?.refresh(), pause: () => pauseCollection(watch), rerender: () => entry && render(entry),
+    refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(entry); }, pause: () => pauseCollection(watch), rerender: () => entry && render(entry),
   });
 
   // A conversation without a collection: where the draft being typed, or
@@ -2139,6 +2165,7 @@ function mountComposer(container, context) {
 
   function render(next) {
     entry = next;
+    renderedStamp = collectionStamp(next, key);
     const repos = entry?.data?.repos ?? [];
     if (!ctx.presented || ctx.signal.aborted) {
       card.remove(); extra.remove();
@@ -2170,7 +2197,7 @@ function mountComposer(container, context) {
       css(el("span", {}, brand("12px", entry.data.version, repoNarrow)), "flex:none;display:inline-flex;align-items:baseline"),
       feedback ?? facts,
       css(el("span", { className: "wtc-header-controls" }, tables.actionToolbar(repos, true, { failed: headerFailed, text: headerNote }),
-        iconButton("↻", `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`, () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
+        iconButton("↻", refreshTitle(entry), () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
         iconButton("⤢", "Open the taba Collection panel", () => ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) })),
         css(el("span", { ariaHidden: "true" }, controlIcon(card.open ? "⌃" : "⌄")), "display:inline-flex;align-items:center;justify-content:center;color:var(--muted,#888);padding:0 2px")), "margin-left:auto;flex:none;display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap"));
     tables.checkAccount(repos);
@@ -2202,17 +2229,29 @@ function mountComposer(container, context) {
     note = "";
     noteFailed = false;
     card.remove(); extra.remove();
-    if (sessionKey) watch = watchCollection(next.host, sessionKey, agentOf(next), render);
+    renderedStamp = undefined;
+    if (sessionKey) watch = watchCollection(next.host, sessionKey, agentOf(next), show);
+  }
+  function show(next) {
+    const changed = renderedStamp !== collectionStamp(next, key);
+    entry = next;
+    if (!ctx.presented || ctx.signal.aborted) { card.remove(); extra.remove(); return; }
+    if (changed) render(next);
+    else {
+      syncTimeLabels(card, next, { composer: true }); syncTimeLabels(extra, next);
+      tables.checkAccount(next.data?.repos ?? []);
+      if (next.data && !next.data.repos?.length && !next.data.subSessions?.length) void suggestFor(key);
+    }
   }
   follow(ctx);
-  // "Updated … ago" stays honest between refreshes.
-  const tick = setInterval(() => { if (entry && card.isConnected) render(entry); }, 15000);
+  const tick = setInterval(() => { if (entry && card.isConnected) { syncTimeLabels(card, entry, { composer: true }); syncTimeLabels(extra, entry); tables.checkAccount(entry.data?.repos ?? []); } }, 15000);
   return {
     update(next) {
+      const visibilityChanged = next.presented !== ctx.presented || next.signal?.aborted !== ctx.signal?.aborted;
       ctx = next;
       follow(next);
       draftChanged();
-      if (entry) render(entry);
+      if (entry) visibilityChanged ? render(entry) : show(entry);
     },
     dispose() {
       disposed = true;
@@ -2314,7 +2353,7 @@ function mountCollection(container, context) {
     showServiceLogs: () => { focusSection = "service-logs"; },
     showActions: () => { focusSection = "actions"; render(); },
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: sessionKeyOf, agent: () => ctx.props.agentId, svc, say,
-    refresh: () => watch?.refresh(), pause: () => pauseCollection(watch), rerender: () => render(),
+    refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(); }, pause: () => pauseCollection(watch), rerender: () => render(),
   });
   let narrow = false, repoNarrow = false;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
@@ -2519,6 +2558,7 @@ function mountCollection(container, context) {
   const footer = (data) => (versionText(data.version) ? muted(versionText(data.version), "font-size:11px;display:block") : null);
   let focusSection = ctx.props?.focus;
   function render() {
+    renderedStamp = collectionStamp(entry, sessionKeyOf());
     if (!entry?.data) {
       header.replaceChildren(css(el("div", { textContent: entry?.error ? `The collection could not be loaded: ${entry.error}` : "Loading…" }), "color:var(--muted, #888)"));
       body.replaceChildren();
@@ -2543,7 +2583,7 @@ function mountCollection(container, context) {
     }
     const toolbar = tables.actionToolbar(repos);
     header.replaceChildren(
-      row(brand("14px", data.version), css(el("span", {}, muted(`Updated ${ago(entry.at)}`),
+      row(brand("14px", data.version), css(el("span", {}, css(timeLabel(entry.at, { prefix: "Updated ", updated: true }), "font-size:12px;color:var(--muted,#888)"),
         iconButton("↻", "Refresh", () => trackedRefresh(watch, sessionKeyOf(), say, sessionKeyOf, () => !disposed))), "margin-left:auto;display:flex;align-items:center;gap:2px")),
       css(el("div", { textContent: data.collection.label ?? data.collection.sessionKey }), "font-size:16px;font-weight:600;color:var(--text-strong, inherit);overflow-wrap:anywhere"),
       row(data.collection.project ? muted(data.collection.project === "ad-hoc" ? "ad-hoc taba project" : `taba project ${data.collection.project}`) : null,
@@ -2591,12 +2631,21 @@ function mountCollection(container, context) {
     void tables.loadServiceLogs(intent.group, intent.label, intent.targets);
   };
   serviceLogListeners.add(consumeServiceLogIntent);
-  const show = (next) => { if (!ctx.signal.aborted) { entry = next; render(); consumeServiceLogIntent(); } };
+  let renderedStamp;
+  const show = (next) => {
+    if (ctx.signal.aborted) return;
+    const changed = renderedStamp !== collectionStamp(next, sessionKeyOf());
+    entry = next;
+    if (changed) render();
+    else { syncTimeLabels(root, next); tables.checkAccount(next.data?.repos ?? []); }
+    consumeServiceLogIntent();
+  };
   function follow() {
     tables.clearServiceLogs();
     watch?.dispose();
     watch = null;
     entry = null;
+    renderedStamp = undefined;
     say("");
     const { sessionKey, agentId } = ctx.props ?? {};
     if (!sessionKey) {
@@ -2607,13 +2656,16 @@ function mountCollection(container, context) {
     watch = watchCollection(ctx.host, sessionKey, agentId, show);
   }
   follow();
-  const tick = setInterval(() => { if (entry?.data) render(); }, 15000);
+  const tick = setInterval(() => { if (entry?.data) { syncTimeLabels(root, entry); tables.checkAccount(entry.data.repos ?? []); } }, 15000);
   return {
     update(next) {
       const changed = next.props?.sessionKey !== ctx.props?.sessionKey;
+      const focusChanged = next.props?.focus !== ctx.props?.focus || (!!next.presented && !ctx.presented);
       ctx = next;
-      if (changed || next.props?.focus) focusSection = next.props?.focus;
-      if (changed) follow(); else { render(); consumeServiceLogIntent(); }
+      if (changed || focusChanged) focusSection = next.props?.focus;
+      if (changed) follow();
+      else if (focusChanged && next.props?.focus) { render(); consumeServiceLogIntent(); }
+      else if (entry) show(entry);
     },
     dispose() {
       disposed = true;
