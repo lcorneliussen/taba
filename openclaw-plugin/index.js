@@ -662,8 +662,8 @@ export default {
           behind: c?.behind ?? null, uncommitted: c?.uncommitted ?? [],
           // The collection's own checkout of the repository, which a merge
           // goes into, and its branch, which ↓ merges into the sub-session.
-          taskSessionKey: result.repos.find((t) => t.repo && t.repo === r.repo)?.sessionKey ?? null,
-          taskBranch: result.repos.find((t) => t.repo && t.repo === r.repo)?.branch ?? null });
+          taskSessionKey: result.repos.find((t) => !t.error && t.repo && t.repo === r.repo)?.sessionKey ?? null,
+          taskBranch: result.repos.find((t) => !t.error && t.repo && t.repo === r.repo)?.branch ?? null });
       }
       result.subSessions = [...subs.values()].sort((a, b) => a.name.localeCompare(b.name));
       tell(agentId, parentKey, watch.observe(agentId, parentKey, result.repos));

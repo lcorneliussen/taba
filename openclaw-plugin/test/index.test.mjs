@@ -810,4 +810,8 @@ test("unavailable checkouts retain canonical identity without fetching or invent
   assert.match(second.warnings[0], /status timed out/);
   assert.equal(second.repos.find(r => r.project === "api").forge, "github");
   assert.equal(calls.filter(a => a[0] === "git").length, 3, "cached identity avoids repeated reads during failures");
+  entries.push({ sessionKey: "agent:main:worker:api", entry: { parentSessionKey: "agent:main:c", projectId: "api", worktree: { branch: "openclaw/test--helper", repoRoot: "/clones/api" }, workspaceDir: path.join(root, "worker") } });
+  const worker = (await load()).subSessions[0].repos[0];
+  assert.equal(worker.taskSessionKey, null, "display identity cannot make an unavailable checkout a merge target");
+  assert.equal(worker.taskBranch, null, "catch-up cannot target an unavailable task checkout");
 });
