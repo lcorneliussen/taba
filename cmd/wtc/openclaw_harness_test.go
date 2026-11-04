@@ -88,6 +88,7 @@ type spawned struct {
 	Repo string `json:"repo"`
 	Args struct {
 		Task            string `json:"task"`
+		Label           string `json:"label"`
 		ProjectID       string `json:"projectId"`
 		ProjectGitURL   string `json:"projectGitUrl"`
 		WorktreeName    string `json:"worktreeName"`

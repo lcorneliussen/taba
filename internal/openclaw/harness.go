@@ -240,6 +240,5 @@ func SameRepository(a, b string) bool {
 // CheckoutOf reports whether the checkout at dir is of the repository at
 // remote, by its origin.
 func CheckoutOf(dir, remote string) bool {
-	url, err := git(dir, "remote", "get-url", "origin")
-	return err == nil && SameRepository(url, remote)
+	return projectMatchesOrigin(dir, ParseOrigin(remote))
 }

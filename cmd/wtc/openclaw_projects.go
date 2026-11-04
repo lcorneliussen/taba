@@ -45,7 +45,7 @@ func localGatewayProjects(allowed []string, worktree string) ([]gatewayProject, 
 			p.Error = reg.err.Error()
 		}
 		for _, r := range reg.repos {
-			p.Repos = append(p.Repos, gatewayProjectRepo{Name: r.Name, Remote: r.Remote, Role: r.Role})
+			p.Repos = append(p.Repos, gatewayProjectRepo{Name: r.Name, Aliases: r.Aliases, Remote: r.Remote, Role: r.Role})
 		}
 		if allowed != nil {
 			p = sandboxProjectMetadata(p, h, reg, worktree)
@@ -83,10 +83,33 @@ func sandboxProjectMetadata(p gatewayProject, h openclaw.Harness, reg harnessReg
 			p.Repos = []gatewayProjectRepo{}
 			return p
 		}
-		repo := gatewayProjectRepo{Name: r.Name, Remote: remote, Role: r.Role, DefaultRef: r.DefaultRef}
+		repo := gatewayProjectRepo{Name: r.Name, Aliases: append([]string{}, r.Aliases...), Remote: remote, Role: r.Role, DefaultRef: r.DefaultRef}
 		if dir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(remote)); dir != "" {
 			repo.ProjectID = filepath.Base(dir)
 			repo.Destination = openclaw.ProjectDestination(dir, worktree)
+			previous := openclaw.ParseOrigin(remote)
+			current := openclaw.GatewayProjectOrigin(dir)
+			for _, name := range r.Names() {
+				alias := openclaw.Origin{Forge: current.Forge, Owner: current.Owner, Repo: name}
+				if name != current.Repo && dir == openclaw.GatewayProjectDir(gatewayStateDir(), alias) && !slices.Contains(repo.Aliases, name) {
+					repo.Aliases = append(repo.Aliases, name)
+				}
+			}
+			if current.Repo != r.Name && !slices.Contains(repo.Aliases, current.Repo) {
+				repo.Aliases = append(repo.Aliases, current.Repo)
+			}
+			if current.Forge == previous.Forge {
+				host := "github.com"
+				if current.Forge == openclaw.ForgeBitbucket {
+					host = "bitbucket.org"
+				}
+				if canonical, err := projectMetadataRemote("https://" + host + "/" + current.Owner + "/" + current.Repo + ".git"); err == nil {
+					repo.Remote = canonical
+					if previous.Repo != current.Repo && !slices.Contains(repo.Aliases, previous.Repo) {
+						repo.Aliases = append(repo.Aliases, previous.Repo)
+					}
+				}
+			}
 		}
 		p.Repos = append(p.Repos, repo)
 	}

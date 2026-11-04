@@ -123,7 +123,7 @@ func GatewayProject(stateDir string, origin Origin) string {
 // GatewayProjectDirByName is the directory of the gateway's clone of the
 // project named name, by the same rules as GatewayProject, or "".
 func GatewayProjectDirByName(stateDir, name string) string {
-	if name == "" || strings.ContainsAny(name, `/\`) || name == "." || name == ".." {
+	if !validProjectName(name) {
 		return ""
 	}
 	dirs, _ := filepath.Glob(filepath.Join(stateDir, "projects", "*", name))
@@ -133,25 +133,32 @@ func GatewayProjectDirByName(stateDir, name string) string {
 			return dir
 		}
 	}
-	return ""
+	return projectNamed(stateDir, name)
 }
 
 // GatewayProjectDir is the directory of the gateway's clone that
 // GatewayProject names, or "".
 func GatewayProjectDir(stateDir string, origin Origin) string {
+	if !validProjectOrigin(origin) {
+		return ""
+	}
 	dirs, _ := filepath.Glob(filepath.Join(stateDir, "projects", "*", origin.Repo))
 	dirs = append(dirs, filepath.Join(stateDir, "repos", origin.Repo))
 	for _, dir := range dirs {
-		url, err := git(dir, "remote", "get-url", "origin")
-		if err != nil {
-			continue
-		}
-		o := ParseOrigin(url)
-		if o.Forge == origin.Forge && strings.EqualFold(o.Owner, origin.Owner) && strings.EqualFold(o.Repo, origin.Repo) {
+		if projectMatchesOrigin(dir, origin) {
 			return dir
 		}
 	}
-	return ""
+	var found string
+	for _, dir := range gatewayProjectDirs(stateDir) {
+		if projectMatchesOrigin(dir, origin) {
+			if found != "" && found != dir {
+				return ""
+			}
+			found = dir
+		}
+	}
+	return found
 }
 
 // CheckoutsStatus describes the checkouts at paths. With pullRequests it also asks

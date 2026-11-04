@@ -87,7 +87,7 @@ func harnessProjectContext(worktree string) (openclaw.GatewayConfig, map[string]
 			reg.err = errors.New(p.Error)
 		}
 		for _, r := range p.Repos {
-			reg.repos = append(reg.repos, wtc.Repo{Name: r.Name, Remote: r.Remote, Role: r.Role, DefaultRef: r.DefaultRef})
+			reg.repos = append(reg.repos, wtc.Repo{Name: r.Name, Aliases: r.Aliases, Remote: r.Remote, Role: r.Role, DefaultRef: r.DefaultRef})
 			reg.projectIDs[r.Name] = r.ProjectID
 			reg.destinations[r.Name] = r.Destination
 		}

@@ -200,8 +200,12 @@ func AddRepo(repo, project, gitURL, worktree, baseRef, task string) (Intent, err
 	if !ValidWorktreeName(worktree) {
 		return Intent{}, fmt.Errorf("add-repo %s: %q is not a valid OpenClaw worktree name (lowercase letters, digits and hyphens, at most 64)", repo, worktree)
 	}
+	labelName := project
+	if labelName == "" {
+		labelName = repo
+	}
 	return intent(ActionAddRepo, ActorParent, repo, ToolSessionsSpawn, SpawnArgs{
-		Task: task, Label: worktree + " " + repo, ProjectID: project, ProjectGitURL: gitURL,
+		Task: task, Label: worktree + " " + labelName, ProjectID: project, ProjectGitURL: gitURL,
 		Worktree: true, WorktreeName: worktree, WorktreeBaseRef: baseRef, Visible: gitURL != "",
 		ExpectsCompletionMessage: new(bool),
 	}), nil

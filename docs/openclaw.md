@@ -481,6 +481,41 @@ gateway, and herdr layouts do not apply. Several projects in one collection,
 stacked rather than merged, are tracked in
 [#100](https://github.com/lcorneliussen/wtc-cli/issues/100).
 
+### Repository renames
+
+A gateway project's ID and its existing worktree paths stay stable when its
+forge repository is renamed. A clone registered as `widget` can keep that ID
+and directory while its origin becomes `example-org/gadget`. Lookup does not
+require the directory to have the new forge name. Registry `aliases` retain old
+logical names; the current remote's short name also resolves. Plans reuse the
+existing project ID instead of requesting a second clone.
+
+Before changing a clone's origin, an operator must verify that old and new URLs
+resolve to the same permanent forge repository ID. Record that evidence in
+`wtc-origin-aliases.json` inside its Git common directory, as reported by
+`git rev-parse --path-format=absolute --git-common-dir`:
+
+```json
+{
+  "version": 1,
+  "origin": "https://github.com/example-org/gadget.git",
+  "repositoryId": "12345",
+  "aliases": ["https://github.com/example-org/widget.git"]
+}
+```
+
+Keep this untracked Git metadata private and write it atomically, then update
+`origin` to the verified new URL. Do not record aliases merely because names
+look similar. A record applies only while its canonical origin matches the
+clone; repointing the clone elsewhere invalidates the old aliases. Discovery
+reads the record without changing Git state or making forge requests.
+
+Old collections keep their older registry worktrees and conversation IDs.
+Permitted sandbox metadata carries alias names and the stable project ID,
+without exposing the record or local paths. This grants no clone or publish
+permission. Ambiguous short names require an explicit registered name or URL;
+aliases never choose an unrelated owner or forge by name alone.
+
 ## The collection in the Control UI
 
 OpenClaw shows a session's changes and pull request for its own checkout only,
