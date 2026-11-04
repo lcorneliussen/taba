@@ -68,6 +68,18 @@ export function parseBitbucketRepo(spec) {
   return { workspace: m[1], repo: m[2], cloneUrl: `https://bitbucket.org/${m[1]}/${m[2]}.git`, webUrl: `https://bitbucket.org/${m[1]}/${m[2]}` };
 }
 
+// Repository identity only: credentials, custom ports and access never leave this read.
+export function repositoryOrigin(remote) {
+  const text = String(remote ?? "").trim();
+  const scp = text.match(/^(?:[^/@:\s]+@)?(github\.com|bitbucket\.org):(.+)$/i);
+  try {
+    const url = new URL(scp ? `ssh://${scp[1]}/${scp[2]}` : text);
+    if (!["https:", "http:", "ssh:"].includes(url.protocol) || !["github.com", "bitbucket.org"].includes(url.hostname.toLowerCase())) return {};
+    const parts = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/);
+    return parts && ![parts[1], parts[2]].some(p => p === "." || p === "..") ? { forge: url.hostname.toLowerCase() === "github.com" ? "github" : "bitbucket", owner: parts[1], repo: parts[2] } : {};
+  } catch { return {}; }
+}
+
 // The person a session belongs to, as the Bitbucket plugin decides it: the
 // assigned human owner, otherwise the signed-in person who created it, for a
 // spawned session that of its parent.
@@ -563,6 +575,23 @@ export default {
       }
     };
 
+    // Identity belongs to the repository, even when its session checkout is gone.
+    // Read only the canonical clone's local config; never fetch or inspect its branch.
+    const identities = new Map();
+    const repositoryIdentity = (entry) => {
+      const root = entry.worktree?.repoRoot || entry.worktree?.canonicalWorkspaceDir;
+      if (!root) return Promise.resolve({});
+      const cached = identities.get(root);
+      if (cached && Date.now() - cached.at < 60000) return cached.value;
+      const value = run(["git", "config", "--no-includes", "--file", path.join(root, ".git", "config"), "--get", "remote.origin.url"], { timeoutMs: 5000 })
+        .then(r => {
+          if (r.code !== 0) return {};
+          return repositoryOrigin(r.stdout);
+        }, () => ({}));
+      identities.set(root, { at: Date.now(), value });
+      return value;
+    };
+
     // The collection a session is in, with what wtc status says about it.
     const loadCollection = async (agentId, sessionKey) => {
       const { parentKey, parent, children } = await collectionOf(agentId, sessionKey);
@@ -598,8 +627,9 @@ export default {
         // The collection's status also compares the sub-sessions' worktrees
         // with its own checkouts.
         const argv = ["wtc", "status", name, "--json", ...(name === task ? subDirs.flatMap((d) => ["--sub", d]) : [])];
-        const status = await run(argv, { env: { OPENCLAW_SHELL: "exec" } });
+        let status;
         try {
+          status = await run(argv, { env: { OPENCLAW_SHELL: "exec" } });
           const col = JSON.parse(status.stdout)[name] ?? {};
           checkouts.push(...(col.repos ?? []));
           if (name === task) for (const r of col.subSessions ?? []) compared.set(r.path, r);
@@ -610,21 +640,25 @@ export default {
           if (col.harness?.name) result.collection.project = col.harness.name;
           else if (col.folder && path.basename(path.dirname(col.folder)) === "ad-hoc") result.collection.project = "ad-hoc";
           if (col.error) result.warnings.push(`collection folder: ${col.error}`);
-        } catch {
-          result.warnings.push(`wtc status failed (exit ${status.code}): ${(status.stderr || status.stdout).trim().slice(0, 300) || "is wtc on the gateway's PATH?"}`);
+        } catch (err) {
+          result.warnings.push(`wtc status failed (exit ${status?.code ?? "unknown"}): ${(status?.stderr || status?.stdout || err?.message || "is wtc on the gateway's PATH?").trim().slice(0, 300)}`);
         }
       }
       const byPath = new Map(checkouts.map((c) => [c.path, c]));
-      const rows = children
-        .map(({ sessionKey, entry }) => ({
+      const rows = (await Promise.all(children
+        .map(async ({ sessionKey, entry }) => ({
           sessionKey,
           label: entry.label ?? entry.displayName ?? null,
           project: entry.projectId ?? null,
           // A hidden owner has no conversation of its own.
           owner: sessionKey.includes(":subagent:") ? "hidden" : "conversation",
           sub: collectionName(entry) && collectionName(entry) !== task ? subName(collectionName(entry)) : null,
-          ...(byPath.get(worktreeOf(entry)) ?? { path: worktreeOf(entry), branch: entry.worktree?.branch ?? null, error: "no status" }),
-        }))
+          ...(byPath.get(worktreeOf(entry)) ?? {
+            ...await repositoryIdentity(entry),
+            path: worktreeOf(entry), branch: entry.worktree?.branch ?? null,
+            error: existsSync(path.join(worktreeOf(entry), ".git")) ? "status unavailable" : "checkout unavailable",
+          }),
+        }))))
         .sort((a, b) => String(a.project ?? a.repo).localeCompare(String(b.project ?? b.repo)));
       result.repos = rows.filter((r) => !r.sub);
       // Each sub-session with its checkouts, and per checkout how it stands
@@ -634,13 +668,13 @@ export default {
       const subs = new Map();
       for (const r of rows.filter((r) => r.sub)) {
         if (!subs.has(r.sub)) subs.set(r.sub, { name: r.sub, collection: collectionName({ worktree: { branch: r.branch } }) || r.sub, repos: [] });
-        const c = compared.get(r.path);
+        const c = r.error ? null : compared.get(r.path);
         subs.get(r.sub).repos.push({ ...r, toMerge: c?.toMerge ?? null, mergeError: c?.error ?? null,
           behind: c?.behind ?? null, uncommitted: c?.uncommitted ?? [],
           // The collection's own checkout of the repository, which a merge
           // goes into, and its branch, which ↓ merges into the sub-session.
-          taskSessionKey: result.repos.find((t) => t.repo && t.repo === r.repo)?.sessionKey ?? null,
-          taskBranch: result.repos.find((t) => t.repo && t.repo === r.repo)?.branch ?? null });
+          taskSessionKey: r.error ? null : result.repos.find((t) => !t.error && t.repo && t.repo === r.repo)?.sessionKey ?? null,
+          taskBranch: r.error ? null : result.repos.find((t) => !t.error && t.repo && t.repo === r.repo)?.branch ?? null });
       }
       result.subSessions = [...subs.values()].sort((a, b) => a.name.localeCompare(b.name));
       tell(agentId, parentKey, watch.observe(agentId, parentKey, result.repos));
