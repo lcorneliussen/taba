@@ -45,7 +45,7 @@ func TestHarnessCommandsWorkOutsideCollection(t *testing.T) {
 	if out, err := run("release-notes", "--since", "9.0.0", "--json"); err != nil || !strings.Contains(out, `"data":[]`) {
 		t.Fatal(out, err)
 	}
-	if out, err := run("release-notes", "unreleased"); err != nil || !strings.HasPrefix(out, "# wtc unreleased\n") {
+	if out, err := run("release-notes", "unreleased"); err != nil || !strings.HasPrefix(out, "# taba/wtc unreleased\n") {
 		t.Fatal(out, err)
 	}
 	if out, err := run("release-notes", "--list", "--json"); err != nil || !strings.Contains(out, `"0.1.0"`) || !strings.Contains(out, `"unreleased"`) {
