@@ -409,11 +409,11 @@ async function svcRequest(host, sessionKey, agentId, payload) {
 // own portal, then a public link for when a portal does not work, a dev
 // tunnel for the person's account, and the tailnet when it is the team's.
 const TUNNEL_PROVIDERS = [
-  { name: "gateway", reach: "OpenClaw portal", portal: true },
-  { name: "cloudflare", reach: "public link", public: true },
-  { name: "ngrok", reach: "public link", public: true },
-  { name: "devtunnel", reach: "your account" },
-  { name: "tailscale", reach: "team tailnet", team: true },
+  { name: "gateway", label: "Gateway", reach: "OpenClaw portal", portal: true },
+  { name: "cloudflare", label: "Cloudflare", reach: "public link", public: true },
+  { name: "ngrok", label: "ngrok", reach: "public link", public: true },
+  { name: "devtunnel", label: "Dev Tunnel", reach: "your account" },
+  { name: "tailscale", label: "Tailscale", reach: "team tailnet", team: true },
 ];
 // portal.list leaves out a portal's URL with its access token; opening the
 // same port again returns it. Kept for the portals this page opened.
@@ -513,11 +513,15 @@ function tunnelNode(g, t, svc, { label, opener } = {}) {
   }
   // Running, but not answering or not signed in: say so on it.
   const trouble = isFailed(t) ? css(el("span", { textContent: "⚠", title: serviceState(t) }), "color:var(--danger, #cf222e)") : null;
-  return css(el("span", {},
-    trouble,
-    t.url ? link(label ?? name, t.url) : label ?? name,
-    smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`))),
-  "display:inline-flex;align-items:center;gap:2px;white-space:nowrap");
+  const route = t.url ? link(label ?? name, t.url) : label ?? name;
+  if (typeof route === "object") {
+    css(route, "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap");
+    route.title = t.url;
+  }
+  const close = smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`));
+  close.style.flex = "none";
+  return css(el("span", {}, trouble, route, close),
+    "display:inline-flex;align-items:center;gap:2px;min-width:0;max-width:100%;white-space:nowrap");
 }
 // A new way to a service, or null when none is left. compact: a "+" only,
 // whose title and options name the ways.
@@ -538,27 +542,94 @@ function newTunnel(g, svc, data = {}, { compact = false } = {}) {
     if (r?.missing) await svc.ask(installTunnel(g, p.name, r.missing));
   };
   if (!g.main || g.loose || !free.length) return null;
-  // One way left is a button that names it; more are a choice.
+  const trigger = css(el("button", { type: "button", className: "wtc-tunnel-trigger", title: `Add a tunnel to ${g.label}`, ariaLabel: `Add a tunnel to ${g.label}` }, controlIcon("+"), compact ? null : " Tunnel…"),
+    `display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;${compact ? "width:24px;" : "padding:0 6px;"}height:24px;min-width:24px;border:1px solid transparent;border-radius:var(--radius-sm,6px);background:transparent;color:var(--muted,#888);font:inherit;font-size:12px;line-height:16px;cursor:pointer;${compact ? "padding:0;" : ""}`);
+  const wrap = (...nodes) => css(el("span", { className: "wtc-tunnel-control" }, ...nodes), "display:inline-flex;align-items:center;vertical-align:middle;transform:translateY(-1px)");
   if (free.length === 1) {
     const p = free[0];
-    return pill(compact ? "+" : `+ ${p.name}`, `Open ${p.name} (${p.reach}) to this service${p.public ? ": anyone with the link can use it" : ""}${!ready(p) ? "; the conversation installs it first" : p.portal && !ingress ? "; the gateway has no portal ingress, so it may not be reachable from here: a tunnel is" : ""}`, () => open(p));
+    if (!compact) trigger.replaceChildren(controlIcon("+"), ` ${p.label ?? p.name}`);
+    trigger.title = trigger.ariaLabel = `Open ${p.label ?? p.name} (${p.reach}) to this service${p.public ? ": anyone with the link can use it" : ""}${!ready(p) ? "; the conversation installs it first" : p.portal && !ingress ? "; the gateway has no portal ingress, so it may not be reachable from here: a tunnel is" : ""}`;
+    trigger.onclick = (e) => { e.preventDefault(); e.stopPropagation(); return open(p); };
+    return wrap(trigger);
   }
-  const pick = css(el("select", { title: "Open a way to this service from your browser: choose how" },
-    el("option", { value: "", textContent: compact ? "+" : "+ Tunnel…" }),
-    ...free.map((p) => el("option", { value: p.name, textContent: `${p.name} · ${p.reach}${note(p)}` }))),
-  `appearance:none;-webkit-appearance:none;font:inherit;font-size:12px;line-height:18px;color:inherit;background:transparent;border:1px solid var(--border-strong, rgba(128,128,128,.4));border-radius:999px;padding:0 ${compact ? 7 : 9}px;cursor:pointer;field-sizing:content;max-width:8em`);
-  pick.onclick = (e) => e.stopPropagation();
-  pick.onchange = async () => {
-    const p = free.find((x) => x.name === pick.value);
-    pick.value = "";
-    if (p) await open(p);
+  const menu = css(el("div", { id: `wtc-tunnels-${uuid()}`, className: "wtc-tunnel-menu", popover: "auto", role: "menu", ariaLabel: `Tunnel for ${g.label}` }),
+    "position:fixed;inset:auto;margin:0;padding:4px;box-sizing:border-box;width:252px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;border:1px solid var(--border-strong,var(--border,rgba(128,128,128,.3)));border-radius:var(--radius-md,8px);background:var(--card,var(--bg,#161920));color:var(--text,inherit);box-shadow:0 6px 20px rgba(0,0,0,.2);font:inherit;font-size:12px;line-height:16px;visibility:hidden");
+  trigger.popoverTargetElement = menu;
+  trigger.ariaHasPopup = "menu";
+  trigger.ariaControls = menu.id;
+  trigger.ariaExpanded = "false";
+  let shown = false, nextFocus = 0, cleanup = () => {};
+  const close = (focus = false) => {
+    if (shown) menu.hidePopover();
+    if (focus && trigger.isConnected) trigger.focus();
   };
-  return pick;
+  const items = free.map((p) => {
+    const item = css(el("button", { type: "button", role: "menuitem", value: p.name, tabIndex: -1, className: "wtc-tunnel-option", ariaLabel: `${p.label ?? p.name} · ${p.reach}${note(p)}` },
+      el("span", { textContent: p.label ?? p.name }),
+      css(el("span", { textContent: `${p.reach}${note(p)}` }), "display:block;font-size:11px;line-height:15px;color:var(--muted,#888)")),
+      "display:block;width:100%;box-sizing:border-box;margin:0;padding:6px 8px;border:0;border-radius:4px;background:transparent;color:inherit;text-align:left;white-space:normal;font:inherit;line-height:16px;cursor:pointer");
+    item.onclick = (e) => { e.preventDefault(); e.stopPropagation(); close(true); return open(p); };
+    return item;
+  });
+  menu.append(...items);
+  // Native popovers handle light dismissal. Open menus own temporary viewport
+  // listeners; closing the menu or removing its trigger releases them.
+  menu.onbeforetoggle = (e) => {
+    shown = e.newState === "open";
+    trigger.ariaExpanded = String(shown);
+    cleanup();
+    if (shown) menu.style.visibility = "hidden";
+  };
+  // A closed popover has no box: measure after it enters the top layer.
+  menu.ontoggle = (e) => {
+    if (e.newState !== "open" || !shown || !trigger.isConnected) return;
+    const viewport = globalThis.visualViewport;
+    const edge = 12, gap = 6;
+    const left = (viewport?.offsetLeft ?? 0) + edge, top = (viewport?.offsetTop ?? 0) + edge;
+    const right = left + (viewport?.width ?? globalThis.innerWidth ?? 1024) - 2 * edge;
+    const bottom = top + (viewport?.height ?? globalThis.innerHeight ?? 768) - 2 * edge;
+    menu.style.maxWidth = `${Math.max(0, right - left)}px`;
+    menu.style.maxHeight = `${Math.max(0, bottom - top)}px`;
+    const anchor = trigger.getBoundingClientRect(), box = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(left, Math.min(anchor.right - box.width, right - box.width))}px`;
+    const above = anchor.top - gap - box.height;
+    const y = above >= top ? above : anchor.bottom + gap;
+    menu.style.top = `${Math.max(top, Math.min(y, bottom - box.height))}px`;
+    menu.style.visibility = "visible";
+    items[nextFocus].focus(); nextFocus = 0;
+    if (!shown || !trigger.isConnected) return;
+    const events = new AbortController();
+    globalThis.addEventListener?.("resize", () => close(), { signal: events.signal });
+    viewport?.addEventListener("resize", () => close(), { signal: events.signal });
+    viewport?.addEventListener("scroll", () => close(), { signal: events.signal });
+    document.addEventListener("scroll", (event) => { if (!menu.contains(event.target)) close(); }, { capture: true, signal: events.signal });
+    const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => { if (!trigger.isConnected) { shown = false; cleanup(); } });
+    observer?.observe(document.documentElement, { childList: true, subtree: true });
+    cleanup = () => { events.abort(); observer?.disconnect(); };
+  };
+  trigger.onclick = (e) => e.stopPropagation();
+  trigger.onkeydown = (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault(); e.stopPropagation();
+    nextFocus = e.key === "ArrowUp" ? items.length - 1 : 0;
+    if (shown) { items[nextFocus].focus(); nextFocus = 0; }
+    else trigger.click();
+  };
+  menu.onkeydown = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(true); return; }
+    if (e.key === "Tab") { close(); return; }
+    const index = items.indexOf(document.activeElement);
+    const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1
+      : e.key === "ArrowDown" ? (index + 1) % items.length
+      : e.key === "ArrowUp" ? (index < 0 ? items.length - 1 : index + items.length - 1) % items.length : -1;
+    if (next >= 0) { e.preventDefault(); e.stopPropagation(); items[next].focus(); }
+  };
+  return wrap(trigger, menu);
 }
 
 // Geometric control glyphs avoid font-dependent centres and spinning hit targets.
 const controlIcon = glyph => {
-  const paths = { "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
+  const paths = { "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg"), path = document.createElementNS(ns, "path");
   for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "14", height: "14", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
   svg.setAttribute("class", "wtc-header-glyph"); svg.style.cssText = "display:block;transform-box:fill-box;transform-origin:center";
@@ -650,6 +721,10 @@ const repositoryColumns = (narrow) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }]
   : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "108px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
+.wtc-tunnel-trigger:hover,.wtc-tunnel-existing:hover,.wtc-tunnel-option:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
+.wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
+.wtc-tunnel-option:focus-visible { outline-offset:-2px; }
+
 .wtc-service-play:is(:hover,:focus-visible) { --wtc-service-play-bg:var(--bg-hover,rgba(128,128,128,.12));--wtc-service-play-color:var(--text-strong,var(--text,inherit)); }
 
 .wtc-service-label:disabled { cursor:default !important;text-decoration:none !important; }
@@ -1600,6 +1675,25 @@ function collectionTables(v) {
       if (portalsOf(g, data).length && !ways.includes("gateway")) ways.push("gateway");
       for (const t of g.tunnels) if (!ways.includes(tunnelName(t))) ways.push(tunnelName(t));
     }
+    const foldWays = narrow && (ways.length > 1 || groups.some(g => g.loose));
+    const visibleWays = foldWays ? [] : ways;
+    const repair = (g) => count("Consolidate", "Ask the conversation to open it with wtc svc tunnel instead", "inherit", () => askConversation(v.host, v.key(), consolidate(g)));
+    const wayNode = (g, w) => {
+      if (w === "gateway") {
+        const ps = portalsOf(g, data);
+        return ps.length ? portalNode(g, ps[0], v.svc, foldWays ? "gateway" : "open") : null;
+      }
+      const t = g.tunnels.find(x => tunnelName(x) === w);
+      return t ? tunnelNode(g, t, v.svc, {
+        label: foldWays ? w : t.url ? slug(t.url) : "open",
+        opener: (title, run) => {
+          if (!foldWays) return stateGlyph("▶", title, TONE.none, run);
+          const b = css(el("button", {type:"button",className:"wtc-tunnel-existing",title,ariaLabel:title},controlIcon("▶"),w), "display:inline-flex;align-items:center;gap:3px;min-height:24px;padding:0 3px;border:0;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;cursor:pointer");
+          b.onclick = e => { e.preventDefault(); e.stopPropagation(); return run(); };
+          return b;
+        },
+      }) : null;
+    };
     const all = groups.length > 1 && !v.svc.busy("*")
       ? css(el("span", {},
         groups.some((g) => !g.running) ? stateGlyph("▶", "Start all services", TONE.none, () => v.svc.run({ op: "up" }, "Starting all services…")) : null,
@@ -1608,12 +1702,12 @@ function collectionTables(v) {
       : v.svc.busy("*") ? busyMark() : "";
     const columns = [
       { head: all ? leadSlot(all) : null, width: "20px" },
-      { head: "Service", width: narrow ? "minmax(64px,1fr)" : "minmax(0,max-content)" },
+      { head: "Service", width: narrow ? `minmax(${visibleWays.length ? 48 : 64}px,1fr)` : "minmax(0,max-content)" },
       { head: "Repo", width: "minmax(0,max-content)", under: true },
-      { head: "State", width: narrow ? "56px" : "78px" },
-      { head: "URL", width: narrow ? "56px" : "80px", title: "Where it listens on the gateway" },
-      ...ways.map((w) => ({ head: w, title: w === "gateway" ? "OpenClaw portals" : `${w} tunnels` })),
-      { head: "", width: narrow ? "var(--wtc-control-width,20px)" : "minmax(0,1fr)", align: "end" },
+      { head: "State", width: narrow ? "minmax(44px,56px)" : "78px" },
+      { head: "URL", width: narrow ? "minmax(44px,56px)" : "80px", title: "Where it listens on the gateway" },
+      ...visibleWays.map((w) => ({ head: css(el("span", { textContent: w }), "display:block;min-width:0;overflow:hidden;text-overflow:ellipsis"), width: narrow ? "minmax(24px,max-content)" : "minmax(14px,max-content)", title: w === "gateway" ? "OpenClaw portals" : `${w} tunnels` })),
+      { head: "", width: !narrow && groups.some(g => g.loose) ? "minmax(32px,max-content)" : "32px", align: "center", overflow: true },
     ];
     const rows = groups.map((g) => {
       const logMembers = g.members.filter(s => !["endpoint", "resources", "configuration"].includes(s.kind) && s.state !== "unconfigured");
@@ -1624,23 +1718,25 @@ function collectionTables(v) {
         leadSlot(stateButton(g, v.svc)),
         Object.assign(css(el("button", { type: "button", className: "wtc-service-label", textContent: g.label, title: logTitle, ariaLabel: logTitle, disabled: !canReadLogs }), "display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit;line-height:inherit;font-weight:600;color:var(--text-strong, inherit);border:0;padding:0;background:transparent;text-align:left;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px"), { onclick: () => { if (canReadLogs) return loadServiceLogs(targets[0] ?? g.group, g.label, targets); } }),
         g.repo ? muted(g.repo) : null,
-        g.loose ? toned("separate tunnel", TONE.pending, "Started apart from the service it exposes")
+        g.loose ? toned(narrow ? "separate" : "separate tunnel", TONE.pending, "Started apart from the service it exposes")
           : toned(g.state === "absent" || g.state === "idle" ? "stopped" : g.state, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none),
         g.url && !g.loose ? address(g.url) : null,
-        ...ways.map((w) => {
-          if (w === "gateway") {
-            const ps = portalsOf(g, data);
-            return ps.length ? portalNode(g, ps[0], v.svc, "open") : null;
-          }
-          const t = g.tunnels.find((x) => tunnelName(x) === w);
-          return t ? tunnelNode(g, t, v.svc, { label: t.url ? slug(t.url) : "open", opener: (title, run) => stateGlyph("▶", title, TONE.none, run) }) : null;
-        }),
+        ...visibleWays.map(w => wayNode(g, w)),
         css(el("span", {}, g.loose
-          ? count("Consolidate", "Ask the conversation to open it with wtc svc tunnel instead", "inherit", () => askConversation(v.host, v.key(), consolidate(g)))
-          : newTunnel(g, v.svc, data, { compact: true }) ?? ""), "justify-self:end"),
+          ? narrow ? null : repair(g)
+          : newTunnel(g, v.svc, data, { compact: true }) ?? ""), `display:inline-flex;justify-content:center;${g.loose && !narrow ? "" : "width:32px"}`),
     ];
     });
-    return table(columns, rows, narrow);
+    const grid = table(columns, rows, narrow);
+    const cells = [...grid.children], width = columns.filter(c => !(narrow && c.under)).length;
+    if (foldWays) groups.forEach((g, index) => {
+      const links = ways.map(w => wayNode(g, w)).filter(Boolean);
+      if (!links.length && !g.loose) return;
+      const extra = css(el("span", {role:"group",ariaLabel:`Tunnels for ${g.label}`},muted("Tunnels"),...links,g.loose ? repair(g) : null), "grid-column:2 / -1;display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;min-width:0;margin-top:-4px;font-size:11px");
+      extra.setAttribute("data-service-tunnels", "true");
+      grid.insertBefore(extra, cells[(index + 2) * width] ?? null);
+    });
+    return grid;
   }
 
   // Collapsed, the same facts summed, in the same order: ± ↑ ↓, the pull

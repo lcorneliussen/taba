@@ -46,6 +46,15 @@ class Node {
     siblings.splice(siblings.indexOf(this), 1);
     this.parentNode = null;
   }
+  focus() { document.activeElement = this; }
+  getBoundingClientRect() { return this.role === "menu" ? { width:this.popoverShown ? 252 : 0,height:this.popoverShown ? 180 : 0 } : { left:280,top:700,right:304,bottom:724,width:24,height:24 }; }
+  showPopover() { this.onbeforetoggle?.({ newState: "open" }); this.popoverShown = true; this.ontoggle?.({ newState: "open" }); }
+  hidePopover() { this.onbeforetoggle?.({ newState: "closed" }); this.popoverShown = false; this.ontoggle?.({ newState: "closed" }); }
+  click() {
+    this.onclick?.({ preventDefault() {}, stopPropagation() {} });
+    const target = this.popoverTargetElement;
+    if (target) target.popoverShown ? target.hidePopover() : target.showPopover();
+  }
   scrollIntoView() { this.scrolled = true; }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
@@ -223,13 +232,15 @@ const busy = collection([
 // The card's cells, row by row: a table is a grid of a header and rows of
 // as many cells.
 const tables = (node) => [...node.all()].filter((n) => n.className === "wtc-table").map((t) => {
-  const cells = t.children;
+  const cells = t.children.filter(n => !n.attributes["data-service-tunnels"]);
   const width = Number(t.attributes["data-columns"]);
   const rows = [];
   for (let i = 0; i < cells.length; i += width) rows.push(cells.slice(i, i + width).map((c) => {
     // A choice reads as its prompt, not its options.
     const pick = [...c.all()].find((n) => n.tagName === "SELECT");
-    return pick ? pick.children[0].textContent : c.textContent;
+    if (pick) return pick.children[0].textContent;
+    const tunnel = [...c.all()].find(n => n.ariaHasPopup === "menu");
+    return tunnel ? "+" : c.textContent;
   }));
   return rows;
 });
@@ -970,19 +981,17 @@ test("panel: a new tunnel, and one whose client is missing", async () => {
   const { host, view } = await mount("panel", collection([repo("api")], [
     { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" },
   ]));
-  const pick = [...host.all()].find((n) => n.tagName === "SELECT");
+  const pick = [...host.all()].find((n) => n.role === "menu");
   // The gateway's portal first; without tunnel clients, the others are
   // installed first, and Tailscale is not offered on a personal tailnet.
-  assert.deepEqual(pick.children.map((o) => o.value), ["", "gateway", "cloudflare", "ngrok", "devtunnel"]);
-  assert.equal(pick.children[0].textContent, "+");
-  assert.equal(pick.children[1].textContent, "gateway · OpenClaw portal");
-  assert.equal(pick.children[2].textContent, "cloudflare · public link · install first");
+  assert.deepEqual(pick.children.map((o) => o.value), ["gateway", "cloudflare", "ngrok", "devtunnel"]);
+  assert.equal(pick.children[0].ariaLabel, "Gateway · OpenClaw portal");
+  assert.equal(pick.children[1].ariaLabel, "Cloudflare · public link · install first");
   // Only reachable on the gateway: the port, not a link.
   assert.ok(texts(host).includes(":42201"));
   calls.length = 0;
   svcResult = { ok: true, result: { missing: "cloudflared" } };
-  pick.value = "cloudflare";
-  await pick.onchange();
+  await pick.children.find(o => o.value === "cloudflare").onclick({ preventDefault() {}, stopPropagation() {} });
   svcResult = { ok: true, result: { message: "done" } };
   assert.deepEqual(calls[0].payload, { op: "tunnel", group: "api/web", provider: "cloudflare", public: true, add: true });
   const asked = calls.find((c) => c.method === "sessions.send");
@@ -1002,20 +1011,20 @@ test("composer: start and stop all only with more than one service", async () =>
 test("panel: the ways to a service", async () => {
   const web = { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" };
   const team = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["tailscale", "cloudflare"], teamTailnet: true });
-  const pick = [...team.host.all()].find((n) => n.tagName === "SELECT");
-  assert.deepEqual(pick.children.map((o) => o.textContent),
-    ["+", "gateway · OpenClaw portal", "cloudflare · public link", "ngrok · public link · install first", "devtunnel · your account · install first", "tailscale · team tailnet"]);
+  const pick = [...team.host.all()].find((n) => n.role === "menu");
+  assert.deepEqual(pick.children.map((o) => o.ariaLabel),
+    ["Gateway · OpenClaw portal", "Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Tailscale · team tailnet"]);
   team.view.dispose();
   // Without portal ingress, the gateway's portal comes last, marked.
   const bare = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["cloudflare"], portalIngress: false });
-  const choice = [...bare.host.all()].find((n) => n.tagName === "SELECT");
-  assert.deepEqual(choice.children.map((o) => o.textContent),
-    ["+", "cloudflare · public link", "ngrok · public link · install first", "devtunnel · your account · install first", "gateway · OpenClaw portal · needs ingress"]);
+  const choice = [...bare.host.all()].find((n) => n.role === "menu");
+  assert.deepEqual(choice.children.map((o) => o.ariaLabel),
+    ["Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Gateway · OpenClaw portal · needs ingress"]);
   bare.view.dispose();
   // With every other way taken, the one left is named.
   const tunnels = ["cloudflare", "ngrok", "devtunnel"].map((p) => ({ group: "api/web", path: `api/web/${p}`, repo: "api", kind: "endpoint", provider: p, state: "idle" }));
   const last = await mount("panel", { ...collection([repo("api")], [web, ...tunnels]), tunnelProviders: [] });
-  assert.ok([...last.host.all()].some((n) => n.tagName === "BUTTON" && n.textContent === "+" && n.title.startsWith("Open gateway (OpenClaw portal)")), "one way left: no choice to make");
+  assert.ok([...last.host.all()].some((n) => n.tagName === "BUTTON" && n.title.startsWith("Open Gateway (OpenClaw portal)")), "one way left: no choice to make");
   last.view.dispose();
 });
 
@@ -1035,7 +1044,7 @@ test("panel: a portal of the gateway beside its service", async () => {
   listed.view.dispose();
   portals = [{ ...portals[0], id: "p42201", url: "http://172.30.0.2:41553/?openclaw_portal=t" }];
   // Open already: not offered again.
-  assert.equal([...open.host.all()].find((n) => n.tagName === "SELECT").children.some((o) => o.value === "gateway"), false);
+  assert.equal([...open.host.all()].find((n) => n.role === "menu").children.some((o) => o.value === "gateway"), false);
   calls.length = 0;
   titled(open.host, "Close the portal").onclick({ preventDefault() {}, stopPropagation() {} });
   await settle();
@@ -2468,4 +2477,26 @@ test("a Next publication keeps its single activity through a personally confirme
   assert.equal([...panel.host.all()].filter(n=>n.className==="wtc-activity-item").length,1);
   assert.match(readable(panel.host),/Done/);assert.doesNotMatch(readable(panel.host),/Awaiting confirm|Publication response received/);
  }finally{panel?.view.dispose();view.dispose();githubConfirmResult=previous;personal=null;nextResult=undefined;}
+});
+
+test("tunnel menu keys navigate without starting a tunnel, and Escape restores its trigger", async () => {
+  const {host,view}=await mount("composer", collection([repo("api")],[{group:"api/web",repo:"api",kind:"service",label:"preview",state:"ready",url:"http://127.0.0.1:42201"}]));
+  const oldWidth=globalThis.innerWidth; globalThis.innerWidth=320;
+  try {
+    const trigger=[...host.all()].find(n=>n.ariaHasPopup==="menu");
+    const menu=[...host.all()].find(n=>n.role==="menu");
+    const key=key=>({key,preventDefault(){},stopPropagation(){}});
+    calls.length=0;
+    trigger.onkeydown(key("ArrowUp")); await settle();
+    assert.equal(trigger.ariaExpanded,"true");
+    assert.ok(Number.parseFloat(menu.style.left)+252<=308,"placement uses the shown menu width and fits the viewport");
+    assert.ok(Number.parseFloat(menu.style.top)+180<=756,"the menu fits above a trigger near the bottom");
+    assert.equal(document.activeElement.value,"devtunnel");
+    menu.onkeydown(key("ArrowDown")); assert.equal(document.activeElement.value,"gateway");
+    menu.onkeydown(key("End")); assert.equal(document.activeElement.value,"devtunnel");
+    menu.onkeydown(key("Home")); assert.equal(document.activeElement.value,"gateway");
+    menu.onkeydown(key("Escape"));
+    assert.equal(trigger.ariaExpanded,"false"); assert.equal(document.activeElement,trigger);
+    assert.equal(calls.length,0,"opening, navigation and dismissal never start a provider");
+  } finally {globalThis.innerWidth=oldWidth;view.dispose();}
 });
