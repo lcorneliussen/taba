@@ -435,6 +435,7 @@ const unreachable = (url) => {
 };
 const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${g.group}. ${program} is not on the gateway's PATH: install it for this collection, then open the tunnel as the wtc-svc skill says.`;
 const serviceStateIcon = glyph => {
+  // Use a supported shell for the filled square, avoiding the unknown-glyph fallback.
   const icon = controlIcon(glyph === "■" ? "▶" : glyph, 12);
   const svg = icon.children[0], path = svg.children[0];
   if (glyph === "▶" || glyph === "■") {
@@ -1598,7 +1599,9 @@ function collectionTables(v) {
             css(el("span", {}, below), "display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px")),
           `${align(c)}min-width:0;display:grid;gap:1px`);
         }
-        return css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? "width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;" : ""}min-width:0;overflow:${c.overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
+        // Absolute icon rails keep their full hit area; text cells still clip.
+        const overflow = c.overflow || value?.className === "wtc-lead-slot";
+        return css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? "width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;" : ""}min-width:0;overflow:${overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
       }));
     }
     return grid;

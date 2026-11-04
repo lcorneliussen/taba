@@ -260,6 +260,14 @@ test("panel: no collection yet says what one is, not the conversation's label", 
   bare.view.dispose();
 });
 
+test("service hover hints retain the readable stopped label in both views", async () => {
+  for (const kind of ["composer", "panel"]) for (const state of ["idle", "absent"]) {
+    const { host, view } = await mount(kind, collection([repo("api")], [{ group: "api/worker", path: "api/worker", repo: "api", kind: "service", label: "Worker", state }]));
+    try { assert.ok([...host.all()].some(n => n.tagName === "SPAN" && n.textContent === "stopped" && n.title === "stopped")); }
+    finally { view.dispose(); }
+  }
+});
+
 test("the branded link names the plugin's and gateway's versions in both views", async () => {
   for (const kind of ["composer", "panel"]) {
     const { host, view } = await mount(kind, { ...busy, version: { plugin: "1.2.3", wtc: "1.2.4-dev+gabc1234" } });
