@@ -2350,7 +2350,7 @@ test("an opened action-log result survives an unrelated refresh", async () => {
     opened.open=true;opened.ontoggle();
     view.update(context);await settle();
     const restored=[...host.all()].find(n=>n.className==="wtc-activity-item"&&n.ariaLabel===opened.ariaLabel);
-    assert.notEqual(restored,opened);assert.equal(restored.open,true);
+    assert.equal(restored,opened,"unchanged updates keep the disclosure connected");assert.equal(restored.open,true);
   } finally {view.dispose();catchUpResult=previous;}
 });
 
@@ -2499,4 +2499,33 @@ test("tunnel menu keys navigate without starting a tunnel, and Escape restores i
     assert.equal(trigger.ariaExpanded,"false"); assert.equal(document.activeElement,trigger);
     assert.equal(calls.length,0,"opening, navigation and dismissal never start a provider");
   } finally {globalThis.innerWidth=oldWidth;view.dispose();}
+});
+
+test("unchanged composer updates preserve the focused suggestion and its current action", async () => {
+ const data=collection([]),key="agent:main:dashboard:hover-start";
+ histories.set(key,[{role:"user",content:"Work on the site documentation"}]);
+ const {host,view,context}=await mount("composer",data,undefined,key);
+ try {
+  await settle();
+  const start=titled(host,"Ask the conversation to start this collection");assert.ok(start);start.focus();
+  for(let i=0;i<30;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Ask the conversation to start this collection"),start);
+  assert.equal(start.isConnected,true);assert.equal(document.activeElement,start);
+  calls.length=0;await start.onclick({preventDefault(){},stopPropagation(){}});await settle();
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+  assert.equal(calls.find(c=>c.method==="sessions.send").key,key);
+ }finally{view.dispose();histories.delete(key);}
+});
+
+for(const kind of ["composer","panel"])test(`${kind}: unchanged context preserves focused service controls but real status changes update them`,async()=>{
+ const data=collection([repo("api")],[{group:"api/web",repo:"api",kind:"service",label:"Preview",state:"idle"}]);
+ const {host,view,context}=await mount(kind,data);
+ try{
+  const starter=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&/^(Start Preview|Preview: idle\. Start it)$/.test(n.title));
+  const start=starter();assert.ok(start);start.focus();
+  for(let i=0;i<30;i++)view.update({...context,props:{...context.props}});
+  assert.equal(starter(),start);assert.equal(document.activeElement,start);
+  data.services[0].state="ready";view.update(context);
+  assert.equal(starter(),undefined);assert.ok([...host.all()].some(n=>n.tagName==="BUTTON"&&/Preview.*Stop it/.test(n.title)));
+ }finally{view.dispose();}
 });
