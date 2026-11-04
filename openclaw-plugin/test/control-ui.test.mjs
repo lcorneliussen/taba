@@ -2350,7 +2350,7 @@ test("an opened action-log result survives an unrelated refresh", async () => {
     opened.open=true;opened.ontoggle();
     view.update(context);await settle();
     const restored=[...host.all()].find(n=>n.className==="wtc-activity-item"&&n.ariaLabel===opened.ariaLabel);
-    assert.notEqual(restored,opened);assert.equal(restored.open,true);
+    assert.equal(restored,opened,"unchanged updates keep the disclosure connected");assert.equal(restored.open,true);
   } finally {view.dispose();catchUpResult=previous;}
 });
 
@@ -2499,4 +2499,110 @@ test("tunnel menu keys navigate without starting a tunnel, and Escape restores i
     assert.equal(trigger.ariaExpanded,"false"); assert.equal(document.activeElement,trigger);
     assert.equal(calls.length,0,"opening, navigation and dismissal never start a provider");
   } finally {globalThis.innerWidth=oldWidth;view.dispose();}
+});
+
+test("unchanged composer updates preserve the focused suggestion and its current action", async () => {
+ const data=collection([]),key="agent:main:dashboard:hover-start";
+ histories.set(key,[{role:"user",content:"Work on the site documentation"}]);
+ const {host,view,context}=await mount("composer",data,undefined,key);
+ try {
+  await settle();
+  const start=titled(host,"Ask the conversation to start this collection");assert.ok(start);start.focus();
+  for(let i=0;i<30;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Ask the conversation to start this collection"),start);
+  assert.equal(start.isConnected,true);assert.equal(document.activeElement,start);
+  calls.length=0;await start.onclick({preventDefault(){},stopPropagation(){}});await settle();
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+  assert.equal(calls.find(c=>c.method==="sessions.send").key,key);
+ }finally{view.dispose();histories.delete(key);}
+});
+
+for(const kind of ["composer","panel"])test(`${kind}: unchanged context preserves focused service controls but real status changes update them`,async()=>{
+ const data=collection([repo("api")],[{group:"api/web",repo:"api",kind:"service",label:"Preview",state:"idle"}]);
+ const {host,view,context}=await mount(kind,data);
+ try{
+  const starter=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&/^(Start Preview|Preview: idle\. Start it)$/.test(n.title));
+  const start=starter();assert.ok(start);start.focus();
+  for(let i=0;i<30;i++)view.update({...context,props:{...context.props}});
+  assert.equal(starter(),start);assert.equal(document.activeElement,start);
+  data.services[0].state="ready";view.update(context);
+  assert.equal(starter(),undefined);assert.ok([...host.all()].some(n=>n.tagName==="BUTTON"&&/Preview.*Stop it/.test(n.title)));
+ }finally{view.dispose();}
+});
+
+test("a panel focus intent retained in host props does not rebuild its controls",async()=>{
+ const {host,view,context}=await mount("panel",collection([repo("api")]),undefined,undefined,{focus:"activity"});
+ try{
+  const refresh=titled(host,"Refresh");assert.ok(refresh);refresh.focus();
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Refresh"),refresh);assert.equal(document.activeElement,refresh);
+ }finally{view.dispose();}
+});
+
+
+for(const kind of ["composer","panel"])test(`${kind}: unchanged status still rechecks a newly connected account on its existing cadence`,async()=>{
+ const realNow=Date.now;let now=realNow();Date.now=()=>now;personal=null;
+ const {view,context}=await mount(kind,collection([repo("api",{unpublished:1})]));
+ let options=0;const request=context.host.request;
+ context.host.request=(method,params)=>{if(method==="sessions.github.options")options++;return request(method,params);};
+ try{
+  await settle();personal={state:"connected",account:{login:"demo"},generation:"new"};now+=31000;
+  view.update(context);await settle();assert.equal(options,1);
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  await settle();assert.equal(options,1,"host updates must not bypass the account-check throttle");
+ }finally{Date.now=realNow;personal=null;view.dispose();}
+});
+
+for(const mode of ["hidden","aborted","workers"])test(`unchanged ${mode} composer updates do not start suggestion reads`,async()=>{
+ const realNow=Date.now;let now=realNow();Date.now=()=>now;
+ const data=mode==="workers"?{...collection([]),subSessions:[{name:"helper",collection:"test--helper",repos:[repo("api")]}]}:collection([]);
+ const {view,context,abort}=await mount("composer",data);
+ let history=0;const request=context.host.request;
+ context.host.request=(method,params)=>{if(method==="chat.history")history++;return request(method,params);};
+ try{
+  const next=mode==="hidden"?{...context,presented:false}:context;if(mode==="aborted")abort();
+  view.update(next);now+=11000;
+  for(let i=0;i<20;i++)view.update(next);
+  await settle();assert.equal(history,0);
+ }finally{Date.now=realNow;view.dispose();}
+});
+
+
+test("panel feedback renders once and keeps its refreshed stamp for later host updates",async()=>{
+ const {host,view,context}=await mount("panel",collection([repo("api")]));
+ try{
+  const input=[...host.all()].find(n=>n.tagName==="INPUT"&&n.placeholder==="Find or add a repository");
+  input.value="";input.onkeydown({key:"Enter",preventDefault(){}});
+  assert.match(readable(host),/Pick a repository from the list/);
+  const refresh=titled(host,"Refresh");refresh.focus();
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Refresh"),refresh);assert.equal(refresh.isConnected,true);assert.equal(document.activeElement,refresh);
+ }finally{view.dispose();}
+});
+
+
+for (const kind of ["composer", "panel"]) test(`${kind}: an action refresh from a previous conversation keeps the new controls connected`, async () => {
+  const data = collection([repo("api", { behind: 3 })]);
+  const { host, view, context } = await mount(kind, data);
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  controlledCollection = params => params.sessionKey === context.props.sessionKey
+    ? pending : { ok: true, result: collections.get(params.sessionKey) };
+  try {
+    const action = [...host.all()].find(n => n.tagName === "BUTTON" && /^3 new on main/.test(n.title)).onclick();
+    await settle();
+    const nextKey = `agent:main:other:${++sessions}`;
+    collections.set(nextKey, collection([repo("web")]));
+    view.update({ ...context, props: { sessionKey: nextKey, agentId: "main" } });
+    await settle();
+    const refreshControl = () => [...host.all()].find(n => n.className === "wtc-refresh-control");
+    const refresh = refreshControl();
+    refresh.focus();
+    release({ ok: true, result: data });
+    await action;
+    await settle();
+    assert.equal(refreshControl(), refresh);
+    assert.equal(refresh.isConnected, true);
+    assert.equal(document.activeElement, refresh);
+  } finally { release({ ok: true, result: data }); controlledCollection = undefined; view.dispose(); }
 });
