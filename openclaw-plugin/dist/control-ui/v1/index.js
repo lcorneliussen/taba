@@ -777,6 +777,10 @@ const actionFeedback = () => el("style", { textContent: `
 @media(prefers-reduced-motion:reduce) { .wtc-refresh-control[aria-busy="true"] .wtc-header-glyph { animation:none; opacity:.6; } }
 .wtc-action-control:focus-visible { outline:2px solid var(--accent,#75c8c1); outline-offset:-2px; }
 .wtc-collection-card summary:focus-visible { outline:2px solid var(--accent,#75c8c1); outline-offset:2px; border-radius:10px; }
+@media(pointer:coarse) {
+  .wtc-base-services { --wtc-state-size:24px; }
+  .wtc-base-services .wtc-table { row-gap:6px !important; }
+}
 @media(max-width:520px) {
   .wtc-collection-card { --wtc-header-top-extra:0px; }
   .wtc-collection-card>summary { column-gap:4px !important; }
@@ -1748,7 +1752,7 @@ function collectionTables(v) {
         Object.assign(css(el("button", { type: "button", className: "wtc-service-label", textContent: g.label, title: logTitle, ariaLabel: logTitle, disabled: !canReadLogs }), "display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit;line-height:inherit;font-weight:600;color:var(--text-strong, inherit);border:0;padding:0;background:transparent;text-align:left;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px"), { onclick: () => { if (canReadLogs) return loadServiceLogs(targets[0] ?? g.group, g.label, targets); } }),
         g.repo ? muted(g.repo) : null,
         g.loose ? toned(narrow ? "separate" : "separate tunnel", TONE.pending, "Started apart from the service it exposes")
-          : toned(g.state === "absent" || g.state === "idle" ? "stopped" : g.state, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none),
+          : toned(g.state === "absent" || g.state === "idle" ? "stopped" : g.state, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none, g.state),
         g.url && !g.loose ? address(g.url) : null,
         ...visibleWays.map(w => wayNode(g, w)),
         g.loose && !narrow ? repair(g) : leadSlot(g.loose ? null : newTunnel(g, v.svc, data, { compact: true }), 32),
