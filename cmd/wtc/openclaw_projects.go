@@ -87,6 +87,15 @@ func sandboxProjectMetadata(p gatewayProject, h openclaw.Harness, reg harnessReg
 		if dir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(remote)); dir != "" {
 			repo.ProjectID = filepath.Base(dir)
 			repo.Destination = openclaw.ProjectDestination(dir, worktree)
+			for _, alias := range openclaw.GatewayProjectOrigins(dir) {
+				host := "github.com"
+				if alias.Forge == openclaw.ForgeBitbucket {
+					host = "bitbucket.org"
+				}
+				if remote, err := projectMetadataRemote("https://" + host + "/" + alias.Owner + "/" + alias.Repo + ".git"); err == nil {
+					repo.OriginAliases = append(repo.OriginAliases, remote)
+				}
+			}
 			previous := openclaw.ParseOrigin(remote)
 			current := openclaw.GatewayProjectOrigin(dir)
 			for _, name := range r.Names() {

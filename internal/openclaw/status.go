@@ -107,12 +107,10 @@ func ManagedCollections(stateDir string) (map[string][]string, error) {
 	return collections, nil
 }
 
-// GatewayProject is the name of the gateway's own clone of a repository,
-// which is its project ID, or "" when the gateway has none. projects.add
-// clones GitHub repositories to stateDir/projects/<hash>/<name>; the wtc
-// plugin clones others, such as Bitbucket ones, to stateDir/repos/<name> and
-// registers them under that name. Checkouts registered from anywhere else are
-// not found.
+// GatewayProject returns the clone's stable native project ID, or "" when
+// no clone matches the requested current origin or operator-verified alias.
+// The ID is its directory basename, which need not be the forge's repo name.
+// Only clones under stateDir/projects/<hash> or stateDir/repos are searched.
 func GatewayProject(stateDir string, origin Origin) string {
 	if dir := GatewayProjectDir(stateDir, origin); dir != "" {
 		return filepath.Base(dir)
@@ -121,7 +119,8 @@ func GatewayProject(stateDir string, origin Origin) string {
 }
 
 // GatewayProjectDirByName is the directory of the gateway's clone of the
-// project named name, by the same rules as GatewayProject, or "".
+// native project ID first, then by an unambiguous current or verified alias
+// repository short name, or "" when neither resolves.
 func GatewayProjectDirByName(stateDir, name string) string {
 	if !validProjectName(name) {
 		return ""
@@ -137,7 +136,8 @@ func GatewayProjectDirByName(stateDir, name string) string {
 }
 
 // GatewayProjectDir is the directory of the gateway's clone that
-// GatewayProject names, or "".
+// GatewayProject names, matching the current origin or an operator-verified
+// alias independently of the directory name. Ambiguous fallback matches return "".
 func GatewayProjectDir(stateDir string, origin Origin) string {
 	if !validProjectOrigin(origin) {
 		return ""

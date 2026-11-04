@@ -511,10 +511,12 @@ clone; repointing the clone elsewhere invalidates the old aliases. Discovery
 reads the record without changing Git state or making forge requests.
 
 Old collections keep their older registry worktrees and conversation IDs.
-Permitted sandbox metadata carries alias names and the stable project ID,
+Permitted sandbox metadata reports the verified current origin as its remote,
+with logical alias names, verified origin aliases, and the stable project ID,
 without exposing the record or local paths. This grants no clone or publish
 permission. Ambiguous short names require an explicit registered name or URL;
-aliases never choose an unrelated owner or forge by name alone.
+logical aliases never grant a forge URL. Exact registered remotes take precedence
+over verified old URLs, so a reused repository name cannot shadow an exact match.
 
 ## The collection in the Control UI
 

@@ -238,7 +238,7 @@ func SameRepository(a, b string) bool {
 }
 
 // CheckoutOf reports whether the checkout at dir is of the repository at
-// remote, by its origin.
+// remote, by its current origin or an operator-verified alias bound to it.
 func CheckoutOf(dir, remote string) bool {
 	return projectMatchesOrigin(dir, ParseOrigin(remote))
 }

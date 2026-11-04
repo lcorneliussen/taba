@@ -2,12 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"github.com/lcorneliussen/wtc-cli/internal/openclaw"
-	"github.com/lcorneliussen/wtc-cli/internal/wtc"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/lcorneliussen/wtc-cli/internal/openclaw"
+	"github.com/lcorneliussen/wtc-cli/internal/wtc"
 )
 
 func TestOpenClawRenameOldAndNewCollectionsReuseProject(t *testing.T) {
@@ -124,5 +125,27 @@ func TestOpenClawRegistryAliasResolutionDoesNotGuessOtherOwners(t *testing.T) {
 	r.repos = append(r.repos, wtc.Repo{Name: "api", Remote: "https://github.com/example-org/different.git"})
 	if got, ok := r.find("api"); !ok || got.Name != "api" {
 		t.Fatal("alias shadowed explicit registry name")
+	}
+}
+
+func TestOpenClawRemoteAliasesRequireVerifiedIdentityAndPreferExact(t *testing.T) {
+	// A logical alias is useful as a short name but grants no forge identity.
+	t.Setenv(openclaw.GatewayGitEnv, "http://gateway.invalid")
+	r := harnessRegistry{repos: []wtc.Repo{{Name: "service", Aliases: []string{"api"}, Remote: "https://github.com/example-org/service.git"}}}
+	oldURL := "https://github.com/example-org/api.git"
+	if _, ok := r.findRemote(oldURL); ok {
+		t.Fatal("logical alias granted an unverified URL")
+	}
+	r.originAliases = map[string][]string{"service": {oldURL}}
+	if got, ok := r.findRemote(oldURL); !ok || got.Name != "service" {
+		t.Fatal("verified origin alias not resolved")
+	}
+	r.repos = append(r.repos, wtc.Repo{Name: "legacy", Remote: oldURL})
+	if got, ok := r.findRemote(oldURL); !ok || got.Name != "legacy" {
+		t.Fatal("verified alias shadowed an exact registered URL")
+	}
+	r.repos = append(r.repos, wtc.Repo{Name: "duplicate", Remote: oldURL})
+	if _, ok := r.findRemote(oldURL); ok {
+		t.Fatal("duplicate exact remotes were guessed")
 	}
 }

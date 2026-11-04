@@ -34,10 +34,11 @@ func gatewayProjectDirs(stateDir string) []string {
 	return append(dirs, others...)
 }
 
+// GatewayProjectOrigins returns the current origin and operator-verified aliases.
 // Alias records bind a verified forge identity to this clone's current origin.
 // They are not inferred from names, and do not add executable Git config keys.
 // Listing never contacts the forge or changes the record, origin, or worktrees.
-func projectOrigins(dir string) []Origin {
+func GatewayProjectOrigins(dir string) []Origin {
 	current := GatewayProjectOrigin(dir)
 	if !validProjectOrigin(current) {
 		return nil
@@ -47,7 +48,12 @@ func projectOrigins(dir string) []Origin {
 	if err != nil {
 		return origins
 	}
-	f, err := os.Open(filepath.Join(common, "wtc-origin-aliases.json"))
+	path := filepath.Join(common, "wtc-origin-aliases.json")
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return origins
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return origins
 	}
@@ -84,7 +90,7 @@ func projectMatchesOrigin(dir string, requested Origin) bool {
 	if sameOrigin(current, requested) {
 		return true
 	}
-	for _, origin := range projectOrigins(dir) {
+	for _, origin := range GatewayProjectOrigins(dir) {
 		if sameOrigin(origin, requested) {
 			return true
 		}
@@ -95,7 +101,7 @@ func projectMatchesOrigin(dir string, requested Origin) bool {
 func projectNamed(stateDir, name string) string {
 	var found string
 	for _, dir := range gatewayProjectDirs(stateDir) {
-		for _, origin := range projectOrigins(dir) {
+		for _, origin := range GatewayProjectOrigins(dir) {
 			if strings.EqualFold(origin.Repo, name) {
 				if found != "" && found != dir {
 					return "" // A short name must not choose between different projects.

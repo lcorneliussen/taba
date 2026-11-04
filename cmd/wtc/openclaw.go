@@ -528,14 +528,15 @@ func unlistedError(h openclaw.Harness, worktree string, repos, unlisted []string
 // the harness at its configured ref. Local resolution retains the path;
 // sandbox snapshots carry only presence and safe metadata.
 type harnessRegistry struct {
-	destination  string
-	destinations map[string]string
-	hasWorktree  bool // current collection presence without exposing the gateway path
-	projectID    string
-	projectIDs   map[string]string
-	repos        []wtc.Repo
-	worktree     string
-	err          error
+	originAliases map[string][]string
+	destination   string
+	destinations  map[string]string
+	hasWorktree   bool // current collection presence without exposing the gateway path
+	projectID     string
+	projectIDs    map[string]string
+	repos         []wtc.Repo
+	worktree      string
+	err           error
 }
 
 func (r harnessRegistry) hasHarnessWorktree() bool { return r.worktree != "" || r.hasWorktree }
@@ -586,19 +587,30 @@ func (r harnessRegistry) find(name string) (wtc.Repo, bool) {
 }
 
 func (r harnessRegistry) findRemote(url string) (wtc.Repo, bool) {
-	requested := openclaw.ParseOrigin(url)
+	// A registered remote takes precedence over another clone's old URL.
+	var exact *wtc.Repo
+	for _, repo := range r.repos {
+		if openclaw.SameRepository(repo.Remote, url) {
+			if exact != nil {
+				return wtc.Repo{}, false
+			}
+			copy := repo
+			exact = &copy
+		}
+	}
+	if exact != nil {
+		return *exact, true
+	}
 	var found *wtc.Repo
 	for _, repo := range r.repos {
-		origin := openclaw.ParseOrigin(repo.Remote)
-		matches := openclaw.SameRepository(repo.Remote, url)
-		// Explicit registry aliases are confined to the declared forge/owner.
-		if origin.Forge != openclaw.ForgeUnknown && origin.Forge == requested.Forge && strings.EqualFold(origin.Owner, requested.Owner) {
-			for _, alias := range repo.Aliases {
-				matches = matches || strings.EqualFold(alias, requested.Repo)
-			}
+		matches := false
+		// Logical registry names never grant a forge URL. These aliases come
+		// only from the operator-verified clone record in permitted metadata.
+		for _, alias := range r.originAliases[repo.Name] {
+			matches = matches || openclaw.SameRepository(alias, url)
 		}
 		if !matches && openclaw.GatewayFromEnv(os.Getenv) == nil {
-			dir := openclaw.GatewayProjectDir(gatewayStateDir(), origin)
+			dir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(repo.Remote))
 			matches = dir != "" && openclaw.CheckoutOf(dir, url)
 		}
 		if matches {
