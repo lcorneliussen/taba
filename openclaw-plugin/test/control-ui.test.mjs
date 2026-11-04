@@ -264,7 +264,7 @@ test("the branded link names the plugin's and gateway's versions in both views",
   for (const kind of ["composer", "panel"]) {
     const { host, view } = await mount(kind, { ...busy, version: { plugin: "1.2.3", wtc: "1.2.4-dev+gabc1234" } });
     await settle();
-    const brandLink = [...host.all()].find((n) => n.tagName === "A" && n.textContent === "束 taba");
+    const brandLink = [...host.all()].find((n) => n.tagName === "A" && n.ariaLabel === "taba home");
     assert.equal(brandLink.href, "https://taba.sh/");
     assert.match(brandLink.title, /\nplugin 1\.2\.3, wtc 1\.2\.4-dev\+gabc1234$/);
     view.dispose();

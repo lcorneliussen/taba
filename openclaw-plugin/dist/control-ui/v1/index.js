@@ -434,12 +434,21 @@ const unreachable = (url) => {
   } catch { return false; }
 };
 const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${g.group}. ${program} is not on the gateway's PATH: install it for this collection, then open the tunnel as the wtc-svc skill says.`;
+const serviceStateIcon = glyph => {
+  const icon = controlIcon(glyph === "■" ? "▶" : glyph, 12);
+  const svg = icon.children[0], path = svg.children[0];
+  if (glyph === "▶" || glyph === "■") {
+    path.setAttribute("d", glyph === "▶" ? "M8 4l13 8-13 8V4z" : "M5 5h14v14H5z");
+    svg.setAttribute("fill", "currentColor"); svg.setAttribute("stroke", "none");
+  }
+  return icon;
+};
 // A button in front of a service, where a repository has its forge icon and
 // as small, that is also its state: ■ stops a running one, ▶ starts a
 // stopped one, ↻ restarts a failed one.
 function stateGlyph(glyph, title, tone, run) {
-  const b = css(el("button", { type: "button", className: glyph === "▶" ? "wtc-service-play" : "", title, ariaLabel: title }, glyph === "▶" ? controlIcon(glyph) : glyph),
-    `flex:none;box-sizing:border-box;width:var(--wtc-state-size,14px);height:var(--wtc-state-size,14px);display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:var(--wtc-service-play-bg,transparent);color:var(--wtc-service-play-color,${tone});cursor:pointer;font-size:${glyph === "↻" ? 13 : 10}px;line-height:1;padding:0`);
+  const b = css(el("button", { type: "button", className: "wtc-service-play", title, ariaLabel: title }, serviceStateIcon(glyph)),
+    `flex:none;box-sizing:border-box;width:var(--wtc-state-size,20px);height:var(--wtc-state-size,20px);display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:var(--wtc-service-play-bg,transparent);color:var(--wtc-service-play-color,${tone});cursor:pointer;font-size:${glyph === "↻" ? 13 : 10}px;line-height:1;padding:0`);
   b.onclick = (e) => { e?.preventDefault(); e?.stopPropagation(); return run(); };
   return b;
 }
@@ -548,7 +557,7 @@ function newTunnel(g, svc, data = {}, { compact = false } = {}) {
   if (!g.main || g.loose || !free.length) return null;
   const trigger = css(el("button", { type: "button", className: "wtc-tunnel-trigger", title: `Add a tunnel to ${g.label}`, ariaLabel: `Add a tunnel to ${g.label}` }, controlIcon("+"), compact ? null : " Tunnel…"),
     `display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;${compact ? "width:24px;" : "padding:0 6px;"}height:24px;min-width:24px;border:1px solid transparent;border-radius:var(--radius-sm,6px);background:transparent;color:var(--muted,#888);font:inherit;font-size:12px;line-height:16px;cursor:pointer;${compact ? "padding:0;" : ""}`);
-  const wrap = (...nodes) => css(el("span", { className: "wtc-tunnel-control" }, ...nodes), "display:inline-flex;align-items:center;vertical-align:middle;transform:translateY(-1px)");
+  const wrap = (...nodes) => css(el("span", { className: "wtc-tunnel-control" }, ...nodes), "display:inline-flex;align-items:center;vertical-align:middle");
   if (free.length === 1) {
     const p = free[0];
     if (!compact) trigger.replaceChildren(controlIcon("+"), ` ${p.label ?? p.name}`);
@@ -632,26 +641,36 @@ function newTunnel(g, svc, data = {}, { compact = false } = {}) {
 }
 
 // Geometric control glyphs avoid font-dependent centres and spinning hit targets.
-const controlIcon = glyph => {
+const controlIcon = (glyph, size = 14) => {
   const paths = { "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg"), path = document.createElementNS(ns, "path");
-  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "14", height: "14", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
+  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: String(size), height: String(size), fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
   svg.setAttribute("class", "wtc-header-glyph"); svg.style.cssText = "display:block;transform-box:fill-box;transform-origin:center";
   path.setAttribute("d", paths[glyph] ?? paths["✕"]); svg.append(path);
-  return css(el("span", { className: "wtc-header-icon" }, svg), "display:inline-flex;width:14px;height:14px");
+  return css(el("span", { className: "wtc-header-icon" }, svg), `display:inline-flex;width:${size}px;height:${size}px`);
 };
 
 // A shared icon rail and text rail for the brand, repositories and services.
-const leadSlot = icon => css(el("span", { className: "wtc-lead-slot" },
-  css(el("span", { className: "wtc-lead-icon" }, icon), "position:absolute;left:50%;top:-.35em;transform:translate(-50%,-50%);display:grid;place-items:center")), "display:inline-block;position:relative;flex:0 0 20px;width:20px;height:0;align-self:baseline");
+const leadSlot = (icon, width = 20) => css(el("span", { className: "wtc-lead-slot" },
+  css(el("span", { className: "wtc-lead-icon" }, icon), "position:absolute;left:50%;top:-.35em;transform:translate(-50%,-50%);display:grid;place-items:center")), `display:inline-block;position:relative;flex:0 0 ${width}px;width:${width}px;height:0;align-self:baseline`);
 
 // Visible branding can change while the plugin and CLI keep their legacy IDs.
 // version is what the collection reports: the plugin's and the gateway's wtc.
 const versionText = (v) => (v?.plugin || v?.wtc ? `plugin ${v.plugin ?? "?"}, wtc ${v.wtc ?? "?"}` : "");
+// The published Taba mark, bundled as vectors so host fonts cannot change it.
+const brandMark = () => {
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  for (const [key, value] of Object.entries({ viewBox: "0 0 64 64", width: "18", height: "18", "aria-hidden": "true", focusable: "false", class: "wtc-brand-icon" })) svg.setAttribute(key, value);
+  const rect = (attrs) => { const node = document.createElementNS(ns, "rect"); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); svg.append(node); };
+  rect({ width: "64", height: "64", rx: "16", fill: "#234e42" });
+  for (const [x, y, width] of [[19, 17, 32], [11, 28.5, 36], [15, 40, 38]]) rect({ x, y, width, height: "7", rx: "3.5", fill: "#f7f7ed" });
+  rect({ x: "30", y: "12", width: "7", height: "40", rx: "3.5", fill: "#c9d98a", stroke: "#234e42", "stroke-width": "2.5" });
+  return css(svg, "display:block;flex:none");
+};
 // Keep the centered logo out of text flow so it cannot supply the link baseline.
 const brand = (size, version, compact = false) => css(el("span", {},
   css(el("a", { href: HOME, target: "_blank", rel: "noopener noreferrer", ariaLabel: "taba home", title: `taba — Make room for the whole task. (opens taba.sh)${version ? `\n${versionText(version)}` : ""}` },
-    leadSlot(css(el("span", { className: "wtc-brand-icon", textContent: "束", lang: "ja", ariaHidden: "true" }), "display:inline-grid;place-items:center;width:18px;height:18px;border-radius:5px;background:#234e42;color:#f7f7ed;font-family:'Hiragino Kaku Gothic ProN','Yu Gothic','Noto Sans CJK JP',sans-serif;font-size:15px;font-weight:500;letter-spacing:0;line-height:1")),
+    leadSlot(brandMark()),
     " ", el("span", { className: "wtc-brand-word", textContent: "taba" })),
     "display:inline-flex;align-items:baseline;gap:6px;min-height:1.5em;color:var(--text-strong, inherit);text-decoration:none;font-weight:700"),
   compact ? null : el("span", { className: "wtc-brand-suffix", textContent: "Collection" })), `display:inline-flex;align-items:baseline;gap:.3em;flex:none;white-space:nowrap;font-weight:600;font-size:${size}`);
@@ -729,6 +748,7 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
 .wtc-tunnel-option:focus-visible { outline-offset:-2px; }
 
+.wtc-service-bulk:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
 .wtc-service-play:is(:hover,:focus-visible) { --wtc-service-play-bg:var(--bg-hover,rgba(128,128,128,.12));--wtc-service-play-color:var(--text-strong,var(--text,inherit)); }
 
 .wtc-service-label:disabled { cursor:default !important;text-decoration:none !important; }
@@ -1674,6 +1694,16 @@ function collectionTables(v) {
   // ▶/■ NAME REPO STATE URL, then a column per way in (gateway, cloudflare…)
   // and the + that opens a new one.
   const slug = (url) => { try { return new URL(url).hostname.split(".")[0]; } catch { return url; } };
+  function serviceControls(groups) {
+    if (groups.length < 2) return null;
+    if (v.svc.busy("*")) return muted("Working…");
+    const button = (text, op) => {
+      const b = css(el("button", { type: "button", className: "wtc-service-bulk", textContent: text, title: `${text} services`, ariaLabel: `${text} services` }), "display:inline-flex;align-items:center;min-height:var(--wtc-state-size,20px);border:0;padding:0 3px;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;font-size:11px;line-height:16px;cursor:pointer;white-space:nowrap");
+      b.onclick = e => { e?.preventDefault(); e?.stopPropagation(); return v.svc.run({ op }, `${op === "up" ? "Starting" : "Stopping"} all services…`); };
+      return b;
+    };
+    return css(el("span", {}, groups.some(g => !g.running) ? button("Start all", "up") : null, groups.some(g => g.running) ? button("Stop all", "down") : null), "display:inline-flex;align-items:baseline;gap:6px");
+  }
   function serviceTable(groups, data, narrow = false) {
     const ways = [];
     for (const g of groups) {
@@ -1692,21 +1722,15 @@ function collectionTables(v) {
       return t ? tunnelNode(g, t, v.svc, {
         label: foldWays ? w : t.url ? slug(t.url) : "open",
         opener: (title, run) => {
-          if (!foldWays) return stateGlyph("▶", title, TONE.none, run);
+          if (!foldWays) return leadSlot(stateGlyph("▶", title, TONE.none, run));
           const b = css(el("button", {type:"button",className:"wtc-tunnel-existing",title,ariaLabel:title},controlIcon("▶"),w), "display:inline-flex;align-items:center;gap:3px;min-height:24px;padding:0 3px;border:0;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;cursor:pointer");
           b.onclick = e => { e.preventDefault(); e.stopPropagation(); return run(); };
           return b;
         },
       }) : null;
     };
-    const all = groups.length > 1 && !v.svc.busy("*")
-      ? css(el("span", {},
-        groups.some((g) => !g.running) ? stateGlyph("▶", "Start all services", TONE.none, () => v.svc.run({ op: "up" }, "Starting all services…")) : null,
-        groups.some((g) => g.running) ? stateGlyph("■", "Stop all services", TONE.success, () => v.svc.run({ op: "down" }, "Stopping all services…")) : null),
-      "display:inline-flex;gap:2px")
-      : v.svc.busy("*") ? busyMark() : "";
     const columns = [
-      { head: all ? leadSlot(all) : null, width: "20px" },
+      { head: "", width: "20px" },
       { head: "Service", width: narrow ? `minmax(${visibleWays.length ? 48 : 64}px,1fr)` : "minmax(0,max-content)" },
       { head: "Repo", width: "minmax(0,max-content)", under: true },
       { head: "State", width: narrow ? "minmax(44px,56px)" : "78px" },
@@ -1727,12 +1751,11 @@ function collectionTables(v) {
           : toned(g.state === "absent" || g.state === "idle" ? "stopped" : g.state, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none),
         g.url && !g.loose ? address(g.url) : null,
         ...visibleWays.map(w => wayNode(g, w)),
-        css(el("span", {}, g.loose
-          ? narrow ? null : repair(g)
-          : newTunnel(g, v.svc, data, { compact: true }) ?? ""), `display:inline-flex;justify-content:center;${g.loose && !narrow ? "" : "width:32px"}`),
+        g.loose && !narrow ? repair(g) : leadSlot(g.loose ? null : newTunnel(g, v.svc, data, { compact: true }), 32),
     ];
     });
     const grid = table(columns, rows, narrow);
+    grid.style.gridAutoRows = "minmax(20px,auto)";
     const cells = [...grid.children], width = columns.filter(c => !(narrow && c.under)).length;
     if (foldWays) groups.forEach((g, index) => {
       const links = ways.map(w => wayNode(g, w)).filter(Boolean);
@@ -1881,7 +1904,7 @@ function collectionTables(v) {
         return narrow ? [identity, row[9]] : [row[0], row[1], changes, pr, row[9]];
       });
       return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow), table(columns, rows, false, true)), "min-width:0");
-    }, serviceTable, totals, prTable };
+    }, serviceTable, serviceControls, totals, prTable };
 }
 
 // The text of the latest message the person wrote, from chat.history.
@@ -2144,7 +2167,7 @@ function mountComposer(container, context) {
         css(el("span", { ariaHidden: "true" }, controlIcon(card.open ? "⌃" : "⌄")), "display:inline-flex;align-items:center;justify-content:center;color:var(--muted,#888);padding:0 2px")), "margin-left:auto;flex:none;display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap"));
     tables.checkAccount(repos);
     detail.replaceChildren(...[tables.repoTable(repos, repoNarrow, entry.data.subSessions),
-      groups.length ? css(el("section", { className: "wtc-base-services", ariaLabel: "Collection services" }, css(el("h3", { textContent: "Services" }), "margin:0 0 4px;font-size:12px;line-height:16px;font-weight:600;color:var(--text-strong,inherit)"), tables.serviceTable(groups, entry.data, narrow)), "min-width:0;border-top:1px solid var(--border,rgba(128,128,128,.2));margin-top:4px;padding-top:8px") : null].filter(Boolean));
+      groups.length ? css(el("section", { className: "wtc-base-services", ariaLabel: "Collection services" }, css(el("div", {}, css(el("h3", { textContent: "Services" }), "margin:0;font-size:12px;line-height:16px;font-weight:600;color:var(--text-strong,inherit)"), tables.serviceControls(groups)), "display:flex;align-items:baseline;gap:10px;margin-bottom:4px"), tables.serviceTable(groups, entry.data, narrow)), "min-width:0;border-top:1px solid var(--border,rgba(128,128,128,.2));margin-top:4px;padding-top:8px") : null].filter(Boolean));
     const confirmations = tables.publicationConfirmations(repos);
     const temporary = [confirmations, tables.nextActions(repos), tables.notice()].filter(Boolean);
     extra.replaceChildren(...temporary);
@@ -2534,7 +2557,7 @@ function mountCollection(container, context) {
 
     const prSection = pullRequestRows(repos).length ? el("div", { className: "wtc-pr-history" }, heading("Pull requests"), tables.prTable(repos, narrow)) : null;
 
-    const serviceSection = el("div", { className: "wtc-base-services" }, heading("Services"));
+    const serviceSection = el("div", { className: "wtc-base-services" }, heading("Services", tables.serviceControls(groups)));
     if (groups.length === 0) serviceSection.append(muted(data.servicesNote ?? "None running. Start them in the collection folder with wtc svc.", "font-size:13px"));
     else serviceSection.append(tables.serviceTable(groups, data, narrow));
 

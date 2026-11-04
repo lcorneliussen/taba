@@ -582,10 +582,15 @@ exercises rendering and interaction contracts against a minimal DOM.
 
 ## Install
 
-The plugin's visible name is **taba**, formerly wtc, with the selectable
-**束 taba** wordmark linking to [taba.sh](https://taba.sh/). This branding does
+The plugin's visible name is **taba**, formerly wtc, with the bundled SVG mark and selectable
+**taba** wordmark linking to [taba.sh](https://taba.sh/). This branding does
 not change its installed identity: the plugin ID is still `wtc`, its package
 is `openclaw-plugin-wtc`, and its settings stay under `plugins.entries.wtc`.
+Service start, stop and restart controls share the same icon rail as their names;
+Start all and Stop all appear beside Services. The alignment check
+`node openclaw-plugin/tools/check-service-alignment.mjs <playwright-module> <output-directory>`
+uses synthetic data and saves screenshots with measured baseline and icon guides.
+
 Use the existing install/reload commands below. When upgrading to a release
 with this branding, install the matching CLI and plugin, then reload open
 Control UI tabs. The technical ID/config migration remains a later step in
