@@ -60,15 +60,22 @@ func statusNextLabel(s *next.Step) string {
 }
 
 func statusNextLines(snapshot wtc.StatusSnapshot, width int, styled bool, selected int, marked ...map[string]wtc.StatusRepo) []string {
+	lines, _ := statusNextRows(snapshot, width, styled, selected, marked...)
+	return lines
+}
+
+func statusNextRows(snapshot wtc.StatusSnapshot, width int, styled bool, selected int, marked ...map[string]wtc.StatusRepo) ([]string, []statusTUIRow) {
 	repos := statusNextRepos(snapshot)
 	if len(repos) == 0 {
-		return nil
+		return nil, nil
 	}
+	var rows []statusTUIRow
 	lines := []string{"", "Next actions"}
 	if styled {
 		lines[1] = statusTUIStyle(lines[1], statusToneHeading)
 	}
 	for i, r := range repos {
+		start := len(lines)
 		checked := false
 		if len(marked) > 0 {
 			if choice, ok := marked[0][statusNextIdentity(r)]; ok {
@@ -104,8 +111,9 @@ func statusNextLines(snapshot wtc.StatusSnapshot, width int, styled bool, select
 				}
 			}
 		}
+		rows = append(rows, statusTUIRow{key: "next:" + statusNextIdentity(r), start: start, end: len(lines)})
 	}
-	return lines
+	return lines, rows
 }
 
 // A click selects a fact, not arbitrary argv. A refresh must still propose

@@ -258,3 +258,67 @@ func TestStatusNextCompactHintAndScrolling(t *testing.T) {
 		t.Fatal(text)
 	}
 }
+
+func TestStatusNextViewportUsesRenderedRows(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	m := statusOverflowModel()
+	m.showHelp = true
+	for i := range m.snapshot.Repos {
+		r := &m.snapshot.Repos[i]
+		r.Next = &next.Step{Step: "commit", By: next.ByAgent, Key: r.Dir, Reason: "Synthetic action reason"}
+		if i%3 == 0 {
+			r.Choices = &next.Choices{Actions: []next.Choice{{Step: next.Step{Step: "push"}, Blocked: "Publish is not authorized"},
+				{Step: next.Step{Step: "merge-pr"}, Blocked: "Current checks required"}}}
+		}
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'n'})
+	assertFocus := func() {
+		t.Helper()
+		name := m.snapshot.Repos[m.selectedNext].Dir
+		if visible := ansi.Strip(m.View().Content); !strings.Contains(visible, "› [ ] "+name) {
+			t.Fatalf("focused %s is offscreen: %s", name, visible)
+		}
+	}
+	assertFocus()
+	for i := 1; i < len(m.snapshot.Repos); i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+		assertFocus()
+	}
+	for i := 1; i < len(m.snapshot.Repos); i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+		assertFocus()
+	}
+	for _, key := range []rune{tea.KeyPgDown, tea.KeyPgDown, tea.KeyPgUp, tea.KeyEnd, tea.KeyHome} {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: key})
+		assertFocus()
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyEnd})
+	m = statusScrollEvent(t, m, tea.WindowSizeMsg{Width: 80, Height: 5})
+	assertFocus()
+	if m.nextRunning || len(m.nextSelected) != 0 || len(m.nextPending) != 0 {
+		t.Fatal("navigation changed action execution or selection state")
+	}
+}
+
+func TestStatusNextViewportRefreshRetainsFocusedIdentity(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	m := statusOverflowModel()
+	for i := range m.snapshot.Repos {
+		r := &m.snapshot.Repos[i]
+		r.Next = &next.Step{Step: "commit", By: next.ByAgent, Key: r.Dir, Reason: "Synthetic action reason"}
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'n'})
+	for i := 0; i < 15; i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'j'})
+	}
+	wanted := m.snapshot.Repos[m.selectedNext].Dir
+	fresh := m.snapshot
+	fresh.Repos = append([]wtc.StatusRepo(nil), fresh.Repos...)
+	for i, j := 0, len(fresh.Repos)-1; i < j; i, j = i+1, j-1 {
+		fresh.Repos[i], fresh.Repos[j] = fresh.Repos[j], fresh.Repos[i]
+	}
+	m = statusScrollEvent(t, m, statusLoadedMsg{snapshot: fresh})
+	if got := m.snapshot.Repos[m.selectedNext].Dir; got != wanted || !strings.Contains(ansi.Strip(m.View().Content), "› [ ] "+wanted) {
+		t.Fatalf("refresh changed/obscured focused %s: selected %s, %s", wanted, got, m.View().Content)
+	}
+}
