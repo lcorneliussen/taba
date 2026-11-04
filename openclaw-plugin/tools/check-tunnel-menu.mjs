@@ -3,7 +3,7 @@
 // Install Playwright/Chromium separately, or point at an existing Playwright installation.
 import {readFile,writeFile,mkdir} from "node:fs/promises";
 import {resolve} from "node:path";
-import {pathToFileURL} from "node:url";
+import {pathToFileURL,fileURLToPath} from "node:url";
 import assert from "node:assert/strict";
 const [playwrightPath,outputPath]=process.argv.slice(2);
 if (!playwrightPath || !outputPath) throw new Error("Usage: check-tunnel-menu.mjs <playwright module> <output directory>");
@@ -33,11 +33,11 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
  await trigger.scrollIntoViewIfNeeded();const stable=await root.boundingBox();
  await trigger.click();const menu=page.getByRole('menu',{name:'Tunnel for preview',exact:true});await menu.waitFor();
  const afterOpen=await root.boundingBox();for(const k of ['x','y','width','height'])assert(Math.abs(stable[k]-afterOpen[k])<.5,'menu opening must not move the view');
- const box=await menu.boundingBox();if(box.x+box.width>width){console.log(await menu.evaluate(n=>({style:n.style.cssText,computed:{left:getComputedStyle(n).left,top:getComputedStyle(n).top,position:getComputedStyle(n).position,visibility:getComputedStyle(n).visibility},handler:typeof n.onbeforetoggle,innerWidth,innerHeight,viewport:visualViewport?.width})));await page.mouse.move(1,1);await page.screenshot({path:new URL('failure.png',out).pathname})};assert(box.x>=11&&box.y>=11&&box.x+box.width<=width-11&&box.y+box.height<=height-11,JSON.stringify({width,view,box}));
+ const box=await menu.boundingBox();if(box.x+box.width>width){console.log(await menu.evaluate(n=>({style:n.style.cssText,computed:{left:getComputedStyle(n).left,top:getComputedStyle(n).top,position:getComputedStyle(n).position,visibility:getComputedStyle(n).visibility},handler:typeof n.onbeforetoggle,innerWidth,innerHeight,viewport:visualViewport?.width})));await page.mouse.move(1,1);await page.screenshot({path:fileURLToPath(new URL('failure.png',out))})};assert(box.x>=11&&box.y>=11&&box.x+box.width<=width-11&&box.y+box.height<=height-11,JSON.stringify({width,view,box}));
  const colorsActual=await menu.evaluate(n=>({background:getComputedStyle(n).backgroundColor,color:getComputedStyle(n).color}));assert.equal(colorsActual.background,theme==='dark'?'rgb(22, 25, 32)':'rgb(255, 255, 255)');
  assert.equal(await trigger.getAttribute('aria-expanded'),'true');assert.equal(await page.evaluate(()=>window.calls.length),0);
  if(view==='card')assert.equal(await page.locator('#card details').evaluate(n=>n.open),true,'opening a tunnel menu must not collapse the card');
- await page.screenshot({path:new URL(`${topology}-${theme}-${width}-${view}-open.png`,out).pathname,fullPage:false});
+ await page.screenshot({path:fileURLToPath(new URL(`${topology}-${theme}-${width}-${view}-open.png`,out)),fullPage:false});
  const gap=await trigger.evaluate(n=>{const cell=n.closest('.wtc-tunnel-control').parentElement.parentElement;return cell.getBoundingClientRect().right-n.getBoundingClientRect().right;});assert(gap>=3,'plus retains breathing room');
  await trigger.click();await page.locator('.wtc-tunnel-menu:popover-open').waitFor({state:'hidden'});assert.equal(await trigger.getAttribute('aria-expanded'),'false','trigger toggles menu closed');
  await trigger.press('ArrowUp');await menu.waitFor();assert.equal(await page.evaluate(()=>document.activeElement.value),'devtunnel');
@@ -45,7 +45,7 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
  await page.keyboard.press('Escape');assert(await trigger.evaluate(n=>document.activeElement===n));assert.equal(await trigger.getAttribute('aria-expanded'),'false');
  await trigger.press('ArrowDown');await menu.waitFor();await page.keyboard.press('Tab');await page.locator('.wtc-tunnel-menu:popover-open').waitFor({state:'hidden'});
  await trigger.click();await menu.waitFor();await page.mouse.click(1,1);await page.locator('.wtc-tunnel-menu:popover-open').waitFor({state:'hidden'});
- await trigger.click();await menu.waitFor();await page.evaluate(v=>window[v==='card'?'cardView':'panelView'].update(window.demoCtx),view);await page.locator('.wtc-tunnel-menu:popover-open').waitFor({state:'hidden'});
+ await trigger.click();await menu.waitFor();await menu.evaluate(n=>window.openMenu=n);await page.evaluate(v=>window[v==='card'?'cardView':'panelView'].update(window.demoCtx),view);assert(await menu.evaluate(n=>n===window.openMenu),'unchanged context preserves the open menu');await page.evaluate(v=>window[v==='card'?'cardView':'panelView'].update({...window.demoCtx,props:{...window.demoCtx.props,sessionKey:'demo:other'}}),view);await page.locator('.wtc-tunnel-menu:popover-open').waitFor({state:'hidden'});await page.evaluate(v=>window[v==='card'?'cardView':'panelView'].update(window.demoCtx),view);await trigger.waitFor();
  await trigger.click();await menu.waitFor();await page.setViewportSize({width:width+1,height});await page.locator('.wtc-tunnel-menu:popover-open').waitFor({state:'hidden'});
  await trigger.click();await menu.waitFor();await menu.getByRole('menuitem',{name:topology!=='empty'?/^Dev Tunnel/:/^Cloudflare/}).focus();await page.keyboard.press('Enter');
  await page.waitForTimeout(100);const calls=await page.evaluate(()=>window.calls);assert.deepEqual(calls,[{op:'tunnel',group:'web/preview',provider:topology!=='empty'?'devtunnel':'cloudflare',public:topology==='empty',add:true}]);
@@ -56,7 +56,7 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
   assert(repairBox.x+repairBox.width<=closeBox.x||closeBox.x+closeBox.width<=repairBox.x||repairBox.y+repairBox.height<=closeBox.y||closeBox.y+closeBox.height<=repairBox.y,'Consolidate must not cover close');
  }
  assert.equal(await page.locator('.wtc-tunnel-menu:popover-open').count(),0);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
- results.push({topology,theme,width,view,menu:box,padding:gap,colors:colorsActual,checks:{theme:true,viewport:true,stableLayout:true,paddedTrigger:true,toggle:true,arrowKeys:true,escapeFocus:true,tabDismiss:true,outsideDismiss:true,rerenderDismiss:true,resizeDismiss:true,explicitProvider:true,noOverflow:true,noErrors:true,looseControl:topology==='loose'?true:null},errors});await page.close();
+ results.push({topology,theme,width,view,menu:box,padding:gap,colors:colorsActual,checks:{theme:true,viewport:true,stableLayout:true,paddedTrigger:true,toggle:true,arrowKeys:true,escapeFocus:true,tabDismiss:true,outsideDismiss:true,unchangedUpdateStable:true,sessionSwitchDismiss:true,resizeDismiss:true,explicitProvider:true,noOverflow:true,noErrors:true,looseControl:topology==='loose'?true:null},errors});await page.close();
 }
 await writeFile(new URL('browser-results.json',out),JSON.stringify(results,null,2));console.log(`${results.length} browser menu cases passed.`);
 }finally{await browser.close()}
