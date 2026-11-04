@@ -1,9 +1,8 @@
 # CLI version in status
 
 The live status header keeps `taba/wtc status` together (`taba status` from
-0.3.0), followed by the collection
-and refresh timing. The running CLI version appears at the end of that same
-line as a muted suffix, including before the first refresh completes and while
+0.3.0), followed by the collection and refresh timing. The running CLI version
+appears at the end of that same line as a muted suffix, including before the first refresh completes and while
 a refresh fails or runs offline. The suffix may clip or disappear in narrow
 terminals so the primary title and timing keep their space; it adds no rows.
 It comes from the process's build version, independently of the harness pin,

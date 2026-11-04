@@ -74,7 +74,8 @@ embedded directly; they are also passed to GoReleaser as the release body.
    ```
 
    This writes `<version>.md`, headed `# taba/wtc <version>` (without `v`;
-   `# taba <version>` from 0.3.0), from the fragments and deletes them. Commit both in one change.
+   `# taba <version>` from 0.3.0), from the fragments and deletes them.
+   Commit both in one change.
 3. Edit `<version>.md` into the release notes: order and merge the topics,
    add a summary, compatibility changes, harness adoption steps, and relevant
    limitations. Use generic public examples.

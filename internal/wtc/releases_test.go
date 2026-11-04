@@ -20,7 +20,8 @@ func TestEmbeddedReleaseNotes(t *testing.T) {
 		t.Fatalf("missing historical or upcoming notes: %d documents", len(notes))
 	}
 	for i, note := range notes {
-		// Notes before 0.2.0 keep their original "# wtc" heading.
+		// 0.1.x notes keep their original "# wtc" heading; from 0.2.0-0 on,
+		// pre-releases included, notes are headed with branding.Product.
 		header := "# " + branding.Product + " " + note.Version + "\n"
 		if v, err := releaseVersion(note.Version); err == nil && v.LessThan(semver.MustParse("0.2.0-0")) {
 			header = "# wtc " + note.Version + "\n"
