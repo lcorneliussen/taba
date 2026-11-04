@@ -1,5 +1,5 @@
 import {resolve} from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {pathToFileURL,fileURLToPath} from 'node:url';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 // Synthetic screenshots and measured alignment rails; no gateway is contacted.
@@ -27,7 +27,7 @@ try{for(const touch of [false,true])for(const state of ['stopped','mixed','runni
   return {rows,logo:root.querySelector('.wtc-brand-icon')?.tagName,headerPlay:[...root.querySelectorAll('.wtc-table')].some(t=>[...t.children].slice(0,Number(t.getAttribute('data-columns'))).some(n=>n.querySelector('.wtc-service-play'))),servicesHeight:root.querySelector('.wtc-base-services')?.getBoundingClientRect().height};
  });
  assert.deepEqual(errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);{assert.equal(metrics.logo,'svg');assert.equal(metrics.headerPlay,false);for(const r of metrics.rows){assert(r.hitEdges.every(Boolean),"control hit area is clipped");if(touch){assert(r.hitWidth>=24);assert(r.hitHeight>=24);}assert(r.rect.width>=40,`layout not settled: ${r.rect.width}`);assert.notEqual(r.iconCenterError,null);assert(r.iconCenterError<=.5,`controls differ by ${r.iconCenterError}`);}}
- await root.screenshot({path:new URL(`${touch?"touch-":""}${state}-${view}-${width}.png`,out).pathname,animations:'disabled'});
+ await root.screenshot({path:fileURLToPath(new URL(`${touch?"touch-":""}${state}-${view}-${width}.png`,out)),animations:'disabled'});
  await root.evaluate((root,metrics)=>{const box=root.getBoundingClientRect();const overlay=document.createElement('div');overlay.style.cssText='position:absolute;inset:0;pointer-events:none;z-index:9999';root.style.position='relative';for(const row of metrics.rows){for(const [y,color]of [[row.baseline,'#ff4078'],[row.playCenter,'#4ed7de']]){if(y===null)continue;const line=document.createElement('div');line.style.cssText=`position:absolute;left:0;right:0;top:${y-box.top}px;border-top:1px dashed ${color};opacity:.8`;overlay.append(line);}for(const x of [row.rect.x]){const line=document.createElement('div');line.style.cssText=`position:absolute;top:0;bottom:0;left:${x-box.left}px;border-left:1px dashed #d6ce77;opacity:.65`;overlay.append(line);}}root.append(overlay);},metrics);
- await root.screenshot({path:new URL(`${touch?"touch-":""}${state}-${view}-${width}-rails.png`,out).pathname,animations:'disabled'});results.push({touch,state,view,width,...metrics});await page.close();
+ await root.screenshot({path:fileURLToPath(new URL(`${touch?"touch-":""}${state}-${view}-${width}-rails.png`,out)),animations:'disabled'});results.push({touch,state,view,width,...metrics});await page.close();
 }await writeFile(new URL('results.json',out),JSON.stringify(results,null,2));console.log(`${results.length} synthetic screenshots/rail checks passed`);}finally{await browser.close();}
