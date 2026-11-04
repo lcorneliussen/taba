@@ -8,6 +8,11 @@ import (
 	"strings"
 )
 
+// Product names the project in headings: release notes and status headers.
+// The 0.2 releases carry both names while the wtc command remains; 0.3.0
+// drops "/wtc" (#203).
+const Product = "taba/wtc"
+
 // Name follows argv[0], including symlinks and dev-build handovers. Unknown
 // executable names retain the released command's spelling.
 func Name() string {

@@ -86,7 +86,7 @@ func readReleaseNotes(root fs.FS) ([]ReleaseNote, error) {
 	if err != nil {
 		return nil, err
 	}
-	pending := "# wtc unreleased\n\nNo unreleased changes.\n"
+	pending := "# " + branding.Product + " unreleased\n\nNo unreleased changes.\n"
 	if len(fragments) > 0 {
 		pending = AssembleReleaseNotes("unreleased", fragments)
 	}
@@ -281,7 +281,7 @@ func visibleContent(body string) bool {
 }
 
 // AssembleReleaseNotes renders fragments as one release document headed
-// "# wtc <version>". Sections with the same heading are merged; headings keep
+// "# <branding.Product> <version>". Sections with the same heading are merged; headings keep
 // the order in which fragments, in ReadReleaseFragments order, first use them.
 func AssembleReleaseNotes(version string, fragments []ReleaseFragment) string {
 	var order []string
@@ -295,7 +295,7 @@ func AssembleReleaseNotes(version string, fragments []ReleaseFragment) string {
 		}
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# wtc %s\n", version)
+	fmt.Fprintf(&b, "# %s %s\n", branding.Product, version)
 	for _, heading := range order {
 		fmt.Fprintf(&b, "\n## %s\n\n", heading)
 		// A blank line keeps each change's entries a block of their own: a

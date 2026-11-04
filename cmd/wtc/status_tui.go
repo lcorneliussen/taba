@@ -1284,7 +1284,7 @@ func (m statusTUIModel) headerLine() string {
 	if m.refreshing {
 		age += " · refreshing"
 	}
-	return fmt.Sprintf(branding.Text("{{command}} status · %s · %s"), name, age)
+	return fmt.Sprintf("%s status · %s · %s", branding.Product, name, age)
 }
 
 func statusTUIProgressLine(step string, elapsed time.Duration, width int) string {

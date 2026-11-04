@@ -572,7 +572,7 @@ func TestStatusTUIModelShowsCachedRowsAndControls(t *testing.T) {
 		width: 90, height: 20, focused: true, interval: 30 * time.Second, background: 5 * time.Minute,
 		lastRefresh: time.Now().Add(-time.Minute), nextRefresh: time.Now().Add(time.Minute)}
 	view := model.View().Content
-	if !strings.Contains(ansi.Strip(view), "wtc status · fixture") || !strings.Contains(view, "widget") || !strings.Contains(view, "archived (1)") || strings.Contains(view, "Old change") {
+	if !strings.Contains(ansi.Strip(view), "taba/wtc status · fixture") || !strings.Contains(view, "widget") || !strings.Contains(view, "archived (1)") || strings.Contains(view, "Old change") {
 		t.Fatalf("cached view wrong: %s", view)
 	}
 	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
