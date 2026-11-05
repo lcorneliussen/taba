@@ -11,12 +11,12 @@ tools/upgrade-rehearsal/rehearse.sh \
 ## What it does
 
 1. Creates a throwaway workspace (`--work`, default a new temporary directory). Its config root and mise data, cache, state and config live inside it; `WTC_*`, `TABA_*` and `MISE_*` variables from the calling shell are cleared.
-2. Clones the harness bare from its remote and creates one collection, `rehearsal`, on the harness's current pin (`.wtc-cli-version`, or `--from`). `--repos a,b` adds registry repositories.
+2. Clones the harness bare from its remote and creates one collection, `rehearsal`, on the harness's current pin (`.wtc-cli-version`). `--from` pins another release first, committed on a local `rehearsal-pin` branch of the throwaway clone so `upgrade` accepts it; nothing is pushed. `--repos a,b` adds registry repositories.
 3. With `--cli-checkout`, adds an unmanaged `ext.wtc-cli` sibling whose owner is a clone outside `.bare/`, cloned from the old CLI URL. This is how some collections carry the CLI next to their own repositories.
-4. Records the collection: versions, environment variable names (never values), the generated `mise.toml` and MCP files, rendered skills, sibling origins, `status --json` with volatile fields masked, and `doctor`.
+4. Records the collection: versions, environment variable names (never values), the generated `mise.toml` and MCP files, rendered skills (files and links into the harness), sibling origins, `status --json` with volatile fields masked, and `doctor`.
 5. Runs `upgrade --dry-run` and `upgrade --version <to>` with the pinned binary. A pin older than the `upgrade` command is moved by the new release instead.
 6. Puts the new release on `PATH`, checks that `wtc` and `taba` both run (from 0.2.0), catches the collection up, and records it again.
-7. With `--registry-followup`, renames the harness's `wtc-cli` registry entry to `taba` with `aliases: [wtc-cli]` and the new remote, catches up again, and records a third time.
+7. With `--registry-followup`, renames the harness's `wtc-cli` registry entry to `taba` with `aliases: [wtc-cli]` and points that entry's remote at `taba`; other entries are left alone. Then it catches up again and records a third time.
 8. Lists hard-coded references to the CLI repository and to `wtc_<version>` release archives in the harness, and counts its `WTC_*` variables.
 
 `report.md` in the work directory has the step results, the diffs between the recorded states, and the harness references. Logs for every step are under `logs/`. The exit status is 1 when a step failed or the rehearsal stopped early, for example on a repository without `.harness-repos.yml`; the report then lists the steps that ran.
@@ -31,6 +31,6 @@ tools/upgrade-rehearsal/rehearse.sh \
 
 ## Boundaries
 
-Nothing outside the work directory is written: no commits, pushes or forge writes. Forge reads (clone, fetch, release lookups) use the caller's git and `gh` authentication. The harness's own hooks run, as they would in a real collection, so rehearse only harnesses whose code you would run anyway. Secrets are not linked: the throwaway config root is empty, so a step that needs a credential fails without it instead of using the real one.
+Nothing outside the work directory is written: no pushes or forge writes, and the only commit is the local `--from` pin. Forge reads (clone, fetch, release lookups) use the caller's git and `gh` authentication. The harness's own hooks run, as they would in a real collection, so rehearse only harnesses whose code you would run anyway. Secrets are not linked: the throwaway config root is empty, so a step that needs a credential fails without it instead of using the real one.
 
 Reports name the harness and its files. Keep reports for private harnesses out of public issues; file what they find as generic cases.

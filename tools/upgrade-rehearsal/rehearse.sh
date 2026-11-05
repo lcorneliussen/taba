@@ -7,8 +7,8 @@
 # its own config root and mise data, clones the harness bare from its remote,
 # creates one collection on the harness's current pin, records its state,
 # upgrades it with the pinned binary, catches it up with the new one and
-# records the state again. Nothing outside --work is written: no commits, no
-# pushes, no forge writes. Forge reads (clone, fetch, release lookups) use
+# records the state again. Nothing outside --work is written: no pushes and
+# no forge writes; --from commits its pin on a local branch of the clone. Forge reads (clone, fetch, release lookups) use
 # your normal git and gh authentication.
 #
 # The harness's own hooks run, as they would in a real collection. Rehearse
@@ -40,14 +40,18 @@ harness="" to="" from="" repos="" cli_checkout=0 followup=0 work=""
 cli_repo="lcorneliussen/wtc-cli"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --harness) harness="${2:-}"; shift 2 ;;
+    --harness|--to|--from|--repos|--cli-repo|--work)
+      [ $# -ge 2 ] && [ -n "$2" ] || { echo "$1 needs a value" >&2; usage; } ;;
+  esac
+  case "$1" in
+    --harness) harness="$2"; shift 2 ;;
     --to) to="${2#v}"; shift 2 ;;
     --from) from="${2#v}"; shift 2 ;;
-    --repos) repos="${2:-}"; shift 2 ;;
+    --repos) repos="$2"; shift 2 ;;
     --cli-checkout) cli_checkout=1; shift ;;
     --registry-followup) followup=1; shift ;;
-    --cli-repo) cli_repo="${2:-}"; shift 2 ;;
-    --work) work="${2:-}"; shift 2 ;;
+    --cli-repo) cli_repo="$2"; shift 2 ;;
+    --work) work="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown option: $1" >&2; usage ;;
   esac
@@ -126,6 +130,23 @@ if [ -z "$from" ]; then
   done
 fi
 [ -n "$from" ] || stop "The harness has no CLI pin; pass --from."
+# --from stands for a harness pinned to that release, so the pin must agree:
+# env rendering and upgrade read it, not the binary's own version.
+pin_file=.wtc-cli-version
+[ -f "$hdir/.taba-version" ] && [ ! -f "$hdir/.wtc-cli-version" ] && pin_file=.taba-version
+# upgrade refuses an uncommitted pin, so the change is committed on a local
+# branch in the throwaway clone, where catch-up leaves it alone. It is never
+# pushed.
+if [ "$(tr -d ' \n' < "$hdir/$pin_file" 2>/dev/null)" != "$from" ]; then
+  pin_from() {
+    printf '%s\n' "$from" > "$hdir/$pin_file" &&
+    git -C "$hdir" switch -q -c rehearsal-pin &&
+    git -C "$hdir" add "$pin_file" &&
+    git -C "$hdir" -c user.name=rehearsal -c user.email=rehearsal@localhost \
+      commit -q -m "rehearsal: pin $from"
+  }
+  step "pin harness to $from" pin_from
+fi
 
 install_from() { mise install "github:$cli_repo@$from"; }
 step "install $from" install_from
@@ -162,8 +183,18 @@ snapshot() {
   for f in mise.toml .mcp.json .cursor/mcp.json .codex/config.toml; do
     [ -f "$f" ] && mkdir -p "$out/files/$(dirname "$f")" && cp "$f" "$out/files/$f"
   done
-  find . -path ./harness -prune -o -path './ext.*' -prune -o \
-    \( -path '*/skills/*' -type f \) -print 2>/dev/null | sort > "$out/rendered-skills.txt"
+  # Skills are rendered as files and as directory links into the harness.
+  for dir in .claude/skills .agents/skills .codex/skills .cursor/skills; do
+    [ -d "$dir" ] || continue
+    for entry in "$dir"/*; do
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
+      if [ -L "$entry" ]; then
+        printf '%s -> %s%s\n' "$entry" "$(readlink "$entry")" "$([ -e "$entry" ] || echo ' (broken)')"
+      else
+        printf '%s\n' "$entry"
+      fi
+    done
+  done > "$out/rendered-skills.txt"
   ls -A | grep -vE '^\.(last-)?wtc-status' > "$out/collection-entries.txt"
   for d in */; do
     d="${d%/}"
@@ -220,7 +251,11 @@ if [ "$followup" = 1 ] && [ -x "${to_dir:-}/wtc" ]; then
   registry="$hdir/.harness-repos.yml"
   if grep -qE '^[[:blank:]]*-[[:blank:]]*name:[[:blank:]]*wtc-cli[[:blank:]]*$' "$registry" 2>/dev/null; then
     rename_entry() {
-      perl -0pi -e 's/^([ \t]*)-([ \t]*)name:[ \t]*wtc-cli[ \t]*\n/$1-$2name: taba\n$1 $2aliases: [wtc-cli]\n/m; s{(github\.com[:/][^/\s]+/)wtc-cli(\.git)?}{$1taba$2}g' "$registry"
+      # Only the wtc-cli entry changes: from its "- name:" line to the next entry.
+      perl -0pi -e 's{^([ \t]*)-([ \t]*)name:[ \t]*wtc-cli[ \t]*\n((?:(?!\1-[ \t]*name:).*\n)*)}{
+        my ($i, $g, $body) = ($1, $2, $3);
+        $body =~ s{^([ \t]*remote:[ \t]*\S*?[:/])wtc-cli((?:\.git)?[ \t]*)$}{$1taba$2}m;
+        "$i-${g}name: taba\n$i $g" . "aliases: [wtc-cli]\n$body" }me' "$registry"
     }
     step "registry: name taba, aliases [wtc-cli]" rename_entry
     step "catch-up after registry rename" wtc catch-up --report "$logs/catch-up-followup.json"
