@@ -143,6 +143,11 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 		}
 		unlockDev, err := lockDevRetirement(target)
 		if err != nil {
+			if !runtimeTarget.AdHoc {
+				if guardErr := writeRetiredMarker(target, nil); guardErr != nil {
+					return fmt.Errorf("dev cleanup lock: %w; preserving retired guard failed: %v", err, guardErr)
+				}
+			}
 			return err
 		}
 		defer func() {
@@ -216,6 +221,9 @@ func (c *Context) retirePreflight(opt RetireOptions) (RetireResult, []retireWork
 		return result, nil, err
 	}
 	result.Collection = target
+	if _, err := preflightDevRetirement(target); err != nil {
+		return result, nil, err
+	}
 	// Harness-based leftovers need a guard after teardown; ad-hoc folders do not.
 	if !targetContext.AdHoc {
 		path := filepath.Join(target, RetiredMarkerFile)

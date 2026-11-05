@@ -865,3 +865,116 @@ func main(){for _,name:=range []string{".wtc-dev-build.lock",".wtc-dev-mode.lock
 		t.Fatalf("teardown ran under dev locks: %s %v", raw, err)
 	}
 }
+
+func TestDevFollowRetirementPreflightsOnlyIntroducedState(t *testing.T) {
+	for _, kind := range []string{"unused", "private-root", "lock-directory", "lock-link"} {
+		t.Run(kind, func(t *testing.T) {
+			c := newWorkspaceFixture(t)
+			made, err := c.NewCollection(NewOptions{Slug: "finished", Repos: []string{"widget"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := made.Collection
+			if err := os.Remove(filepath.Join(target, "widget", "init-ran")); err != nil {
+				t.Fatal(err)
+			}
+			switch kind {
+			case "unused", "private-root":
+				if kind == "private-root" {
+					if err := SetDevMode(target, "off", ""); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.Chmod(target, 0775); err != nil {
+					t.Fatal(err)
+				}
+			case "lock-directory":
+				if err := os.Mkdir(filepath.Join(target, ".wtc-dev-build.lock"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "lock-link":
+				outside := filepath.Join(t.TempDir(), "keep")
+				fixtureFile(t, outside, "external state", 0600)
+				if err := os.Symlink(outside, filepath.Join(target, ".taba-dev-mode.lock")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			retired, err := c.RetireCollection(RetireOptions{Name: "finished"})
+			if kind == "unused" {
+				if err != nil || !retired.FolderRemoved {
+					t.Fatalf("unused dev state changed retirement eligibility: %+v %v", retired, err)
+				}
+			} else {
+				if err == nil || len(retired.Removed) != 0 {
+					t.Fatalf("dev prerequisite failed after teardown: %+v %v", retired, err)
+				}
+				if _, err := os.Stat(filepath.Join(target, "harness", ".git")); err != nil {
+					t.Fatal("preflight removed the harness")
+				}
+			}
+		})
+	}
+}
+
+func TestDevFollowRetirementLateLockFailureKeepsGuard(t *testing.T) {
+	for _, kind := range []string{"guard", "blocked-guard"} {
+		t.Run(kind, func(t *testing.T) {
+			c := newWorkspaceFixture(t)
+			made, err := c.NewCollection(NewOptions{Slug: "finished", Repos: []string{"widget"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			widget := filepath.Join(made.Collection, "widget")
+			if err := os.Remove(filepath.Join(widget, "init-ran")); err != nil {
+				t.Fatal(err)
+			}
+			hook := "#!/bin/sh\nmkdir \"$PWD/../.wtc-dev-build.lock\"\n"
+			if kind == "blocked-guard" {
+				hook += "mkdir \"$PWD/../.wtc-retired\"\n"
+			}
+			fixtureFile(t, filepath.Join(widget, ".harness", "teardown.sh"), hook, 0755)
+			fixtureGit(t, "-C", widget, "add", ".harness/teardown.sh")
+			fixtureGit(t, "-C", widget, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "late lock fixture")
+			head := fixtureGit(t, "-C", widget, "rev-parse", "HEAD")
+			fixtureGit(t, "--git-dir="+filepath.Join(c.Workspace, ".bare", "widget.git"), "update-ref", "refs/remotes/origin/teardown-fixture", head)
+			retired, err := c.RetireCollection(RetireOptions{Name: "finished"})
+			if kind == "blocked-guard" {
+				if err == nil || len(retired.Removed) != 2 || !strings.Contains(err.Error(), "preserving retired guard failed") {
+					t.Fatalf("guard failure was hidden: %+v %v", retired, err)
+				}
+				if info, err := os.Lstat(filepath.Join(made.Collection, RetiredMarkerFile)); err != nil || !info.IsDir() {
+					t.Fatal("unexpected marker slot was replaced")
+				}
+				return
+			}
+			if err == nil || len(retired.Removed) != 2 || !RetiredFolder(made.Collection) {
+				t.Fatalf("late failure stranded an undiscoverable folder: %+v %v", retired, err)
+			}
+			if err := os.Remove(filepath.Join(made.Collection, ".wtc-dev-build.lock")); err != nil {
+				t.Fatal(err)
+			}
+			retired, err = c.RetireCollection(RetireOptions{Name: "finished"})
+			if err != nil || !retired.FolderRemoved {
+				t.Fatalf("corrected late blocker could not finish normally: %+v %v", retired, err)
+			}
+		})
+	}
+}
+
+func TestDevFollowUnusedAutoAddsNoPrivateRootRequirement(t *testing.T) {
+	collection, _ := devFollowFixture(t)
+	if err := os.Chmod(collection, 0775); err != nil {
+		t.Fatal(err)
+	}
+	state, err := DevFollowConfiguration(collection)
+	if err != nil || state.Active || state.Mode != "auto" {
+		t.Fatalf("unused AUTO rejected ordinary collection: %+v %v", state, err)
+	}
+	state, err = EnsureDevFollow(context.Background(), collection)
+	if err != nil || state.Active || state.Build != nil {
+		t.Fatalf("passive inactive check mutated eligibility: %+v %v", state, err)
+	}
+	if _, err := os.Stat(filepath.Join(collection, ".wtc-dev-build.lock")); !os.IsNotExist(err) {
+		t.Fatal("inactive check created a build lock")
+	}
+}

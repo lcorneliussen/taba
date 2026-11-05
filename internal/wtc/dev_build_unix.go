@@ -51,11 +51,15 @@ func lockDevFile(ctx context.Context, path string) (func(), error) {
 }
 
 func lockDevRetirement(collection string) (func(), error) {
+	used, err := preflightDevRetirement(collection)
+	if err != nil {
+		return nil, err
+	}
 	root, err := os.Lstat(collection)
 	if err != nil {
 		return nil, err
 	}
-	if !root.IsDir() || !ownedByCurrentUser(root) || root.Mode()&0022 != 0 {
+	if !root.IsDir() {
 		return nil, fmt.Errorf("unsafe dev collection root")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -70,7 +74,7 @@ func lockDevRetirement(collection string) (func(), error) {
 		return nil, err
 	}
 	current, err := os.Lstat(collection)
-	if err != nil || !os.SameFile(root, current) {
+	if err != nil || !os.SameFile(root, current) || used && (!ownedByCurrentUser(current) || current.Mode()&0022 != 0) {
 		policy()
 		build()
 		return nil, fmt.Errorf("dev collection root changed during retirement")

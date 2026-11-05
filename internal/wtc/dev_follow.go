@@ -42,6 +42,59 @@ func devCollectionRoot(collection string, previous os.FileInfo) (os.FileInfo, er
 	return info, nil
 }
 
+// Retirement's existing eligibility is unchanged for collections that never
+// used dev state. Introduced private state and lock prerequisites are checked
+// without taking locks or executing hooks before destructive teardown.
+func preflightDevRetirement(collection string) (bool, error) {
+	used := false
+	for _, namespace := range []string{".wtc", ".taba"} {
+		for _, suffix := range []string{"-dev-mode.json", "-dev-mode.lock", "-dev-build.lock"} {
+			info, err := os.Lstat(filepath.Join(collection, namespace+suffix))
+			if os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return false, err
+			}
+			used = true
+			if !info.Mode().IsRegular() || !ownedByCurrentUser(info) || info.Mode()&0022 != 0 {
+				return false, fmt.Errorf("unsafe dev retirement slot: %s", namespace+suffix)
+			}
+		}
+		root := filepath.Join(collection, namespace)
+		info, err := os.Lstat(root)
+		if err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		if err == nil && info.IsDir() {
+			if _, err := os.Lstat(filepath.Join(root, "dev-generations")); err == nil {
+				used = true
+			} else if !os.IsNotExist(err) {
+				return false, err
+			}
+			if info, err := os.Lstat(filepath.Join(root, "dev")); err == nil && info.IsDir() {
+				if _, err := os.Lstat(filepath.Join(root, "dev", "current.json")); err == nil {
+					used = true
+				} else if !os.IsNotExist(err) {
+					return false, err
+				}
+			} else if err != nil && !os.IsNotExist(err) {
+				return false, err
+			}
+		}
+	}
+	if used {
+		info, err := os.Lstat(collection)
+		if err != nil {
+			return false, err
+		}
+		if !info.IsDir() || !ownedByCurrentUser(info) || info.Mode()&0022 != 0 {
+			return false, fmt.Errorf("unsafe dev collection root")
+		}
+	}
+	return used, nil
+}
+
 // DevMode is the only selection input. Generations and versions are build
 // observations, not additional release pins. An absent policy inherits AUTO.
 type DevMode struct {
@@ -115,8 +168,15 @@ func devReviewContext(collection string) bool {
 
 // DevFollowConfiguration only reads selection; it does not run Go or install.
 func DevFollowConfiguration(collection string) (DevFollowState, error) {
-	if _, err := devCollectionRoot(collection, nil); err != nil {
+	if RetiredFolder(collection) {
+		return DevFollowState{}, retiredFolderError(collection)
+	}
+	present, err := collectionMarker(collection)
+	if err != nil {
 		return DevFollowState{}, err
+	}
+	if !present {
+		return DevFollowState{}, fmt.Errorf("dev collection boundary is unavailable")
 	}
 	policy, err := readDevMode(collection)
 	state := DevFollowState{Mode: policy.Mode}
@@ -132,6 +192,9 @@ func DevFollowConfiguration(collection string) (DevFollowState, error) {
 		return state, nil
 	}
 	if policy.Mode == "on" {
+		if _, err := devCollectionRoot(collection, nil); err != nil {
+			return state, err
+		}
 		state.Source, err = devSourcePath(policy.Source)
 		state.Active = err == nil
 		state.Reason = "explicit source"
@@ -144,6 +207,9 @@ func DevFollowConfiguration(collection string) (DevFollowState, error) {
 	if name == "" {
 		state.Reason = "no project dev convention"
 		return state, nil
+	}
+	if _, err := devCollectionRoot(collection, nil); err != nil {
+		return state, err
 	}
 	c, err := OpenCollection(collection)
 	if err != nil {
@@ -338,12 +404,12 @@ func publishDevBuild(collection, dir string, build *DevBuild) error {
 // EnsureDevFollow is the shared strict freshness path for startup and passive
 // TUI checks. Errors never present an expired artifact as a fresh executable.
 func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, error) {
-	root, err := devCollectionRoot(collection, nil)
-	if err != nil {
-		return DevFollowState{}, err
-	}
 	state, err := DevFollowConfiguration(collection)
 	if err != nil || !state.Active {
+		return state, err
+	}
+	root, err := devCollectionRoot(collection, nil)
+	if err != nil {
 		return state, err
 	}
 	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-build.lock"))

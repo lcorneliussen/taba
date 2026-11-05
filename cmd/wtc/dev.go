@@ -169,11 +169,19 @@ func handOverToDevBuild() error {
 // Selection and recovery commands must work without building broken source.
 // Review commands never automatically run the candidate being verified.
 func devControlInvocation(args []string) bool {
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			continue
+	var asJSON bool
+	root := commandRoot(&asJSON)
+	root.InitDefaultHelpFlag()
+	addDevCommands(root, &asJSON)
+	addReviewCommands(root, &asJSON)
+	// Find uses the actual command/flag definitions, including values and
+	// aliases, without parsing into a context or executing any callback.
+	command, _, _ := root.Find(args)
+	for command != nil && command != root {
+		if command.Name() == "dev" || command.Name() == "review" {
+			return true
 		}
-		return arg == "dev" || arg == "review"
+		command = command.Parent()
 	}
 	return false
 }

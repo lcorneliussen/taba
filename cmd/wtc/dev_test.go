@@ -9,6 +9,30 @@ import (
 	"testing"
 )
 
+func TestDevControlInvocationUsesCommandFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"--collection", "inspected", "review", "status", "widget", "1"},
+		{"--collection=inspected", "review", "status", "widget", "1"},
+		{"--json", "--collection", "inspected", "review", "--help"},
+		{"-h", "review"},
+		{"--source", "selected", "dev", "mode", "on"},
+		{"--source=selected", "dev", "mode", "on"},
+		{"--dir", "bundle", "review", "bundle", "widget", "1"},
+	} {
+		if !devControlInvocation(args) {
+			t.Errorf("control command not recognized: %q", args)
+		}
+	}
+	for _, args := range [][]string{
+		{"status", "review"}, {"--json", "status"},
+		{"--collection", "review", "status"}, {"--source=dev", "status"},
+	} {
+		if devControlInvocation(args) {
+			t.Errorf("ordinary command bypassed following: %q", args)
+		}
+	}
+}
+
 func TestDevFollowCLIOverridesSemverPreservesArgsAndCanExit(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a CLI and disposable source")
@@ -84,6 +108,16 @@ func main(){if len(os.Args)==4&&os.Args[1]=="--json"&&os.Args[2]=="dev"&&os.Args
 	if out, code := run(pinned, nil, "review", "--help"); code != 0 || strings.Contains(out, "second:") {
 		t.Fatalf("review command redirected: %d %s", code, out)
 	}
+	// A review target is operated context, never an alternate executable policy.
+	inspected := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(inspected, "harness"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	write(filepath.Join(inspected, "harness", ".harness-repos.yml"), "repos: []\n")
+	write(filepath.Join(inspected, ".wtc-dev-mode.json"), `{"mode":"on","source":"/missing-unselected-fixture","revision":"fixture"}`)
+	if out, code := run(taba, nil, "--collection", inspected, "review", "--help"); code != 0 || strings.Contains(out, "second:") || !strings.Contains(out, "Manage independent local PR reviews") {
+		t.Fatalf("flagged review selected source from invocation or target: %d %s", code, out)
+	}
 	write(filepath.Join(collection, ".wtc-review-mode"), "review fixture")
 	if out, code := run(pinned, nil, "--version"); code != 0 || !strings.Contains(out, "9.0.0") {
 		t.Fatalf("review-only redirected: %d %s", code, out)
@@ -95,6 +129,9 @@ func main(){if len(os.Args)==4&&os.Args[1]=="--json"&&os.Args[2]=="dev"&&os.Args
 	write(main, "broken source")
 	if out, code := run(pinned, nil, "hello"); code == 0 || strings.Contains(out, "second:") {
 		t.Fatalf("stale code executed: %d %s", code, out)
+	}
+	if out, code := run(pinned, nil, "--collection", inspected, "review", "--help"); code != 0 || !strings.Contains(out, "Manage independent local PR reviews") {
+		t.Fatalf("flagged review required broken candidate source: %d %s", code, out)
 	}
 	if out, code := run(pinned, nil, "dev", "mode", "off"); code != 0 {
 		t.Fatalf("broken-source OFF: %d %s", code, out)
