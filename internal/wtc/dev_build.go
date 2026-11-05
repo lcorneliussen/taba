@@ -26,8 +26,9 @@ import (
 const wtcModule = "github.com/lcorneliussen/wtc-cli"
 
 // DevBuildDelegatedEnv is set on the dev build's environment when another wtc
-// handed over to it. It carries the version that stepped aside and prevents a
-// second handover.
+// handed over to it. It carries the version that stepped aside and guards
+// inactive one-shot fallback against another hop. Active following instead
+// checks freshness and guards its hop with the generation and executable path.
 const DevBuildDelegatedEnv = "WTC_DEV_DELEGATED_FROM"
 
 // DevBuildDisableEnv turns the handover off for one invocation.

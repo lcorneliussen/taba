@@ -1215,3 +1215,58 @@ func TestStatusDevSlowPollGivesActionWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusDevCancelledRestartKeepsRuntimeTimer(t *testing.T) {
+	old := devRunningGeneration
+	devRunningGeneration = "running"
+	defer func() { devRunningGeneration = old }()
+	for _, event := range []string{"tick", "result"} {
+		for _, failed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/failure=%v", event, failed), func(t *testing.T) {
+				m := statusTUIModel{context: &wtc.Context{Collection: t.TempDir()}, nextRunning: true, devCollection: "synthetic"}
+				updated, _ := m.Update(statusDevMsg{state: wtc.DevFollowState{Active: true, Build: &wtc.DevBuild{Generation: "replacement"}}})
+				m = updated.(statusTUIModel)
+				var incoming tea.Msg = statusRuntimeTickMsg{}
+				if event == "result" {
+					m.runtimeReading = true
+					incoming = statusRuntimeMsg{}
+				}
+				updated, command := m.Update(incoming)
+				m = updated.(statusTUIModel)
+				if command == nil {
+					t.Fatal("pending restart dropped the single runtime timer")
+				}
+				// With the action still running, this is the only scheduled command.
+				tick, ok := command().(statusRuntimeTickMsg)
+				if !ok {
+					t.Fatal("pending restart did not preserve its runtime tick")
+				}
+				m.nextRunning = false
+				updated, command = m.Update(statusTickMsg(time.Now()))
+				m = updated.(statusTUIModel)
+				if command == nil || !m.devChecking {
+					t.Fatal("idle restart did not revalidate")
+				}
+				result := statusDevMsg{state: wtc.DevFollowState{Active: true, Build: &wtc.DevBuild{Generation: "running"}}}
+				if failed {
+					result.err = errors.New("synthetic build failure")
+				}
+				updated, command = m.Update(result)
+				m = updated.(statusTUIModel)
+				if command != nil || m.devRestart != nil || m.devAutoExit {
+					t.Fatal("cancelled replacement quit the working TUI")
+				}
+				updated, command = m.Update(tick)
+				m = updated.(statusTUIModel)
+				if command == nil || !m.runtimeReading {
+					t.Fatal("retained tick did not resume service reads")
+				}
+				updated, command = m.Update(statusRuntimeMsg{items: []wtc.RuntimeItem{{Repo: "widget", Group: "web", Label: "changed service"}}})
+				m = updated.(statusTUIModel)
+				if command == nil || m.runtimeReading || len(m.snapshot.Runtime) != 1 || m.snapshot.Runtime[0].Label != "changed service" {
+					t.Fatal("service state stopped updating after cancelled restart")
+				}
+			})
+		}
+	}
+}

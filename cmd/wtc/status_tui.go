@@ -94,9 +94,6 @@ type statusTUIModel struct {
 	progressLog    []string
 	progressStep   string
 	progressKey    string
-	startedAt      time.Time
-	errorText      string
-	hover          string
 	devAllowed     bool
 	devCollection  string
 	devChecking    bool
@@ -106,72 +103,9 @@ type statusTUIModel struct {
 	devRestart     *statusDevRestart
 	devAutoExit    bool
 	devResume      *statusTUIPresentation
-}
-
-func statusCheckDev(collection string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-		state, err := wtc.EnsureDevFollow(ctx, collection)
-		return statusDevMsg{state: state, err: err}
-	}
-}
-
-func (m statusTUIModel) devIdle() bool {
-	return !m.nextRunning && !m.refreshing && !m.runtimeReading && !m.devChecking
-}
-
-func (m statusTUIModel) devBlocksActions() bool {
-	return m.devChecking || m.devError || m.devRestart != nil
-}
-
-func (m statusTUIModel) devRestartCommand() tea.Cmd {
-	if m.devRestart != nil && !m.devRestart.needsCheck && m.devIdle() {
-		return tea.Quit
-	}
-	return nil
-}
-
-func (m statusTUIModel) finishDevUpdate() (tea.Model, tea.Cmd) {
-	if m.devRestart != nil && m.devRestart.needsCheck && m.devIdle() {
-		m.devChecking = true
-		m.devMessage = "dev: revalidating source before restart"
-		return m, statusCheckDev(m.devCollection)
-	}
-	if command := m.devRestartCommand(); command != nil {
-		m.devAutoExit = true
-		return m, command
-	}
-	return m, nil
-}
-
-func (m statusTUIModel) devPresentation() statusTUIPresentation {
-	anchor := m.scrollAnchor()
-	state := statusTUIPresentation{Help: m.showHelp, Archived: m.showArchived, Log: m.showLog, Next: m.showNext,
-		AnchorKey: anchor.key, AnchorOffset: anchor.offset, Scroll: m.scroll, Notice: m.nextNotice}
-	if len(state.Notice) > 4096 {
-		state.Notice = state.Notice[:4096]
-	}
-	if repos := statusNextRepos(m.snapshot); m.selectedNext >= 0 && m.selectedNext < len(repos) {
-		state.Selected = statusNextIdentity(repos[m.selectedNext])
-	}
-	return state
-}
-
-func (m *statusTUIModel) restoreDevPresentation() {
-	if m.devResume == nil {
-		return
-	}
-	s := m.devResume
-	m.showHelp, m.showArchived, m.showLog, m.showNext, m.nextNotice = s.Help, s.Archived, s.Log, s.Next, s.Notice
-	m.scroll = max(0, s.Scroll)
-	m.restoreScroll(statusTUIAnchor{key: s.AnchorKey, offset: max(0, s.AnchorOffset)})
-	for i, repo := range statusNextRepos(m.snapshot) {
-		if statusNextIdentity(repo) == s.Selected {
-			m.selectedNext = i
-			break
-		}
-	}
+	startedAt      time.Time
+	errorText      string
+	hover          string
 }
 
 // Row locations come from the renderers, including conditional detail lines.
@@ -362,6 +296,96 @@ func statusTUIWait(events <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg { return <-events }
 }
 
+func statusCheckDev(collection string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		state, err := wtc.EnsureDevFollow(ctx, collection)
+		return statusDevMsg{state: state, err: err}
+	}
+}
+
+func (m statusTUIModel) devIdle() bool {
+	return !m.nextRunning && !m.refreshing && !m.runtimeReading && !m.devChecking
+}
+
+func (m statusTUIModel) devBlocksActions() bool {
+	return m.devChecking || m.devError || m.devRestart != nil
+}
+
+func (m statusTUIModel) devRestartCommand() tea.Cmd {
+	if m.devRestart != nil && !m.devRestart.needsCheck && m.devIdle() {
+		return tea.Quit
+	}
+	return nil
+}
+
+func (m statusTUIModel) finishDevUpdate() (tea.Model, tea.Cmd) {
+	if m.devRestart != nil && m.devRestart.needsCheck && m.devIdle() {
+		m.devChecking = true
+		m.devMessage = "dev: revalidating source before restart"
+		return m, statusCheckDev(m.devCollection)
+	}
+	if command := m.devRestartCommand(); command != nil {
+		m.devAutoExit = true
+		return m, command
+	}
+	return m, nil
+}
+
+func (m statusTUIModel) devPresentation() statusTUIPresentation {
+	anchor := m.scrollAnchor()
+	state := statusTUIPresentation{Help: m.showHelp, Archived: m.showArchived, Log: m.showLog, Next: m.showNext,
+		AnchorKey: anchor.key, AnchorOffset: anchor.offset, Scroll: m.scroll, Notice: m.nextNotice}
+	if len(state.Notice) > 4096 {
+		state.Notice = state.Notice[:4096]
+	}
+	if repos := statusNextRepos(m.snapshot); m.selectedNext >= 0 && m.selectedNext < len(repos) {
+		state.Selected = statusNextIdentity(repos[m.selectedNext])
+	}
+	return state
+}
+
+func (m *statusTUIModel) restoreDevPresentation() {
+	if m.devResume == nil {
+		return
+	}
+	s := m.devResume
+	m.showHelp, m.showArchived, m.showLog, m.showNext, m.nextNotice = s.Help, s.Archived, s.Log, s.Next, s.Notice
+	m.scroll = max(0, s.Scroll)
+	m.restoreScroll(statusTUIAnchor{key: s.AnchorKey, offset: max(0, s.AnchorOffset)})
+	for i, repo := range statusNextRepos(m.snapshot) {
+		if statusNextIdentity(repo) == s.Selected {
+			m.selectedNext = i
+			break
+		}
+	}
+}
+
+func (m statusTUIModel) devTick() (tea.Model, tea.Cmd, bool) {
+	if m.devRestart != nil {
+		if m.devIdle() {
+			next, command := m.finishDevUpdate()
+			return next, command, true
+		}
+		return m, statusTUITick(), true
+	}
+	if m.devAllowed && !m.devChecking && m.context != nil && time.Since(m.devCheckAt) >= 3*time.Second {
+		if m.devCollection == "" {
+			cwd, _ := os.Getwd()
+			m.devCollection = wtc.FindCollectionRoot(cwd)
+		}
+		if m.devCollection == "" {
+			m.devAllowed = false
+			return m, statusTUITick(), true
+		}
+		m.devChecking, m.devCheckAt = true, time.Now()
+		m.devMessage = "dev: checking source / building changes"
+		return m, tea.Batch(statusTUITick(), statusCheckDev(m.devCollection)), true
+	}
+	return m, nil, false
+}
+
 func (m *statusTUIModel) startRefresh() {
 	m.refreshing = true
 	m.startedAt = time.Now()
@@ -452,12 +476,14 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.snapshot.Runtime, m.runtimeReading = msg.items, false
 		m.restoreScroll(anchor)
 		if m.devRestart != nil {
-			return m.finishDevUpdate()
+			next, command := m.finishDevUpdate()
+			return next, tea.Batch(statusTUIRuntimeTick(), command)
 		}
 		return m, statusTUIRuntimeTick()
 	case statusRuntimeTickMsg:
 		if m.devRestart != nil {
-			return m.finishDevUpdate()
+			next, command := m.finishDevUpdate()
+			return next, tea.Batch(statusTUIRuntimeTick(), command)
 		}
 		if m.context == nil {
 			return m, nil
@@ -569,28 +595,12 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case statusTickMsg:
-		if m.devRestart != nil {
-			if m.devIdle() {
-				return m.finishDevUpdate()
-			}
-			return m, statusTUITick()
-		}
-		if m.devAllowed && !m.devChecking && m.context != nil && time.Since(m.devCheckAt) >= 3*time.Second {
-			if m.devCollection == "" {
-				cwd, _ := os.Getwd()
-				m.devCollection = wtc.FindCollectionRoot(cwd)
-			}
-			if m.devCollection == "" {
-				m.devAllowed = false
-				return m, statusTUITick()
-			}
-			m.devChecking, m.devCheckAt = true, time.Now()
-			m.devMessage = "dev: checking source / building changes"
-			return m, tea.Batch(statusTUITick(), statusCheckDev(m.devCollection))
-		}
 		if !m.refreshing && !m.nextRunning && !m.nextRefresh.IsZero() && !time.Now().Before(m.nextRefresh) {
 			m.startRefresh()
 			return m, tea.Batch(statusTUITick(), statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge))
+		}
+		if next, command, handled := m.devTick(); handled {
+			return next, command
 		}
 		return m, statusTUITick()
 	case tea.MouseMotionMsg:
@@ -1814,10 +1824,6 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 	}
 	model := statusTUIModel{context: c, all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, fetchAge: fetchAge, interval: interval,
 		background: background, focused: true, refreshing: true}
-	model.devAllowed = os.Getenv(wtc.DevBuildDisableEnv) != "off" && version != "dev"
-	cwd, _ := os.Getwd()
-	model.devCollection = wtc.FindCollectionRoot(cwd)
-	model.devResume = takeStatusDevPresentation()
 	model.startRefresh()
 	if !all && !procs {
 		model.snapshot.Collection = filepath.Base(c.Collection)
@@ -1833,6 +1839,10 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 		// cache another wtc may have written; live states follow from Init.
 		model.snapshot.Runtime = c.RuntimeEnlisted()
 	}
+	model.devAllowed = os.Getenv(wtc.DevBuildDisableEnv) != "off" && version != "dev"
+	cwd, _ := os.Getwd()
+	model.devCollection = wtc.FindCollectionRoot(cwd)
+	model.devResume = takeStatusDevPresentation()
 	model.restoreDevPresentation()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
