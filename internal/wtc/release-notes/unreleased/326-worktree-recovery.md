@@ -8,3 +8,6 @@
 - **Repository actions share one alignment rail.** Per-row `⋯` menus expose
   alternatives and blocked reasons; the header menu retains collection-wide
   catch-up, recovery and push preparation when another action is primary.
+- **Action groups adapt to available width.** The primary stays right-aligned;
+  additional eligible actions appear inline when space permits, with remaining
+  and unavailable choices behind a left-side `⋯` menu.

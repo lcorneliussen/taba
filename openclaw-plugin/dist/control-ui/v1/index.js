@@ -814,9 +814,11 @@ async function trackedRefresh(watch, sessionKey, say, currentSession = () => ses
 }
 
 const REPO_NEXT_WIDTH = 132, REPO_COLUMN_GAP = 10;
-const repositoryColumns = (narrow) => narrow
-  ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }]
-  : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "116px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }];
+export const inlineActionCapacity = (width, narrow = false) => narrow ? 1 : Math.max(1, Math.min(3, Math.floor(((width || 0) - 484) / 108)));
+const headerActionCapacity = width => Math.max(1, Math.min(4, Math.floor(((width || 0) - 300) / 108)));
+const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH) => narrow
+  ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${actionWidth}px`, align: "end" }]
+  : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "116px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${actionWidth}px`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
 .wtc-tunnel-trigger:hover,.wtc-tunnel-existing:hover,.wtc-tunnel-option:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
 .wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
@@ -826,9 +828,11 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-service-play:is(:hover,:focus-visible) { --wtc-service-play-bg:var(--bg-hover,rgba(128,128,128,.12));--wtc-service-play-color:var(--text-strong,var(--text,inherit)); }
 
 .wtc-service-label:disabled { cursor:default !important;text-decoration:none !important; }
-.wtc-next-step { width:${REPO_NEXT_WIDTH}px;justify-content:flex-start !important; }
-.wtc-next-step>:first-child { width:104px;flex:0 0 104px; }
-.wtc-next-step>:not(:first-child) { width:24px;flex:0 0 24px; }
+.wtc-next-step { width:var(--wtc-action-width,${REPO_NEXT_WIDTH}px);justify-content:flex-end !important; }
+ .wtc-next-step>.wtc-action-control,.wtc-next-step>select,.wtc-next-step>.wtc-step-status,.wtc-next-step>.wtc-primary-spacer { width:104px;flex:0 0 104px; }
+.wtc-next-step>.wtc-action-menu { width:24px;flex:0 0 24px; }
+.wtc-toolbar-inline { width:104px;flex:0 0 104px; }
+.wtc-action-toolbar>.wtc-action-control,.wtc-toolbar-primary>.wtc-action-control { min-height:24px !important;height:24px; }
 .wtc-action-menu>button { width:24px !important;min-width:24px !important;padding:0 !important; }
 .wtc-step-status { width:104px;text-align:center; }
 /* Primary actions and their menu rail share one fixed layout in every row. */
@@ -888,6 +892,7 @@ const actionFeedback = () => el("style", { textContent: `
 
 ` });
 function collectionTables(v) {
+  let inlineCapacity = 1, actionColumns = 1;
   // Repositories being pushed, and being caught up.
   const busy = new Set();
   const catching = new Set();
@@ -1185,6 +1190,7 @@ function collectionTables(v) {
   function syncConversation() {
     if (batchKey === v.key()) return;
     batchKey = v.key();
+    actionColumns = 1;
     cancelPreparations("Preparation discarded after conversation switch; nothing was pushed.");
     choosing = false; selection = new Map(); batchResults = new Map(); batchLabels = new Map(); batchKeys = new Map(); batchKinds = new Map(); batchPreview = null; dispatched = new Set(); batchCancelled = true;
   }
@@ -1210,17 +1216,30 @@ function collectionTables(v) {
   const activityFailed = item => item?.state === "failed" || /^(Failed|Handoff failed|Cannot )/.test(item?.status ?? "");
   const recoveryButton = (...args) => { const button = nextButton(...args); button.className += " wtc-restore-control"; return button; };
   const recoveryQueued = r => recoveryQueues.get(v.collectionKey?.() ?? v.key())?.targets.has(r.sessionKey) && !recoveryBusy(r);
-  function repoActionMenu(r) {
-    const options = choicesOf(r).map(step => ({ label: nextLabel(step), detail: dispatched.has(handoffKey(r, step)) ? "Already sent to the conversation; wait for its result" : step.available ? step.reason : step.blocked ?? step.reason,
+  function repoActionOptions(r) {
+    const options = choicesOf(r).map(step => ({ id: step.key, label: nextLabel(step), detail: dispatched.has(handoffKey(r, step)) ? "Already sent to the conversation; wait for its result" : step.available ? step.reason : step.blocked ?? step.reason,
       disabled: !!r.error || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || dispatched.has(handoffKey(r, step)) || batchRunning || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => actNext({ ...r, next: step }) }));
-    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({label:"Commit changes",detail:"Review intended changes and save local commits",disabled:reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>askCommit(r)});
-    if (r.error === "checkout unavailable") options.unshift({ label: "Restore", detail: r.recovery?.reason ?? "Restore the saved checkout before running repository actions", disabled: r.recovery?.state !== "restorable" || recoveryQueueBusy(), run: () => restoreCheckouts([r]) });
-    if (r.behind > 0 && !options.some(o => o.label === "Catch up")) options.push({ label: "Catch up", detail: r.error ? "Restore the checkout first" : r.dirty ? "Save or stash local changes before catching up" : "Not offered by the current repository plan; refresh its status", disabled: true });
-    if (!options.length) return css(el("span", {ariaHidden:"true"}), "width:24px;flex:0 0 24px");
-    const trigger = nextButton("⋯", `More actions for ${nameOf(r)}`, () => {});
-    return actionMenu(trigger, options, `Actions for ${nameOf(r)}`, text => v.say(text, true));
+    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({id:"commit",label:"Commit changes",detail:"Review intended changes and save local commits",disabled:reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>askCommit(r)});
+    if (r.error === "checkout unavailable") options.unshift({ id: "restore", label: "Restore", detail: r.recovery?.reason ?? "Restore the saved checkout before running repository actions", disabled: r.recovery?.state !== "restorable" || recoveryQueueBusy(), run: () => restoreCheckouts([r]) });
+    if (r.behind > 0 && !options.some(o => o.label === "Catch up")) options.push({ id: "catch-up-blocked", label: "Catch up", detail: r.error ? "Restore the checkout first" : r.dirty ? "Save or stash local changes before catching up" : "Not offered by the current repository plan; refresh its status", disabled: true });
+    return options;
   }
-  const actionSlot = (r, action, picker = null) => css(el("div", { className: "wtc-next-step" }, picker ?? action ?? el("span", { ariaHidden: "true" }), repoActionMenu(r)), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
+  function optionButton(option) {
+    const button = option.href && !option.disabled ? link(option.label, option.href) : nextButton(option.label, option.detail, option.run, option.disabled);
+    if (button.tagName === "A") { button.className = "wtc-action-control"; button.style.cssText = nextControlStyle + ";text-decoration:none"; button.title = option.detail; }
+    return button;
+  }
+  const primaryActionId = r => r.error === "checkout unavailable" && r.recovery?.state === "restorable" ? "restore" : selection.get(r.sessionKey)?.step?.key ?? r.next?.key ?? (r.dirty ? "commit" : null);
+  const actionSlot = (r, action, picker = null) => {
+    const main = picker ?? action ?? el("span", { className: "wtc-primary-spacer", ariaHidden: "true" });
+    main.className = `${main.className ?? ""} wtc-primary-action`;
+    const primaryId = primaryActionId(r);
+    const options = repoActionOptions(r);
+    const extras = picker || batchRunning || reserved(r) || recoveryQueueBusy() ? [] : options.filter(o => !o.disabled && o.id !== primaryId).slice(0, inlineCapacity - 1);
+    const overflow = options.filter(o => !extras.includes(o) && (o.id !== primaryId || o.disabled));
+    const menu = overflow.length ? actionMenu(nextButton("⋯", `More actions for ${nameOf(r)}`, () => {}), overflow, `Actions for ${nameOf(r)}`, text => v.say(text, true)) : null;
+    return css(el("div", { className: "wtc-next-step" }, menu, ...extras.map(o => {const button=optionButton(o);button.className+=" wtc-inline-action";return button;}), main), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
+  };
   function nextCell(r) {
     if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return actionSlot(r, recoveryButton(recoveryBusy(r) ? "Restoring…" : recoveryQueued(r) ? "Queued" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryQueueBusy()));
     if (!actionable(r)) {
@@ -1396,19 +1415,22 @@ function collectionTables(v) {
     const catches = repos.filter(r => toCatchUp(r) && !r.dirty && (!r.next || !dispatched.has(handoffKey(r, r.next))));
     const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
     const more = [
-      {label: `Catch up (${catches.length})`, detail: catches.length ? "Merge the base into clean checkouts" : "No clean checkout needs catching up", disabled: !catches.length || batchRunning || catches.some(reserved) || recoveryQueueBusy(), run: () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({repo,step:repo.next}))) : catchUp([...catches])},
-      {label: `Restore (${recoverable.length})`, detail: recoverable.length ? "Recover saved checkouts; gateway admin required" : "No recoverable checkout is currently evicted", disabled: !recoverable.length || batchRunning || recoveryQueueBusy(), run: () => restoreCheckouts(recoverable)},
-      {label: `Prepare pushes (${pushes.length})`, detail: pushes.length ? "Review each push before confirming" : "No unpublished commits ready to push", disabled: !pushes.length || batchRunning || pushes.some(reserved) || recoveryQueueBusy(), run: () => pushAll([...pushes])},
+      {id:"catch-up",label: `Catch up (${catches.length})`, detail: catches.length ? "Merge the base into clean checkouts" : "No clean checkout needs catching up", disabled: !catches.length || batchRunning || catches.some(reserved) || recoveryQueueBusy(), run: () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({repo,step:repo.next}))) : catchUp([...catches])},
+      {id:"restore",label: `Restore (${recoverable.length})`, detail: recoverable.length ? "Recover saved checkouts; gateway admin required" : "No recoverable checkout is currently evicted", disabled: !recoverable.length || batchRunning || recoveryQueueBusy(), run: () => restoreCheckouts(recoverable)},
+      {id:"push",label: `Prepare pushes (${pushes.length})`, detail: pushes.length ? "Review each push before confirming" : "No unpublished commits ready to push", disabled: !pushes.length || batchRunning || pushes.some(reserved) || recoveryQueueBusy(), run: () => pushAll([...pushes])},
       {label: "Refresh status", detail: "Recheck the collection without running an action", run: () => v.refresh()},
       {label: "Choose steps…", detail: "Select different steps per repository", disabled: !rows.length || batchRunning || recoveryQueueBusy(), run: () => {choosing=true;v.reveal?.();v.showActions?.();v.rerender();}},
     ];
+    const primaryId = feedback?.failed ? null : recoverable.length && !batchRunning && !batchPreview && !prepared && !batchResults.size ? "restore" : prepared ? "push" : single ? single.step.step : same && targets.length ? targets[0].step.step : null;
+    const extras = batchRunning || batchPreview || currentPublications.length || catching.size || busy.size || recoveryQueueBusy() ? [] : more.filter(o => o.id && !o.disabled && o.id !== primaryId).slice(0, headerActionCapacity(v.width?.()) - 1);
+    const overflow = more.filter(o => !extras.includes(o) && (o.id !== primaryId || o.disabled));
     const secondary = batchRunning
       ? nextButton(compact ? "Stop" : "Cancel queued", "Stop queued dispatches; active work continues", () => { batchCancelled = true; v.rerender(); })
-      : actionMenu(nextButton("⋯", "More collection actions", () => {}), more, "Collection actions", text => v.say(text, true));
+      : actionMenu(nextButton("⋯", "More collection actions", () => {}), overflow, "Collection actions", text => v.say(text, true));
     secondary.style.width = compact ? "36px" : "24px";
     secondary.style.flexShrink = "0";
     secondary.style.flexBasis = compact ? "36px" : "24px";
-    return css(el("span", { className: "wtc-action-toolbar" }, slot, secondary), `display:inline-flex;align-items:baseline;gap:${compact ? 4 : 8}px;min-width:0;flex-wrap:nowrap;white-space:nowrap`);
+    return css(el("span", { className: "wtc-action-toolbar" }, secondary, ...extras.map(o => { const button = optionButton(o); button.className += " wtc-toolbar-inline"; return button; }), slot), `display:inline-flex;align-items:baseline;gap:${compact ? 4 : 8}px;min-width:0;flex-wrap:nowrap;white-space:nowrap`);
   }
   function publicationConfirmations(repos) {
     const pending = repos.filter(r => confirming.has(r.sessionKey));
@@ -1434,7 +1456,7 @@ function collectionTables(v) {
           nextButton("Cancel", `Cancel preparation for ${nameOf(r)}; nothing will be pushed`, () => { if (!active(prepared.conversationKey) || confirming.get(r.sessionKey) !== prepared) return; confirming.delete(r.sessionKey); if (prepared.activityId) recordActivity(prepared.logKey, prepared.activityId, { state: "cancelled", status: `${nameOf(r)}: publication cancelled.` }); v.say(`${nameOf(r)}: publication cancelled.`); v.rerender(); }, reserved(r))), "display:flex;align-items:center;gap:8px;padding-top:4px")), "display:grid;gap:4px;padding:10px 12px;border:1px solid var(--border-strong,rgba(128,128,128,.35));border-radius:8px;background:var(--bg,transparent)");
     })), "display:grid;gap:8px;min-width:0");
   }
-  function bulkActions(repos, narrow) {
+  function bulkActions(repos, narrow, actionWidth = REPO_NEXT_WIDTH) {
     if (!repos.length) return null;
     const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
     const catches = repos.filter(r => toCatchUp(r) && !r.dirty && (!r.next || !dispatched.has(handoffKey(r, r.next))));
@@ -1449,7 +1471,7 @@ function collectionTables(v) {
     const arrows = css(el("span", {}, narrow ? label : el("span"), push, catchAll), "display:grid;grid-template-columns:24px 36px 36px;gap:4px;align-items:baseline");
     return css(el("div", { className: "wtc-bulk-actions", role: "group", ariaLabel: "All repositories" }, ...(narrow ? [arrows] : [label, el("span"), arrows, el("span"), el("span")])), narrow
       ? "display:grid;grid-template-columns:104px minmax(0,1fr);column-gap:4px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0"
-      : `display:grid;grid-template-columns:${repositoryColumns(false).map(c => c.width).join(" ")};column-gap:10px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`);
+      : `display:grid;grid-template-columns:${repositoryColumns(false, actionWidth).map(c => c.width).join(" ")};column-gap:10px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`);
   }
   // What a repository's push would send: its commits not on the forge yet,
   // or, before its first pull request, everything ahead of the base.
@@ -2040,7 +2062,11 @@ function collectionTables(v) {
     dispose: () => { clearServiceLogs(); cancelPreparations("Preparation discarded when the view closed; nothing was pushed."); },
     repoTable: (repos, narrow, workers) => {
       syncConversation();
-      const columns = repositoryColumns(narrow);
+      // Retain space already exposed during this conversation so progress cannot move facts.
+      actionColumns = Math.max(actionColumns, ...repos.map(r => 1 + repoActionOptions(r).filter(o => !o.disabled && o.id !== primaryActionId(r)).length));
+      inlineCapacity = Math.min(actionColumns, inlineActionCapacity(v.width?.(), narrow));
+      const actionWidth = inlineCapacity * 108 + 24;
+      const columns = repositoryColumns(narrow, actionWidth);
       const rows = repoRows(repos, workers).map((row) => {
         if (row[1]?.style) row[1].style.fontFamily = "inherit";
         const changes = css(el("span", { className: "wtc-change-slots" },
@@ -2057,10 +2083,10 @@ function collectionTables(v) {
         if (narrow && row[1]?.style) row[1].style.cssText += ";flex:1 1 0;min-width:32px;font-size:11px";
         const hasFacts = row.slice(2,9).some(Boolean) || !!row[10];
         const identity = css(el("div", {}, nameAndBranch,
-          narrow && hasFacts ? css(el("div", { className: "wtc-repo-facts" }, factSlot(changes), row[5] || row[6] || row[7] || row[8] || row[10] ? factSlot(pr) : null), `display:grid;grid-template-columns:104px minmax(0,1fr);width:calc(100% + ${REPO_NEXT_WIDTH + REPO_COLUMN_GAP}px);min-width:0;column-gap:4px;align-items:baseline;box-sizing:border-box`) : null), "min-width:0;padding:0;width:100%;flex:1 1 0");
+          narrow && hasFacts ? css(el("div", { className: "wtc-repo-facts" }, factSlot(changes), row[5] || row[6] || row[7] || row[8] || row[10] ? factSlot(pr) : null), `display:grid;grid-template-columns:104px minmax(0,1fr);width:calc(100% + ${actionWidth + REPO_COLUMN_GAP}px);min-width:0;column-gap:4px;align-items:baseline;box-sizing:border-box`) : null), "min-width:0;padding:0;width:100%;flex:1 1 0");
         return narrow ? [identity, row[9]] : [row[0], row[1], changes, pr, row[9]];
       });
-      return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow), table(columns, rows, false, true)), "min-width:0");
+      return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow, actionWidth), table(columns, rows, false, true)), `min-width:0;--wtc-action-width:${actionWidth}px`);
     }, serviceTable, serviceControls, totals, prTable };
 }
 
@@ -2150,11 +2176,13 @@ function mountComposer(container, context) {
       note = ""; if (!disposed && entry) render(entry);
     }, 8000);
   };
-  let narrow = false, repoNarrow = false;
+  let narrow = false, repoNarrow = false, contentWidth = 0;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
     const now = e.contentRect.width > 0 && e.contentRect.width < NARROW_PX;
     const compactRepos = e.contentRect.width > 0 && e.contentRect.width < REPO_NARROW_PX;
-    if (now !== narrow || compactRepos !== repoNarrow) { narrow = now; repoNarrow = compactRepos; if (entry) render(entry); }
+    const changed = inlineActionCapacity(contentWidth, repoNarrow) !== inlineActionCapacity(e.contentRect.width, compactRepos) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
+    contentWidth = e.contentRect.width;
+    if (now !== narrow || compactRepos !== repoNarrow || changed) { narrow = now; repoNarrow = compactRepos; if (entry) render(entry); }
   });
   sized?.observe(card);
   const svcBusy = new Set();
@@ -2186,6 +2214,7 @@ function mountComposer(container, context) {
       ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) });
       for (const notify of serviceLogListeners) notify();
     },
+    width: () => contentWidth,
     publicationBesideCollapsedBar: true,
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: () => key, agent: () => agentOf(ctx), svc, say,
     // What a push needs (the how-to of connecting GitHub) shows open.
@@ -2473,17 +2502,20 @@ function mountCollection(container, context) {
   };
 
   const tables = collectionTables({
+    width: () => contentWidth,
     collectionKey: sessionKeyOf,
     showServiceLogs: () => { focusSection = "service-logs"; },
     showActions: () => { focusSection = "actions"; render(); },
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: sessionKeyOf, agent: () => ctx.props.agentId, svc, say,
     refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(); }, pause: () => pauseCollection(watch), rerender: () => render(),
   });
-  let narrow = false, repoNarrow = false;
+  let narrow = false, repoNarrow = false, contentWidth = 0;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
     const now = e.contentRect.width > 0 && e.contentRect.width < NARROW_PX;
     const compactRepos = e.contentRect.width > 0 && e.contentRect.width < REPO_NARROW_PX;
-    if (now !== narrow || compactRepos !== repoNarrow) { narrow = now; repoNarrow = compactRepos; render(); }
+    const changed = inlineActionCapacity(contentWidth, repoNarrow) !== inlineActionCapacity(e.contentRect.width, compactRepos) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
+    contentWidth = e.contentRect.width;
+    if (now !== narrow || compactRepos !== repoNarrow || changed) { narrow = now; repoNarrow = compactRepos; render(); }
   });
   sized?.observe(root);
 

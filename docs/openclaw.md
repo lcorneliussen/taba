@@ -922,3 +922,11 @@ available even when a different action occupies the main button. Counts include
 only eligible repositories; catch-up excludes dirty and unavailable checkouts.
 Pushes retain their personal confirmation. **Choose steps…** opens mixed
 selection across repositories. Merely opening or navigating a menu runs nothing.
+
+Action groups are right-aligned, with `⋯` on the left. The recommended action
+stays at the right edge. Wider views show additional available actions inline;
+narrower views move those choices into the menu. Unavailable alternatives stay
+in the menu with their reasons. Each repository uses the same action-column
+width, and space already exposed during the conversation is retained while
+work is running so progress does not shift the repository facts. Changing the
+viewport never runs or selects an action.

@@ -177,7 +177,7 @@ const contexts = new WeakMap();
 const detailViews = [];
 afterEach(() => { for (const view of detailViews.splice(0)) view.dispose(); });
 // Include full outcome text from accessible status/details labels in feedback assertions.
-const readable = node => [node.textContent, ...[...node.all()].filter(n => n.className?.includes("wtc-header-feedback") || n.className?.includes("wtc-batch-result") || n.className === "wtc-step-status").map(n => n.ariaLabel ?? n.title ?? "")].join("\n");
+const readable = node => [node.textContent, ...[...node.all()].filter(n => n.className?.includes("wtc-header-feedback") || n.className?.includes("wtc-batch-result") || n.className?.split(" ").includes("wtc-step-status")).map(n => n.ariaLabel ?? n.title ?? "")].join("\n");
 async function reviewAction(host) {
   let action = [...host.all()].find(n => n.tagName === "BUTTON" && n.textContent === "Review PR text");
   if (action) return action;
@@ -242,7 +242,7 @@ const tables = (node) => [...node.all()].filter((n) => n.className === "wtc-tabl
     const pick = [...c.all()].find((n) => n.tagName === "SELECT");
     if (pick) return pick.children[0].textContent;
     const action = [...c.all()].find(n => n.className?.split(" ").includes("wtc-next-step"));
-    if (action) return action.children[0]?.textContent ?? "";
+    if (action) return action.children.find(n=>n.className?.includes("wtc-primary-action"))?.textContent ?? "";
     const tunnel = [...c.all()].find(n => n.className === "wtc-tunnel-trigger");
     return tunnel ? "+" : c.textContent;
   }));
@@ -2696,7 +2696,8 @@ test("evicted rows do not hide a prepared publication in the header", async () =
 
 for (const kind of ["composer", "panel"]) test(`mixed recovery and checkout actions stay available in ${kind} menus`, async () => {
   const step={step:"catch-up",by:"wtc",approve:"agent",command:["wtc","catch-up"],key:"api:catch-up:head",reason:"12 new on main"};
-  const clean=repo("api",{behind:12,next:step,choices:{actions:[{...step,available:true}]}});
+  const follow={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+  const clean=repo("api",{behind:12,next:step,choices:{actions:[{...step,available:true},follow]}});
   const commit={step:"commit",by:"agent",skill:"wtc",key:"web:commit:head",reason:"Save local changes"};
   const dirty=repo("web",{dirty:2,behind:7,next:commit,choices:{actions:[{...commit,available:true}]}});
   const missing=repo("docs",{error:"checkout unavailable",recovery:{state:"restorable",key:"docs"}});
@@ -2706,17 +2707,18 @@ for (const kind of ["composer", "panel"]) test(`mixed recovery and checkout acti
     const header=menus.find(n=>n.ariaLabel==="Collection actions");
     const item=(menu,label)=>menu.children.find(n=>n.ariaLabel===label);
     assert.ok(!item(header,"Catch up (1)").disabled,"one clean checkout remains eligible beside recovery");
-    assert.ok(!item(header,"Restore (1)").disabled);
+    assert.equal(item(header,"Restore (1)"),undefined,"primary recovery is not duplicated in overflow");
+    assert.ok(buttons(host).includes("Restore"));
     const web=menus.find(n=>n.ariaLabel==="Actions for web");
     assert.ok(item(web,"Catch up").disabled);
     assert.match(item(web,"Catch up").textContent,/Save or stash/);
     const api=menus.find(n=>n.ariaLabel==="Actions for api");
-    assert.ok(!item(api,"Catch up").disabled);
+    assert.ok(!item(api,"Check PR progress").disabled);
     const trigger=[...host.all()].find(n=>n.ariaLabel==="More actions for api");
     const event=key=>({key,preventDefault(){},stopPropagation(){}});
     calls.length=0;trigger.onkeydown(event("ArrowDown"));
     assert.equal(trigger.ariaExpanded,"true");
-    assert.equal(document.activeElement,item(api,"Catch up"));
+    assert.equal(document.activeElement,item(api,"Check PR progress"));
     api.onkeydown(event("Escape"));assert.equal(document.activeElement,trigger);
     assert.equal(calls.length,0,"opening and navigating menus dispatches nothing");
     nextResult={ok:true,result:{performed:true,repo:clean,code:0,json:{summary:"caught up"}}};
@@ -2742,9 +2744,28 @@ test("already dispatched repository steps are disabled in the alternative menu",
  try{
    nextResult={ok:true,result:{performed:false,repo:r}};
    let menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");
-   await menu.children.find(n=>n.ariaLabel==="Check PR progress").onclick();for(let i=0;i<6;i++)await settle();
+   const main=[...host.all()].find(n=>n.className?.includes("wtc-primary-action")&&n.textContent==="Check PR progress");
+   await main.onclick();for(let i=0;i<6;i++)await settle();
    menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");const sent=menu.children.find(n=>n.ariaLabel==="Check PR progress");
    assert.ok(sent.disabled);assert.match(sent.textContent,/Already sent/);
    calls.length=0;await sent.onclick();assert.equal(calls.length,0);
  }finally{view.dispose();nextResult=undefined;}
+});
+
+for(const kind of ["composer","panel"]) test(`responsive ${kind} actions surface available choices and keep overflow left`,async()=>{
+ const observers=[];globalThis.ResizeObserver=class{constructor(fn){this.fn=fn;observers.push(this)}observe(){}disconnect(){}};
+ const primary={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow",reason:"Inspect current PR",available:true};
+ const fix={step:"fix-checks",by:"agent",skill:"wtc",key:"api:fix",reason:"Fix checks",available:true};
+ const review={step:"address-review",by:"agent",skill:"wtc",key:"api:review",reason:"Address review",available:true};
+ const blocked={step:"merge-pr",by:"person",key:"api:merge",available:false,blocked:"Approval required"};
+ let view;
+ try{
+  const mounted=await mount(kind,collection([repo("api",{next:primary,choices:{actions:[primary,fix,review,blocked]}})]));view=mounted.view;const host=mounted.host;
+  const resize=width=>{for(const o of observers)o.fn([{contentRect:{width}}])};
+  resize(320);let row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children[0].className,"wtc-action-menu");assert.equal(row.children.at(-1).textContent,"Check PR progress");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,0);
+  resize(760);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,1);
+  resize(1100);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,2);assert.equal(row.children.at(-1).textContent,"Check PR progress");
+  const menu=row.children[0].children.find(n=>n.role==="menu");assert.deepEqual(menu.children.map(n=>n.ariaLabel),["Open pull request"]);assert.ok(menu.children[0].disabled);
+  calls.length=0;resize(320);assert.equal(calls.length,0,"resizing never dispatches an action");
+ }finally{view?.dispose();delete globalThis.ResizeObserver;}
 });
