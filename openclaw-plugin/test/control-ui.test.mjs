@@ -2763,8 +2763,8 @@ for(const kind of ["composer","panel"]) test(`responsive ${kind} actions surface
   const mounted=await mount(kind,collection([repo("api",{next:primary,choices:{actions:[primary,fix,review,blocked]}})]));view=mounted.view;const host=mounted.host;
   const resize=width=>{for(const o of observers)o.fn([{contentRect:{width}}])};
   resize(320);let row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children[0].className,"wtc-action-menu");assert.equal(row.children.at(-1).textContent,"Check PR progress");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,0);
-  resize(760);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,1);
-  resize(1100);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,2);assert.equal(row.children.at(-1).textContent,"Check PR progress");
+  resize(760);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,1);assert.equal(row.children.at(-2).textContent,"Fix checks");
+  resize(1100);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,2);assert.deepEqual(row.children.slice(1,-1).map(n=>n.textContent),["Address review","Fix checks"]);assert.equal(row.children.at(-1).textContent,"Check PR progress");
   const menu=row.children[0].children.find(n=>n.role==="menu");assert.deepEqual(menu.children.map(n=>n.ariaLabel),["Open pull request"]);assert.ok(menu.children[0].disabled);
   calls.length=0;resize(320);assert.equal(calls.length,0,"resizing never dispatches an action");
  }finally{view?.dispose();delete globalThis.ResizeObserver;}

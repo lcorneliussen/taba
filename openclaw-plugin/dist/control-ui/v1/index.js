@@ -690,8 +690,9 @@ function actionMenu(trigger, options, label, fail) {
     const left = (viewport?.offsetLeft ?? 0) + edge, top = (viewport?.offsetTop ?? 0) + edge;
     const right = left + (viewport?.width ?? globalThis.innerWidth ?? 1024) - 2 * edge, bottom = top + (viewport?.height ?? globalThis.innerHeight ?? 768) - 2 * edge;
     menu.style.maxWidth = `${right-left}px`; menu.style.maxHeight = `${bottom-top}px`;
+    const small = right - left <= 496; menu.style.width = small ? `${right-left}px` : "264px";
     const a = trigger.getBoundingClientRect(), box = menu.getBoundingClientRect();
-    menu.style.left = `${Math.max(left,Math.min(a.right-box.width,right-box.width))}px`;
+    menu.style.left = `${small ? left : Math.max(left,Math.min(a.right-box.width,right-box.width))}px`;
     menu.style.top = `${Math.max(top,Math.min(a.top-6-box.height >= top ? a.top-6-box.height : a.bottom+6,bottom-box.height))}px`;
     menu.style.visibility = "visible"; available[focusIndex]?.focus(); focusIndex = 0;
     if (!shown || !trigger.isConnected) return;
@@ -814,7 +815,7 @@ async function trackedRefresh(watch, sessionKey, say, currentSession = () => ses
 }
 
 const REPO_NEXT_WIDTH = 132, REPO_COLUMN_GAP = 10;
-export const inlineActionCapacity = (width, narrow = false) => narrow ? 1 : Math.max(1, Math.min(3, Math.floor(((width || 0) - 484) / 108)));
+export const inlineActionCapacity = (width, narrow = false) => narrow ? 1 : Math.max(1, Math.floor(((width || 0) - 484) / 108));
 const headerActionCapacity = width => Math.max(1, Math.min(4, Math.floor(((width || 0) - 300) / 108)));
 const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${actionWidth}px`, align: "end" }]
@@ -1238,7 +1239,7 @@ function collectionTables(v) {
     const extras = picker || batchRunning || reserved(r) || recoveryQueueBusy() ? [] : options.filter(o => !o.disabled && o.id !== primaryId).slice(0, inlineCapacity - 1);
     const overflow = options.filter(o => !extras.includes(o) && (o.id !== primaryId || o.disabled));
     const menu = overflow.length ? actionMenu(nextButton("⋯", `More actions for ${nameOf(r)}`, () => {}), overflow, `Actions for ${nameOf(r)}`, text => v.say(text, true)) : null;
-    return css(el("div", { className: "wtc-next-step" }, menu, ...extras.map(o => {const button=optionButton(o);button.className+=" wtc-inline-action";return button;}), main), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
+    return css(el("div", { className: "wtc-next-step" }, menu, ...[...extras].reverse().map(o => {const button=optionButton(o);button.className+=" wtc-inline-action";return button;}), main), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
   };
   function nextCell(r) {
     if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return actionSlot(r, recoveryButton(recoveryBusy(r) ? "Restoring…" : recoveryQueued(r) ? "Queued" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryQueueBusy()));
@@ -1430,7 +1431,7 @@ function collectionTables(v) {
     secondary.style.width = compact ? "36px" : "24px";
     secondary.style.flexShrink = "0";
     secondary.style.flexBasis = compact ? "36px" : "24px";
-    return css(el("span", { className: "wtc-action-toolbar" }, secondary, ...extras.map(o => { const button = optionButton(o); button.className += " wtc-toolbar-inline"; return button; }), slot), `display:inline-flex;align-items:baseline;gap:${compact ? 4 : 8}px;min-width:0;flex-wrap:nowrap;white-space:nowrap`);
+    return css(el("span", { className: "wtc-action-toolbar" }, secondary, ...[...extras].reverse().map(o => { const button = optionButton(o); button.className += " wtc-toolbar-inline"; return button; }), slot), `display:inline-flex;align-items:baseline;gap:${compact ? 4 : 8}px;min-width:0;flex-wrap:nowrap;white-space:nowrap`);
   }
   function publicationConfirmations(repos) {
     const pending = repos.filter(r => confirming.has(r.sessionKey));
