@@ -143,7 +143,8 @@ if [ "$(tr -d ' \n' < "$hdir/$pin_file" 2>/dev/null)" != "$from" ]; then
     git -C "$hdir" switch -q -c rehearsal-pin &&
     git -C "$hdir" add "$pin_file" &&
     git -C "$hdir" -c user.name=rehearsal -c user.email=rehearsal@localhost \
-      commit -q -m "rehearsal: pin $from"
+      -c commit.gpgsign=false -c core.hooksPath=/dev/null \
+      commit -q --no-verify -m "rehearsal: pin $from"
   }
   step "pin harness to $from" pin_from
 fi
