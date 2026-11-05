@@ -362,6 +362,34 @@ func TestStatusPRDraftMarkerFitsAcrossTheNumberCohort(t *testing.T) {
 	}
 }
 
+func TestStatusPRCompactRowsPreserveDraftAndConflictPriority(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	for _, merge := range []string{"UNKNOWN", "DIRTY"} {
+		for _, styled := range []bool{false, true} {
+			for _, width := range []int{24, 31, 39, 40, 60} {
+				target := "https://example.invalid/pull/7"
+				snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{{
+					Dir: "widget", BranchDisplay: "a-long-synthetic-topic", PR: &wtc.StatusPRFacts{
+						Number: "7", URL: target, Draft: true, Merge: merge,
+					},
+				}}}
+				lines := statusTUIRepoLines(snapshot, width, styled)
+				plain := ansi.Strip(lines[1])
+				if !strings.Contains(plain, "◇") || !strings.Contains(plain, "#7") || (merge == "DIRTY" && !strings.Contains(plain, "✗")) {
+					t.Fatalf("draft/conflict hidden at width %d styled %t: %q", width, styled, lines)
+				}
+				if ansi.StringWidth(lines[1]) > width {
+					t.Fatalf("compact row overflows width %d: %q", width, lines[1])
+				}
+				model := statusTUIModel{snapshot: snapshot, width: width, height: 20}
+				if got := model.buildClickTarget(statusTUIRepoLayout(snapshot, width).prStart(), 3); got != target {
+					t.Fatalf("compact draft click at width %d = %q", width, got)
+				}
+			}
+		}
+	}
+}
+
 func TestStatusPRSignalsKeepUnknownPendingAndReviewMeaning(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")

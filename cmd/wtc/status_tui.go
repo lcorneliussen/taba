@@ -819,7 +819,7 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 		l.name = 10
 	}
 	if width < 40 {
-		l.name, l.pr = 8, 8
+		l.name = 8
 		l.showSync, l.showBuilds = false, false
 		l.showTree = width >= 31
 	}
@@ -951,11 +951,23 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 		n = numberWidth[0]
 	}
 	cell := statusTUIPRNumberCell(pr.Number, pr.URL, n+2, styled, statusToneLink) + " " + statusTUIPRSuffix(pr, styled)
-	if statusTUIPRConflict(pr) && ansi.StringWidth(cell) > width {
-		// Keep the warning visible even when the number and signals do not fit.
-		marker, label := "✗ ", statusTUIPRNumber(pr.Number)
+	if (statusTUIPRConflict(pr) || pr.Draft) && ansi.StringWidth(cell) > width {
+		// Preserve PR state before optional signals when the full cell cannot fit.
+		marker, label := "", statusTUIPRNumber(pr.Number)
+		if statusTUIPRConflict(pr) {
+			marker = "✗ "
+			if styled {
+				marker = statusTUIStyle(marker, statusToneFailure)
+			}
+		}
+		if pr.Draft {
+			draft := "◇ "
+			if styled {
+				draft = statusTUIStyle(draft, statusToneDim)
+			}
+			marker += draft
+		}
 		if styled {
-			marker = statusTUIStyle(marker, statusToneFailure)
 			label = statusTUILinkCell(label, pr.URL, statusToneLabel)
 		}
 		if !styled {
