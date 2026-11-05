@@ -43,6 +43,19 @@ export function versionWarning(pluginVersion, wtcVersionOutput) {
   return `This card is the taba ${pluginVersion} plugin, but the gateway runs wtc ${m[1]}: run "wtc openclaw install" on the gateway host.`;
 }
 
+// Native records are authoritative; directory absence alone does not establish recovery.
+function worktreeRecovery(entry, sessionKey, records) {
+  const matches = records.filter(r => r.id === entry.worktree?.id);
+  const r = matches.length === 1 ? matches[0] : null;
+  if (!r || r.ownerKind !== "session" || r.ownerId !== sessionKey ||
+      r.path !== worktreeOf(entry) || r.repoRoot !== entry.worktree?.repoRoot ||
+      r.branch !== entry.worktree?.branch) return { state: "unknown", reason: "Native worktree ownership or location could not be verified" };
+  if (!Number.isFinite(r.removedAt)) return { state: "unknown", reason: "The native record is not evicted; inspect the missing checkout" };
+  if (!r.snapshotRef) return { state: "unavailable", reason: "No recovery snapshot is recorded" };
+  const key = createHash("sha256").update(JSON.stringify([r.id, r.ownerId, r.path, r.repoRoot, r.branch, r.removedAt, r.snapshotRef])).digest("hex");
+  return { state: "restorable", key, removedAt: r.removedAt };
+}
+
 const onPath = (program) => String(process.env.PATH ?? "").split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, program)));
 
 const warnedEnvConflicts = new Set();
@@ -447,6 +460,52 @@ export default {
       return wtcVersion.output;
     };
 
+    // Coalesce missing-checkout reads. Native listing may reconcile its own registry,
+    // but this plugin never restores, clones or touches activity while reading status.
+    let recoveryCache;
+    const recoveryRecords = (fresh = false) => {
+      if (fresh || !recoveryCache || Date.now() - recoveryCache.at > 60000) {
+        recoveryCache = { at: Date.now(), value: run(["openclaw", "worktrees", "list", "--json"], { timeoutMs: 30000 }).then(r => {
+          if (r.code !== 0) throw Error("Native worktree recovery status unavailable");
+          const out = JSON.parse(r.stdout);
+          if (!Array.isArray(out.worktrees)) throw Error("Native worktree recovery status unavailable");
+          return out.worktrees;
+        }) };
+      }
+      return recoveryCache.value;
+    };
+    const restoring = new Set();
+    api.session.controls.registerSessionAction({
+      id: "restore-checkout",
+      description: "Restore one evicted collection checkout from its native snapshot, preserving its recorded owner and destination.",
+      requiredScopes: ["operator.admin"],
+      async handler(action) {
+        const { ownerSessionKey, key } = action.payload ?? {};
+        if (!action.agentId || !action.sessionKey || typeof ownerSessionKey !== "string" || typeof key !== "string") return { ok: false, error: "A collection checkout and recovery key are required" };
+        const { children } = await collectionOf(action.agentId, action.sessionKey);
+        const { collectionName, task } = collectionIdentity(children);
+        const child = children.find(c => c.sessionKey === ownerSessionKey && collectionName(c.entry) === task);
+        if (!child?.entry.worktree?.id) return { ok: false, error: "The checkout is no longer in this collection" };
+        const entry = child.entry, id = entry.worktree.id;
+        if (restoring.has(id)) return { ok: false, error: "This checkout is already being restored" };
+        restoring.add(id);
+        try {
+          if (existsSync(path.join(worktreeOf(entry), ".git"))) return { ok: false, error: "The checkout is already present; refresh the collection" };
+          const current = worktreeRecovery(entry, ownerSessionKey, await recoveryRecords(true));
+          if (current.state !== "restorable" || current.key !== key) return { ok: false, error: "Recovery changed; refresh the collection before restoring" };
+          const fresh = await getSessionEntry({ agentId: action.agentId, sessionKey: ownerSessionKey });
+          if (!fresh || fresh.parentSessionKey !== entry.parentSessionKey || fresh.worktree?.id !== id || worktreeOf(fresh) !== worktreeOf(entry) || fresh.worktree?.repoRoot !== entry.worktree.repoRoot || fresh.worktree?.branch !== entry.worktree.branch) return { ok: false, error: "The checkout owner changed; refresh before restoring" };
+          if (fresh.hasActiveRun || fresh.hasActiveSubagentRun || fresh.activeRunIds?.length) return { ok: false, error: "Wait for this checkout's active run to finish before restoring" };
+          const result = await run(["openclaw", "worktrees", "restore", id, "--json"], { timeoutMs: 300000 });
+          if (result.code !== 0) return { ok: false, error: (result.stderr || result.stdout).trim().slice(-600) || "Native restore failed; refresh and inspect the saved snapshot" };
+          const restored = JSON.parse(result.stdout);
+          if (restored.id !== id || restored.path !== worktreeOf(entry) || restored.ownerId !== ownerSessionKey || restored.branch !== entry.worktree.branch || restored.removedAt != null || !existsSync(path.join(worktreeOf(entry), ".git"))) return { ok: false, error: "Native restore returned an unexpected result; inspect the checkout before retrying" };
+          return { ok: true, result: { message: "Checkout restored from its saved snapshot" } };
+        } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
+        finally { restoring.delete(id); recoveryCache = null; }
+      },
+    });
+
     const stateDir = api.runtime.state.resolveStateDir(process.env);
 
     // Repositories from the accounts the person connected that the gateway
@@ -661,6 +720,13 @@ export default {
         }))))
         .sort((a, b) => String(a.project ?? a.repo).localeCompare(String(b.project ?? b.repo)));
       result.repos = rows.filter((r) => !r.sub);
+      const missing = result.repos.filter(r => r.error === "checkout unavailable");
+      if (missing.length) {
+        try {
+          const records = await recoveryRecords();
+          for (const row of missing) row.recovery = worktreeRecovery(children.find(c => c.sessionKey === row.sessionKey).entry, row.sessionKey, records);
+        } catch { for (const row of missing) row.recovery = { state: "unknown", reason: "Native recovery status unavailable" }; }
+      }
       // Each sub-session with its checkouts, and per checkout how it stands
       // against the collection's: ↑ what the collection lacks, ↓ what it
       // lacks, its uncommitted files. Not against origin: a sub-session's

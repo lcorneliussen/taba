@@ -785,7 +785,8 @@ such as **Catch up 2 repos →** or **Do next (2) →** captures those exact ste
 Catch-up and local steps start directly. Publication selections show a preview
 and retain each repository's account/commit confirmation.
 
-**⋯** in the compact top bar (**Choose steps…** in the sidebar) reveals alternatives and mixed selection controls. Choose an
+The header **⋯** menu, in both the card and sidebar, lists **Choose steps…**
+for alternatives and mixed selection controls. Choose an
 action per repository, check its selection, or use **Select suggested**. Existing
 alternative choices are preserved. **Run selected** rechecks the exact targets.
 A changed head, base, worktree state or PR observation makes an old selection
@@ -886,3 +887,47 @@ repositories, but the section is not nested under the final repository row.
 Browser table labels use normal capitalization; the terminal keeps its uppercase
 headings. Visual review compares intended section regions with a separately
 recorded pixels-only grouping, rather than inferring hierarchy from the DOM alone.
+
+### Restore an evicted checkout
+
+When OpenClaw evicts an idle managed worktree but retains its snapshot, the
+Collection card and sidebar show **Evicted** and **Restore**. The header offers
+**Restore all** for the recoverable repositories, including while the card is
+collapsed. Restoration needs the person's gateway `operator.admin` permission.
+It runs sequentially through OpenClaw's native restore command, rechecks the
+recorded owner, destination, branch and snapshot, then refreshes status. Each
+repository's success or error appears in the Action log. If the conversation
+changes, queued repositories are left alone.
+
+Restore keeps the existing native record and session binding, including saved
+uncommitted changes. It does not fetch a newer branch, clone a replacement,
+start services or overwrite an occupied destination. A stale record, missing
+snapshot, changed branch or native permission failure is reported for inspection.
+A directory that is merely missing, with no verified recovery record, does not
+get a Restore action. Older hosts without recovery commands still show its
+repository identity and **No checkout**.
+
+Status refreshes never restore or extend activity. Recovery metadata uses a
+coalesced native worktree listing only while checkout rows are unavailable; the
+native service can reconcile its own registry during that listing. Restoration
+does not change OpenClaw's idle cleanup or snapshot retention policy.
+
+Repository actions use a shared fixed column: the main button and its `⋯` menu
+keep the same positions for Catch up, Commit changes and Restore. The menu
+shows available alternatives and explains blocked ones. If local changes keep
+catch-up out of the current plan, the menu says to save or stash them first;
+it does not override the plan or bypass the gateway's checks.
+
+The header `⋯` menu keeps collection-wide Catch up, Restore and push preparation
+available even when a different action occupies the main button. Counts include
+only eligible repositories; catch-up excludes dirty and unavailable checkouts.
+Pushes retain their personal confirmation. **Choose steps…** opens mixed
+selection across repositories. Merely opening or navigating a menu runs nothing.
+
+Action groups are right-aligned, with `⋯` on the left. The recommended action
+stays at the right edge. Wider views show additional available actions inline;
+narrower views move those choices into the menu. Unavailable alternatives stay
+in the menu with their reasons. Each repository uses the same action-column
+width, and space already exposed during the conversation is retained while
+work is running so progress does not shift the repository facts. Changing the
+viewport never runs or selects an action.
