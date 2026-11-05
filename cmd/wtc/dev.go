@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,42 +24,173 @@ import (
 // agents and panes started from here hand over again on their own.
 var delegatedFrom string
 
+var devAmbientExecutable string
+var devRunningGeneration string
+
+const devAmbientEnv = "WTC_DEV_AMBIENT_EXE"
+const devGenerationEnv = "WTC_DEV_GENERATION"
+const devStatusStateEnv = "WTC_DEV_STATUS_STATE"
+
+func restartStatusDev(binary, generation string, presentation statusTUIPresentation) error {
+	state, err := json.Marshal(presentation)
+	if err != nil {
+		return err
+	}
+	execute := func(target, currentGeneration string) error {
+		env := append(os.Environ(), devAmbientEnv+"="+devAmbientExecutable, devGenerationEnv+"="+currentGeneration, devStatusStateEnv+"="+string(state))
+		return syscall.Exec(target, os.Args, env)
+	}
+	if generation != "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ran, err := wtc.WithDevGeneration(ctx, wtc.FindCollectionRoot(cwd), generation, func(current *wtc.DevBuild) error {
+			return execute(current.Binary, current.Generation)
+		})
+		if ran || err != nil {
+			return err
+		}
+		// OFF or another source selection may have arrived while the TUI
+		// waited for its action to finish. Re-enter through the ambient CLI.
+		if devAmbientExecutable == "" {
+			return fmt.Errorf("dev selection changed; restart status with the selected CLI")
+		}
+		return execute(devAmbientExecutable, "")
+	}
+	return execute(binary, generation)
+}
+
+func takeStatusDevPresentation() *statusTUIPresentation {
+	raw := os.Getenv(devStatusStateEnv)
+	os.Unsetenv(devStatusStateEnv)
+	if raw == "" || len(raw) > 16384 {
+		return nil
+	}
+	var state statusTUIPresentation
+	if json.Unmarshal([]byte(raw), &state) != nil {
+		return nil
+	}
+	return &state
+}
+
 func takeDelegatedFrom() {
 	delegatedFrom = os.Getenv(wtc.DevBuildDelegatedEnv)
 	os.Unsetenv(wtc.DevBuildDelegatedEnv)
+	devAmbientExecutable = os.Getenv(devAmbientEnv)
+	os.Unsetenv(devAmbientEnv)
+	// The immutable executable path, not an inherited claim or mutable current
+	// pointer, names the code loaded in this process.
+	devRunningGeneration = ""
+	os.Unsetenv(devGenerationEnv)
+	if self, err := os.Executable(); err == nil && filepath.Base(filepath.Dir(filepath.Dir(self))) == "dev-generations" {
+		candidate := filepath.Base(filepath.Dir(self))
+		if _, err := hex.DecodeString(candidate); err == nil && len(candidate) == 64 {
+			devRunningGeneration = candidate
+		}
+	}
 }
 
 // handOverToDevBuild replaces this process with the collection's dev build
 // when that build is the same version as this one or newer. It returns only
 // when this binary should keep running.
-func handOverToDevBuild() {
+func handOverToDevBuild() error {
 	takeDelegatedFrom()
-	if delegatedFrom != "" || os.Getenv(wtc.DevBuildDisableEnv) == "off" {
-		return
+	if delegatedFrom != "" || os.Getenv(wtc.DevBuildDisableEnv) == "off" || devControlInvocation(os.Args[1:]) {
+		return nil
 	}
 	if _, err := semver.NewVersion(version); err != nil {
 		// An unversioned build ("dev") is already somebody's build.
-		return
+		return nil
 	}
 	dir, err := os.Getwd()
 	if err != nil {
-		return
+		return nil
 	}
-	build := wtc.ReadDevBuild(wtc.FindCollectionRoot(dir))
+	collection := wtc.FindCollectionRoot(dir)
+	if collection == "" {
+		return nil
+	}
+	follow, err := wtc.DevFollowConfiguration(collection)
+	if err != nil {
+		return fmt.Errorf("dev mode: %w (use dev mode off or WTC_DEV_BUILD=off to recover)", err)
+	}
+	if follow.Mode == "off" || strings.Contains(follow.Reason, "review-only") {
+		return nil
+	}
+	if follow.Active {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		follow, err = wtc.EnsureDevFollow(ctx, collection)
+		if err != nil {
+			return fmt.Errorf("dev build is not current: %w", err)
+		}
+		if !follow.Active {
+			return nil // Mode was disabled while this invocation waited.
+		}
+		if follow.Build == nil {
+			return fmt.Errorf("dev selection has no fresh build; retry")
+		}
+		if follow.Build.Generation == devRunningGeneration {
+			return nil
+		}
+		return execDevBuild(follow.Build)
+	}
+	build := wtc.ReadDevBuild(collection)
 	if build == nil || isDevBuildBinary(build) {
-		return
+		return nil
+	}
+	if build.Generation != "" {
+		return nil // An inactive follow generation is not a one-shot override.
 	}
 	if !wtc.DevBuildTakesOver(version, build) {
 		if term.IsTerminal(os.Stderr.Fd()) {
 			fmt.Fprintf(os.Stderr, branding.Text("{{command}}: dev build %s is older than %s; using %s ({{command}} dev install to rebuild)\n"), build.Version, version, version)
 		}
-		return
+		return nil
 	}
-	env := append(os.Environ(), wtc.DevBuildDelegatedEnv+"="+version)
-	// On success Exec does not return; on failure keep running this binary.
-	if err := syscall.Exec(build.Binary, os.Args, env); err != nil {
+	if err := execDevBuild(build); err != nil {
 		fmt.Fprintf(os.Stderr, branding.Text("{{command}}: cannot run dev build %s: %v\n"), build.Binary, err)
 	}
+	return nil
+}
+
+// Selection and recovery commands must work without building broken source.
+// Review commands never automatically run the candidate being verified.
+func devControlInvocation(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg == "dev" || arg == "review"
+	}
+	return false
+}
+
+func execDevBuild(build *wtc.DevBuild) error {
+	ambient := devAmbientExecutable
+	if ambient == "" {
+		ambient, _ = os.Executable()
+	}
+	env := append(os.Environ(), wtc.DevBuildDelegatedEnv+"="+version, devAmbientEnv+"="+ambient, devGenerationEnv+"="+build.Generation)
+	if build.Generation != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ran, err := wtc.WithDevGeneration(ctx, build.Collection, build.Generation, func(current *wtc.DevBuild) error {
+			return syscall.Exec(current.Binary, os.Args, env)
+		})
+		if ran || err != nil {
+			return err
+		}
+		state, err := wtc.DevFollowConfiguration(build.Collection)
+		if err != nil || !state.Active {
+			return err
+		}
+		return fmt.Errorf("dev selection changed; retry the command")
+	}
+	return syscall.Exec(build.Binary, os.Args, env)
 }
 
 // isDevBuildBinary says whether this process is the dev build itself, by file
@@ -127,10 +261,10 @@ func describeBuild(readInfo func() (*debug.BuildInfo, bool)) string {
 
 func addDevCommands(root *cobra.Command, asJSON *bool) {
 	dev := &cobra.Command{Use: "dev", Short: branding.Text("Run a collection-local build of {{command}} in place of the pinned release"),
-		Long: branding.Text("{{command}} dev install builds the wtc-cli checkout in this collection into .wtc/dev/wtc.\n") +
-			branding.Text("Any {{command}} started inside the collection then hands over to that build while it is the same version\n") +
-			"or newer, and runs itself again once it is newer than the build. Set WTC_DEV_BUILD=off to skip\n" +
-			"the handover for one command.", Args: cobra.NoArgs}
+		Long: branding.Text("{{command}} dev install builds a one-shot local artifact; a newer release can overtake it.\n") +
+			branding.Text("{{command}} dev mode on follows the selected checkout, rebuilding changes before new commands.\n") +
+			"Mode auto requires an explicit project convention; mode off disables local builds persistently.\n" +
+			"Uninstall also selects off. WTC_DEV_BUILD=off bypasses local builds for one invocation.", Args: cobra.NoArgs}
 	collectionRoot := func() (string, error) {
 		dir, err := os.Getwd()
 		if err != nil {
@@ -171,10 +305,18 @@ func addDevCommands(root *cobra.Command, asJSON *bool) {
 				return err
 			}
 			build := wtc.ReadDevBuild(root)
-			data := map[string]any{"running": version, "delegated_from": delegatedFrom, "dev_build": build}
+			follow, err := wtc.DevFollowConfiguration(root)
+			if err != nil {
+				return err
+			}
+			data := map[string]any{"running": version, "delegated_from": delegatedFrom, "dev_build": build, "follow": follow, "running_generation": devRunningGeneration}
 			summary := "no dev build in " + root
 			if build != nil {
 				summary = fmt.Sprintf("dev build %s from %s\n%s", build.Version, build.Source, devBuildEffect(build))
+			}
+			summary += fmt.Sprintf("\nmode: %s; %s", follow.Mode, follow.Reason)
+			if follow.Active {
+				summary += "following " + follow.Source
 			}
 			return emit(envelope{OK: true, Data: data, Summary: summary}, *asJSON)
 		}}
@@ -194,11 +336,40 @@ func addDevCommands(root *cobra.Command, asJSON *bool) {
 			}
 			return emit(envelope{OK: true, Data: map[string]bool{"removed": removed}, Summary: summary}, *asJSON)
 		}}
-	dev.AddCommand(install, status, uninstall)
+	var modeSource string
+	mode := &cobra.Command{Use: "mode <auto|on|off>", Short: "Follow local source automatically, explicitly, or disable it persistently", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			root, err := collectionRoot()
+			if err != nil {
+				return err
+			}
+			if err := wtc.SetDevMode(root, args[0], modeSource); err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Minute)
+			defer cancel()
+			state, err := wtc.EnsureDevFollow(ctx, root)
+			if err != nil {
+				return fmt.Errorf("mode saved; build is not current: %w", err)
+			}
+			return emit(envelope{OK: true, Data: state, Summary: fmt.Sprintf("dev mode %s: %s", state.Mode, state.Reason)}, *asJSON)
+		}}
+	mode.Flags().StringVar(&modeSource, "source", "", "Explicit checkout for mode on; never fetches or changes its branch")
+	capabilities := &cobra.Command{Use: "capabilities", Short: "Report this executable's local-build lifecycle protocol", Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return emit(envelope{OK: true, Data: map[string]int{"dev_follow": 1, "status_handover": 1}, Summary: "dev-follow 1; status-handover 1"}, *asJSON)
+		}}
+	dev.AddCommand(install, status, uninstall, mode, capabilities)
 	root.AddCommand(dev)
 }
 
 func devBuildEffect(build *wtc.DevBuild) string {
+	if build.Generation != "" {
+		if build.Generation == devRunningGeneration {
+			return "running this immutable local generation"
+		}
+		return "stored local generation; dev mode controls whether future commands use it"
+	}
 	if delegatedFrom != "" {
 		return "in effect: running it in place of " + delegatedFrom
 	}

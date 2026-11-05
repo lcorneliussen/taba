@@ -2,7 +2,9 @@ package wtc
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,10 +33,12 @@ const DevBuildDelegatedEnv = "WTC_DEV_DELEGATED_FROM"
 const DevBuildDisableEnv = "WTC_DEV_BUILD"
 
 type DevBuild struct {
-	Collection string `json:"collection"`
-	Binary     string `json:"binary"`
-	Version    string `json:"version"`
-	Source     string `json:"source,omitempty"`
+	Collection     string `json:"collection"`
+	Binary         string `json:"binary"`
+	Version        string `json:"version"`
+	Source         string `json:"source,omitempty"`
+	Generation     string `json:"generation,omitempty"`
+	FollowProtocol int    `json:"follow_protocol,omitempty"`
 }
 
 func devBuildDir(collection string) string {
@@ -74,6 +78,9 @@ func ReadDevBuild(collection string) *DevBuild {
 	dir, err := collectionDirectoryInput(collection, "dev")
 	if err != nil || safeGeneratedParent(collection, dir) != nil {
 		return nil
+	}
+	if build, present, err := readDevGeneration(collection, dir); present || err != nil {
+		return build
 	}
 	binary := filepath.Join(dir, "wtc")
 	info, err := os.Lstat(binary)
@@ -178,6 +185,10 @@ func goModule(path string) string {
 // InstallDevBuild builds source into the collection's dev build slot. The
 // binary is replaced atomically, so a running pane is never left without one.
 func InstallDevBuild(collection, source string) (*DevBuild, error) {
+	return installDevBuild(context.Background(), collection, source, os.Stderr)
+}
+
+func installDevBuild(ctx context.Context, collection, source string, output io.Writer) (*DevBuild, error) {
 	if goModule(filepath.Join(source, "go.mod")) != wtcModule {
 		return nil, fmt.Errorf("%s is not a wtc-cli checkout", source)
 	}
@@ -199,8 +210,8 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	tmp := filepath.Join(dir, ".wtc.tmp")
 	build := exec.Command("go", "build", "-ldflags", "-X main.version="+version, "-o", tmp, "./cmd/wtc")
 	build.Dir = source
-	build.Stdout, build.Stderr = os.Stderr, os.Stderr
-	if err := build.Run(); err != nil {
+	build.Stdout, build.Stderr = output, output
+	if err := runDevCompiler(ctx, build); err != nil {
 		os.Remove(tmp)
 		return nil, fmt.Errorf("go build: %w", err)
 	}
@@ -225,6 +236,11 @@ func UninstallDevBuild(collection string) (bool, error) {
 		if err := safeGeneratedParent(collection, dir); err != nil {
 			return false, err
 		}
+	}
+	// OFF lives outside the artifacts. A builder already in flight cannot
+	// publish after this returns; immutable generations stay for running actions.
+	if err := SetDevMode(collection, "off", ""); err != nil {
+		return false, err
 	}
 	removed := false
 	for _, dir := range dirs {

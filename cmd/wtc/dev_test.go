@@ -1,12 +1,115 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestDevFollowCLIOverridesSemverPreservesArgsAndCanExit(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a CLI and disposable source")
+	}
+	collection := t.TempDir()
+	source := filepath.Join(collection, "ext.wtc-cli")
+	if err := os.MkdirAll(filepath.Join(source, "cmd", "wtc"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(collection, "harness"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(path, text string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(text), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(collection, "harness", ".harness-repos.yml"), "schema_version: 1\nrepos: []\n")
+	write(filepath.Join(source, "go.mod"), "module github.com/lcorneliussen/wtc-cli\n\ngo 1.27.0\n")
+	main := filepath.Join(source, "cmd", "wtc", "main.go")
+	fixture := `package main
+import("fmt";"os";"strings";"path/filepath")
+var version="dev"
+func main(){if len(os.Args)==4&&os.Args[1]=="--json"&&os.Args[2]=="dev"&&os.Args[3]=="capabilities"{fmt.Print("{\"ok\":true,\"data\":{\"dev_follow\":1,\"status_handover\":1}}");return};if len(os.Args)>1&&os.Args[1]=="fail"{os.Exit(7)};fmt.Println("first:"+strings.Join(os.Args[1:],"|")+":"+filepath.Base(os.Args[0]))}
+`
+	write(main, fixture)
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.name", "Fixture"}, {"config", "user.email", "fixture@example.invalid"}, {"add", "."}, {"commit", "-qm", "Fixture"}, {"tag", "v0.1.0"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = source
+		if raw, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git fixture: %v %s", err, raw)
+		}
+	}
+	pinned := filepath.Join(t.TempDir(), "wtc")
+	buildVersioned(t, pinned, "9.0.0")
+	taba := filepath.Join(t.TempDir(), "taba")
+	if err := os.Symlink(pinned, taba); err != nil {
+		t.Fatal(err)
+	}
+	run := func(binary string, extraEnv []string, args ...string) (string, int) {
+		cmd := exec.Command(binary, args...)
+		cmd.Dir = collection
+		cmd.Env = append(os.Environ(), "GOROOT=", "NO_COLOR=", "GOWORK=off", "WTC_DEV_BUILD=", "WTC_DEV_DELEGATED_FROM=", "WTC_DEV_AMBIENT_EXE=", "WTC_DEV_GENERATION=")
+		cmd.Env = append(cmd.Env, extraEnv...)
+		raw, err := cmd.CombinedOutput()
+		if err == nil {
+			return string(raw), 0
+		}
+		if exit, ok := err.(*exec.ExitError); ok {
+			return string(raw), exit.ExitCode()
+		}
+		t.Fatal(err)
+		return "", -1
+	}
+	if out, code := run(pinned, nil, "dev", "mode", "on", "--source", source); code != 0 {
+		t.Fatalf("mode on: %d %s", code, out)
+	}
+	if out, code := run(taba, nil, "hello", "one two"); code != 0 || strings.TrimSpace(out) != "first:hello|one two:taba" {
+		t.Fatalf("handover identity/args: %d %s", code, out)
+	}
+	write(main, strings.ReplaceAll(fixture, "first:", "second:"))
+	if out, code := run(pinned, nil, "hello"); code != 0 || !strings.Contains(out, "second:hello:wtc") {
+		t.Fatalf("changed source not followed: %d %s", code, out)
+	}
+	if out, code := run(pinned, nil, "fail"); code != 7 {
+		t.Fatalf("exit forwarding: %d %s", code, out)
+	}
+	// Explicit verifier bypass and review commands never select candidate code.
+	if out, code := run(pinned, []string{"WTC_DEV_BUILD=off"}, "--version"); code != 0 || !strings.Contains(out, "9.0.0") {
+		t.Fatalf("trusted bypass redirected: %d %s", code, out)
+	}
+	if out, code := run(pinned, nil, "review", "--help"); code != 0 || strings.Contains(out, "second:") {
+		t.Fatalf("review command redirected: %d %s", code, out)
+	}
+	write(filepath.Join(collection, ".wtc-review-mode"), "review fixture")
+	if out, code := run(pinned, nil, "--version"); code != 0 || !strings.Contains(out, "9.0.0") {
+		t.Fatalf("review-only redirected: %d %s", code, out)
+	}
+	os.Remove(filepath.Join(collection, ".wtc-review-mode"))
+	write(main, "broken source")
+	if out, code := run(pinned, nil, "hello"); code == 0 || strings.Contains(out, "second:") {
+		t.Fatalf("stale code executed: %d %s", code, out)
+	}
+	if out, code := run(pinned, nil, "dev", "mode", "off"); code != 0 {
+		t.Fatalf("broken-source OFF: %d %s", code, out)
+	}
+	if out, code := run(pinned, nil, "--version"); code != 0 || !strings.Contains(out, "9.0.0") {
+		t.Fatalf("persistent OFF lost: %d %s", code, out)
+	}
+	if out, code := run(pinned, nil, "--json", "dev", "status"); code != 0 {
+		t.Fatalf("mode status: %d %s", code, out)
+	} else {
+		var body struct {
+			Data struct{ Follow struct{ Mode string } }
+		}
+		if json.Unmarshal([]byte(out), &body) != nil || body.Data.Follow.Mode != "off" {
+			t.Fatalf("status mode: %s", out)
+		}
+	}
+}
 
 func buildVersioned(t *testing.T, out, version string) {
 	t.Helper()

@@ -1,0 +1,618 @@
+package wtc
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+)
+
+const devPolicyFile = ".wtc-dev-mode.json"
+
+// DevMode is the only selection input. Generations and versions are build
+// observations, not additional release pins. An absent policy inherits AUTO.
+type DevMode struct {
+	Mode     string `json:"mode"`
+	Source   string `json:"source,omitempty"`
+	Revision string `json:"revision"`
+}
+
+type DevFollowState struct {
+	Mode   string    `json:"mode"`
+	Source string    `json:"source,omitempty"`
+	Active bool      `json:"active"`
+	Reason string    `json:"reason,omitempty"`
+	Build  *DevBuild `json:"build,omitempty"`
+}
+
+type devFailedBuild struct {
+	Generation string    `json:"generation"`
+	Revision   string    `json:"revision"`
+	Error      string    `json:"error"`
+	RetryAfter time.Time `json:"retry_after"`
+}
+
+func readPrivateDevFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || !ownedByCurrentUser(info) || info.Mode()&0022 != 0 || info.Size() > 64*1024 {
+		return nil, fmt.Errorf("unsafe dev state %s", path)
+	}
+	return os.ReadFile(path)
+}
+
+func readDevMode(collection string) (DevMode, error) {
+	var found *DevMode
+	for _, name := range []string{devPolicyFile, ".taba-dev-mode.json"} {
+		raw, err := readPrivateDevFile(filepath.Join(collection, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return DevMode{}, err
+		}
+		var policy DevMode
+		if err := json.Unmarshal(raw, &policy); err != nil {
+			return DevMode{}, fmt.Errorf("invalid dev mode: %w", err)
+		}
+		if policy.Mode != "auto" && policy.Mode != "on" && policy.Mode != "off" || policy.Revision == "" {
+			return DevMode{}, fmt.Errorf("invalid dev mode")
+		}
+		if found != nil && *found != policy {
+			return DevMode{}, fmt.Errorf("conflicting dev-mode aliases")
+		}
+		found = &policy
+	}
+	if found == nil {
+		return DevMode{Mode: "auto"}, nil
+	}
+	return *found, nil
+}
+
+func devReviewContext(collection string) bool {
+	for _, name := range reviewModeNames {
+		if _, err := os.Lstat(filepath.Join(collection, name)); !os.IsNotExist(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// DevFollowConfiguration only reads selection; it does not run Go or install.
+func DevFollowConfiguration(collection string) (DevFollowState, error) {
+	policy, err := readDevMode(collection)
+	state := DevFollowState{Mode: policy.Mode}
+	if err != nil {
+		return state, err
+	}
+	if policy.Mode == "off" {
+		state.Reason = "disabled explicitly"
+		return state, nil
+	}
+	if devReviewContext(collection) {
+		state.Reason = "review-only context; no dev redirection"
+		return state, nil
+	}
+	if policy.Mode == "on" {
+		state.Source, err = devSourcePath(policy.Source)
+		state.Active = err == nil
+		state.Reason = "explicit source"
+		return state, err
+	}
+	name, err := devAutoSource(collection)
+	if err != nil {
+		return state, err
+	}
+	if name == "" {
+		state.Reason = "no project dev convention"
+		return state, nil
+	}
+	c, err := OpenCollection(collection)
+	if err != nil {
+		return state, err
+	}
+	if _, err := c.Repository(name); err != nil {
+		return state, fmt.Errorf("dev auto_source must name a registered repository: %w", err)
+	}
+	source, err := DevBuildSource(collection)
+	if err != nil {
+		return state, err
+	}
+	identity, err := c.prRepositories().resolve(name)
+	if err != nil || identity == nil || identity.dir() == "" || filepath.Join(collection, identity.dir()) != source {
+		return state, fmt.Errorf("dev auto_source does not identify the unique CLI checkout")
+	}
+	state.Source, err = devSourcePath(source)
+	state.Active = err == nil
+	state.Reason = "project development convention"
+	return state, err
+}
+
+func devSourcePath(source string) (string, error) {
+	if source == "" {
+		return "", fmt.Errorf("dev source is missing")
+	}
+	abs, err := filepath.Abs(source)
+	if err != nil {
+		return "", err
+	}
+	entry, err := os.Lstat(abs)
+	if err != nil || entry.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("dev source must be an existing, unlinked checkout")
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(real)
+	if err != nil || !info.IsDir() || !ownedByCurrentUser(info) || info.Mode()&0022 != 0 {
+		return "", fmt.Errorf("unsafe dev source")
+	}
+	top, err := gitOutput("-C", real, "rev-parse", "--show-toplevel")
+	if canonical, e := filepath.EvalSymlinks(top); e == nil {
+		top = canonical
+	}
+	if err != nil || top != real {
+		return "", fmt.Errorf("dev source must be the checkout root")
+	}
+	return real, nil
+}
+
+// SetDevMode publishes OFF without waiting for compilation. A separate short
+// lock serializes the policy change with generation publication.
+func SetDevMode(collection, mode, source string) error {
+	if mode != "auto" && mode != "on" && mode != "off" {
+		return fmt.Errorf("mode must be auto, on or off")
+	}
+	if mode != "on" && source != "" {
+		return fmt.Errorf("--source requires mode on")
+	}
+	if mode == "on" {
+		var err error
+		if source == "" {
+			source, err = DevBuildSource(collection)
+		}
+		if err == nil {
+			source, err = devSourcePath(source)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-mode.lock"))
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	// Even recovery must not replace a link or special file. Malformed regular
+	// JSON can be repaired by explicitly selecting a new mode.
+	for _, name := range []string{devPolicyFile, ".taba-dev-mode.json"} {
+		if _, err := readPrivateDevFile(filepath.Join(collection, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	var revision [16]byte
+	if _, err := rand.Read(revision[:]); err != nil {
+		return err
+	}
+	data, _ := json.Marshal(DevMode{Mode: mode, Source: source, Revision: hex.EncodeToString(revision[:])})
+	if err := devAtomicJSON(filepath.Join(collection, devPolicyFile), data); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(collection, ".taba-dev-mode.json")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func devAtomicJSON(path string, data []byte) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".dev-state-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
+}
+
+func readDevGeneration(collection, dir string) (*DevBuild, bool, error) {
+	raw, err := readPrivateDevFile(filepath.Join(dir, "current.json"))
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, true, err
+	}
+	var build DevBuild
+	if err := json.Unmarshal(raw, &build); err != nil {
+		return nil, true, err
+	}
+	if err := validateDevGeneration(collection, dir, &build); err != nil {
+		return nil, true, err
+	}
+	return &build, true, nil
+}
+
+func validateDevGeneration(collection, dir string, build *DevBuild) error {
+	if build.FollowProtocol != 1 {
+		return fmt.Errorf("dev generation lacks follow capability; use dev install for one-shot builds")
+	}
+	if len(build.Generation) != 64 {
+		return fmt.Errorf("invalid dev generation")
+	}
+	if _, err := hex.DecodeString(build.Generation); err != nil {
+		return err
+	}
+	expected := filepath.Join(filepath.Dir(dir), "dev-generations", build.Generation, "wtc")
+	if build.Binary != expected || build.Collection != collection || safeGeneratedParent(collection, filepath.Dir(expected)) != nil {
+		return fmt.Errorf("unsafe dev generation path")
+	}
+	info, err := os.Lstat(expected)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 || info.Mode()&0022 != 0 || !ownedByCurrentUser(info) {
+		return fmt.Errorf("unsafe dev generation executable")
+	}
+	return nil
+}
+
+// EnsureDevFollow is the shared strict freshness path for startup and passive
+// TUI checks. Errors never present an expired artifact as a fresh executable.
+func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, error) {
+	state, err := DevFollowConfiguration(collection)
+	if err != nil || !state.Active {
+		return state, err
+	}
+	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-build.lock"))
+	if err != nil {
+		return state, err
+	}
+	defer unlock()
+	state, err = DevFollowConfiguration(collection)
+	if err != nil || !state.Active {
+		return state, err
+	}
+	policy, err := readDevMode(collection)
+	if err != nil {
+		return state, err
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		fingerprint, err := devFingerprint(ctx, state.Source)
+		if err != nil {
+			return state, err
+		}
+		dir, err := collectionDirectoryInput(collection, "dev")
+		if err != nil {
+			return state, err
+		}
+		if err := safeGeneratedParent(collection, dir); err != nil {
+			return state, err
+		}
+		if build, _, err := readDevGeneration(collection, dir); err != nil {
+			return state, err
+		} else if build != nil && build.Source == state.Source && build.Generation == fingerprint {
+			var selected DevFollowState
+			_, err := WithDevGeneration(ctx, collection, fingerprint, func(current *DevBuild) error {
+				selected, selected.Build = state, current
+				return nil
+			})
+			if err != nil {
+				return state, err
+			}
+			if selected.Build == nil {
+				current, err := DevFollowConfiguration(collection)
+				if err == nil && current.Active {
+					err = fmt.Errorf("dev selection changed during freshness check; retry")
+				}
+				return current, err
+			}
+			return selected, nil
+		}
+		if raw, err := readPrivateDevFile(filepath.Join(dir, "failure.json")); err == nil {
+			var failed devFailedBuild
+			if json.Unmarshal(raw, &failed) != nil {
+				return state, fmt.Errorf("invalid dev failure state")
+			}
+			if failed.Generation == fingerprint && failed.Revision == policy.Revision && time.Now().Before(failed.RetryAfter) {
+				return state, fmt.Errorf("last build failed; retry after %s or select mode on to retry now: %s", failed.RetryAfter.Format(time.RFC3339), failed.Error)
+			}
+		} else if !os.IsNotExist(err) {
+			return state, err
+		}
+		select {
+		case <-ctx.Done():
+			return state, ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
+		quiet, err := devFingerprint(ctx, state.Source)
+		if err != nil {
+			return state, err
+		}
+		if quiet != fingerprint {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return state, err
+		}
+		store := filepath.Join(filepath.Dir(dir), "dev-generations")
+		if err := safeGeneratedParent(collection, store); err != nil {
+			return state, err
+		}
+		if err := os.MkdirAll(store, 0700); err != nil {
+			return state, err
+		}
+		staging, err := os.MkdirTemp(store, ".building-")
+		if err != nil {
+			return state, err
+		}
+		var output bytes.Buffer
+		build, err := installDevBuild(ctx, staging, state.Source, &output)
+		if err == nil {
+			err = probeDevFollow(ctx, build.Binary)
+		}
+		if err != nil {
+			os.RemoveAll(staging)
+			text := output.String()
+			if len(text) > 4096 {
+				text = text[len(text)-4096:]
+			}
+			failure := fmt.Errorf("%w: %s", err, strings.TrimSpace(text))
+			data, _ := json.Marshal(devFailedBuild{Generation: fingerprint, Revision: policy.Revision, Error: failure.Error(), RetryAfter: time.Now().Add(30 * time.Second)})
+			// Failure metadata is diagnostic only and can never activate code.
+			_ = devAtomicJSON(filepath.Join(dir, "failure.json"), data)
+			return state, failure
+		}
+		after, err := devFingerprint(ctx, state.Source)
+		if err != nil || after != fingerprint {
+			os.RemoveAll(staging)
+			if err != nil {
+				return state, err
+			}
+			continue
+		}
+		publishUnlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-mode.lock"))
+		if err != nil {
+			os.RemoveAll(staging)
+			return state, err
+		}
+		current, modeErr := readDevMode(collection)
+		selected, configErr := DevFollowConfiguration(collection)
+		if modeErr != nil || configErr != nil || current != policy || !selected.Active || selected.Source != state.Source {
+			publishUnlock()
+			os.RemoveAll(staging)
+			return state, fmt.Errorf("dev mode changed during build; nothing published")
+		}
+		generationDir := filepath.Join(store, fingerprint)
+		build.Collection, build.Generation, build.FollowProtocol = collection, fingerprint, 1
+		build.Binary = filepath.Join(generationDir, "wtc")
+		// Never replace a published generation: a running action may still
+		// launch a child from its original immutable executable path.
+		if _, err := os.Lstat(generationDir); os.IsNotExist(err) {
+			err = os.Rename(filepath.Join(staging, ".wtc", "dev"), generationDir)
+			if err != nil {
+				publishUnlock()
+				os.RemoveAll(staging)
+				return state, err
+			}
+		} else if err != nil {
+			publishUnlock()
+			os.RemoveAll(staging)
+			return state, err
+		}
+		if err := validateDevGeneration(collection, dir, build); err != nil {
+			publishUnlock()
+			os.RemoveAll(staging)
+			return state, err
+		}
+		data, _ := json.Marshal(build)
+		err = devAtomicJSON(filepath.Join(dir, "current.json"), data)
+		publishUnlock()
+		os.RemoveAll(staging)
+		if err != nil {
+			return state, err
+		}
+		state.Build = ReadDevBuild(collection)
+		if state.Build == nil {
+			return state, fmt.Errorf("published dev generation is invalid")
+		}
+		return state, nil
+	}
+	return state, fmt.Errorf("dev source is still changing; retry after edits settle")
+}
+
+// WithDevGeneration serializes final delegation with OFF. Exec closes the
+// policy lock in the kernel, so OFF cannot complete before a stale delegation.
+func WithDevGeneration(ctx context.Context, collection, generation string, run func(*DevBuild) error) (bool, error) {
+	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-mode.lock"))
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	state, err := DevFollowConfiguration(collection)
+	if err != nil || !state.Active {
+		return false, err
+	}
+	build := ReadDevBuild(collection)
+	if build == nil || build.Generation != generation || build.Source != state.Source {
+		return false, nil
+	}
+	return true, run(build)
+}
+
+func runDevCompiler(ctx context.Context, command *exec.Cmd) error {
+	if err := command.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		_ = command.Process.Kill()
+		<-done
+		return ctx.Err()
+	}
+}
+
+func probeDevFollow(ctx context.Context, binary string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "--json", "dev", "capabilities")
+	command.Env = append(os.Environ(), DevBuildDisableEnv+"=off", DevBuildDelegatedEnv+"=")
+	raw, err := command.Output()
+	if err != nil {
+		return fmt.Errorf("local CLI cannot report follow capability; use dev install for one-shot builds: %w", err)
+	}
+	var capability struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			DevFollow      int `json:"dev_follow"`
+			StatusHandover int `json:"status_handover"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(raw, &capability) != nil || !capability.OK || capability.Data.DevFollow != 1 || capability.Data.StatusHandover != 1 {
+		return fmt.Errorf("local CLI lacks compatible follow/status handover; use dev install for a one-shot build")
+	}
+	return nil
+}
+
+// Go reports the actual selected source and embed inputs, including files
+// ignored by Git. No hand-maintained extension list can establish freshness.
+func devFingerprint(ctx context.Context, source string) (string, error) {
+	list := exec.CommandContext(ctx, "go", "list", "-deps", "-json", "./...")
+	list.Dir = source
+	raw, err := list.Output()
+	if err != nil {
+		return "", fmt.Errorf("cannot list dev build inputs: %w", err)
+	}
+	// Map paths to the package/module root whose descendants may be read.
+	files := map[string]string{filepath.Join(source, "go.mod"): source}
+	addModule := func(path string) error {
+		if path == "" {
+			return nil
+		}
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return err
+		}
+		files[canonical] = filepath.Dir(canonical)
+		sum := filepath.Join(filepath.Dir(canonical), "go.sum")
+		if _, err := os.Stat(sum); err == nil {
+			files[sum] = filepath.Dir(sum)
+		}
+		return nil
+	}
+	if err := addModule(filepath.Join(source, "go.mod")); err != nil {
+		return "", err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	for decoder.More() {
+		var pkg struct {
+			Dir                                                                                                                 string
+			GoFiles, CgoFiles, CFiles, CXXFiles, MFiles, HFiles, FFiles, SFiles, SwigFiles, SwigCXXFiles, SysoFiles, EmbedFiles []string
+			Module                                                                                                              *struct {
+				Dir, GoMod string
+				Main       bool
+				Replace    *struct{ Dir, Version, GoMod string }
+			}
+		}
+		if err := decoder.Decode(&pkg); err != nil {
+			return "", err
+		}
+		rel, err := filepath.Rel(source, pkg.Dir)
+		outside := err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+		mutable := pkg.Module != nil && (pkg.Module.Main || pkg.Module.Replace != nil && pkg.Module.Replace.Version == "")
+		if outside && !mutable {
+			continue
+		}
+		root, err := filepath.EvalSymlinks(pkg.Dir)
+		if err != nil {
+			return "", err
+		}
+		for _, group := range [][]string{pkg.GoFiles, pkg.CgoFiles, pkg.CFiles, pkg.CXXFiles, pkg.MFiles, pkg.HFiles, pkg.FFiles, pkg.SFiles, pkg.SwigFiles, pkg.SwigCXXFiles, pkg.SysoFiles, pkg.EmbedFiles} {
+			for _, name := range group {
+				files[filepath.Join(root, name)] = root
+			}
+		}
+		if pkg.Module != nil {
+			mod := pkg.Module.GoMod
+			if pkg.Module.Replace != nil && pkg.Module.Replace.GoMod != "" {
+				mod = pkg.Module.Replace.GoMod
+			}
+			if err := addModule(mod); err != nil {
+				return "", err
+			}
+		}
+	}
+	hash := sha256.New()
+	head, err := gitOutput("-C", source, "rev-parse", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintln(hash, head)
+	env := exec.CommandContext(ctx, "go", "env", "-json", "GOOS", "GOARCH", "CGO_ENABLED", "GOVERSION", "GOFLAGS", "GOWORK", "CC", "CXX", "CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS", "GOEXPERIMENT")
+	env.Dir = source
+	settings, err := env.Output()
+	if err != nil {
+		return "", err
+	}
+	hash.Write(settings)
+	var config map[string]string
+	if err := json.Unmarshal(settings, &config); err != nil {
+		return "", err
+	}
+	if work := config["GOWORK"]; work != "" && work != "off" {
+		work, err = filepath.EvalSymlinks(work)
+		if err != nil {
+			return "", err
+		}
+		files[work] = filepath.Dir(work)
+		if _, err := os.Stat(work + ".sum"); err == nil {
+			files[work+".sum"] = filepath.Dir(work)
+		}
+	}
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := safeGeneratedParent(files[name], filepath.Dir(name)); err != nil {
+			return "", err
+		}
+		info, err := os.Lstat(name)
+		if err != nil || !info.Mode().IsRegular() {
+			return "", fmt.Errorf("unsafe dev build input %s", name)
+		}
+		fmt.Fprintf(hash, "\x00%s\x00%d\x00", name, info.Size())
+		f, err := os.Open(name)
+		if err != nil {
+			return "", err
+		}
+		_, err = io.Copy(hash, f)
+		f.Close()
+		if err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}

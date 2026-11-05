@@ -1,8 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +16,119 @@ import (
 	"github.com/lcorneliussen/wtc-cli/internal/wtc"
 	"github.com/mattn/go-runewidth"
 )
+
+func TestStatusDevRestartWaitsForEveryOwnedOperation(t *testing.T) {
+	oldGeneration := devRunningGeneration
+	defer func() { devRunningGeneration = oldGeneration }()
+	devRunningGeneration = "old"
+	for _, busy := range []string{"action", "refresh", "runtime"} {
+		t.Run(busy, func(t *testing.T) {
+			m := statusTUIModel{width: 100, height: 20, devAllowed: true}
+			m.nextRunning, m.refreshing, m.runtimeReading = busy == "action", busy == "refresh", busy == "runtime"
+			updated, command := m.Update(statusDevMsg{state: wtc.DevFollowState{Active: true, Build: &wtc.DevBuild{Generation: "new", Binary: "/fixture/immutable-generation/wtc"}}})
+			m = updated.(statusTUIModel)
+			if command != nil || m.devRestart == nil || m.devRestartCommand() != nil {
+				t.Fatal("restart interrupted owned work")
+			}
+			m.nextRunning, m.refreshing, m.runtimeReading = false, false, false
+			updated, command = m.Update(statusTickMsg(time.Now()))
+			if command == nil {
+				t.Fatal("idle restart did not quit the terminal cleanly")
+			}
+			if _, ok := command().(tea.QuitMsg); !ok {
+				t.Fatal("restart did not go through orderly terminal shutdown")
+			}
+			if updated.(statusTUIModel).nextRunning {
+				t.Fatal("restart replayed an action")
+			}
+		})
+	}
+}
+
+func TestStatusDevErrorBlocksActionsAndKeepsNavigation(t *testing.T) {
+	var snapshot wtc.StatusSnapshot
+	if err := json.Unmarshal([]byte(`{"repos":[{"dir":"widget","next":{"step":"push","by":"wtc","key":"fixture"}}]}`), &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	m := statusTUIModel{width: 100, height: 12, showNext: true, snapshot: snapshot}
+	updated, _ := m.Update(statusDevMsg{err: errors.New("fixture compiler failed")})
+	m = updated.(statusTUIModel)
+	if !m.devBlocksActions() || !strings.Contains(m.View().Content, "compiler failed") {
+		t.Fatal("stale build is not visible or does not block action dispatch")
+	}
+	_, command := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if command != nil {
+		t.Fatal("failed freshness allowed action execution")
+	}
+	state := m.devPresentation()
+	raw, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "nextSelected") || strings.Contains(string(raw), "nextPending") || strings.Contains(string(raw), "nextRunning") {
+		t.Fatal("restart serialized executable or queued work")
+	}
+	resumed := statusTUIModel{width: 100, height: 12, snapshot: m.snapshot, devResume: &state}
+	resumed.restoreDevPresentation()
+	if !resumed.showNext || resumed.nextRunning || resumed.nextSelected != nil || resumed.nextPreview != nil || resumed.nextPending != nil {
+		t.Fatal("presentation restore lost mode or replayed action state")
+	}
+}
+
+// The real exec boundary is exercised in a subprocess. OFF is written after
+// a replacement was queued behind an action; the final selection must use the
+// ambient executable, never the stale queued candidate.
+func TestStatusDevQueuedRestartRevalidatesOff(t *testing.T) {
+	if root := os.Getenv("DEV_TEST_RESTART_ROOT"); root != "" {
+		if err := os.Chdir(root); err != nil {
+			t.Fatal(err)
+		}
+		devAmbientExecutable = filepath.Join(root, "ambient")
+		err := restartStatusDev(filepath.Join(root, "candidate"), strings.Repeat("a", 64), statusTUIPresentation{Next: true, Notice: "completed fixture action"})
+		t.Fatalf("exec returned: %v", err)
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "harness"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for path, text := range map[string]string{
+		filepath.Join(root, "harness", ".harness-repos.yml"): "repos: []\n",
+		filepath.Join(root, "ambient"):                       "#!/bin/sh\nprintf 'ambient:%s\\n' \"$WTC_DEV_STATUS_STATE\"\n",
+		filepath.Join(root, "candidate"):                     "#!/bin/sh\necho candidate-must-not-run\n",
+	} {
+		mode := os.FileMode(0644)
+		if filepath.Dir(path) == root {
+			mode = 0755
+		}
+		if err := os.WriteFile(path, []byte(text), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := wtc.SetDevMode(root, "off", ""); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestStatusDevQueuedRestartRevalidatesOff$")
+	command.Env = append(os.Environ(), "DEV_TEST_RESTART_ROOT="+root)
+	out, err := command.CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "ambient:") || !strings.Contains(string(out), "completed fixture action") || strings.Contains(string(out), "candidate-must-not-run") {
+		t.Fatalf("queued OFF handover: %v %s", err, out)
+	}
+}
+
+func TestStatusDevQuitDoesNotRestart(t *testing.T) {
+	m := statusTUIModel{devRestart: &statusDevRestart{binary: "/fixture/generation/wtc", generation: "new"}}
+	updated, command := m.Update(tea.KeyPressMsg{Code: 'q'})
+	final := updated.(statusTUIModel)
+	if command == nil {
+		t.Fatal("quit was ignored")
+	}
+	if _, ok := command().(tea.QuitMsg); !ok {
+		t.Fatal("quit did not stop status")
+	}
+	if final.devRestart != nil || final.devAutoExit {
+		t.Fatal("user quit would reexecute status")
+	}
+}
 
 func statusTestMessage(t *testing.T, command tea.Cmd) tea.Msg {
 	t.Helper()

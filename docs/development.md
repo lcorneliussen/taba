@@ -35,6 +35,66 @@ The dev build is run only if it is an executable owned by you and not writable
 by others. Plain `go build` binaries report version `dev` and never hand over.
 The handover itself needs a pinned release that includes it (0.1.41 or later).
 
+### Following a local checkout
+
+To rebuild local changes automatically for this collection:
+
+```sh
+wtc dev mode on                 # select the unique CLI sibling, including ext.wtc-cli
+wtc dev mode on --source /path/to/checkout
+wtc dev status                 # selected mode, source and stored/running generation
+wtc dev mode off               # persistent exit; use the ordinary selected CLI
+```
+
+`on` intentionally follows the selected source even if its version sorts below
+an installed release. It does not fetch, switch branches or merge changes: an
+older checkout stays that checkout. New invocations wait for a fresh successful
+build, or fail clearly instead of running known-stale local code. Go determines
+the source and embedded inputs; dirty edits, ignored embedded files and mutable
+local module/workspace dependencies participate in freshness checks.
+
+`auto` follows a unique verified CLI checkout only when the project's existing
+`wtc.toml` (or `taba.toml`) explicitly names its registered repository:
+
+```toml
+[dev]
+auto_source = "wtc-cli"
+```
+
+Use `wtc dev mode auto` to inherit this convention. A checkout present only as
+reference material does nothing without that explicit convention. Ambiguous or
+unsafe candidates are refused. Review-only collections and `review` commands
+never automatically delegate to candidate code. Immutable review verification
+must additionally use its explicit trusted executable with `WTC_DEV_BUILD=off`.
+An unversioned `go build` binary retains its existing no-delegation behavior.
+
+`off` overrides the project convention before source discovery or compilation.
+It persists separately from generated artifacts, including after `dev uninstall`.
+Uninstall removes the active artifact but retains immutable generations until
+collection retirement so running actions can finish from their original binary.
+Use `mode on` or `mode auto` explicitly to enable following again. The existing
+`WTC_DEV_BUILD=off` escape works even with broken source; mode/status/uninstall
+commands do not require a successful rebuild. Legacy one-shot `dev install`
+does not undo persistent off.
+
+An updated status TUI checks in the background, shows rebuilding or failure,
+and keeps its last working display while a build fails. It blocks new actions
+on known-stale code. Successful replacements restart in the same terminal only
+after active actions and reads finish. Navigation is restored; confirmations
+and queued actions are never replayed. Disabling follows the same idle handover
+back to the original selected executable. A TUI started directly from a local
+artifact without an ambient executable needs an explicit restart to exit it.
+Existing older TUIs need one initial restart before they can use this lifecycle.
+Follow mode probes the built CLI's structured lifecycle capability before
+publishing it. An older checkout without this support is refused for following;
+use the existing one-shot `dev install` workflow for it instead. A restart alone
+cannot add automatic reload support to older source. A failed capability check
+leaves the ordinary CLI's mode/status/off controls available and activates no
+replacement generation.
+
+This uses normal CLI invocations and the TUI timer, not a permanent daemon; no
+process means no continuous background build. Poltergeist is not required.
+
 Tagged releases build macOS and Linux binaries through GoReleaser. Generic
 instructions and skills live under `internal/wtc/defaults/` and are embedded
 in the CLI. Project-owned overrides belong in harness repositories.
