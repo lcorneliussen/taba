@@ -1330,7 +1330,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 			label = statusTUISafe(row.Title)
 		}
 		if label == "" {
-			label = "PR #" + row.Number
+			label = "PR " + statusTUIPRNumber(row.Number)
 		}
 		state := "open"
 		merged := statusTUIMergedPR(row)

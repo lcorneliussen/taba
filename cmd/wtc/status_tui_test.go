@@ -333,7 +333,7 @@ func TestStatusPRNumbersAlignLinksAndSignalsAcrossTheListedCohort(t *testing.T) 
 							t.Fatalf("table signals do not align with meanings: %q", prs)
 						}
 					}
-					if ansi.StringWidth(line) > width {
+					if ansi.StringWidth(line) > width || (!styled && strings.Contains(line, "\x1b")) {
 						t.Fatalf("table overflow: %q", line)
 					}
 				}
