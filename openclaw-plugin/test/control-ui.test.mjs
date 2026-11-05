@@ -113,6 +113,7 @@ let serviceLogsResult = { ok: true, result: { logs: "" } };
 let preserved = {};
 let catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
 let nextResult;
+let restoreResult;
 let githubPublishResult = { status: "needs_confirmation", requestId: "req-1" };
 let githubConfirmResult;
 let githubStatusResult;
@@ -163,6 +164,7 @@ const hostRequest = async (method, params) => {
   if (method === "plugins.sessionAction" && params.actionId === "svc-logs") return typeof serviceLogsResult === "function" ? serviceLogsResult(params) : serviceLogsResult;
   if (method === "plugins.sessionAction" && params.actionId === "catch-up") return catchUpResult;
   if (method === "plugins.sessionAction" && params.actionId === "next") return typeof nextResult === "function" ? nextResult(params) : nextResult;
+  if (method === "plugins.sessionAction" && params.actionId === "restore-checkout") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
   if (method === "sessions.delete") return { ok: true, key: params.key, deleted: true, archived: [], ...(preserved[params.key] ? { worktreePreserved: preserved[params.key] } : {}) };
   if (method === "sessions.github.publish") return typeof githubPublishResult === "function" ? githubPublishResult(params) : githubPublishResult;
   if (method === "sessions.github.confirm") return typeof githubConfirmResult === "function" ? githubConfirmResult(params) : githubConfirmResult ?? { status: "published", url: "https://github.com/octo/api/pull/7" };
@@ -175,7 +177,7 @@ const contexts = new WeakMap();
 const detailViews = [];
 afterEach(() => { for (const view of detailViews.splice(0)) view.dispose(); });
 // Include full outcome text from accessible status/details labels in feedback assertions.
-const readable = node => [node.textContent, ...[...node.all()].filter(n => n.className?.includes("wtc-header-feedback") || n.className?.includes("wtc-batch-result") || n.className === "wtc-step-status").map(n => n.ariaLabel ?? n.title ?? "")].join("\n");
+const readable = node => [node.textContent, ...[...node.all()].filter(n => n.className?.includes("wtc-header-feedback") || n.className?.includes("wtc-batch-result") || n.className?.split(" ").includes("wtc-step-status")).map(n => n.ariaLabel ?? n.title ?? "")].join("\n");
 async function reviewAction(host) {
   let action = [...host.all()].find(n => n.tagName === "BUTTON" && n.textContent === "Review PR text");
   if (action) return action;
@@ -239,7 +241,9 @@ const tables = (node) => [...node.all()].filter((n) => n.className === "wtc-tabl
     // A choice reads as its prompt, not its options.
     const pick = [...c.all()].find((n) => n.tagName === "SELECT");
     if (pick) return pick.children[0].textContent;
-    const tunnel = [...c.all()].find(n => n.ariaHasPopup === "menu");
+    const action = [...c.all()].find(n => n.className?.split(" ").includes("wtc-next-step"));
+    if (action) return action.children.find(n=>n.className?.includes("wtc-primary-action"))?.textContent ?? "";
+    const tunnel = [...c.all()].find(n => n.className === "wtc-tunnel-trigger");
     return tunnel ? "+" : c.textContent;
   }));
   return rows;
@@ -675,13 +679,14 @@ test("publication keeps the successful PR result and shows a local-status warnin
   }
 });
 
-test("Bitbucket dirty files offer local commits instead of an empty push", async () => {
+test("Bitbucket dirty files offer commits; push appears only as a disabled alternative", async () => {
   bitbucket = { user: "ada@example.com", name: "Ada" };
   for (const kind of ["composer", "panel"]) {
     const { host, view } = await mount(kind, collection([repo("docs", { forge: "bitbucket", dirty: 2, ahead: 3, unpublished: 0, published: true })]));
     try {
       assert.ok([...host.all()].some((n) => n.tagName === "BUTTON" && n.textContent === "Commit changes"));
-      assert.equal([...host.all()].some((n) => n.tagName === "BUTTON" && /to push/.test(n.title)), false);
+      const pushes=[...host.all()].filter(n=>n.tagName==="BUTTON"&&/to push/.test(n.title));
+      assert.ok(pushes.every(n=>n.disabled&&n.role==="menuitem"),"only disabled menu explanations may mention a push; no executable empty push");
     } finally { view.dispose(); }
   }
   bitbucket = undefined;
@@ -989,7 +994,7 @@ test("panel: a new tunnel, and one whose client is missing", async () => {
   const { host, view } = await mount("panel", collection([repo("api")], [
     { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" },
   ]));
-  const pick = [...host.all()].find((n) => n.role === "menu");
+  const pick = [...host.all()].find((n) => n.className === "wtc-tunnel-menu");
   // The gateway's portal first; without tunnel clients, the others are
   // installed first, and Tailscale is not offered on a personal tailnet.
   assert.deepEqual(pick.children.map((o) => o.value), ["gateway", "cloudflare", "ngrok", "devtunnel"]);
@@ -1019,13 +1024,13 @@ test("composer: start and stop all only with more than one service", async () =>
 test("panel: the ways to a service", async () => {
   const web = { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" };
   const team = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["tailscale", "cloudflare"], teamTailnet: true });
-  const pick = [...team.host.all()].find((n) => n.role === "menu");
+  const pick = [...team.host.all()].find((n) => n.className === "wtc-tunnel-menu");
   assert.deepEqual(pick.children.map((o) => o.ariaLabel),
     ["Gateway · OpenClaw portal", "Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Tailscale · team tailnet"]);
   team.view.dispose();
   // Without portal ingress, the gateway's portal comes last, marked.
   const bare = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["cloudflare"], portalIngress: false });
-  const choice = [...bare.host.all()].find((n) => n.role === "menu");
+  const choice = [...bare.host.all()].find((n) => n.className === "wtc-tunnel-menu");
   assert.deepEqual(choice.children.map((o) => o.ariaLabel),
     ["Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Gateway · OpenClaw portal · needs ingress"]);
   bare.view.dispose();
@@ -1052,7 +1057,7 @@ test("panel: a portal of the gateway beside its service", async () => {
   listed.view.dispose();
   portals = [{ ...portals[0], id: "p42201", url: "http://172.30.0.2:41553/?openclaw_portal=t" }];
   // Open already: not offered again.
-  assert.equal([...open.host.all()].find((n) => n.role === "menu").children.some((o) => o.value === "gateway"), false);
+  assert.equal([...open.host.all()].find((n) => n.className === "wtc-tunnel-menu").children.some((o) => o.value === "gateway"), false);
   calls.length = 0;
   titled(open.host, "Close the portal").onclick({ preventDefault() {}, stopPropagation() {} });
   await settle();
@@ -1494,7 +1499,7 @@ const withChoices = (name, kind = "fix-checks") => {
   return repo(name, { next: step, choices: { recommended: step.key, actions: [{ ...step, available: true }, { ...alternative, available: true }, { ...step, step: "review", key: `${name}:review`, available: false, blocked: "No review adapter" }] } });
 };
 const clickText = async (host, text) => {
-  const b = [...host.all()].find((n) => n.tagName === "BUTTON" && (n.textContent === text || text === "Catch up 2 repos →" && n.textContent === "Catch up 2" || text === "Choose steps…" && n.title === "Choose alternatives or combine steps across repositories" || text === "Cancel queued" && n.title === "Stop queued dispatches; active work continues" || text === "Allow retry" && n.title === "Check the conversation before retrying unchanged work"));
+  const b = [...host.all()].find((n) => n.tagName === "BUTTON" && (n.textContent === text || text === "Catch up 2 repos →" && n.textContent === "Catch up 2" || text === "Choose steps…" && n.ariaLabel === "Choose steps…" || text === "Cancel queued" && n.title === "Stop queued dispatches; active work continues" || text === "Allow retry" && n.title === "Check the conversation before retrying unchanged work"));
   assert.ok(b, text); b.onclick({ preventDefault() {}, stopPropagation() {} });
   for (let i = 0; i < 6; i++) await settle();
 };
@@ -2225,7 +2230,7 @@ test("sidebar Review push explicitly reveals the temporary section without autom
     assert.equal(scrolled[0].node.className,"wtc-transient-actions");
     assert.equal(scrolled[0].options.block,"nearest");
     scrolled.length=0;
-    await [...host.all()].find(n=>n.tagName === "BUTTON" && n.textContent === "Choose steps…").onclick();
+    await [...host.all()].find(n=>n.tagName === "BUTTON" && n.ariaLabel === "Choose steps…").onclick();
     assert.equal(scrolled.length,1,"explicit selection also reveals its controls");
     assert.equal(scrolled[0].node.className,"wtc-transient-actions");
   } finally {view.dispose();personal=null;if(previous)Node.prototype.scrollIntoView=previous;else delete Node.prototype.scrollIntoView;}
@@ -2491,8 +2496,8 @@ test("tunnel menu keys navigate without starting a tunnel, and Escape restores i
   const {host,view}=await mount("composer", collection([repo("api")],[{group:"api/web",repo:"api",kind:"service",label:"preview",state:"ready",url:"http://127.0.0.1:42201"}]));
   const oldWidth=globalThis.innerWidth; globalThis.innerWidth=320;
   try {
-    const trigger=[...host.all()].find(n=>n.ariaHasPopup==="menu");
-    const menu=[...host.all()].find(n=>n.role==="menu");
+    const trigger=[...host.all()].find(n=>n.className==="wtc-tunnel-trigger");
+    const menu=[...host.all()].find(n=>n.className==="wtc-tunnel-menu");
     const key=key=>({key,preventDefault(){},stopPropagation(){}});
     calls.length=0;
     trigger.onkeydown(key("ArrowUp")); await settle();
@@ -2613,4 +2618,154 @@ for (const kind of ["composer", "panel"]) test(`${kind}: an action refresh from 
     assert.equal(refresh.isConnected, true);
     assert.equal(document.activeElement, refresh);
   } finally { release({ ok: true, result: data }); controlledCollection = undefined; view.dispose(); }
+});
+
+for (const kind of ["composer", "panel"]) test(`native checkout recovery from ${kind} logs errors and refreshes successes`, async () => {
+  const r=repo("api",{error:"checkout unavailable",recovery:{state:"restorable",key:"recovery-key",removedAt:1000}});
+  const key=`agent:main:restore-${kind}`;
+  const {host,view}=await mount(kind,collection([r]),undefined,key);
+  try {
+    assert.ok(texts(host).some(t=>t.includes("Evicted")));
+    const button=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore"&&n.title.startsWith("Restore api from"));
+    assert.ok(button());
+    let finish;restoreResult=new Promise(resolve=>{finish=resolve});
+    button().click();await settle();
+    assert.ok(buttons(host).includes("Restoring…"));
+    assert.equal(calls.at(-1).actionId,"restore-checkout");
+    assert.deepEqual(calls.at(-1).payload,{ownerSessionKey:r.sessionKey,key:"recovery-key"});
+    finish({ok:false,error:"missing scope: operator.admin"});await settle();await settle();
+    assert.ok(readable(host).includes("operator.admin"),"permission failure remains accessible in result details");
+    restoreResult=()=>{collections.set(key,collection([repo("api")]));return {ok:true,result:{message:"Checkout restored from its saved snapshot"}}};
+    button().click();await settle();await settle();
+    assert.ok(!texts(host).some(t=>t==="Evicted"));
+    assert.ok(!button(),"the refreshed row no longer offers recovery");
+  } finally {view.dispose();restoreResult=undefined;}
+});
+
+test("recovery without a recorded snapshot never offers Restore", async () => {
+  const {host,view}=await mount("panel",collection([repo("api",{error:"checkout unavailable",recovery:{state:"unavailable",reason:"No recovery snapshot is recorded"}})]));
+  try{assert.ok(!buttons(host).includes("Restore"));assert.ok(texts(host).some(t=>t.includes("Snapshot unavailable")));}finally{view.dispose();}
+});
+
+test("collapsed restore-all stays sequential, records partial failure and cancels queued work on switch", async () => {
+  const missing=name=>repo(name,{error:"checkout unavailable",recovery:{state:"restorable",key:name}});
+  const key="agent:main:restore-queue";
+  const {host,view}=await mount("composer",collection([missing("api"),missing("web")]),undefined,key);
+  const requests=[];let finish;
+  restoreResult=params=>{requests.push(params);return new Promise(resolve=>{finish=resolve})};
+  try {
+    const all=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all");assert.ok(all,"collapsed toolbar exposes recovery");
+    all.click();await settle();assert.equal(requests.length,1);
+    const primary=[...host.all()].find(n=>n.className?.startsWith("wtc-toolbar-primary"));
+    assert.ok(primary.textContent.includes("Restoring 1/2"));
+    const queued=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Queued");
+    assert.ok(queued?.disabled,"waiting target is visibly queued and disabled");
+    await all.onclick();assert.equal(requests.length,1,"stale second click dispatches nothing");
+    assert.ok(readable(host).includes("already running"));
+    finish({ok:false,error:"Snapshot unavailable"});await settle();await settle();
+    assert.equal(requests.length,2,"second target starts only after first result and refresh");
+    assert.equal(requests[1].payload.ownerSessionKey,"agent:main:owner:web");
+    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    assert.ok(!readable(host).includes("Restoring…"));
+    const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
+    try{assert.ok(readable(log.host).includes("api: restore failed"));assert.ok(readable(log.host).includes("web: restored"));}finally{log.view.dispose();}
+  }finally{view.dispose();restoreResult=undefined;}
+  const other=await mount("composer",collection([missing("api"),missing("web")]),undefined,"agent:main:restore-switch");
+  requests.length=0;
+  restoreResult=params=>{requests.push(params);return new Promise(resolve=>{finish=resolve})};
+  try{
+    [...other.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all").click();await settle();
+    collections.set("agent:main:replacement",collection([repo("docs")]));
+    other.context.props.sessionKey="agent:main:replacement";other.view.update(other.context);await settle();
+    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    assert.equal(requests.length,1,"switch cancels the second captured target");
+    assert.ok(!readable(other.host).includes("api: restored"),"old result cannot appear in new conversation");
+  }finally{other.view.dispose();restoreResult=undefined;}
+});
+
+test("evicted rows do not hide a prepared publication in the header", async () => {
+  personal={state:"connected",account:{login:"demo"},generation:"g1"};
+  const step={step:"push",by:"wtc",approve:"person",gateway:"github_publish",key:"api:push:h1",reason:"Push local commits"};
+  const {host,view}=await mount("composer",collection([repo("api",{unpublished:1,next:step,choices:{actions:[{...step,available:true}]}}),repo("web",{error:"checkout unavailable",recovery:{state:"restorable",key:"web"}})]));
+  try{
+    await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^1 commit to push/.test(n.title)).onclick();
+    const primary=[...host.all()].find(n=>n.className?.startsWith("wtc-toolbar-primary"));
+    assert.ok(primary.textContent.includes("Review push"),"prepared confirmation takes precedence over recovery");
+  }finally{view.dispose();personal=null;}
+});
+
+for (const kind of ["composer", "panel"]) test(`mixed recovery and checkout actions stay available in ${kind} menus`, async () => {
+  const step={step:"catch-up",by:"wtc",approve:"agent",command:["wtc","catch-up"],key:"api:catch-up:head",reason:"12 new on main"};
+  const follow={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+  const clean=repo("api",{behind:12,next:step,choices:{actions:[{...step,available:true},follow]}});
+  const commit={step:"commit",by:"agent",skill:"wtc",key:"web:commit:head",reason:"Save local changes"};
+  const dirty=repo("web",{dirty:2,behind:7,next:commit,choices:{actions:[{...commit,available:true}]}});
+  const missing=repo("docs",{error:"checkout unavailable",recovery:{state:"restorable",key:"docs"}});
+  const {host,view}=await mount(kind,collection([clean,dirty,missing]));
+  try{
+    const menus=[...host.all()].filter(n=>n.className==="wtc-context-menu");
+    const header=menus.find(n=>n.ariaLabel==="Collection actions");
+    const item=(menu,label)=>menu.children.find(n=>n.ariaLabel===label);
+    assert.ok(!item(header,"Catch up (1)").disabled,"one clean checkout remains eligible beside recovery");
+    assert.equal(item(header,"Restore (1)"),undefined,"primary recovery is not duplicated in overflow");
+    assert.ok(buttons(host).includes("Restore"));
+    const web=menus.find(n=>n.ariaLabel==="Actions for web");
+    assert.ok(item(web,"Catch up").disabled);
+    assert.match(item(web,"Catch up").textContent,/Save or stash/);
+    const api=menus.find(n=>n.ariaLabel==="Actions for api");
+    assert.ok(!item(api,"Check PR progress").disabled);
+    const trigger=[...host.all()].find(n=>n.ariaLabel==="More actions for api");
+    const event=key=>({key,preventDefault(){},stopPropagation(){}});
+    calls.length=0;trigger.onkeydown(event("ArrowDown"));
+    assert.equal(trigger.ariaExpanded,"true");
+    assert.equal(document.activeElement,item(api,"Check PR progress"));
+    api.onkeydown(event("Escape"));assert.equal(document.activeElement,trigger);
+    assert.equal(calls.length,0,"opening and navigating menus dispatches nothing");
+    nextResult={ok:true,result:{performed:true,repo:clean,code:0,json:{summary:"caught up"}}};
+    await item(header,"Catch up (1)").onclick(event());for(let i=0;i<6;i++)await settle();
+    const invoked=calls.filter(c=>c.actionId==="next");assert.equal(invoked.length,1);
+    assert.equal(invoked[0].payload.ownerSessionKey,clean.sessionKey);
+    assert.equal(invoked[0].payload.approveCatchUp,true);
+    assert.ok(!calls.some(c=>c.actionId==="restore-checkout"),"choosing catch-up does not restore another row");
+  }finally{view.dispose();nextResult=undefined;}
+});
+
+test("blocked repository alternatives remain visible and cannot dispatch", async()=>{
+ const step={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+ const r=repo("api",{next:step,choices:{actions:[step,{step:"review",by:"agent",skill:"wtc-local-review",key:"api:review:head",available:false,blocked:"Independent review adapter unavailable"}]}});
+ const {host,view}=await mount("panel",collection([r]));
+ try{const menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");const blocked=menu.children.find(n=>n.ariaLabel==="Run independent review");assert.ok(blocked.disabled);assert.match(blocked.textContent,/adapter unavailable/);calls.length=0;await blocked.onclick();assert.equal(calls.length,0);}finally{view.dispose();}
+});
+
+test("already dispatched repository steps are disabled in the alternative menu", async()=>{
+ const step={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+ const r=repo("api",{next:step,choices:{actions:[step]}});
+ const {host,view}=await mount("panel",collection([r]));
+ try{
+   nextResult={ok:true,result:{performed:false,repo:r}};
+   let menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");
+   const main=[...host.all()].find(n=>n.className?.includes("wtc-primary-action")&&n.textContent==="Check PR progress");
+   await main.onclick();for(let i=0;i<6;i++)await settle();
+   menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");const sent=menu.children.find(n=>n.ariaLabel==="Check PR progress");
+   assert.ok(sent.disabled);assert.match(sent.textContent,/Already sent/);
+   calls.length=0;await sent.onclick();assert.equal(calls.length,0);
+ }finally{view.dispose();nextResult=undefined;}
+});
+
+for(const kind of ["composer","panel"]) test(`responsive ${kind} actions surface available choices and keep overflow left`,async()=>{
+ const observers=[];globalThis.ResizeObserver=class{constructor(fn){this.fn=fn;observers.push(this)}observe(){}disconnect(){}};
+ const primary={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow",reason:"Inspect current PR",available:true};
+ const fix={step:"fix-checks",by:"agent",skill:"wtc",key:"api:fix",reason:"Fix checks",available:true};
+ const review={step:"address-review",by:"agent",skill:"wtc",key:"api:review",reason:"Address review",available:true};
+ const blocked={step:"merge-pr",by:"person",key:"api:merge",available:false,blocked:"Approval required"};
+ let view;
+ try{
+  const mounted=await mount(kind,collection([repo("api",{next:primary,choices:{actions:[primary,fix,review,blocked]}})]));view=mounted.view;const host=mounted.host;
+  const resize=width=>{for(const o of observers)o.fn([{contentRect:{width}}])};
+  resize(320);let row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children[0].className,"wtc-action-menu");assert.equal(row.children.at(-1).textContent,"Check PR progress");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,0);
+  resize(760);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,1);assert.equal(row.children.at(-2).textContent,"Fix checks");
+  resize(1100);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,2);assert.deepEqual(row.children.slice(1,-1).map(n=>n.textContent),["Address review","Fix checks"]);assert.equal(row.children.at(-1).textContent,"Check PR progress");
+  const menu=row.children[0].children.find(n=>n.role==="menu");assert.deepEqual(menu.children.map(n=>n.ariaLabel),["Open pull request"]);assert.ok(menu.children[0].disabled);
+  calls.length=0;resize(320);assert.equal(calls.length,0,"resizing never dispatches an action");
+ }finally{view?.dispose();delete globalThis.ResizeObserver;}
 });
