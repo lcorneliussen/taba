@@ -753,7 +753,8 @@ func statusTUIPRSuffix(pr *wtc.StatusPRFacts, styled bool) string {
 	return suffix
 }
 
-// Padding precedes a reserved link slot, so missing URLs do not shift signals.
+// Numbers are padded to the cohort width; two following cells reserve " ↗".
+// Missing URLs therefore leave the signal columns in the same positions.
 func statusTUIPRNumberCell(number, target string, width int, styled bool, tone string) string {
 	label := statusTUIFit(statusTUIPRNumber(number), max(1, width-2))
 	if styled && number != "" && statusTUIURL(target) != "" {
@@ -793,7 +794,7 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 	}
 	l.pr = max(l.pr, l.number+8)
 	for _, row := range snapshot.Repos {
-		if statusTUIPRConflict(row.PR) {
+		if row.PR != nil && row.PR.Number != "" {
 			l.pr = max(l.pr, l.number+3+ansi.StringWidth(statusTUIPRSuffix(row.PR, false)))
 		}
 	}
@@ -1531,7 +1532,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"↗ link: modifier-click; PR/TEST/PROD: click; ↑/↓ or wheel scroll; PgUp/PgDn page; Home/End",
 			"PR signals, left to right: C checks · M mergeability · R reviews. ? toggles this help.",
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
-			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · unknown.",
+			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
 			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
 			"◇ draft; ↗ opens a link. Completed PR signals are ·; follow-up state appears in STATE.",
 		}

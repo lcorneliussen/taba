@@ -342,6 +342,26 @@ func TestStatusPRNumbersAlignLinksAndSignalsAcrossTheListedCohort(t *testing.T) 
 	}
 }
 
+func TestStatusPRDraftMarkerFitsAcrossTheNumberCohort(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	snapshot := wtc.StatusSnapshot{}
+	for _, number := range []string{"7", "12345", "123456789"} {
+		snapshot.Repos = append(snapshot.Repos, wtc.StatusRepo{Dir: "widget", PR: &wtc.StatusPRFacts{
+			Number: number, URL: "https://example.invalid/pull/" + number, Draft: true,
+			Checks: "SUCCESS", Merge: "CLEAN", Review: "approved",
+		}})
+	}
+	for _, styled := range []bool{false, true} {
+		lines := statusTUIRepoLines(snapshot, 100, styled)
+		for i, line := range lines[1:] {
+			plain := ansi.Strip(line)
+			if !strings.Contains(plain, "#"+snapshot.Repos[i].PR.Number) || !strings.Contains(plain, "✓ ✓ ✓ ◇") || strings.Contains(plain, "…") || ansi.StringWidth(line) > 100 {
+				t.Fatalf("draft status clipped in a wide table: %q", lines)
+			}
+		}
+	}
+}
+
 func TestStatusPRSignalsKeepUnknownPendingAndReviewMeaning(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")
@@ -520,6 +540,10 @@ func TestStatusLongConflictingPRFitsAndKeepsClickTarget(t *testing.T) {
 	plainWidth := runewidth.StringWidth(plain)
 	if got := statusTUIRepoPRCell(pr, plainWidth, false); got != plain {
 		t.Fatalf("plain conflict cell should fit exactly: %q", got)
+	}
+	styledCell := statusTUIRepoPRCell(pr, plainWidth, true)
+	if ansi.StringWidth(styledCell) != plainWidth || ansi.Strip(styledCell) != strings.Replace(plain, "   ", " ↗ ", 1) || !strings.Contains(styledCell, ansi.SetHyperlink(prURL)) {
+		t.Fatalf("reserved link slot should fit the styled conflict cell exactly: %q", styledCell)
 	}
 	if got := ansi.Strip(statusTUIRepoPRCell(pr, plainWidth-1, true)); !strings.HasPrefix(got, "✗ ") {
 		t.Fatalf("clipped cell should retain compact conflict warning: %q", got)
