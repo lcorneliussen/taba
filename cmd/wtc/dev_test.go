@@ -98,6 +98,9 @@ func main(){if len(os.Args)==4&&os.Args[1]=="--json"&&os.Args[2]=="dev"&&os.Args
 	if out, code := run(pinned, nil, "hello"); code != 0 || !strings.Contains(out, "second:hello:wtc") {
 		t.Fatalf("changed source not followed: %d %s", code, out)
 	}
+	if out, code := run(pinned, []string{"WTC_DEV_DELEGATED_FROM=0.1.64"}, "hello"); code != 0 || !strings.Contains(out, "second:hello:wtc") {
+		t.Fatalf("legacy version-only hop suppressed active freshness: %d %s", code, out)
+	}
 	if out, code := run(pinned, nil, "fail"); code != 7 {
 		t.Fatalf("exit forwarding: %d %s", code, out)
 	}

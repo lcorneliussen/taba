@@ -33,8 +33,13 @@ func TestStatusDevRestartWaitsForEveryOwnedOperation(t *testing.T) {
 			}
 			m.nextRunning, m.refreshing, m.runtimeReading = false, false, false
 			updated, command = m.Update(statusTickMsg(time.Now()))
+			m = updated.(statusTUIModel)
+			if command == nil || !m.devChecking || m.devAutoExit {
+				t.Fatal("idle queued restart did not revalidate before terminal shutdown")
+			}
+			updated, command = m.Update(statusDevMsg{state: wtc.DevFollowState{Active: true, Build: &wtc.DevBuild{Generation: "new", Binary: "/fixture/immutable-generation/wtc"}}})
 			if command == nil {
-				t.Fatal("idle restart did not quit the terminal cleanly")
+				t.Fatal("fresh idle restart did not quit the terminal cleanly")
 			}
 			if _, ok := command().(tea.QuitMsg); !ok {
 				t.Fatal("restart did not go through orderly terminal shutdown")
@@ -87,6 +92,10 @@ func TestStatusDevQueuedRestartRevalidatesOff(t *testing.T) {
 		devAmbientExecutable = filepath.Join(root, "ambient")
 		generation := os.Getenv("DEV_TEST_RESTART_GENERATION")
 		err := restartStatusDev(root, filepath.Join(root, ".wtc", "dev-generations", generation, "wtc"), generation, statusTUIPresentation{Next: true, Notice: "completed fixture action"})
+		if os.Getenv("DEV_TEST_EXPECT_RETRY") != "" && err != nil && strings.Contains(err.Error(), "selection changed") {
+			fmt.Println("active-selection-retry")
+			return
+		}
 		t.Fatalf("exec returned: %v", err)
 	}
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -148,6 +157,11 @@ func TestStatusDevQueuedRestartRevalidatesOff(t *testing.T) {
 	if out := run(); !strings.Contains(out, "candidate-ran") || strings.Contains(out, "ambient:") {
 		t.Fatalf("ON control did not execute the selectable generation: %s", out)
 	}
+	stale := exec.Command(os.Args[0], "-test.run=^TestStatusDevQueuedRestartRevalidatesOff$")
+	stale.Env = append(os.Environ(), "DEV_TEST_RESTART_ROOT="+root, "DEV_TEST_RESTART_GENERATION="+strings.Repeat("b", 64), "DEV_TEST_EXPECT_RETRY=1")
+	if out, err := stale.CombinedOutput(); err != nil || !strings.Contains(string(out), "active-selection-retry") || strings.Contains(string(out), "ambient:") {
+		t.Fatalf("active changed selection did not refuse delegation: %v %s", err, out)
+	}
 	model := statusTUIModel{nextRunning: true, devCollection: root}
 	updated, command := model.Update(statusDevMsg{state: wtc.DevFollowState{Active: true, Build: build}})
 	queued := updated.(statusTUIModel)
@@ -158,8 +172,15 @@ func TestStatusDevQueuedRestartRevalidatesOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	queued.nextRunning = false
-	if queued.devRestartCommand() == nil {
-		t.Fatal("replacement did not reach final validation after action")
+	updated, command = queued.Update(statusTickMsg(time.Now()))
+	queued = updated.(statusTUIModel)
+	if command == nil || !queued.devChecking || queued.devAutoExit {
+		t.Fatal("replacement did not revalidate in the live terminal after action")
+	}
+	updated, command = queued.Update(statusDevMsg{err: errors.New("source changed and compilation failed")})
+	queued = updated.(statusTUIModel)
+	if command != nil || queued.devRestart != nil || !queued.devError || queued.devAutoExit {
+		t.Fatal("failed revalidation quit the working terminal")
 	}
 	if out := run(); !strings.Contains(out, "ambient:") || !strings.Contains(out, "completed fixture action") || strings.Contains(out, "candidate-ran") {
 		t.Fatalf("OFF lost to queued generation: %s", out)
@@ -1154,6 +1175,43 @@ func TestStatusTableShowsRetiredLeftoversInWorkspaceSweep(t *testing.T) {
 		}
 		if table := statusTable(snapshot, reposOnly, 80); strings.Contains(table, "\x1b[2J") || strings.Contains(table, "evil\nname") {
 			t.Fatalf("control characters reached the terminal: %q", table)
+		}
+	}
+}
+
+func TestStatusDevSlowPollGivesActionWindow(t *testing.T) {
+	old := devRunningGeneration
+	devRunningGeneration = "same"
+	defer func() { devRunningGeneration = old }()
+	for _, bad := range []bool{false, true} {
+		var snapshot wtc.StatusSnapshot
+		if err := json.Unmarshal([]byte(`{"repos":[{"dir":"widget","next":{"step":"push","by":"wtc","key":"fixture"}}]}`), &snapshot); err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now().Add(-4 * time.Second)
+		m := statusTUIModel{width: 100, height: 20, showNext: true, snapshot: snapshot, context: &wtc.Context{}, devAllowed: true, devCollection: "synthetic", devChecking: true, devCheckAt: started}
+		if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+			t.Fatal("in-flight check allowed dispatch")
+		}
+		msg := statusDevMsg{state: wtc.DevFollowState{Active: true, Build: &wtc.DevBuild{Generation: "same"}}}
+		if bad {
+			msg.err = errors.New("fixture failure")
+		}
+		updated, _ := m.Update(msg)
+		m = updated.(statusTUIModel)
+		updated, _ = m.Update(statusTickMsg(time.Now()))
+		m = updated.(statusTUIModel)
+		if m.devChecking {
+			t.Fatalf("slow check immediately rescheduled; bad=%v", bad)
+		}
+		updated, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		m = updated.(statusTUIModel)
+		if bad {
+			if cmd != nil || m.nextRunning {
+				t.Fatal("known stale error allowed dispatch")
+			}
+		} else if cmd == nil || !m.nextRunning {
+			t.Fatal("fresh completed check has no action window")
 		}
 	}
 }

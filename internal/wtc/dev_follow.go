@@ -56,7 +56,7 @@ func preflightDevRetirement(collection string) (bool, error) {
 			if err != nil {
 				return false, err
 			}
-			used = true
+			used = used || suffix == "-dev-mode.json"
 			if !info.Mode().IsRegular() || !ownedByCurrentUser(info) || info.Mode()&0022 != 0 {
 				return false, fmt.Errorf("unsafe dev retirement slot: %s", namespace+suffix)
 			}
@@ -370,6 +370,12 @@ func validateDevPublishedBuild(collection, dir string, build *DevBuild) error {
 		relative = filepath.Join("dev-generations", build.Generation, "wtc")
 	} else if build.FollowProtocol != 0 {
 		return fmt.Errorf("invalid one-shot artifact protocol")
+	} else if name := filepath.Base(filepath.Dir(build.Binary)); strings.HasPrefix(name, "oneshot-") {
+		identity := strings.TrimPrefix(name, "oneshot-")
+		if _, err := hex.DecodeString(identity); err != nil || len(identity) != 64 {
+			return fmt.Errorf("invalid one-shot artifact identity")
+		}
+		relative = filepath.Join("dev-generations", name, "wtc")
 	}
 	expected := filepath.Join(filepath.Dir(dir), relative)
 	// A supported namespace move changes only the selected generated root.
@@ -399,6 +405,56 @@ func publishDevBuild(collection, dir string, build *DevBuild) error {
 		return err
 	}
 	return devAtomicJSON(filepath.Join(dir, "current.json"), data)
+}
+
+func devArtifactHash(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&0111 == 0 || info.Mode()&0022 != 0 || !ownedByCurrentUser(info) {
+		return "", fmt.Errorf("unsafe immutable dev executable")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// A completed immutable slot is either retained unchanged or rejected. Never
+// replace an executable a running process may still use for a child command.
+func retainDevArtifact(collection, destination, staged string) error {
+	if err := safeGeneratedParent(collection, destination); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(destination); os.IsNotExist(err) {
+		return os.Rename(staged, destination)
+	} else if err != nil {
+		return err
+	}
+	want, err := devArtifactHash(filepath.Join(staged, "wtc"))
+	if err != nil {
+		return err
+	}
+	have, err := devArtifactHash(filepath.Join(destination, "wtc"))
+	if err != nil || have != want {
+		return fmt.Errorf("existing immutable dev executable does not match completed build")
+	}
+	wantVersion, err := readPrivateDevFile(filepath.Join(staged, "version"))
+	if err != nil {
+		return err
+	}
+	haveVersion, err := readPrivateDevFile(filepath.Join(destination, "version"))
+	if err != nil || !bytes.Equal(wantVersion, haveVersion) {
+		return fmt.Errorf("existing immutable dev metadata does not match completed build")
+	}
+	return nil
 }
 
 // EnsureDevFollow is the shared strict freshness path for startup and passive
@@ -539,14 +595,7 @@ func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, er
 		build.Binary = filepath.Join(generationDir, "wtc")
 		// Never replace a published generation: a running action may still
 		// launch a child from its original immutable executable path.
-		if _, err := os.Lstat(generationDir); os.IsNotExist(err) {
-			err = os.Rename(filepath.Join(staging, ".wtc", "dev"), generationDir)
-			if err != nil {
-				publishUnlock()
-				os.RemoveAll(staging)
-				return state, err
-			}
-		} else if err != nil {
+		if err := retainDevArtifact(collection, generationDir, filepath.Join(staging, ".wtc", "dev")); err != nil {
 			publishUnlock()
 			os.RemoveAll(staging)
 			return state, err
@@ -572,6 +621,19 @@ func WithDevGeneration(ctx context.Context, collection, generation string, run f
 	if len(generation) != 64 {
 		return false, nil
 	}
+	build := ReadDevBuild(collection)
+	if build == nil || build.Generation != generation {
+		return false, nil
+	}
+	return WithDevBuild(ctx, collection, build, run)
+}
+
+// WithDevBuild guards final one-shot and follow delegation with the same
+// current selector and OFF policy. Callers compile before taking this lock.
+func WithDevBuild(ctx context.Context, collection string, expected *DevBuild, run func(*DevBuild) error) (bool, error) {
+	if expected == nil {
+		return false, nil
+	}
 	root, err := devCollectionRoot(collection, nil)
 	if err != nil {
 		return false, err
@@ -585,17 +647,25 @@ func WithDevGeneration(ctx context.Context, collection, generation string, run f
 		return false, err
 	}
 	state, err := DevFollowConfiguration(collection)
-	if err != nil || !state.Active {
+	if err != nil || state.Mode == "off" || devReviewContext(collection) {
 		return false, err
 	}
 	build := ReadDevBuild(collection)
-	if build == nil || build.Generation != generation || build.Source != state.Source {
+	if build == nil || *build != *expected {
+		return false, nil
+	}
+	if build.Generation != "" {
+		if !state.Active || build.Source != state.Source {
+			return false, nil
+		}
+	} else if state.Active {
 		return false, nil
 	}
 	return true, run(build)
 }
 
 func runDevCompiler(ctx context.Context, command *exec.Cmd) error {
+	command.WaitDelay = time.Second
 	if err := command.Start(); err != nil {
 		return err
 	}
@@ -611,12 +681,17 @@ func runDevCompiler(ctx context.Context, command *exec.Cmd) error {
 	}
 }
 
+func devCommandOutput(command *exec.Cmd) ([]byte, error) {
+	command.WaitDelay = time.Second
+	return command.Output()
+}
+
 func probeDevFollow(ctx context.Context, binary string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, "--json", "dev", "capabilities")
 	command.Env = append(os.Environ(), DevBuildDisableEnv+"=off", DevBuildDelegatedEnv+"=")
-	raw, err := command.Output()
+	raw, err := devCommandOutput(command)
 	if err != nil {
 		return fmt.Errorf("local CLI cannot report follow capability; use dev install for one-shot builds: %w", err)
 	}
@@ -636,9 +711,14 @@ func probeDevFollow(ctx context.Context, binary string) error {
 // Go reports the actual selected source and embed inputs, including files
 // ignored by Git. No hand-maintained extension list can establish freshness.
 func devFingerprint(ctx context.Context, source string) (string, error) {
-	list := exec.CommandContext(ctx, "go", "list", "-deps", "-json", "./...")
+	version, err := devBuildVersion(source)
+	if err != nil {
+		return "", err
+	}
+	compiler, _ := devCompilerCommand(source, "", version, io.Discard)
+	list := exec.CommandContext(ctx, "go", "list", "-deps", "-json", compiler.Args[len(compiler.Args)-1])
 	list.Dir = source
-	raw, err := list.Output()
+	raw, err := devCommandOutput(list)
 	if err != nil {
 		return "", fmt.Errorf("cannot list dev build inputs: %w", err)
 	}
@@ -702,22 +782,36 @@ func devFingerprint(ctx context.Context, source string) (string, error) {
 		}
 	}
 	hash := sha256.New()
+	fmt.Fprintln(hash, compiler.Path)
+	for i, arg := range compiler.Args {
+		if i > 0 && compiler.Args[i-1] == "-o" {
+			continue // The staging output path is not a semantic compiler input.
+		}
+		fmt.Fprintln(hash, arg)
+	}
 	head, err := gitOutput("-C", source, "rev-parse", "HEAD")
 	if err != nil {
 		return "", err
 	}
 	fmt.Fprintln(hash, head)
-	env := exec.CommandContext(ctx, "go", "env", "-json", "GOOS", "GOARCH", "CGO_ENABLED", "GOVERSION", "GOFLAGS", "GOWORK", "CC", "CXX", "CGO_CFLAGS", "CGO_CPPFLAGS", "CGO_CXXFLAGS", "CGO_LDFLAGS", "GOEXPERIMENT")
+	env := exec.CommandContext(ctx, "go", "env", "-json")
 	env.Dir = source
-	settings, err := env.Output()
+	settings, err := devCommandOutput(env)
 	if err != nil {
 		return "", err
 	}
-	hash.Write(settings)
 	var config map[string]string
 	if err := json.Unmarshal(settings, &config); err != nil {
 		return "", err
 	}
+	// GOGCCFLAGS is derived output containing a fresh temporary build path.
+	// Its semantic inputs (CC, CGO_*FLAGS, GOOS/GOARCH and tuning) remain here.
+	delete(config, "GOGCCFLAGS")
+	settings, err = json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	hash.Write(settings)
 	if work := config["GOWORK"]; work != "" && work != "off" {
 		work, err = filepath.EvalSymlinks(work)
 		if err != nil {

@@ -133,8 +133,14 @@ func TestInstallAndUninstallDevBuild(t *testing.T) {
 	if read == nil || read.Version != build.Version || read.Source != source || !strings.Contains(build.Version, "dev") {
 		t.Fatalf("installed build not readable: %+v / %+v", build, read)
 	}
-	if build.Binary != filepath.Join(collection, ".wtc", "dev", "wtc") {
-		t.Fatalf("install changed the default namespace: %+v", build)
+	if filepath.Dir(filepath.Dir(build.Binary)) != filepath.Join(collection, ".wtc", "dev-generations") || !strings.HasPrefix(filepath.Base(filepath.Dir(build.Binary)), "oneshot-") || build.Generation != "" || build.FollowProtocol != 0 {
+		t.Fatalf("one-shot is not an immutable default-namespace artifact: %+v", build)
+	}
+	bridge, err := os.ReadFile(filepath.Join(collection, ".wtc", "dev", "wtc"))
+	artifact, artifactErr := os.ReadFile(build.Binary)
+	legacy, legacyErr := os.ReadFile(filepath.Join(collection, ".wtc", "dev", "version"))
+	if err != nil || artifactErr != nil || legacyErr != nil || string(bridge) != string(artifact) || string(legacy) != build.Version+"\n"+source+"\n" {
+		t.Fatal("legacy bootstrap bridge does not match the committed artifact")
 	}
 	if _, err := os.Stat(filepath.Join(collection, ".wtc", "dev", ".wtc.tmp")); !os.IsNotExist(err) {
 		t.Fatal("temporary binary left behind")

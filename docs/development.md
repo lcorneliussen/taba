@@ -75,7 +75,8 @@ An unversioned `go build` binary retains its existing no-delegation behavior.
 
 `off` overrides the project convention before source discovery or compilation.
 It persists separately from generated artifacts, including after `dev uninstall`.
-Uninstall removes the active artifact but retains immutable generations until
+Uninstall removes the active selection and legacy bootstrap slot, but retains immutable
+one-shot artifacts and follow generations until
 collection retirement so running actions can finish from their original binary.
 Final retirement removes this generated state. Ad-hoc directories retain their
 existing reuse rules; retirement does not permanently prevent reinitialization.
@@ -83,6 +84,13 @@ Use `mode on` or `mode auto` explicitly to enable following again. The existing
 `WTC_DEV_BUILD=off` escape works even with broken source; mode/status/uninstall
 commands do not require a successful rebuild. Legacy one-shot `dev install`
 does not undo persistent off.
+
+One-shot installs also publish an immutable executable through the atomic selection.
+A failed publication keeps the previous executable and metadata together. The
+classic bootstrap pair is updated after that commit for older shims; if this
+compatibility update fails, installation reports a warning and the new selection
+remains valid. Older shims and installers do not understand this atomic selection
+or its locks, so their concurrent two-file updates have no atomicity guarantee.
 
 An updated status TUI checks in the background, shows rebuilding or failure,
 and keeps its last working display while a build fails. It blocks new actions

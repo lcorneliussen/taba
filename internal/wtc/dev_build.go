@@ -208,7 +208,23 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	if _, err := devCollectionRoot(collection, root); err != nil {
 		return nil, err
 	}
-	build, err := installDevBuild(context.Background(), collection, source, os.Stderr)
+	store := filepath.Join(collection, ".wtc", "dev-generations")
+	if err := safeGeneratedParent(collection, store); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(store, 0700); err != nil {
+		return nil, err
+	}
+	staging, err := os.MkdirTemp(store, ".oneshot-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(staging)
+	build, err := installDevBuild(context.Background(), staging, source, os.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := devArtifactHash(build.Binary)
 	if err != nil {
 		return nil, err
 	}
@@ -225,21 +241,95 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 		return nil, err
 	}
 	dir := devBuildDir(collection)
+	artifact := filepath.Join(store, "oneshot-"+identity)
+	if err := retainDevArtifact(collection, artifact, filepath.Dir(build.Binary)); err != nil {
+		return nil, err
+	}
+	build.Collection, build.Binary = collection, filepath.Join(artifact, "wtc")
+	commitBridge, cleanupBridge, err := prepareDevLegacyBridge(collection, dir, build)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupBridge()
 	if err := publishDevBuild(collection, dir, build); err != nil {
 		return nil, err
 	}
+	// The authoritative commit succeeded. An older bootstrap reader ignores
+	// current.json and locks; a bridge failure cannot roll back its successor.
+	if err := commitBridge(); err != nil {
+		fmt.Fprintf(os.Stderr, "installed immutable dev artifact; legacy bootstrap bridge update failed: %v (run the reported binary directly or retry dev install)\n", err)
+	}
 	return build, nil
+}
+
+func prepareDevLegacyBridge(collection, dir string, build *DevBuild) (func() error, func(), error) {
+	if err := safeGeneratedParent(collection, dir); err != nil {
+		return nil, nil, err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, nil, err
+	}
+	for _, name := range []string{"wtc", "version"} {
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil && !os.IsNotExist(err) {
+			return nil, nil, err
+		}
+		if err == nil && (!info.Mode().IsRegular() || !ownedByCurrentUser(info) || info.Mode()&0022 != 0) {
+			return nil, nil, fmt.Errorf("unsafe legacy dev bridge slot: %s", name)
+		}
+	}
+	var temporary []string
+	cleanup := func() {
+		for _, path := range temporary {
+			_ = os.Remove(path)
+		}
+	}
+	stage := func(reader io.Reader, mode os.FileMode) (string, error) {
+		f, err := os.CreateTemp(dir, ".bridge-")
+		if err != nil {
+			return "", err
+		}
+		temporary = append(temporary, f.Name())
+		_, copyErr := io.Copy(f, reader)
+		modeErr := f.Chmod(mode)
+		closeErr := f.Close()
+		for _, err := range []error{copyErr, modeErr, closeErr} {
+			if err != nil {
+				return "", err
+			}
+		}
+		return f.Name(), nil
+	}
+	binary, err := os.Open(build.Binary)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Copy rather than hard-link: an old installer may mutate its classic slot.
+	bridge, err := stage(binary, 0755)
+	binary.Close()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	version, err := stage(strings.NewReader(build.Version+"\n"+build.Source+"\n"), 0644)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	commit := func() error {
+		if err := os.Rename(bridge, filepath.Join(dir, "wtc")); err != nil {
+			return err
+		}
+		return os.Rename(version, filepath.Join(dir, "version"))
+	}
+	return commit, cleanup, nil
 }
 
 // The one-shot entrypoint validates its historical module contract above.
 // Follow mode validates AUTO through discovery; an explicit source additionally
 // has to demonstrate the structured lifecycle capability before publication.
 func installDevBuild(ctx context.Context, collection, source string, output io.Writer) (*DevBuild, error) {
-	describe, err := gitOutput("-C", source, "describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
-	if err != nil {
-		return nil, fmt.Errorf("describe %s: %w", source, err)
-	}
-	version, err := DevVersion(describe)
+	version, err := devBuildVersion(source)
 	if err != nil {
 		return nil, err
 	}
@@ -250,10 +340,28 @@ func installDevBuild(ctx context.Context, collection, source string, output io.W
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
+	metadata := &DevBuild{Collection: collection, Binary: filepath.Join(dir, "wtc"), Version: version, Source: source}
+	command, tmp := devCompilerCommand(source, dir, version, output)
+	return completeDevBuild(ctx, command, tmp, metadata)
+}
+
+func devBuildVersion(source string) (string, error) {
+	describe, err := gitOutput("-C", source, "describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
+	if err != nil {
+		return "", fmt.Errorf("describe %s: %w", source, err)
+	}
+	return DevVersion(describe)
+}
+
+func devCompilerCommand(source, dir, version string, output io.Writer) (*exec.Cmd, string) {
 	tmp := filepath.Join(dir, ".wtc.tmp")
 	build := exec.Command("go", "build", "-ldflags", "-X main.version="+version, "-o", tmp, "./cmd/wtc")
 	build.Dir = source
 	build.Stdout, build.Stderr = output, output
+	return build, tmp
+}
+
+func completeDevBuild(ctx context.Context, build *exec.Cmd, tmp string, metadata *DevBuild) (*DevBuild, error) {
 	if err := runDevCompiler(ctx, build); err != nil {
 		os.Remove(tmp)
 		return nil, fmt.Errorf("go build: %w", err)
@@ -261,14 +369,13 @@ func installDevBuild(ctx context.Context, collection, source string, output io.W
 	if err := os.Chmod(tmp, 0755); err != nil {
 		return nil, err
 	}
-	binary := filepath.Join(dir, "wtc")
-	if err := os.Rename(tmp, binary); err != nil {
+	if err := os.Rename(tmp, metadata.Binary); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "version"), []byte(version+"\n"+source+"\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(filepath.Dir(metadata.Binary), "version"), []byte(metadata.Version+"\n"+metadata.Source+"\n"), 0644); err != nil {
 		return nil, err
 	}
-	return &DevBuild{Collection: collection, Binary: binary, Version: version, Source: source}, nil
+	return metadata, nil
 }
 
 func UninstallDevBuild(collection string) (bool, error) {

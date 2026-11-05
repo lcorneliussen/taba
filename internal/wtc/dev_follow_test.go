@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -269,15 +270,17 @@ func TestDevFollowOffDuringBuildAndCachedInputRead(t *testing.T) {
 			if err := SetDevMode(collection, "on", source); err != nil {
 				t.Fatal(err)
 			}
+			started, release, _ := devBlockGo(t, operation)
 			generation := ""
 			if operation == "list" {
+				t.Setenv("DEV_TEST_OPERATION", "")
 				generation = ensureDevTest(t, collection).Build.Generation
+				t.Setenv("DEV_TEST_OPERATION", operation)
 				selected, err := WithDevGeneration(context.Background(), collection, generation, func(*DevBuild) error { return nil })
 				if !selected || err != nil {
 					t.Fatalf("positive generation selection: %v %v", selected, err)
 				}
 			}
-			started, release, _ := devBlockGo(t, operation)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			type result struct {
@@ -707,7 +710,7 @@ func TestDevFollowOneShotNamespaceMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	selected := ReadDevBuild(collection)
-	if selected == nil || selected.Generation != "" || selected.Binary != filepath.Join(collection, ".taba", "dev", "wtc") || selected.Version != installed.Version {
+	if selected == nil || selected.Generation != "" || selected.Binary != filepath.Join(collection, ".taba", "dev-generations", filepath.Base(filepath.Dir(installed.Binary)), "wtc") || selected.Version != installed.Version {
 		t.Fatalf("successful moved one-shot not selected: %+v", selected)
 	}
 	if err := os.Chmod(selected.Binary, 0775); err != nil {
@@ -976,5 +979,330 @@ func TestDevFollowUnusedAutoAddsNoPrivateRootRequirement(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(collection, ".wtc-dev-build.lock")); !os.IsNotExist(err) {
 		t.Fatal("inactive check created a build lock")
+	}
+}
+
+func TestDevRetirementLockOnlyRetryEligibility(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	made, err := c.NewCollection(NewOptions{Slug: "finished", Repos: []string{"widget"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := made.Collection
+	if err := os.Remove(filepath.Join(target, "widget", "init-ran")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0775); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(target, "HANDOFF.md")); err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, filepath.Join(target, "HANDOFF.md", "keep"), "synthetic blocker", 0600)
+	retired, err := c.RetireCollection(RetireOptions{Name: "finished"})
+	if err == nil || len(retired.Removed) != 2 || !RetiredFolder(target) {
+		t.Fatalf("late cleanup control: %+v %v", retired, err)
+	}
+	if err := os.RemoveAll(filepath.Join(target, "HANDOFF.md")); err != nil {
+		t.Fatal(err)
+	}
+	retired, err = c.RetireCollection(RetireOptions{Name: "finished"})
+	if err != nil || !retired.FolderRemoved {
+		t.Fatalf("lock-only state changed unused 0775 retry eligibility: %+v %v", retired, err)
+	}
+}
+
+func TestDevOneShotFailedPublishKeepsPair(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	old, err := InstallDevBuild(collection, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(old.Binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockDevFile(context.Background(), filepath.Join(collection, ".wtc-dev-mode.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	fixtureFile(t, filepath.Join(source, "cmd", "wtc", "main.go"), "package main\nimport \"fmt\"\nvar version=\"dev\"\nfunc main(){fmt.Println(\"replacement\")}\n", 0644)
+	if _, err := InstallDevBuild(collection, source); err == nil {
+		t.Fatal("publication lock control unexpectedly succeeded")
+	}
+	selected := ReadDevBuild(collection)
+	if selected == nil {
+		t.Fatal("lost previous record")
+	}
+	after, err := os.ReadFile(selected.Binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Version != old.Version || !bytes.Equal(before, after) {
+		t.Fatalf("failed publication changed selected executable/metadata pair: old=%+v selected=%+v", old, selected)
+	}
+}
+func TestDevCompilerCancellationClosesInheritedPipes(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "started")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	command := exec.Command("/bin/sh", "-c", "sleep 4 & echo started > \""+marker+"\"; wait")
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	done := make(chan error, 1)
+	go func() { done <- runDevCompiler(ctx, command) }()
+	waitDevMarker(t, marker)
+	start := time.Now()
+	cancel()
+	err := <-done
+	if err != context.Canceled {
+		t.Fatalf("cancellation control: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("descendant-held pipes defeated cancellation bound: %v", elapsed)
+	}
+}
+func TestDevFingerprintIgnoresUnrelatedBrokenPackage(t *testing.T) {
+	_, source := devFollowFixture(t)
+	t.Setenv("GOPROXY", "off")
+	fixtureFile(t, filepath.Join(source, "unrelated", "broken.go"), "package unrelated\nimport _ \"example.invalid/never-downloaded\"\n", 0644)
+	build := exec.Command("go", "build", "-o", filepath.Join(t.TempDir(), "wtc"), "./cmd/wtc")
+	build.Dir = source
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("CLI positive build: %v %s", err, out)
+	}
+	if _, err := devFingerprint(context.Background(), source); err != nil {
+		t.Fatalf("unrelated package rejected valid CLI graph: %v", err)
+	}
+}
+func TestDevFingerprintIncludesArchitectureTuning(t *testing.T) {
+	_, source := devFollowFixture(t)
+	t.Setenv("GOARCH", "amd64")
+	t.Setenv("CGO_ENABLED", "0")
+	t.Setenv("GOAMD64", "v1")
+	a, err := devFingerprint(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOAMD64", "v3")
+	b, err := devFingerprint(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("architecture target changed but generation fingerprint was reused")
+	}
+}
+
+func TestDevFingerprintIncludesCompilerVersionArguments(t *testing.T) {
+	_, source := devFollowFixture(t)
+	firstVersion, err := devBuildVersion(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := devFingerprint(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"tag", "-d", "v0.1.0"}, {"tag", "v0.2.0"}} {
+		command := exec.Command("git", args...)
+		command.Dir = source
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("tag fixture: %v %s", err, out)
+		}
+	}
+	secondVersion, err := devBuildVersion(source)
+	if err != nil || firstVersion == secondVersion {
+		t.Fatalf("version control: %s %s %v", firstVersion, secondVersion, err)
+	}
+	second, err := devFingerprint(context.Background(), source)
+	if err != nil || first == second {
+		t.Fatalf("compiler ldflags changed without fingerprint: %v", err)
+	}
+}
+
+func TestDevOneShotFailedPublishPreservesLegacyPair(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	if _, err := InstallDevBuild(collection, source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(collection, ".wtc", "dev", "current.json")); err != nil {
+		t.Fatal(err)
+	}
+	old := ReadDevBuild(collection)
+	if old == nil {
+		t.Fatal("legacy fallback control missing")
+	}
+	before, err := os.ReadFile(old.Binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockDevFile(context.Background(), filepath.Join(collection, ".wtc-dev-mode.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	fixtureFile(t, filepath.Join(source, "cmd", "wtc", "main.go"), "package main\nvar version=\"dev\"\nfunc main(){}\n", 0644)
+	if _, err := InstallDevBuild(collection, source); err == nil {
+		t.Fatal("blocked publication unexpectedly succeeded")
+	}
+	selected := ReadDevBuild(collection)
+	if selected == nil || *selected != *old {
+		t.Fatal("failed commit replaced legacy metadata")
+	}
+	after, err := os.ReadFile(old.Binary)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("failed commit replaced legacy binary")
+	}
+}
+
+func TestDevImmutableArtifactNeverOverwritesExistingSlot(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	build, err := InstallDevBuild(collection, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(build.Binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(collection, ".wtc", "dev-generations", "staged-fixture")
+	fixtureFile(t, filepath.Join(stage, "wtc"), "#!/bin/sh\necho other\n", 0755)
+	fixtureFile(t, filepath.Join(stage, "version"), build.Version+"\n"+build.Source+"\n", 0644)
+	if err := retainDevArtifact(collection, filepath.Dir(build.Binary), stage); err == nil {
+		t.Fatal("different executable overwrote immutable artifact")
+	}
+	after, err := os.ReadFile(build.Binary)
+	if err != nil || !bytes.Equal(original, after) {
+		t.Fatal("immutable artifact changed")
+	}
+}
+
+func TestDevFinalSelectionGuardBothArtifactKinds(t *testing.T) {
+	for _, follow := range []bool{false, true} {
+		t.Run(map[bool]string{false: "oneshot", true: "follow"}[follow], func(t *testing.T) {
+			collection, source := devFollowFixture(t)
+			var selected *DevBuild
+			if follow {
+				if err := SetDevMode(collection, "on", source); err != nil {
+					t.Fatal(err)
+				}
+				selected = ensureDevTest(t, collection).Build
+			} else {
+				var err error
+				selected, err = InstallDevBuild(collection, source)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			called, err := WithDevBuild(context.Background(), collection, selected, func(*DevBuild) error { return nil })
+			if err != nil || !called {
+				t.Fatalf("selected positive control: %v %v", called, err)
+			}
+			// The expected record was read before OFF completed; final authority must be fresh.
+			if err := SetDevMode(collection, "off", ""); err != nil {
+				t.Fatal(err)
+			}
+			called, err = WithDevBuild(context.Background(), collection, selected, func(*DevBuild) error { t.Fatal("OFF delegate executed"); return nil })
+			if err != nil || called {
+				t.Fatalf("OFF guard: %v %v", called, err)
+			}
+			mode, selectedSource := "auto", ""
+			if follow {
+				mode, selectedSource = "on", source
+			}
+			if err := SetDevMode(collection, mode, selectedSource); err != nil {
+				t.Fatal(err)
+			}
+			changed := *selected
+			changed.Version += ".changed"
+			if err := publishDevBuild(collection, devBuildDir(collection), &changed); err != nil {
+				t.Fatal(err)
+			}
+			called, err = WithDevBuild(context.Background(), collection, selected, func(*DevBuild) error { t.Fatal("superseded delegate executed"); return nil })
+			if err != nil || called {
+				t.Fatalf("selector guard: %v %v", called, err)
+			}
+		})
+	}
+}
+
+func TestDevRetirementLockOnlyVersusActualPrivateState(t *testing.T) {
+	for _, path := range []string{".wtc-dev-build.lock", ".wtc-dev-mode.lock", ".wtc-dev-mode.json", ".wtc/dev/current.json", ".wtc/dev-generations/fixture"} {
+		t.Run(path, func(t *testing.T) {
+			root := t.TempDir()
+			fixtureFile(t, filepath.Join(root, path), "fixture", 0600)
+			if err := os.Chmod(root, 0775); err != nil {
+				t.Fatal(err)
+			}
+			used, err := preflightDevRetirement(root)
+			lock := strings.HasSuffix(path, ".lock")
+			if lock {
+				if err != nil || used {
+					t.Fatalf("benign lock changed eligibility: %v %v", used, err)
+				}
+			} else if err == nil {
+				t.Fatal("actual dev state on unsafe root accepted")
+			}
+			if lock {
+				if err := os.Chmod(filepath.Join(root, path), 0666); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := preflightDevRetirement(root); err == nil {
+					t.Fatal("unsafe lock slot accepted")
+				}
+			}
+		})
+	}
+}
+
+func TestDevBridgeFailureDoesNotRollBackCommittedSelector(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	build, err := InstallDevBuild(collection, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := devBuildDir(collection)
+	commit, cleanup, err := prepareDevLegacyBridge(collection, dir, build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if err := publishDevBuild(collection, dir, build); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "version")); err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, filepath.Join(dir, "version", "unexpected"), "preserve", 0600)
+	if err := commit(); err == nil {
+		t.Fatal("blocked bridge commit unexpectedly succeeded")
+	}
+	selected := ReadDevBuild(collection)
+	if selected == nil || *selected != *build {
+		t.Fatal("bridge failure invalidated committed selection")
+	}
+	if _, err := os.Stat(build.Binary); err != nil {
+		t.Fatal("bridge failure removed committed immutable executable")
+	}
+}
+
+func TestDevOutputCommandBoundsDescendantHeldPipes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	marker := filepath.Join(t.TempDir(), "started")
+	command := exec.CommandContext(ctx, "/bin/sh", "-c", "sleep 4 & echo started > \""+marker+"\"; wait")
+	done := make(chan error, 1)
+	go func() { _, err := devCommandOutput(command); done <- err }()
+	waitDevMarker(t, marker)
+	start := time.Now()
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("canceled output command succeeded")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("descendant-held output exceeded cancellation bound: %v", elapsed)
 	}
 }

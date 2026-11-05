@@ -56,6 +56,7 @@ type statusTUIPresentation struct {
 
 type statusDevRestart struct {
 	collection, binary, generation string
+	needsCheck                     bool
 }
 
 type statusTUIModel struct {
@@ -125,13 +126,18 @@ func (m statusTUIModel) devBlocksActions() bool {
 }
 
 func (m statusTUIModel) devRestartCommand() tea.Cmd {
-	if m.devRestart != nil && m.devIdle() {
+	if m.devRestart != nil && !m.devRestart.needsCheck && m.devIdle() {
 		return tea.Quit
 	}
 	return nil
 }
 
 func (m statusTUIModel) finishDevUpdate() (tea.Model, tea.Cmd) {
+	if m.devRestart != nil && m.devRestart.needsCheck && m.devIdle() {
+		m.devChecking = true
+		m.devMessage = "dev: revalidating source before restart"
+		return m, statusCheckDev(m.devCollection)
+	}
 	if command := m.devRestartCommand(); command != nil {
 		m.devAutoExit = true
 		return m, command
@@ -545,15 +551,17 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case statusDevMsg:
 		m.devChecking, m.devError = false, msg.err != nil
+		m.devCheckAt = time.Now()
+		m.devRestart = nil
 		m.devMessage = ""
 		if msg.err != nil {
 			m.devMessage = "dev build stale: " + statusTUISafe(msg.err.Error())
 		} else if msg.state.Active && msg.state.Build != nil && msg.state.Build.Generation != devRunningGeneration {
-			m.devRestart = &statusDevRestart{collection: m.devCollection, binary: msg.state.Build.Binary, generation: msg.state.Build.Generation}
+			m.devRestart = &statusDevRestart{collection: m.devCollection, binary: msg.state.Build.Binary, generation: msg.state.Build.Generation, needsCheck: !m.devIdle()}
 			m.devMessage = "dev build ready; waiting for active work before restart"
 		} else if !msg.state.Active && devRunningGeneration != "" {
 			if devAmbientExecutable != "" {
-				m.devRestart = &statusDevRestart{collection: m.devCollection, binary: devAmbientExecutable}
+				m.devRestart = &statusDevRestart{collection: m.devCollection, binary: devAmbientExecutable, needsCheck: !m.devIdle()}
 				m.devMessage = "dev mode inactive; returning to the selected CLI when idle"
 			} else {
 				m.devError = true
@@ -563,8 +571,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusTickMsg:
 		if m.devRestart != nil {
 			if m.devIdle() {
-				m.devAutoExit = true
-				return m, tea.Quit
+				return m.finishDevUpdate()
 			}
 			return m, statusTUITick()
 		}

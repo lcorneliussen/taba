@@ -26,6 +26,7 @@ var delegatedFrom string
 
 var devAmbientExecutable string
 var devRunningGeneration string
+var devValidatedHandover bool
 
 const devAmbientEnv = "WTC_DEV_AMBIENT_EXE"
 const devGenerationEnv = "WTC_DEV_GENERATION"
@@ -49,8 +50,15 @@ func restartStatusDev(collection, binary, generation string, presentation status
 		if ran || err != nil {
 			return err
 		}
-		// OFF or another source selection may have arrived while the TUI
-		// waited for its action to finish. Re-enter through the ambient CLI.
+		state, err := wtc.DevFollowConfiguration(collection)
+		if err != nil {
+			return err
+		}
+		if state.Active {
+			return fmt.Errorf("dev selection changed; retry status with the selected CLI")
+		}
+		// OFF or inactive policy may have arrived while the TUI waited.
+		// Only that inactive state may return through the ambient CLI.
 		if devAmbientExecutable == "" {
 			return fmt.Errorf("dev selection changed; restart status with the selected CLI")
 		}
@@ -80,6 +88,7 @@ func takeDelegatedFrom() {
 	// The immutable executable path, not an inherited claim or mutable current
 	// pointer, names the code loaded in this process.
 	devRunningGeneration = ""
+	incomingGeneration := os.Getenv(devGenerationEnv)
 	os.Unsetenv(devGenerationEnv)
 	if self, err := os.Executable(); err == nil && filepath.Base(filepath.Dir(filepath.Dir(self))) == "dev-generations" {
 		candidate := filepath.Base(filepath.Dir(self))
@@ -87,6 +96,7 @@ func takeDelegatedFrom() {
 			devRunningGeneration = candidate
 		}
 	}
+	devValidatedHandover = incomingGeneration != "" && incomingGeneration == devRunningGeneration
 	if devAmbientExecutable == "" {
 		if self, err := os.Executable(); err == nil && !devArtifactExecutable(self) {
 			devAmbientExecutable = self
@@ -107,7 +117,7 @@ func devArtifactExecutable(path string) bool {
 // this executable to continue; an error aborts startup without running stale code.
 func handOverToDevBuild() error {
 	takeDelegatedFrom()
-	if delegatedFrom != "" || os.Getenv(wtc.DevBuildDisableEnv) == "off" || devControlInvocation(os.Args[1:]) {
+	if os.Getenv(wtc.DevBuildDisableEnv) == "off" || devControlInvocation(os.Args[1:]) || devValidatedHandover {
 		return nil
 	}
 	if _, err := semver.NewVersion(version); err != nil {
@@ -146,6 +156,9 @@ func handOverToDevBuild() error {
 			return nil
 		}
 		return execDevBuild(follow.Build)
+	}
+	if delegatedFrom != "" {
+		return nil // A legacy version-only hop guards only inactive fallback.
 	}
 	build := wtc.ReadDevBuild(collection)
 	if build == nil || isDevBuildBinary(build) {
@@ -194,22 +207,19 @@ func execDevBuild(build *wtc.DevBuild) error {
 		}
 	}
 	env := append(os.Environ(), wtc.DevBuildDelegatedEnv+"="+version, devAmbientEnv+"="+ambient, devGenerationEnv+"="+build.Generation)
-	if build.Generation != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		ran, err := wtc.WithDevGeneration(ctx, build.Collection, build.Generation, func(current *wtc.DevBuild) error {
-			return syscall.Exec(current.Binary, os.Args, env)
-		})
-		if ran || err != nil {
-			return err
-		}
-		state, err := wtc.DevFollowConfiguration(build.Collection)
-		if err != nil || !state.Active {
-			return err
-		}
-		return fmt.Errorf("dev selection changed; retry the command")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ran, err := wtc.WithDevBuild(ctx, build.Collection, build, func(current *wtc.DevBuild) error {
+		return syscall.Exec(current.Binary, os.Args, env)
+	})
+	if ran || err != nil {
+		return err
 	}
-	return syscall.Exec(build.Binary, os.Args, env)
+	state, err := wtc.DevFollowConfiguration(build.Collection)
+	if err != nil || state.Mode == "off" {
+		return err
+	}
+	return fmt.Errorf("dev selection changed; retry the command")
 }
 
 // isDevBuildBinary says whether this process is the dev build itself, by file
