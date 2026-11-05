@@ -910,3 +910,15 @@ Status refreshes never restore or extend activity. Recovery metadata uses a
 coalesced native worktree listing only while checkout rows are unavailable; the
 native service can reconcile its own registry during that listing. Restoration
 does not change OpenClaw's idle cleanup or snapshot retention policy.
+
+Repository actions use a shared fixed column: the main button and its `⋯` menu
+keep the same positions for Catch up, Commit changes and Restore. The menu
+shows available alternatives and explains blocked ones. If local changes keep
+catch-up out of the current plan, the menu says to save or stash them first;
+it does not override the plan or bypass the gateway's checks.
+
+The header `⋯` menu keeps collection-wide Catch up, Restore and push preparation
+available even when a different action occupies the main button. Counts include
+only eligible repositories; catch-up excludes dirty and unavailable checkouts.
+Pushes retain their personal confirmation. **Choose steps…** opens mixed
+selection across repositories. Merely opening or navigating a menu runs nothing.

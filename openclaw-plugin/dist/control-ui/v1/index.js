@@ -666,6 +666,53 @@ function newTunnel(g, svc, data = {}, { compact = false } = {}) {
   return wrap(trigger, menu);
 }
 
+// Native popovers escape table clipping; disabled alternatives keep their reason visible.
+function actionMenu(trigger, options, label, fail) {
+  const menu = css(el("div", { id: `wtc-actions-${uuid()}`, className: "wtc-context-menu", popover: "auto", role: "menu", ariaLabel: label }),
+    "position:fixed;inset:auto;margin:0;padding:4px;box-sizing:border-box;width:264px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;border:1px solid var(--border-strong,var(--border,#444));border-radius:8px;background:var(--card,var(--bg,#161920));color:var(--text,inherit);box-shadow:0 6px 20px rgba(0,0,0,.2);font:inherit;font-size:12px;line-height:16px;visibility:hidden");
+  trigger.popoverTargetElement = menu; trigger.ariaHasPopup = "menu"; trigger.ariaControls = menu.id; trigger.ariaExpanded = "false";
+  let shown = false, focusIndex = 0, cleanup = () => {};
+  const close = (focus = false) => { if (shown) menu.hidePopover(); if (focus && trigger.isConnected) trigger.focus(); };
+  const items = options.map(option => {
+    const navigate = !option.disabled && /^https?:\/\//.test(option.href ?? "");
+    const item = css(el(navigate ? "a" : "button", { ...(navigate ? {href:option.href,target:"_blank",rel:"noopener noreferrer"} : {type:"button"}), role: "menuitem", tabIndex: -1, disabled: !!option.disabled, ariaLabel: option.label, title: option.detail ?? option.label, className: "wtc-context-option" },
+      el("span", { textContent: option.label }), option.detail ? css(el("span", { textContent: option.detail }), "display:block;font-size:11px;color:var(--muted,#888);line-height:15px") : null),
+      `display:block;width:100%;margin:0;padding:6px 8px;box-sizing:border-box;border:0;border-radius:4px;background:transparent;color:inherit;text-decoration:none;text-align:left;white-space:normal;font:inherit;line-height:16px;cursor:${option.disabled ? "default" : "pointer"};opacity:${option.disabled ? ".65" : "1"}`);
+    item.onclick = async e => { if (!navigate) e?.preventDefault(); e?.stopPropagation(); if (item.disabled) return; close(true); if (navigate) return; try { await option.run?.(); } catch (err) { fail(String(err?.message ?? err)); } };
+    return item;
+  });
+  menu.append(...items);
+  const available = items.filter(item => !item.disabled);
+  menu.onbeforetoggle = e => { shown = e.newState === "open"; trigger.ariaExpanded = String(shown); cleanup(); if (shown) menu.style.visibility = "hidden"; };
+  menu.ontoggle = e => {
+    if (e.newState !== "open" || !shown || !trigger.isConnected) return;
+    const viewport = globalThis.visualViewport, edge = 12;
+    const left = (viewport?.offsetLeft ?? 0) + edge, top = (viewport?.offsetTop ?? 0) + edge;
+    const right = left + (viewport?.width ?? globalThis.innerWidth ?? 1024) - 2 * edge, bottom = top + (viewport?.height ?? globalThis.innerHeight ?? 768) - 2 * edge;
+    menu.style.maxWidth = `${right-left}px`; menu.style.maxHeight = `${bottom-top}px`;
+    const a = trigger.getBoundingClientRect(), box = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(left,Math.min(a.right-box.width,right-box.width))}px`;
+    menu.style.top = `${Math.max(top,Math.min(a.top-6-box.height >= top ? a.top-6-box.height : a.bottom+6,bottom-box.height))}px`;
+    menu.style.visibility = "visible"; available[focusIndex]?.focus(); focusIndex = 0;
+    if (!shown || !trigger.isConnected) return;
+    const events = new AbortController();
+    globalThis.addEventListener?.("resize", () => close(), {signal:events.signal}); viewport?.addEventListener("resize", () => close(), {signal:events.signal});
+    viewport?.addEventListener("scroll", () => close(), {signal:events.signal});
+    document.addEventListener("scroll", e => { if (!menu.contains(e.target)) close(); }, {capture:true,signal:events.signal});
+    const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => { if (!trigger.isConnected) { shown=false; cleanup(); } });
+    observer?.observe(document.documentElement,{childList:true,subtree:true}); cleanup=()=>{events.abort();observer?.disconnect();};
+  };
+  trigger.onclick = e => e?.stopPropagation();
+  trigger.onkeydown = e => { if (!["ArrowDown","ArrowUp"].includes(e.key)) return; e.preventDefault();e.stopPropagation();focusIndex=e.key==="ArrowUp"?Math.max(0,available.length-1):0;if(shown)available[focusIndex]?.focus();else trigger.click(); };
+  menu.onkeydown = e => {
+    if(e.key==="Escape"){e.preventDefault();e.stopPropagation();close(true);return;}if(e.key==="Tab"){close();return;}
+    const i=available.indexOf(document.activeElement), n=available.length;
+    const next=e.key==="Home"?0:e.key==="End"?n-1:e.key==="ArrowDown"?(i+1)%n:e.key==="ArrowUp"?(i<0?n-1:(i+n-1)%n):-1;
+    if(next>=0&&n){e.preventDefault();e.stopPropagation();available[next].focus();}
+  };
+  return css(el("span",{className:"wtc-action-menu"},trigger,menu),"display:inline-flex;width:24px;flex:0 0 24px;align-items:baseline;justify-content:center");
+}
+
 // Geometric control glyphs avoid font-dependent centres and spinning hit targets.
 const controlIcon = (glyph, size = 14) => {
   const paths = { "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
@@ -766,7 +813,7 @@ async function trackedRefresh(watch, sessionKey, say, currentSession = () => ses
   }
 }
 
-const REPO_NEXT_WIDTH = 128, REPO_COLUMN_GAP = 10;
+const REPO_NEXT_WIDTH = 132, REPO_COLUMN_GAP = 10;
 const repositoryColumns = (narrow) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }]
   : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "108px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }];
@@ -781,9 +828,14 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-service-label:disabled { cursor:default !important;text-decoration:none !important; }
 .wtc-next-step { width:${REPO_NEXT_WIDTH}px;justify-content:flex-start !important; }
 .wtc-next-step>:first-child { width:104px;flex:0 0 104px; }
-.wtc-next-step>:not(:first-child) { width:20px;flex:0 0 20px; }
+.wtc-next-step>:not(:first-child) { width:24px;flex:0 0 24px; }
+.wtc-action-menu>button { width:24px !important;min-width:24px !important;padding:0 !important; }
 .wtc-step-status { width:104px;text-align:center; }
-.wtc-next-step.wtc-restore-step { justify-content:flex-end !important; }
+/* Primary actions and their menu rail share one fixed layout in every row. */
+.wtc-next-step { display:flex;align-items:baseline;gap:4px; }
+.wtc-table .wtc-next-step>.wtc-action-control,.wtc-next-step .wtc-action-menu>.wtc-action-control { min-height:24px !important;height:24px; }
+.wtc-next-step.wtc-restore-step { justify-content:flex-start !important; }
+.wtc-context-option:not(:disabled):is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;outline:2px solid var(--accent,#75c8c1);outline-offset:-2px; }
 .wtc-restore-control,.wtc-next-step.wtc-restore-step>.wtc-restore-control { min-height:24px !important;height:24px;--wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
 .wtc-toolbar-primary>.wtc-restore-control:disabled { --wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
 .wtc-toolbar-primary:empty,.wtc-summary-facts:empty,.wtc-header-controls>button,.wtc-header-controls>span:last-child { align-self:center; }
@@ -1157,18 +1209,29 @@ function collectionTables(v) {
   const activityFailed = item => item?.state === "failed" || /^(Failed|Handoff failed|Cannot )/.test(item?.status ?? "");
   const recoveryButton = (...args) => { const button = nextButton(...args); button.className += " wtc-restore-control"; return button; };
   const recoveryQueued = r => recoveryQueues.get(v.collectionKey?.() ?? v.key())?.targets.has(r.sessionKey) && !recoveryBusy(r);
+  function repoActionMenu(r) {
+    const options = choicesOf(r).map(step => ({ label: nextLabel(step), detail: step.available ? step.reason : step.blocked ?? step.reason,
+      disabled: !!r.error || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || batchRunning || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => actNext({ ...r, next: step }) }));
+    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({label:"Commit changes",detail:"Review intended changes and save local commits",disabled:reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>askCommit(r)});
+    if (r.error === "checkout unavailable") options.unshift({ label: "Restore", detail: r.recovery?.reason ?? "Restore the saved checkout before running repository actions", disabled: r.recovery?.state !== "restorable" || recoveryQueueBusy(), run: () => restoreCheckouts([r]) });
+    if (r.behind > 0 && !options.some(o => o.label === "Catch up")) options.push({ label: "Catch up", detail: r.error ? "Restore the checkout first" : r.dirty ? "Save or stash local changes before catching up" : "Not offered by the current repository plan; refresh its status", disabled: true });
+    options.push({ label: "Refresh status", detail: "Refresh collection status without running actions", run: () => v.refresh() });
+    const trigger = nextButton("⋯", `More actions for ${nameOf(r)}`, () => {});
+    return actionMenu(trigger, options, `Actions for ${nameOf(r)}`, text => v.say(text, true));
+  }
+  const actionSlot = (r, action, picker = null) => css(el("div", { className: "wtc-next-step" }, picker ?? action ?? el("span", { ariaHidden: "true" }), repoActionMenu(r)), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
   function nextCell(r) {
-    if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return css(el("div", { className: "wtc-next-step wtc-restore-step" }, recoveryButton(recoveryBusy(r) ? "Restoring…" : recoveryQueued(r) ? "Queued" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryQueueBusy())), "display:flex;align-items:baseline");
+    if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return actionSlot(r, recoveryButton(recoveryBusy(r) ? "Restoring…" : recoveryQueued(r) ? "Queued" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryQueueBusy()));
     if (!actionable(r)) {
       // Keep the completed recovery row's geometry; its result lives in the Action log.
       if (lastActivity(r)?.action === "restore" && lastActivity(r)?.state === "completed") {
         const space = recoveryButton("Restored", "", () => {}, true);
         space.ariaHidden = "true"; space.tabIndex = -1; space.style.visibility = "hidden";
-        return el("div", { className: "wtc-next-step wtc-restore-step" }, space);
+        return actionSlot(r, space);
       }
-      return null;
+      return actionSlot(r, null);
     }
-    if (!r.next && r.choices && !r.dirty) return r.choices.actions?.length ? nextButton("Choose step…", "Inspect available actions and blocked reasons", () => { choosing = true; v.showActions?.(); v.rerender(); }) : null;
+    if (!r.next && r.choices && !r.dirty) return actionSlot(r, null);
     const step = selection.get(r.sessionKey)?.step ?? r.next ?? { step: "commit", reason: "Review and commit intended changes locally" };
     const phase = batchKeys.get(r.sessionKey) === step.key ? batchResults.get(r.sessionKey) : null;
     // Informational results belong in the log; after dispatch they must not
@@ -1177,7 +1240,7 @@ function collectionTables(v) {
       const complete = phase === "Completed";
       const failed = /^Failed|^Handoff failed|^Cannot /.test(phase);
       const label = complete ? step.step === "catch-up" ? "✓ Caught up" : "✓ Done" : failed ? "⚠ Failed" : /Cancel/.test(phase) ? "Cancelled" : phase === "Queued" ? "Queued" : /pending|Sent/.test(phase) ? "Sent to agent" : step.step === "catch-up" ? "Catching up…" : "Running…";
-      return css(el("span", { className: "wtc-step-status", textContent: label, title: phase, ariaLabel: phase, role: "status" }), `font-size:11px;white-space:nowrap;color:${failed ? TONE.failure : complete ? TONE.success : "var(--muted,#888)"}`);
+      return actionSlot(r, css(el("span", { className: "wtc-step-status", textContent: label, title: phase, ariaLabel: phase, role: "status" }), `font-size:11px;white-space:nowrap;color:${failed ? TONE.failure : complete ? TONE.success : "var(--muted,#888)"}`));
     }
     const pending = !!step.key && dispatched.has(handoffKey(r, step));
     const running = reserved(r);
@@ -1195,7 +1258,7 @@ function collectionTables(v) {
       action.ariaLabel = `${retry ? "Retry " : ""}${nextLabel(step)}: ${step.reason}`;
       if (action.disabled) { action.style.color = "var(--muted,#888)"; action.style.cursor = "default"; }
     }
-    if (confirming.has(r.sessionKey)) return css(el("div", { className: "wtc-next-step" }, nextButton("Review push", `Review ${nameOf(r)}'s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); })), "display:flex;justify-content:flex-end");
+    if (confirming.has(r.sessionKey)) return actionSlot(r, nextButton("Review push", `Review ${nameOf(r)}'s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); }));
     const available = choicesOf(r);
     let picker = null;
     if (choosing && available.length > 1) {
@@ -1203,8 +1266,7 @@ function collectionTables(v) {
       picker.style.cssText = "font:inherit;font-size:11px;max-width:104px;min-width:0;padding:2px;border:1px solid var(--border-strong,#666);border-radius:4px;background:var(--bg,#151a22);color:inherit";
       picker.onchange = () => { const chosen = available.find(a => a.available && a.key === picker.value); if (chosen) selection.set(r.sessionKey, { repo: r, step: chosen }); batchPreview = null; v.rerender(); };
     }
-    return css(el("div", { className: "wtc-next-step" }, picker ?? action,
-      !choosing && choicesOf(r).length > 1 ? nextButton("⋯", `Choose another action for ${nameOf(r)}`, () => { choosing = !choosing; if (choosing) v.showActions?.(); v.rerender(); }) : el("span", { ariaHidden: "true" })), "display:flex;align-items:center;justify-content:flex-start;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
+    return actionSlot(r, action, picker);
   }
   function actionRows(repos) {
     const rows = repos.filter(actionable);
@@ -1330,11 +1392,20 @@ function collectionTables(v) {
     if (feedback?.failed && !batchRunning) primary = nextButton("⚠ Failed", `${feedback.text}. Open full action details`, openActivity);
     if (primary) primary.style.width = "104px";
     const slot = css(el("span", { className: `wtc-toolbar-primary${confirming.size || batchRunning || selection.size ? " wtc-toolbar-primary-required" : ""}` }, primary), "display:inline-flex;align-items:baseline;justify-content:flex-end;flex:0 0 104px;width:104px;min-width:104px;min-height:var(--wtc-control-height,20px)");
+    const catches = repos.filter(r => toCatchUp(r) && !r.dirty);
+    const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
+    const more = [
+      {label: `Catch up (${catches.length})`, detail: catches.length ? "Merge the base into clean checkouts" : "No clean checkout needs catching up", disabled: !catches.length || batchRunning || catches.some(reserved) || recoveryQueueBusy(), run: () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({repo,step:repo.next}))) : catchUp([...catches])},
+      {label: `Restore (${recoverable.length})`, detail: recoverable.length ? "Recover saved checkouts; gateway admin required" : "No recoverable checkout is currently evicted", disabled: !recoverable.length || batchRunning || recoveryQueueBusy(), run: () => restoreCheckouts(recoverable)},
+      {label: `Prepare pushes (${pushes.length})`, detail: pushes.length ? "Review each push before confirming" : "No unpublished commits ready to push", disabled: !pushes.length || batchRunning || pushes.some(reserved) || recoveryQueueBusy(), run: () => pushAll([...pushes])},
+      {label: "Choose steps…", detail: "Select different steps per repository", disabled: !rows.length || batchRunning || recoveryQueueBusy(), run: () => {choosing=true;v.reveal?.();v.showActions?.();v.rerender();}},
+    ];
     const secondary = batchRunning
       ? nextButton(compact ? "Stop" : "Cancel queued", "Stop queued dispatches; active work continues", () => { batchCancelled = true; v.rerender(); })
-      : nextButton(compact ? "⋯" : "Choose steps…", "Choose alternatives or combine steps across repositories", () => { choosing = true; v.reveal?.(); v.showActions?.(); v.rerender(); }, !rows.length);
-    secondary.style.width = compact ? "36px" : "104px";
+      : actionMenu(nextButton("⋯", "More collection actions", () => {}), more, "Collection actions", text => v.say(text, true));
+    secondary.style.width = compact ? "36px" : "24px";
     secondary.style.flexShrink = "0";
+    secondary.style.flexBasis = compact ? "36px" : "24px";
     return css(el("span", { className: "wtc-action-toolbar" }, ...(compact ? [slot, secondary] : [secondary, slot])), `display:inline-flex;align-items:baseline;gap:${compact ? 4 : 8}px;min-width:0;flex-wrap:nowrap;white-space:nowrap`);
   }
   function publicationConfirmations(repos) {
@@ -1364,7 +1435,7 @@ function collectionTables(v) {
   function bulkActions(repos, narrow) {
     if (!repos.length) return null;
     const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
-    const catches = repos.filter(toCatchUp);
+    const catches = repos.filter(r => toCatchUp(r) && !r.dirty);
     const push = nextButton("↑", `Push all ${pushes.length} eligible repositories; prepare each personal confirmation`, () => pushAll([...pushes]), !pushes.length || pushes.some(reserved) || batchRunning || choosing);
     const catchAll = nextButton("↓", `Catch up all ${catches.length} eligible repositories`, () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({ repo, step: repo.next }))) : catchUp([...catches]), !catches.length || catches.some(reserved) || batchRunning || choosing);
     for (const [button, glyph] of [[push, "↑"], [catchAll, "↓"]]) {

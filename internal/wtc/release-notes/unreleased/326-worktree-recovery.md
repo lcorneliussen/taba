@@ -5,3 +5,6 @@
   recovery preserves recorded identities and saved changes; progress and failures
   appear in the Action log. Refreshing status never restores a checkout or extends
   its activity. Collection lifetime protection remains separate (#326).
+- **Repository actions share one alignment rail.** Per-row `⋯` menus expose
+  alternatives and blocked reasons; the header menu retains collection-wide
+  catch-up, recovery and push preparation when another action is primary.

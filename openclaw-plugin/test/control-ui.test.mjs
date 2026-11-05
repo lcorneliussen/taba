@@ -241,7 +241,9 @@ const tables = (node) => [...node.all()].filter((n) => n.className === "wtc-tabl
     // A choice reads as its prompt, not its options.
     const pick = [...c.all()].find((n) => n.tagName === "SELECT");
     if (pick) return pick.children[0].textContent;
-    const tunnel = [...c.all()].find(n => n.ariaHasPopup === "menu");
+    const action = [...c.all()].find(n => n.className?.split(" ").includes("wtc-next-step"));
+    if (action) return action.children[0]?.textContent ?? "";
+    const tunnel = [...c.all()].find(n => n.className === "wtc-tunnel-trigger");
     return tunnel ? "+" : c.textContent;
   }));
   return rows;
@@ -683,7 +685,7 @@ test("Bitbucket dirty files offer local commits instead of an empty push", async
     const { host, view } = await mount(kind, collection([repo("docs", { forge: "bitbucket", dirty: 2, ahead: 3, unpublished: 0, published: true })]));
     try {
       assert.ok([...host.all()].some((n) => n.tagName === "BUTTON" && n.textContent === "Commit changes"));
-      assert.equal([...host.all()].some((n) => n.tagName === "BUTTON" && /to push/.test(n.title)), false);
+      assert.equal([...host.all()].some((n) => n.tagName === "BUTTON" && !n.disabled && /to push/.test(n.title)), false);
     } finally { view.dispose(); }
   }
   bitbucket = undefined;
@@ -991,7 +993,7 @@ test("panel: a new tunnel, and one whose client is missing", async () => {
   const { host, view } = await mount("panel", collection([repo("api")], [
     { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" },
   ]));
-  const pick = [...host.all()].find((n) => n.role === "menu");
+  const pick = [...host.all()].find((n) => n.className === "wtc-tunnel-menu");
   // The gateway's portal first; without tunnel clients, the others are
   // installed first, and Tailscale is not offered on a personal tailnet.
   assert.deepEqual(pick.children.map((o) => o.value), ["gateway", "cloudflare", "ngrok", "devtunnel"]);
@@ -1021,13 +1023,13 @@ test("composer: start and stop all only with more than one service", async () =>
 test("panel: the ways to a service", async () => {
   const web = { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" };
   const team = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["tailscale", "cloudflare"], teamTailnet: true });
-  const pick = [...team.host.all()].find((n) => n.role === "menu");
+  const pick = [...team.host.all()].find((n) => n.className === "wtc-tunnel-menu");
   assert.deepEqual(pick.children.map((o) => o.ariaLabel),
     ["Gateway · OpenClaw portal", "Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Tailscale · team tailnet"]);
   team.view.dispose();
   // Without portal ingress, the gateway's portal comes last, marked.
   const bare = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["cloudflare"], portalIngress: false });
-  const choice = [...bare.host.all()].find((n) => n.role === "menu");
+  const choice = [...bare.host.all()].find((n) => n.className === "wtc-tunnel-menu");
   assert.deepEqual(choice.children.map((o) => o.ariaLabel),
     ["Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Gateway · OpenClaw portal · needs ingress"]);
   bare.view.dispose();
@@ -1054,7 +1056,7 @@ test("panel: a portal of the gateway beside its service", async () => {
   listed.view.dispose();
   portals = [{ ...portals[0], id: "p42201", url: "http://172.30.0.2:41553/?openclaw_portal=t" }];
   // Open already: not offered again.
-  assert.equal([...open.host.all()].find((n) => n.role === "menu").children.some((o) => o.value === "gateway"), false);
+  assert.equal([...open.host.all()].find((n) => n.className === "wtc-tunnel-menu").children.some((o) => o.value === "gateway"), false);
   calls.length = 0;
   titled(open.host, "Close the portal").onclick({ preventDefault() {}, stopPropagation() {} });
   await settle();
@@ -1496,7 +1498,7 @@ const withChoices = (name, kind = "fix-checks") => {
   return repo(name, { next: step, choices: { recommended: step.key, actions: [{ ...step, available: true }, { ...alternative, available: true }, { ...step, step: "review", key: `${name}:review`, available: false, blocked: "No review adapter" }] } });
 };
 const clickText = async (host, text) => {
-  const b = [...host.all()].find((n) => n.tagName === "BUTTON" && (n.textContent === text || text === "Catch up 2 repos →" && n.textContent === "Catch up 2" || text === "Choose steps…" && n.title === "Choose alternatives or combine steps across repositories" || text === "Cancel queued" && n.title === "Stop queued dispatches; active work continues" || text === "Allow retry" && n.title === "Check the conversation before retrying unchanged work"));
+  const b = [...host.all()].find((n) => n.tagName === "BUTTON" && (n.textContent === text || text === "Catch up 2 repos →" && n.textContent === "Catch up 2" || text === "Choose steps…" && n.ariaLabel === "Choose steps…" || text === "Cancel queued" && n.title === "Stop queued dispatches; active work continues" || text === "Allow retry" && n.title === "Check the conversation before retrying unchanged work"));
   assert.ok(b, text); b.onclick({ preventDefault() {}, stopPropagation() {} });
   for (let i = 0; i < 6; i++) await settle();
 };
@@ -2227,7 +2229,7 @@ test("sidebar Review push explicitly reveals the temporary section without autom
     assert.equal(scrolled[0].node.className,"wtc-transient-actions");
     assert.equal(scrolled[0].options.block,"nearest");
     scrolled.length=0;
-    await [...host.all()].find(n=>n.tagName === "BUTTON" && n.textContent === "Choose steps…").onclick();
+    await [...host.all()].find(n=>n.tagName === "BUTTON" && n.ariaLabel === "Choose steps…").onclick();
     assert.equal(scrolled.length,1,"explicit selection also reveals its controls");
     assert.equal(scrolled[0].node.className,"wtc-transient-actions");
   } finally {view.dispose();personal=null;if(previous)Node.prototype.scrollIntoView=previous;else delete Node.prototype.scrollIntoView;}
@@ -2493,8 +2495,8 @@ test("tunnel menu keys navigate without starting a tunnel, and Escape restores i
   const {host,view}=await mount("composer", collection([repo("api")],[{group:"api/web",repo:"api",kind:"service",label:"preview",state:"ready",url:"http://127.0.0.1:42201"}]));
   const oldWidth=globalThis.innerWidth; globalThis.innerWidth=320;
   try {
-    const trigger=[...host.all()].find(n=>n.ariaHasPopup==="menu");
-    const menu=[...host.all()].find(n=>n.role==="menu");
+    const trigger=[...host.all()].find(n=>n.className==="wtc-tunnel-trigger");
+    const menu=[...host.all()].find(n=>n.className==="wtc-tunnel-menu");
     const key=key=>({key,preventDefault(){},stopPropagation(){}});
     calls.length=0;
     trigger.onkeydown(key("ArrowUp")); await settle();
@@ -2689,4 +2691,45 @@ test("evicted rows do not hide a prepared publication in the header", async () =
     const primary=[...host.all()].find(n=>n.className?.startsWith("wtc-toolbar-primary"));
     assert.ok(primary.textContent.includes("Review push"),"prepared confirmation takes precedence over recovery");
   }finally{view.dispose();personal=null;}
+});
+
+for (const kind of ["composer", "panel"]) test(`mixed recovery and checkout actions stay available in ${kind} menus`, async () => {
+  const step={step:"catch-up",by:"wtc",approve:"agent",command:["wtc","catch-up"],key:"api:catch-up:head",reason:"12 new on main"};
+  const clean=repo("api",{behind:12,next:step,choices:{actions:[{...step,available:true}]}});
+  const commit={step:"commit",by:"agent",skill:"wtc",key:"web:commit:head",reason:"Save local changes"};
+  const dirty=repo("web",{dirty:2,behind:7,next:commit,choices:{actions:[{...commit,available:true}]}});
+  const missing=repo("docs",{error:"checkout unavailable",recovery:{state:"restorable",key:"docs"}});
+  const {host,view}=await mount(kind,collection([clean,dirty,missing]));
+  try{
+    const menus=[...host.all()].filter(n=>n.className==="wtc-context-menu");
+    const header=menus.find(n=>n.ariaLabel==="Collection actions");
+    const item=(menu,label)=>menu.children.find(n=>n.ariaLabel===label);
+    assert.ok(!item(header,"Catch up (1)").disabled,"one clean checkout remains eligible beside recovery");
+    assert.ok(!item(header,"Restore (1)").disabled);
+    const web=menus.find(n=>n.ariaLabel==="Actions for web");
+    assert.ok(item(web,"Catch up").disabled);
+    assert.match(item(web,"Catch up").textContent,/Save or stash/);
+    const api=menus.find(n=>n.ariaLabel==="Actions for api");
+    assert.ok(!item(api,"Catch up").disabled);
+    const trigger=[...host.all()].find(n=>n.ariaLabel==="More actions for api");
+    const event=key=>({key,preventDefault(){},stopPropagation(){}});
+    calls.length=0;trigger.onkeydown(event("ArrowDown"));
+    assert.equal(trigger.ariaExpanded,"true");
+    assert.equal(document.activeElement,item(api,"Catch up"));
+    api.onkeydown(event("Escape"));assert.equal(document.activeElement,trigger);
+    assert.equal(calls.length,0,"opening and navigating menus dispatches nothing");
+    nextResult={ok:true,result:{performed:true,repo:clean,code:0,json:{summary:"caught up"}}};
+    await item(header,"Catch up (1)").onclick(event());for(let i=0;i<6;i++)await settle();
+    const invoked=calls.filter(c=>c.actionId==="next");assert.equal(invoked.length,1);
+    assert.equal(invoked[0].payload.ownerSessionKey,clean.sessionKey);
+    assert.equal(invoked[0].payload.approveCatchUp,true);
+    assert.ok(!calls.some(c=>c.actionId==="restore-checkout"),"choosing catch-up does not restore another row");
+  }finally{view.dispose();nextResult=undefined;}
+});
+
+test("blocked PR alternatives remain visible and cannot dispatch", async()=>{
+ const step={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+ const r=repo("api",{next:step,choices:{actions:[step,{step:"review",by:"agent",skill:"wtc-local-review",key:"api:review:head",available:false,blocked:"Independent review adapter unavailable"}]}});
+ const {host,view}=await mount("panel",collection([r]));
+ try{const menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");const blocked=menu.children.find(n=>n.ariaLabel==="Run independent review");assert.ok(blocked.disabled);assert.match(blocked.textContent,/adapter unavailable/);calls.length=0;await blocked.onclick();assert.equal(calls.length,0);}finally{view.dispose();}
 });
