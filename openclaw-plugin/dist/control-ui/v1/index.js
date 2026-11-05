@@ -725,6 +725,7 @@ const pullRequestRows = (repos) => {
 // Activity is shared by views of one collection for this browser session.
 // It is UI feedback, not an executable plan or a durable completion receipt.
 const activityStore = new Map();
+const recoveryQueues = new Set();
 const feedbackStore = new Map();
 // Hand off the requested service locally, independently of optional host panel
 // props; log output stays in the panel that fetched it.
@@ -886,6 +887,35 @@ function collectionTables(v) {
   // Mirror browser-local publication progress; this is not a gateway lock.
   const sharedPushBusy = (r) => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "push" && item.repoSessionKey === r.sessionKey && item.inFlight);
   const reserved = (r) => acting.has(r.sessionKey) || busy.has(r.sessionKey) || catching.has(r.sessionKey) || sharedPushBusy(r);
+  const recoveryBusy = r => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "restore" && item.repoSessionKey === r.sessionKey && item.inFlight);
+  async function restoreCheckouts(repos) {
+    const conversation = v.key(), logKey = v.collectionKey?.() ?? conversation;
+    if (recoveryQueues.has(logKey)) return;
+    recoveryQueues.add(logKey);
+    const captured = repos.map(r => structuredClone(r));
+    try { for (const r of captured) {
+      if (!active(conversation)) {
+        recordActivity(logKey, uuid(), { repo: nameOf(r), repoSessionKey: r.sessionKey, action: "restore", state: "cancelled", status: "Restore cancelled before dispatch: the view closed or changed" });
+        continue;
+      }
+      if (recoveryBusy(r) || r.recovery?.state !== "restorable") continue;
+      const id = uuid(), name = nameOf(r);
+      const say = (text, failed = false) => { if (active(conversation)) v.say(text, failed, null, id); };
+      recordActivity(logKey, id, { repo: name, repoSessionKey: r.sessionKey, action: "restore", inFlight: true, state: "running", status: `Restoring ${name}…` });
+      say(`Restoring ${name}…`); v.rerender();
+      try {
+        const out = await call(v.host, "restore-checkout", conversation, v.agent(), { ownerSessionKey: r.sessionKey, key: r.recovery.key });
+        const status = `${name}: ${out.message ?? "checkout restored"}`;
+        recordActivity(logKey, id, { state: "completed", status }); say(status);
+      } catch (err) {
+        const status = `${name}: restore failed — ${String(err?.message ?? err)}`;
+        recordActivity(logKey, id, { state: "failed", status }); say(status, true);
+      } finally {
+        recordActivity(logKey, id, { inFlight: false });
+        if (active(conversation)) { try { await v.refresh(); } catch {} v.rerender(); }
+      }
+    } } finally { recoveryQueues.delete(logKey); if (active(conversation)) v.rerender(); }
+  }
   async function sendToAuthor(conversation, skill, input) {
     if (!active(conversation)) throw Error("The view closed or changed before handoff");
     if (authorSending) throw Error("An author handoff is already pending; wait before dispatching another");
@@ -1119,6 +1149,7 @@ function collectionTables(v) {
   const lastActivity = (r) => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].reverse().filter(item => item.repo === nameOf(r)).sort((a, b) => b.at - a.at)[0];
   const activityFailed = item => item?.state === "failed" || /^(Failed|Handoff failed|Cannot )/.test(item?.status ?? "");
   function nextCell(r) {
+    if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return css(el("div", { className: "wtc-next-step" }, nextButton(recoveryBusy(r) ? "Restoring…" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryBusy(r))), "display:flex;align-items:baseline");
     if (!actionable(r)) return null;
     if (!r.next && r.choices && !r.dirty) return r.choices.actions?.length ? nextButton("Choose step…", "Inspect available actions and blocked reasons", () => { choosing = true; v.showActions?.(); v.rerender(); }) : null;
     const step = selection.get(r.sessionKey)?.step ?? r.next ?? { step: "commit", reason: "Review and commit intended changes locally" };
@@ -1231,7 +1262,9 @@ function collectionTables(v) {
     const title = (batchRunning ? `Running: ${processed} of ${batchResults.size} selected steps handled.\n` : "") + targets.map(({ repo, step }) => `${nameOf(repo)}: ${nextLabel(step)} — ${step.reason}`).join("\n");
     let primary = null;
     const prepared = repos.find(r => confirming.has(r.sessionKey));
-    if (prepared && !batchRunning && !batchPreview) primary = nextButton("Review push", `Review ${nameOf(prepared)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
+    const recoverable = repos.filter(r => r.error === "checkout unavailable" && r.recovery?.state === "restorable");
+    if (recoverable.length) primary = nextButton(recoverable.some(recoveryBusy) ? "Restoring…" : `Restore${recoverable.length > 1 ? ` ${recoverable.length}` : ""}`, `Restore saved checkouts: ${recoverable.map(nameOf).join(", ")}. Each result is recorded in the Action log. Requires gateway admin permission.`, () => restoreCheckouts(recoverable), recoverable.some(recoveryBusy) || batchRunning);
+    else if (prepared && !batchRunning && !batchPreview) primary = nextButton("Review push", `Review ${nameOf(prepared)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
     else if (single && !batchRunning && !batchPreview) {
       const { repo, step } = single;
       if (nextRoute(step) === "pr" && repo.pullRequest?.url) {
@@ -1266,6 +1299,7 @@ function collectionTables(v) {
       const last = [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].reverse().sort((a,b) => b.at-a.at)[0];
       if (last) {
         const label = last.state === "published" && last.action === "push" ? "✓ Pushed"
+          : last.state === "completed" && last.action === "restore" ? "✓ Restored"
           : last.state === "completed" && last.action === "refresh" ? "✓ Refreshed"
           : last.state === "confirmation" ? "Awaiting confirm"
           : last.state === "blocked" ? "Needs attention"
@@ -1696,8 +1730,8 @@ function collectionTables(v) {
         () => sendToAuthor(v.key(), "wtc-catch-up", `${nameOf(r)}: pull request #${pr.number} conflicts with ${baseOf(r)}.`))
       : null;
     const review = open ? { approved: toned("✓", TONE.success, "approved"), changes_requested: toned("✗", TONE.failure, "changes requested"), review_required: muted("○", "review required") }[pr.review] ?? null : null;
-    const errorLabel = r.error === "checkout unavailable" ? "No checkout" : r.error === "status unavailable" ? "No status" : r.error;
-    const branch = r.error ? toned(errorLabel, TONE.failure, r.error)
+    const errorLabel = r.error === "checkout unavailable" ? r.recovery?.state === "restorable" ? "Evicted" : r.recovery?.state === "unavailable" ? "Snapshot unavailable" : "No checkout" : r.error === "status unavailable" ? "No status" : r.error;
+    const branch = r.error ? toned(errorLabel, r.recovery?.state === "restorable" ? TONE.pending : TONE.failure, r.recovery?.state === "restorable" ? "OpenClaw evicted this checkout; a recovery snapshot is recorded. Restore to resume." : r.recovery?.reason ?? r.error)
         : untouched(r)
           ? css(el("code", { textContent: `at ${baseOf(r)}`, title: `Checked out on branch ${r.branch}; no task commits ahead of ${baseOf(r)}` }), "font-size:12px;color:var(--muted, #888)")
           : css(el("code", { textContent: r.branch ?? `at ${baseOf(r)}`, title: r.branch ? `${r.branch}, ${r.ahead ?? 0} ahead of ${baseOf(r)}` : `Detached HEAD at ${baseOf(r)}; no branch is checked out` }), "font-size:12px;color:var(--muted, #888)");

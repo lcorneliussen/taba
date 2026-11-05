@@ -886,3 +886,27 @@ repositories, but the section is not nested under the final repository row.
 Browser table labels use normal capitalization; the terminal keeps its uppercase
 headings. Visual review compares intended section regions with a separately
 recorded pixels-only grouping, rather than inferring hierarchy from the DOM alone.
+
+### Restore an evicted checkout
+
+When OpenClaw evicts an idle managed worktree but retains its snapshot, the
+Collection card and sidebar show **Evicted** and **Restore**. The header offers
+**Restore N** for the recoverable repositories, including while the card is
+collapsed. Restoration needs the person's gateway `operator.admin` permission.
+It runs sequentially through OpenClaw's native restore command, rechecks the
+recorded owner, destination, branch and snapshot, then refreshes status. Each
+repository's success or error appears in the Action log. If the conversation
+changes, queued repositories are left alone.
+
+Restore keeps the existing native record and session binding, including saved
+uncommitted changes. It does not fetch a newer branch, clone a replacement,
+start services or overwrite an occupied destination. A stale record, missing
+snapshot, changed branch or native permission failure is reported for inspection.
+A directory that is merely missing, with no verified recovery record, does not
+get a Restore action. Older hosts without recovery commands still show its
+repository identity and **No checkout**.
+
+Status refreshes never restore or extend activity. Recovery metadata uses a
+coalesced native worktree listing only while checkout rows are unavailable; the
+native service can reconcile its own registry during that listing. Restoration
+does not change OpenClaw's idle cleanup or snapshot retention policy.

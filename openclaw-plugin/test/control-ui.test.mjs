@@ -113,6 +113,7 @@ let serviceLogsResult = { ok: true, result: { logs: "" } };
 let preserved = {};
 let catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
 let nextResult;
+let restoreResult;
 let githubPublishResult = { status: "needs_confirmation", requestId: "req-1" };
 let githubConfirmResult;
 let githubStatusResult;
@@ -163,6 +164,7 @@ const hostRequest = async (method, params) => {
   if (method === "plugins.sessionAction" && params.actionId === "svc-logs") return typeof serviceLogsResult === "function" ? serviceLogsResult(params) : serviceLogsResult;
   if (method === "plugins.sessionAction" && params.actionId === "catch-up") return catchUpResult;
   if (method === "plugins.sessionAction" && params.actionId === "next") return typeof nextResult === "function" ? nextResult(params) : nextResult;
+  if (method === "plugins.sessionAction" && params.actionId === "restore-checkout") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
   if (method === "sessions.delete") return { ok: true, key: params.key, deleted: true, archived: [], ...(preserved[params.key] ? { worktreePreserved: preserved[params.key] } : {}) };
   if (method === "sessions.github.publish") return typeof githubPublishResult === "function" ? githubPublishResult(params) : githubPublishResult;
   if (method === "sessions.github.confirm") return typeof githubConfirmResult === "function" ? githubConfirmResult(params) : githubConfirmResult ?? { status: "published", url: "https://github.com/octo/api/pull/7" };
@@ -2613,4 +2615,59 @@ for (const kind of ["composer", "panel"]) test(`${kind}: an action refresh from 
     assert.equal(refresh.isConnected, true);
     assert.equal(document.activeElement, refresh);
   } finally { release({ ok: true, result: data }); controlledCollection = undefined; view.dispose(); }
+});
+
+for (const kind of ["composer", "panel"]) test(`native checkout recovery from ${kind} logs errors and refreshes successes`, async () => {
+  const r=repo("api",{error:"checkout unavailable",recovery:{state:"restorable",key:"recovery-key",removedAt:1000}});
+  const key=`agent:main:restore-${kind}`;
+  const {host,view}=await mount(kind,collection([r]),undefined,key);
+  try {
+    assert.ok(texts(host).some(t=>t.includes("Evicted")));
+    const button=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore"&&n.title.startsWith("Restore api from"));
+    assert.ok(button());
+    let finish;restoreResult=new Promise(resolve=>{finish=resolve});
+    button().click();await settle();
+    assert.ok(buttons(host).includes("Restoring…"));
+    assert.equal(calls.at(-1).actionId,"restore-checkout");
+    assert.deepEqual(calls.at(-1).payload,{ownerSessionKey:r.sessionKey,key:"recovery-key"});
+    finish({ok:false,error:"missing scope: operator.admin"});await settle();await settle();
+    assert.ok(readable(host).includes("operator.admin"),"permission failure remains accessible in result details");
+    restoreResult=()=>{collections.set(key,collection([repo("api")]));return {ok:true,result:{message:"Checkout restored from its saved snapshot"}}};
+    button().click();await settle();await settle();
+    assert.ok(!texts(host).some(t=>t==="Evicted"));
+    assert.ok(!button(),"the refreshed row no longer offers recovery");
+  } finally {view.dispose();restoreResult=undefined;}
+});
+
+test("unknown or expired recovery never offers Restore", async () => {
+  const {host,view}=await mount("panel",collection([repo("api",{error:"checkout unavailable",recovery:{state:"unavailable",reason:"No recovery snapshot is recorded"}})]));
+  try{assert.ok(!buttons(host).includes("Restore"));assert.ok(texts(host).some(t=>t.includes("Snapshot unavailable")));}finally{view.dispose();}
+});
+
+test("collapsed restore-all stays sequential, records partial failure and cancels queued work on switch", async () => {
+  const missing=name=>repo(name,{error:"checkout unavailable",recovery:{state:"restorable",key:name}});
+  const key="agent:main:restore-queue";
+  const {host,view}=await mount("composer",collection([missing("api"),missing("web")]),undefined,key);
+  const requests=[];let finish;
+  restoreResult=params=>{requests.push(params);return new Promise(resolve=>{finish=resolve})};
+  try {
+    const all=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore 2");assert.ok(all,"collapsed toolbar exposes recovery");
+    all.click();await settle();assert.equal(requests.length,1);
+    finish({ok:false,error:"Snapshot unavailable"});await settle();await settle();
+    assert.equal(requests.length,2,"second target starts only after first result and refresh");
+    assert.equal(requests[1].payload.ownerSessionKey,"agent:main:owner:web");
+    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    assert.ok(!readable(host).includes("Restoring…"));
+  }finally{view.dispose();restoreResult=undefined;}
+  const other=await mount("composer",collection([missing("api"),missing("web")]),undefined,"agent:main:restore-switch");
+  requests.length=0;
+  restoreResult=params=>{requests.push(params);return new Promise(resolve=>{finish=resolve})};
+  try{
+    [...other.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore 2").click();await settle();
+    collections.set("agent:main:replacement",collection([repo("docs")]));
+    other.context.props.sessionKey="agent:main:replacement";other.view.update(other.context);await settle();
+    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    assert.equal(requests.length,1,"switch cancels the second captured target");
+    assert.ok(!readable(other.host).includes("api: restored"),"old result cannot appear in new conversation");
+  }finally{other.view.dispose();restoreResult=undefined;}
 });
