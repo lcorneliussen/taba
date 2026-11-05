@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/lcorneliussen/wtc-cli/internal/branding"
@@ -43,6 +44,11 @@ type DevBuild struct {
 
 func devBuildDir(collection string) string {
 	return filepath.Join(collection, ".wtc", "dev")
+}
+
+func validDevBuildVersion(version string) bool {
+	_, err := semver.NewVersion(version)
+	return err == nil
 }
 
 // FindCollectionRoot walks up from start to the collection root, recognized
@@ -79,7 +85,7 @@ func ReadDevBuild(collection string) *DevBuild {
 	if err != nil || safeGeneratedParent(collection, dir) != nil {
 		return nil
 	}
-	if build, present, err := readDevGeneration(collection, dir); present || err != nil {
+	if build, present, err := readDevPublishedBuild(collection, dir); present || err != nil {
 		return build
 	}
 	binary := filepath.Join(dir, "wtc")
@@ -188,7 +194,31 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	if goModule(filepath.Join(source, "go.mod")) != wtcModule {
 		return nil, fmt.Errorf("%s is not a wtc-cli checkout", source)
 	}
-	return installDevBuild(context.Background(), collection, source, os.Stderr)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-build.lock"))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	build, err := installDevBuild(context.Background(), collection, source, os.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	// One-shot and follow artifacts share the publication point. Policy still
+	// decides whether this artifact may run; installing never undoes OFF/ON.
+	publishCtx, publishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer publishCancel()
+	publishUnlock, err := lockDevFile(publishCtx, filepath.Join(collection, ".wtc-dev-mode.lock"))
+	if err != nil {
+		return nil, err
+	}
+	defer publishUnlock()
+	dir := devBuildDir(collection)
+	if err := publishDevBuild(collection, dir, build); err != nil {
+		return nil, err
+	}
+	return build, nil
 }
 
 // The one-shot entrypoint validates its historical module contract above.

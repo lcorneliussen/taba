@@ -89,6 +89,9 @@ func main(){if len(os.Args)==4&&os.Args[1]=="--json"&&os.Args[2]=="dev"&&os.Args
 		t.Fatalf("review-only redirected: %d %s", code, out)
 	}
 	os.Remove(filepath.Join(collection, ".wtc-review-mode"))
+	if out, code := run(pinned, nil, "dev", "install", "--source", source); code != 0 || !strings.Contains(out, "mode on follows") {
+		t.Fatalf("install summary ignored active source policy: %d %s", code, out)
+	}
 	write(main, "broken source")
 	if out, code := run(pinned, nil, "hello"); code == 0 || strings.Contains(out, "second:") {
 		t.Fatalf("stale code executed: %d %s", code, out)

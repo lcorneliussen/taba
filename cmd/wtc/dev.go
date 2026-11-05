@@ -375,6 +375,18 @@ func addDevCommands(root *cobra.Command, asJSON *bool) {
 }
 
 func devBuildEffect(build *wtc.DevBuild) string {
+	if build.Collection != "" {
+		state, err := wtc.DevFollowConfiguration(build.Collection)
+		if err != nil {
+			return "stored artifact; dev mode needs attention: " + err.Error()
+		}
+		if state.Mode == "off" {
+			return "stored artifact; mode off keeps it inactive"
+		}
+		if state.Active {
+			return "mode " + state.Mode + " follows " + state.Source
+		}
+	}
 	if build.Generation != "" {
 		if build.Generation == devRunningGeneration {
 			return "running this immutable local generation"

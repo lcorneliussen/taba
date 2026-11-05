@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -429,6 +430,9 @@ func TestDevFollowFailureBackoffAndUnsafePublication(t *testing.T) {
 	if _, err := EnsureDevFollow(ctx, collection); err == nil {
 		t.Fatal("linked manifest accepted")
 	}
+	if _, err := InstallDevBuild(collection, source); err == nil {
+		t.Fatal("one-shot publisher replaced a linked current-state slot")
+	}
 	if data, _ := os.ReadFile(outside); string(data) != string(validManifest) {
 		t.Fatal("linked target changed")
 	}
@@ -477,4 +481,115 @@ func TestDevFollowExplicitCompatibleForkDoesNotWeakenAuto(t *testing.T) {
 	if _, err := InstallDevBuild(collection, source); err == nil {
 		t.Fatal("historical one-shot module validation was weakened")
 	}
+}
+
+func TestDevFollowInactiveAutoAllowsNewOneShotInstall(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	if err := SetDevMode(collection, "on", source); err != nil {
+		t.Fatal(err)
+	}
+	followed := ensureDevTest(t, collection).Build
+	if err := SetDevMode(collection, "auto", ""); err != nil {
+		t.Fatal(err)
+	}
+	state, err := DevFollowConfiguration(collection)
+	if err != nil || state.Active {
+		t.Fatalf("inactive AUTO control: %+v %v", state, err)
+	}
+	fixtureFile(t, filepath.Join(source, "cmd", "wtc", "main.go"), "package main\nimport \"fmt\"\nvar version=\"dev\"\nfunc main(){fmt.Println(\"legacy-restored\")}\n", 0644)
+	installed, err := InstallDevBuild(collection, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected := ReadDevBuild(collection)
+	if selected == nil || selected.Generation != "" || selected.Binary != installed.Binary || !DevBuildTakesOver("0.1.0", selected) {
+		t.Fatalf("retained follow pointer hid successful one-shot: installed=%+v selected=%+v", installed, selected)
+	}
+	out, err := exec.Command(selected.Binary).Output()
+	if err != nil || strings.TrimSpace(string(out)) != "legacy-restored" {
+		t.Fatalf("new one-shot not selected: %v %s", err, out)
+	}
+	if _, err := os.Stat(followed.Binary); err != nil {
+		t.Fatal("one-shot publication unlinked active generation")
+	}
+}
+
+func TestDevFollowAndOneShotPublishersAreOrdered(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	if err := SetDevMode(collection, "on", source); err != nil {
+		t.Fatal(err)
+	}
+	started, release, calls := devBlockGo(t, "build")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	oneShot := make(chan error, 1)
+	go func() { _, err := InstallDevBuild(collection, source); oneShot <- err }()
+	waitDevMarker(t, started)
+	// The compiler has acknowledged entry. Independently attempting the
+	// exact shared lock proves exclusion; this does not infer overlap from sleep.
+	short, stop := context.WithTimeout(ctx, 100*time.Millisecond)
+	unlock, err := lockDevFile(short, filepath.Join(collection, ".wtc-dev-build.lock"))
+	stop()
+	if err == nil {
+		unlock()
+		t.Fatal("one-shot compiler did not hold the shared build lock")
+	}
+	waitCtx, cancelWait := context.WithCancel(ctx)
+	observed := &devObservedContext{Context: waitCtx, waiting: make(chan struct{})}
+	follow := make(chan error, 1)
+	go func() {
+		_, err := EnsureDevFollow(observed, collection)
+		follow <- err
+	}()
+	select {
+	case <-observed.waiting:
+	case <-ctx.Done():
+		t.Fatal("second publisher did not reach its cancellable wait")
+	}
+	cancelWait()
+	if err := <-follow; err != context.Canceled {
+		t.Fatalf("second publisher did not stop at the lock boundary: %v", err)
+	}
+	fixtureFile(t, release, "release", 0600)
+	if err := <-oneShot; err != nil {
+		t.Fatal(err)
+	}
+	state := ensureDevTest(t, collection)
+	if state.Build == nil || state.Build.Generation == "" {
+		t.Fatalf("ON lost selected follow source: %+v", state)
+	}
+	selected := ReadDevBuild(collection)
+	if selected == nil || selected.Generation != state.Build.Generation {
+		t.Fatalf("final publication mismatch: %+v", selected)
+	}
+	if _, err := os.Stat(selected.Binary); err != nil {
+		t.Fatal("published record points to a missing binary")
+	}
+	raw, _ := os.ReadFile(calls)
+	if strings.Count(string(raw), "call") != 2 {
+		t.Fatalf("expected one one-shot and one follow compile: %s", raw)
+	}
+	if err := SetDevMode(collection, "off", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallDevBuild(collection, source); err != nil {
+		t.Fatal(err)
+	}
+	if state := ensureDevTest(t, collection); state.Active || state.Mode != "off" {
+		t.Fatalf("manual publication undid OFF: %+v", state)
+	}
+}
+
+// Done is observed without altering cancellation behavior. While the first
+// compiler owns the lock, the second call must return the raw lock cancellation
+// before that compiler is released, not a wrapped input-query/build error.
+type devObservedContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *devObservedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
 }

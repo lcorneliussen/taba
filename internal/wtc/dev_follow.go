@@ -235,7 +235,7 @@ func devAtomicJSON(path string, data []byte) error {
 	return os.Rename(f.Name(), path)
 }
 
-func readDevGeneration(collection, dir string) (*DevBuild, bool, error) {
+func readDevPublishedBuild(collection, dir string) (*DevBuild, bool, error) {
 	raw, err := readPrivateDevFile(filepath.Join(dir, "current.json"))
 	if os.IsNotExist(err) {
 		return nil, false, nil
@@ -247,23 +247,31 @@ func readDevGeneration(collection, dir string) (*DevBuild, bool, error) {
 	if err := json.Unmarshal(raw, &build); err != nil {
 		return nil, true, err
 	}
-	if err := validateDevGeneration(collection, dir, &build); err != nil {
+	if err := validateDevPublishedBuild(collection, dir, &build); err != nil {
 		return nil, true, err
 	}
 	return &build, true, nil
 }
 
-func validateDevGeneration(collection, dir string, build *DevBuild) error {
-	if build.FollowProtocol != 1 {
-		return fmt.Errorf("dev generation lacks follow capability; use dev install for one-shot builds")
+func validateDevPublishedBuild(collection, dir string, build *DevBuild) error {
+	if !validDevBuildVersion(build.Version) {
+		return fmt.Errorf("invalid dev build version")
 	}
-	if len(build.Generation) != 64 {
-		return fmt.Errorf("invalid dev generation")
+	expected := filepath.Join(dir, "wtc")
+	if build.Generation != "" {
+		if build.FollowProtocol != 1 {
+			return fmt.Errorf("dev generation lacks follow capability; use dev install for one-shot builds")
+		}
+		if len(build.Generation) != 64 {
+			return fmt.Errorf("invalid dev generation")
+		}
+		if _, err := hex.DecodeString(build.Generation); err != nil {
+			return err
+		}
+		expected = filepath.Join(filepath.Dir(dir), "dev-generations", build.Generation, "wtc")
+	} else if build.FollowProtocol != 0 {
+		return fmt.Errorf("invalid one-shot artifact protocol")
 	}
-	if _, err := hex.DecodeString(build.Generation); err != nil {
-		return err
-	}
-	expected := filepath.Join(filepath.Dir(dir), "dev-generations", build.Generation, "wtc")
 	if build.Binary != expected || build.Collection != collection || safeGeneratedParent(collection, filepath.Dir(expected)) != nil {
 		return fmt.Errorf("unsafe dev generation path")
 	}
@@ -272,6 +280,22 @@ func validateDevGeneration(collection, dir string, build *DevBuild) error {
 		return fmt.Errorf("unsafe dev generation executable")
 	}
 	return nil
+}
+
+// Callers hold the policy lock. Both artifact kinds use this selection point;
+// a manual install must not replace a linked/special current-state slot either.
+func publishDevBuild(collection, dir string, build *DevBuild) error {
+	if _, err := readPrivateDevFile(filepath.Join(dir, "current.json")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := validateDevPublishedBuild(collection, dir, build); err != nil {
+		return err
+	}
+	data, err := json.Marshal(build)
+	if err != nil {
+		return err
+	}
+	return devAtomicJSON(filepath.Join(dir, "current.json"), data)
 }
 
 // EnsureDevFollow is the shared strict freshness path for startup and passive
@@ -306,7 +330,7 @@ func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, er
 		if err := safeGeneratedParent(collection, dir); err != nil {
 			return state, err
 		}
-		if build, _, err := readDevGeneration(collection, dir); err != nil {
+		if build, _, err := readDevPublishedBuild(collection, dir); err != nil {
 			return state, err
 		} else if build != nil && build.Source == state.Source && build.Generation == fingerprint {
 			var selected DevFollowState
@@ -417,13 +441,7 @@ func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, er
 			os.RemoveAll(staging)
 			return state, err
 		}
-		if err := validateDevGeneration(collection, dir, build); err != nil {
-			publishUnlock()
-			os.RemoveAll(staging)
-			return state, err
-		}
-		data, _ := json.Marshal(build)
-		err = devAtomicJSON(filepath.Join(dir, "current.json"), data)
+		err = publishDevBuild(collection, dir, build)
 		publishUnlock()
 		os.RemoveAll(staging)
 		if err != nil {
@@ -441,6 +459,9 @@ func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, er
 // WithDevGeneration serializes final delegation with OFF. Exec closes the
 // policy lock in the kernel, so OFF cannot complete before a stale delegation.
 func WithDevGeneration(ctx context.Context, collection, generation string, run func(*DevBuild) error) (bool, error) {
+	if len(generation) != 64 {
+		return false, nil
+	}
 	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-mode.lock"))
 	if err != nil {
 		return false, err
