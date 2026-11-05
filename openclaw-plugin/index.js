@@ -44,7 +44,7 @@ export function versionWarning(pluginVersion, wtcVersionOutput) {
 }
 
 // Native records are authoritative; directory absence alone does not establish recovery.
-export function worktreeRecovery(entry, sessionKey, records) {
+function worktreeRecovery(entry, sessionKey, records) {
   const matches = records.filter(r => r.id === entry.worktree?.id);
   const r = matches.length === 1 ? matches[0] : null;
   if (!r || r.ownerKind !== "session" || r.ownerId !== sessionKey ||

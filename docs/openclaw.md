@@ -785,7 +785,8 @@ such as **Catch up 2 repos →** or **Do next (2) →** captures those exact ste
 Catch-up and local steps start directly. Publication selections show a preview
 and retain each repository's account/commit confirmation.
 
-**⋯** in the compact top bar (**Choose steps…** in the sidebar) reveals alternatives and mixed selection controls. Choose an
+The header **⋯** menu, in both the card and sidebar, lists **Choose steps…**
+for alternatives and mixed selection controls. Choose an
 action per repository, check its selection, or use **Select suggested**. Existing
 alternative choices are preserved. **Run selected** rechecks the exact targets.
 A changed head, base, worktree state or PR observation makes an old selection

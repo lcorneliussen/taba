@@ -815,7 +815,7 @@ async function trackedRefresh(watch, sessionKey, say, currentSession = () => ses
 }
 
 const REPO_NEXT_WIDTH = 132, REPO_COLUMN_GAP = 10;
-export const inlineActionCapacity = (width, narrow = false) => narrow ? 1 : Math.max(1, Math.floor(((width || 0) - 484) / 108));
+const inlineActionCapacity = (width, narrow = false) => narrow ? 1 : Math.max(1, Math.floor(((width || 0) - 484) / 108));
 const headerActionCapacity = width => Math.max(1, Math.min(4, Math.floor(((width || 0) - 300) / 108)));
 const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${actionWidth}px`, align: "end" }]
@@ -839,9 +839,8 @@ const actionFeedback = () => el("style", { textContent: `
 /* Primary actions and their menu rail share one fixed layout in every row. */
 .wtc-next-step { display:flex;align-items:baseline;gap:4px; }
 .wtc-table .wtc-next-step>.wtc-action-control,.wtc-next-step .wtc-action-menu>.wtc-action-control { min-height:24px !important;height:24px; }
-.wtc-next-step.wtc-restore-step { justify-content:flex-start !important; }
 .wtc-context-option:not(:disabled):is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;outline:2px solid var(--accent,#75c8c1);outline-offset:-2px; }
-.wtc-restore-control,.wtc-next-step.wtc-restore-step>.wtc-restore-control { min-height:24px !important;height:24px;--wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
+.wtc-restore-control { min-height:24px !important;height:24px;--wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
 .wtc-toolbar-primary>.wtc-restore-control:disabled { --wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
 .wtc-toolbar-primary:empty,.wtc-summary-facts:empty,.wtc-header-controls>button,.wtc-header-controls>span:last-child { align-self:center; }
 .wtc-action-control:not(:disabled):hover { --wtc-control-bg:var(--bg-hover,rgba(128,128,128,.16)); --wtc-control-border:var(--border-strong,rgba(128,128,128,.5)); --wtc-control-text:var(--text-strong,var(--text,inherit)); box-shadow:none; }

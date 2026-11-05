@@ -2642,7 +2642,7 @@ for (const kind of ["composer", "panel"]) test(`native checkout recovery from ${
   } finally {view.dispose();restoreResult=undefined;}
 });
 
-test("unknown or expired recovery never offers Restore", async () => {
+test("recovery without a recorded snapshot never offers Restore", async () => {
   const {host,view}=await mount("panel",collection([repo("api",{error:"checkout unavailable",recovery:{state:"unavailable",reason:"No recovery snapshot is recorded"}})]));
   try{assert.ok(!buttons(host).includes("Restore"));assert.ok(texts(host).some(t=>t.includes("Snapshot unavailable")));}finally{view.dispose();}
 });
@@ -2730,7 +2730,7 @@ for (const kind of ["composer", "panel"]) test(`mixed recovery and checkout acti
   }finally{view.dispose();nextResult=undefined;}
 });
 
-test("blocked PR alternatives remain visible and cannot dispatch", async()=>{
+test("blocked repository alternatives remain visible and cannot dispatch", async()=>{
  const step={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
  const r=repo("api",{next:step,choices:{actions:[step,{step:"review",by:"agent",skill:"wtc-local-review",key:"api:review:head",available:false,blocked:"Independent review adapter unavailable"}]}});
  const {host,view}=await mount("panel",collection([r]));
