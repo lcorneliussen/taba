@@ -1270,3 +1270,84 @@ func TestStatusDevCancelledRestartKeepsRuntimeTimer(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusDevCancelledRestartKeepsStatusAndFollowTicks(t *testing.T) {
+	old := devRunningGeneration
+	devRunningGeneration = "running"
+	defer func() { devRunningGeneration = old }()
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failure=%v", failed), func(t *testing.T) {
+			m := statusTUIModel{context: &wtc.Context{Collection: t.TempDir()}, nextRunning: true, devAllowed: true, devCollection: "synthetic", interval: time.Hour}
+			updated, _ := m.Update(statusDevMsg{state: wtc.DevFollowState{Active: true, Build: &wtc.DevBuild{Generation: "replacement"}}})
+			m = updated.(statusTUIModel)
+			m.nextRunning = false
+			updated, command := m.Update(statusTickMsg(time.Now()))
+			m = updated.(statusTUIModel)
+			if command == nil || !m.devChecking || m.devAutoExit {
+				t.Fatal("queued idle restart did not revalidate in the working TUI")
+			}
+			commands, ok := command().(tea.BatchMsg)
+			if !ok || len(commands) != 2 {
+				t.Fatal("revalidation consumed the single status tick chain")
+			}
+			tick, ok := commands[0]().(statusTickMsg)
+			if !ok {
+				t.Fatal("revalidation did not retain exactly one status tick")
+			}
+			result := statusDevMsg{state: wtc.DevFollowState{Active: true, Build: &wtc.DevBuild{Generation: "running"}}}
+			if failed {
+				result.err = errors.New("synthetic build failure")
+			}
+			updated, command = m.Update(result)
+			m = updated.(statusTUIModel)
+			if command != nil || m.devRestart != nil || m.devAutoExit {
+				t.Fatal("cancelled replacement quit or duplicated the status chain")
+			}
+			m.nextRefresh = time.Now().Add(-time.Second)
+			updated, command = m.Update(tick)
+			m = updated.(statusTUIModel)
+			if command == nil || !m.refreshing {
+				t.Fatal("retained status tick did not schedule a later snapshot refresh")
+			}
+			commands, ok = command().(tea.BatchMsg)
+			if !ok || len(commands) != 2 {
+				t.Fatal("snapshot refresh did not retain one status tick")
+			}
+			tick, ok = commands[0]().(statusTickMsg)
+			if !ok {
+				t.Fatal("snapshot refresh lost its next tick")
+			}
+			updated, _ = m.Update(statusLoadedMsg{snapshot: m.snapshot, at: time.Now()})
+			m = updated.(statusTUIModel)
+			m.nextRefresh = time.Now().Add(time.Hour)
+			m.devCheckAt = time.Now().Add(-time.Hour)
+			updated, command = m.Update(tick)
+			m = updated.(statusTUIModel)
+			if command == nil || !m.devChecking {
+				t.Fatal("surviving status chain did not schedule a future source check")
+			}
+			commands, ok = command().(tea.BatchMsg)
+			if !ok || len(commands) != 2 {
+				t.Fatal("future source check did not retain one status tick")
+			}
+			if _, ok := commands[0]().(statusTickMsg); !ok {
+				t.Fatal("future source check dropped its next tick")
+			}
+		})
+	}
+}
+
+func TestStatusDevPendingRestartDoesNotStartAnotherDueRead(t *testing.T) {
+	old := devRunningGeneration
+	devRunningGeneration = "running"
+	defer func() { devRunningGeneration = old }()
+	m := statusTUIModel{context: &wtc.Context{}, nextRunning: true, nextRefresh: time.Now().Add(-time.Minute)}
+	updated, _ := m.Update(statusDevMsg{state: wtc.DevFollowState{Active: true, Build: &wtc.DevBuild{Generation: "replacement"}}})
+	m = updated.(statusTUIModel)
+	m.nextRunning = false
+	updated, command := m.Update(statusTickMsg(time.Now()))
+	m = updated.(statusTUIModel)
+	if command == nil || m.refreshing || !m.devChecking || m.devAutoExit {
+		t.Fatal("pending handover started another due read instead of idle revalidation")
+	}
+}

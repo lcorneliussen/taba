@@ -365,7 +365,11 @@ func (m *statusTUIModel) restoreDevPresentation() {
 func (m statusTUIModel) devTick() (tea.Model, tea.Cmd, bool) {
 	if m.devRestart != nil {
 		if m.devIdle() {
+			revalidating := m.devRestart.needsCheck
 			next, command := m.finishDevUpdate()
+			if revalidating {
+				command = tea.Batch(statusTUITick(), command)
+			}
 			return next, command, true
 		}
 		return m, statusTUITick(), true
@@ -596,8 +600,10 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case statusTickMsg:
 		if !m.refreshing && !m.nextRunning && !m.nextRefresh.IsZero() && !time.Now().Before(m.nextRefresh) {
-			m.startRefresh()
-			return m, tea.Batch(statusTUITick(), statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge))
+			if m.devRestart == nil {
+				m.startRefresh()
+				return m, tea.Batch(statusTUITick(), statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge))
+			}
 		}
 		if next, command, handled := m.devTick(); handled {
 			return next, command
