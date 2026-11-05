@@ -953,12 +953,13 @@ func linkGatewayFolder(name string, repos []openclaw.CheckoutStatus) (string, []
 	if err != nil {
 		return folder, []wtc.RuntimeItem{}, err.Error()
 	}
-	if err := inheritGatewayProjectPorts(c, name, linked); err != nil {
-		return folder, []wtc.RuntimeItem{}, err.Error()
-	}
+	portErr := inheritGatewayProjectPorts(c, name, linked)
 	services := c.RuntimeStatus()
 	if services == nil {
 		services = []wtc.RuntimeItem{}
+	}
+	if portErr != nil {
+		return folder, services, portErr.Error()
 	}
 	return folder, services, ""
 }
@@ -976,7 +977,7 @@ func inheritGatewayProjectPorts(c *wtc.Context, task string, linked []wtc.Linked
 	}
 	var selected *openclaw.Harness
 	for _, h := range cfg.Harnesses {
-		if h.Name == name && h.Remote == remote {
+		if h.Name == name && gatewayPortSameRemote(h.Remote, remote) {
 			copy := h
 			selected = &copy
 		}
@@ -987,11 +988,6 @@ func inheritGatewayProjectPorts(c *wtc.Context, task string, linked []wtc.Linked
 	reg := readHarnessRegistry(*selected, task)
 	if reg.err != nil {
 		return reg.err
-	}
-	for _, repo := range reg.repos {
-		if _, ok := gatewayPortOrigin(repo.Remote); !ok && repo.PortOffset != nil {
-			return fmt.Errorf("project %s has an unsupported repository identity for port metadata", name)
-		}
 	}
 	var ports []wtc.GatewayPort
 	for _, link := range linked {
@@ -1046,6 +1042,12 @@ func gatewayPortOrigin(remote string) (openclaw.Origin, bool) {
 	}
 	origin := openclaw.ParseOrigin("https://" + u.Hostname() + "/" + strings.Join(parts, "/"))
 	return origin, origin.Forge != openclaw.ForgeUnknown
+}
+
+func gatewayPortSameRemote(a, b string) bool {
+	x, ok := gatewayPortOrigin(a)
+	y, other := gatewayPortOrigin(b)
+	return ok && other && x.Forge == y.Forge && strings.EqualFold(x.Owner, y.Owner) && strings.EqualFold(x.Repo, y.Repo)
 }
 
 // refuseUnderGateway stops commands that make folder collections: under

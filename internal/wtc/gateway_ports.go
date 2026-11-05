@@ -19,8 +19,8 @@ type GatewayPort struct {
 }
 
 // InheritGatewayPorts fills absent port metadata on gateway rows. Explicit null,
-// zero, aliases and unrelated fields remain operator-owned. It regenerates only
-// the generated env, never hooks, local overrides or running services.
+// zero, aliases and unrelated fields remain operator-owned. It updates local
+// port metadata and the generated env, never hooks, local overrides or services.
 func (c *Context) InheritGatewayPorts(ports []GatewayPort) error {
 	if !c.AdHoc {
 		return fmt.Errorf("gateway ports require a collection-local registry")
@@ -41,6 +41,9 @@ func (c *Context) InheritGatewayPorts(ports []GatewayPort) error {
 	if err := yaml.Unmarshal(old, &doc); err != nil {
 		return err
 	}
+	if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+		return fmt.Errorf("gateway registry requires a mapping")
+	}
 	field := func(node *yaml.Node, key string) *yaml.Node {
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			if node.Content[i].Value == key {
@@ -50,6 +53,9 @@ func (c *Context) InheritGatewayPorts(ports []GatewayPort) error {
 		return nil
 	}
 	rows := field(doc.Content[0], "repos")
+	if rows != nil && rows.Tag == "!!null" {
+		rows = &yaml.Node{Kind: yaml.SequenceNode}
+	}
 	if rows == nil || rows.Kind != yaml.SequenceNode {
 		return fmt.Errorf("gateway registry requires a repos sequence")
 	}

@@ -28,15 +28,3 @@ refresh, retry the failed service with `wtc svc up <repo>/<service>` or its
 Collection control. Running services keep their launch environment until an
 explicit restart. A direct `svc up` without a prior collection refresh does
 not discover missing project metadata.
-
-## GitHub connection and commit identity
-
-Port setup is independent of Git identity. In OpenClaw, a personal GitHub
-connection is used for explicitly selected brokered publication. It does not
-configure shared agent shell credentials or a local Git author. A local
-`git commit` still needs workspace Git identity or the shared/per-agent
-`tools.github.gitAuthor` selection. Do not guess an author, copy personal
-credentials into a shell, or change a shared identity to bypass this error.
-Confirmed GitHub publication can commit pending changes as the verified
-selected account. See OpenClaw's
-[GitHub identity documentation](https://docs.openclaw.ai/gateway/config-tools/github-identity).

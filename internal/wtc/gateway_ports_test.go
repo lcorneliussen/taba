@@ -109,3 +109,30 @@ func TestGatewayPortsPreserveExplicitAliasesAndForeignRows(t *testing.T) {
 		t.Fatal("explicit aliases or offset changed")
 	}
 }
+
+func TestGatewayPortsRejectEmptyOrNonMappingRegistry(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	c, err := LinkGatewayCollection(filepath.Join(t.TempDir(), "collections", "example"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, data := range []string{"", "[]", "null"} {
+		fixtureFile(t, c.registryPath(), data, 0o644)
+		if err := c.InheritGatewayPorts(nil); err == nil {
+			t.Errorf("invalid registry accepted: %q", data)
+		}
+	}
+}
+
+func TestGatewayPortsAcceptInitialNullRepos(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	c, err := LinkGatewayCollection(filepath.Join(t.TempDir(), "collections", "example"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.InheritGatewayPorts(nil); err != nil {
+		t.Fatal(err)
+	}
+}

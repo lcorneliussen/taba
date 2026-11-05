@@ -75,6 +75,99 @@ func TestGatewayPortOriginRequiresFullRepositoryIdentity(t *testing.T) {
 	}
 }
 
+func TestGatewayProjectPortsRefuseUnavailableOrAmbiguousMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, registry, want string
+	}{
+		{"missing-project", `{"harnesses":[]}`, platformRegistry, "recorded project platform is unavailable"},
+		{"ambiguous-origin", `{"harnesses":[{"name":"platform","remote":"https://github.com/example-org/platform-harness.git","ref":"main"}]}`, "repos:\n  - name: docs\n    remote: https://github.com/example-org/web.git\n    port_offset: 1\n  - name: other\n    remote: git@github.com:example-org/web.git\n    port_offset: 2\n", "lists several entries"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state, git := harnessGateway(t)
+			withGatewayConfig(t, tc.config)
+			harness := filepath.Join(state, "repos", "platform-harness")
+			if err := os.WriteFile(filepath.Join(harness, ".harness-repos.yml"), []byte(tc.registry), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			git(harness, "add", ".")
+			git(harness, "commit", "-qm", "registry fixture")
+			git(harness, "update-ref", "refs/remotes/origin/main", "HEAD")
+			folder := openclaw.NewCollectionFolder(state, "ports", "platform")
+			if err := wtc.RecordGatewayHarness(folder, "platform", "https://github.com/example-org/platform-harness.git"); err != nil {
+				t.Fatal(err)
+			}
+			linked := []wtc.LinkedRepo{{Name: "web", Remote: "https://github.com/example-org/web.git", DefaultRef: "origin/main", Path: filepath.Join(state, "repos", "web")}}
+			c, err := wtc.LinkGatewayCollection(folder, linked)
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths := []string{filepath.Join(folder, ".env.collection"), filepath.Join(c.Harness, "repos.yml")}
+			before := map[string]string{}
+			for _, path := range paths {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[path] = string(data)
+			}
+			if err := inheritGatewayProjectPorts(c, "ports", linked); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected %q, got %v", tc.want, err)
+			}
+			for _, path := range paths {
+				data, _ := os.ReadFile(path)
+				if string(data) != before[path] {
+					t.Fatalf("refusal changed %s", filepath.Base(path))
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayPortRepairErrorKeepsServicesVisible(t *testing.T) {
+	state, _ := harnessGateway(t)
+	withGatewayConfig(t, `{"harnesses":[]}`)
+	folder := openclaw.NewCollectionFolder(state, "ports", "platform")
+	if err := wtc.RecordGatewayHarness(folder, "platform", "https://github.com/example-org/platform-harness.git"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(state, "repos", "web", ".harness")
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "dekit.tasks.yaml"), []byte("tasks:\n  web/main:\n    cmd: [sleep, '60']\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, services, warning := linkGatewayFolder("ports", []openclaw.CheckoutStatus{{Repo: "web", Path: filepath.Join(state, "repos", "web")}})
+	if !strings.Contains(warning, "recorded project platform is unavailable") || len(services) != 1 || services[0].Path != "web/web/main" || services[0].State != "unconfigured" {
+		t.Fatalf("port error hid service observations: %v %s", services, warning)
+	}
+}
+
+func TestGatewayPortsIgnoreUnverifiedProjectRowsAndEquivalentHarnessURL(t *testing.T) {
+	state, git := harnessGateway(t)
+	withGatewayConfig(t, `{"harnesses":[{"name":"platform","remote":"https://github.com/example-org/platform-harness","ref":"main"}]}`)
+	harness := filepath.Join(state, "repos", "platform-harness")
+	registry := "repos:\n  - name: docs\n    remote: https://github.com/another-org/web.git\n    port_offset: 9\n  - name: unverified\n    remote: https://unknown.invalid/example-org/web\n    port_offset: 1\n"
+	if err := os.WriteFile(filepath.Join(harness, ".harness-repos.yml"), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(harness, "add", ".")
+	git(harness, "commit", "-qm", "unrelated port metadata")
+	git(harness, "update-ref", "refs/remotes/origin/main", "HEAD")
+	folder := openclaw.NewCollectionFolder(state, "ports", "platform")
+	if err := wtc.RecordGatewayHarness(folder, "platform", "git@github.com:example-org/platform-harness.git"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, warning := linkGatewayFolder("ports", []openclaw.CheckoutStatus{{Repo: "web", Path: filepath.Join(state, "repos", "web")}})
+	if warning != "" {
+		t.Fatal(warning)
+	}
+	env, _ := os.ReadFile(filepath.Join(folder, ".env.collection"))
+	if strings.Contains(string(env), "WEB_PORT=") || strings.Contains(string(env), "DOCS_PORT=") || strings.Contains(string(env), "UNVERIFIED_PORT=") {
+		t.Fatalf("unverified metadata supplied ports: %s", env)
+	}
+}
+
 // harnessGateway is a gateway state dir with clones of a harness and of the
 // repositories its registry names, as projects.add and the plugin make them.
 func harnessGateway(t *testing.T) (state string, git func(dir string, args ...string) string) {
