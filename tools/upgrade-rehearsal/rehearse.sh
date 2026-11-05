@@ -29,7 +29,7 @@
 # Output: <work>/report.md, plus logs/ and the before/after/followup
 # snapshots beside it. Exit status is 0 when every step ran and passed, 1
 # when a step failed or the rehearsal could not continue (the report says
-# which), 2 on usage errors.
+# which), 2 on usage errors or a missing prerequisite (no report is written).
 set -uo pipefail
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2; }
@@ -116,7 +116,7 @@ clone_harness() {
 }
 step "clone harness" clone_harness
 [ -d "$hdir" ] || stop "The harness could not be cloned."
-[ -f "$hdir/.harness-repos.yml" ] || stop "$harness has no .harness-repos.yml; it is not a harness collections are created from."
+[ -f "$hdir/.harness-repos.yml" ] || stop "$harness has no .harness-repos.yml, so collections cannot be created from it."
 
 if [ -z "$from" ]; then
   for pin in .wtc-cli-version .taba-version; do
@@ -225,8 +225,8 @@ if [ "$followup" = 1 ] && [ -x "${to_dir:-}/wtc" ]; then
   fi
 fi
 
-# Names the compatibility layer cannot cover: hard-coded CLI repository paths
-# (including github: mise keys) and release archive names. WTC_* variables keep working in 0.2,
+# Names the 0.2 compatibility aliases cannot cover: hard-coded CLI
+# repository paths (including github: mise keys) and release archive names. WTC_* variables keep working in 0.2,
 # so they are only counted.
 grep -rnIE "($cli_repo|wtc_[0-9]+\.|wtc_\\\$|wtc_\\\{)" "$hdir" --exclude-dir=.git \
   | sed "s|^$hdir/||" > "$work/harness-scan.txt"
@@ -260,8 +260,8 @@ wtc_vars="$(grep -rhoIE '\bWTC_[A-Z0-9_]+' "$hdir" --exclude-dir=.git | sort | u
   echo "## Hard-coded CLI names ($scan_count)"
   echo
   echo "References to \`$cli_repo\` and \`wtc_<version>\` release archives. From 0.2.0 archives are"
-  echo "named \`taba_<version>_<os>_<arch>.tar.gz\`, and the repository moves; GitHub redirects the old"
-  echo "path for API calls and clones, not for every download URL."
+  echo "named \`taba_<version>_<os>_<arch>.tar.gz\`, and the repository moves. Anything that"
+  echo "builds an archive name or download URL needs updating."
   echo
   echo '```text'
   head -n 200 "$work/harness-scan.txt"
