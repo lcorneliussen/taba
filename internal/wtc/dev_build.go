@@ -18,8 +18,8 @@ import (
 
 // A collection may carry its own build of wtc, made from the wtc-cli checkout
 // beside the harness. Any wtc started inside that collection hands over to it
-// when it is the same version or newer, so panes, agents and hooks all run the
-// code under development without PATH changes, and fall back to the pinned
+// when policy selects a fresh followed generation or a same/newer one-shot
+// artifact. Only one-shot artifacts fall back to the pinned
 // release once that has moved past the build.
 
 const wtcModule = "github.com/lcorneliussen/wtc-cli"
@@ -185,13 +185,16 @@ func goModule(path string) string {
 // InstallDevBuild builds source into the collection's dev build slot. The
 // binary is replaced atomically, so a running pane is never left without one.
 func InstallDevBuild(collection, source string) (*DevBuild, error) {
-	return installDevBuild(context.Background(), collection, source, os.Stderr)
-}
-
-func installDevBuild(ctx context.Context, collection, source string, output io.Writer) (*DevBuild, error) {
 	if goModule(filepath.Join(source, "go.mod")) != wtcModule {
 		return nil, fmt.Errorf("%s is not a wtc-cli checkout", source)
 	}
+	return installDevBuild(context.Background(), collection, source, os.Stderr)
+}
+
+// The one-shot entrypoint validates its historical module contract above.
+// Follow mode validates AUTO through discovery; an explicit source additionally
+// has to demonstrate the structured lifecycle capability before publication.
+func installDevBuild(ctx context.Context, collection, source string, output io.Writer) (*DevBuild, error) {
 	describe, err := gitOutput("-C", source, "describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
 	if err != nil {
 		return nil, fmt.Errorf("describe %s: %w", source, err)

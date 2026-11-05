@@ -53,6 +53,11 @@ build, or fail clearly instead of running known-stale local code. Go determines
 the source and embedded inputs; dirty edits, ignored embedded files and mutable
 local module/workspace dependencies participate in freshness checks.
 
+An explicit `--source` can select a compatible CLI fork with a different module
+identity; it must be an owned Git checkout and pass the lifecycle capability
+probe. AUTO remains limited to recognized CLI modules and registry identity.
+The historical one-shot install keeps its existing module validation.
+
 `auto` follows a unique verified CLI checkout only when the project's existing
 `wtc.toml` (or `taba.toml`) explicitly names its registered repository:
 
@@ -85,6 +90,8 @@ and queued actions are never replayed. Disabling follows the same idle handover
 back to the original selected executable. A TUI started directly from a local
 artifact without an ambient executable needs an explicit restart to exit it.
 Existing older TUIs need one initial restart before they can use this lifecycle.
+Following belongs to the invocation's collection. Displaying another collection
+with `status <name>` does not opt into or execute that collection's local source.
 Follow mode probes the built CLI's structured lifecycle capability before
 publishing it. An older checkout without this support is refused for following;
 use the existing one-shot `dev install` workflow for it instead. A restart alone

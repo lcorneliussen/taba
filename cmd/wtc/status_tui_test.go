@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,34 +85,84 @@ func TestStatusDevQueuedRestartRevalidatesOff(t *testing.T) {
 			t.Fatal(err)
 		}
 		devAmbientExecutable = filepath.Join(root, "ambient")
-		err := restartStatusDev(filepath.Join(root, "candidate"), strings.Repeat("a", 64), statusTUIPresentation{Next: true, Notice: "completed fixture action"})
+		generation := os.Getenv("DEV_TEST_RESTART_GENERATION")
+		err := restartStatusDev(root, filepath.Join(root, ".wtc", "dev-generations", generation, "wtc"), generation, statusTUIPresentation{Next: true, Notice: "completed fixture action"})
 		t.Fatalf("exec returned: %v", err)
 	}
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(source, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := exec.Command("git", "-C", source, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git fixture: %v %s", err, raw)
+	}
 	if err := os.Mkdir(filepath.Join(root, "harness"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "harness", ".harness-repos.yml"), []byte("repos: []\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	generation := strings.Repeat("a", 64)
+	artifact := filepath.Join(root, ".wtc", "dev-generations", generation, "wtc")
 	for path, text := range map[string]string{
-		filepath.Join(root, "harness", ".harness-repos.yml"): "repos: []\n",
-		filepath.Join(root, "ambient"):                       "#!/bin/sh\nprintf 'ambient:%s\\n' \"$WTC_DEV_STATUS_STATE\"\n",
-		filepath.Join(root, "candidate"):                     "#!/bin/sh\necho candidate-must-not-run\n",
+		filepath.Join(root, "ambient"): "#!/bin/sh\nprintf 'ambient:%s\\n' \"$WTC_DEV_STATUS_STATE\"\n",
+		artifact:                       "#!/bin/sh\necho candidate-ran\n",
 	} {
-		mode := os.FileMode(0644)
-		if filepath.Dir(path) == root {
-			mode = 0755
-		}
-		if err := os.WriteFile(path, []byte(text), mode); err != nil {
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(path, []byte(text), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := wtc.SetDevMode(root, "on", source); err != nil {
+		t.Fatal(err)
+	}
+	build := &wtc.DevBuild{Collection: root, Source: source, Binary: artifact, Version: "0.1.0", Generation: generation, FollowProtocol: 1}
+	current := filepath.Join(root, ".wtc", "dev", "current.json")
+	if err := os.MkdirAll(filepath.Dir(current), 0755); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(build)
+	if err := os.WriteFile(current, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := wtc.WithDevGeneration(context.Background(), root, generation, func(*wtc.DevBuild) error { return nil })
+	if err != nil || !selected {
+		t.Fatalf("positive selection control: %v %v", selected, err)
+	}
+	run := func() string {
+		t.Helper()
+		command := exec.Command(os.Args[0], "-test.run=^TestStatusDevQueuedRestartRevalidatesOff$")
+		command.Env = append(os.Environ(), "DEV_TEST_RESTART_ROOT="+root, "DEV_TEST_RESTART_GENERATION="+generation)
+		out, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("restart subprocess: %v %s", err, out)
+		}
+		return string(out)
+	}
+	if out := run(); !strings.Contains(out, "candidate-ran") || strings.Contains(out, "ambient:") {
+		t.Fatalf("ON control did not execute the selectable generation: %s", out)
+	}
+	model := statusTUIModel{nextRunning: true, devCollection: root}
+	updated, command := model.Update(statusDevMsg{state: wtc.DevFollowState{Active: true, Build: build}})
+	queued := updated.(statusTUIModel)
+	if command != nil || queued.devRestart == nil || queued.devRestart.generation != generation {
+		t.Fatal("replacement not acknowledged behind active action")
 	}
 	if err := wtc.SetDevMode(root, "off", ""); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(os.Args[0], "-test.run=^TestStatusDevQueuedRestartRevalidatesOff$")
-	command.Env = append(os.Environ(), "DEV_TEST_RESTART_ROOT="+root)
-	out, err := command.CombinedOutput()
-	if err != nil || !strings.Contains(string(out), "ambient:") || !strings.Contains(string(out), "completed fixture action") || strings.Contains(string(out), "candidate-must-not-run") {
-		t.Fatalf("queued OFF handover: %v %s", err, out)
+	queued.nextRunning = false
+	if queued.devRestartCommand() == nil {
+		t.Fatal("replacement did not reach final validation after action")
+	}
+	if out := run(); !strings.Contains(out, "ambient:") || !strings.Contains(out, "completed fixture action") || strings.Contains(out, "candidate-ran") {
+		t.Fatalf("OFF lost to queued generation: %s", out)
 	}
 }
 
@@ -127,6 +178,41 @@ func TestStatusDevQuitDoesNotRestart(t *testing.T) {
 	}
 	if final.devRestart != nil || final.devAutoExit {
 		t.Fatal("user quit would reexecute status")
+	}
+}
+
+func TestStatusDevNamedTargetUsesInvocationPolicy(t *testing.T) {
+	root := t.TempDir()
+	alpha, beta := filepath.Join(root, "alpha"), filepath.Join(root, "beta")
+	for _, collection := range []string{alpha, beta} {
+		if err := os.MkdirAll(filepath.Join(collection, "harness"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(collection, "harness", ".harness-repos.yml"), []byte("repos: []\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := wtc.SetDevMode(alpha, "off", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(beta, ".wtc-dev-mode.json"), []byte(`{"mode":"on","source":"/missing-unselected-fixture","revision":"fixture"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(alpha)
+	m := statusTUIModel{context: &wtc.Context{Collection: beta}, devAllowed: true}
+	_, command := m.Update(statusTickMsg(time.Now()))
+	batch, ok := command().(tea.BatchMsg)
+	if !ok {
+		t.Fatal("no dev check scheduled")
+	}
+	var result *statusDevMsg
+	for _, item := range batch {
+		if msg, ok := item().(statusDevMsg); ok {
+			result = &msg
+		}
+	}
+	if result == nil || result.err != nil || result.state.Active || result.state.Mode != "off" {
+		t.Fatalf("display target overrode invocation dev policy: %+v", result)
 	}
 }
 

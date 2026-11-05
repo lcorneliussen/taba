@@ -55,7 +55,7 @@ type statusTUIPresentation struct {
 }
 
 type statusDevRestart struct {
-	binary, generation string
+	collection, binary, generation string
 }
 
 type statusTUIModel struct {
@@ -97,6 +97,7 @@ type statusTUIModel struct {
 	errorText      string
 	hover          string
 	devAllowed     bool
+	devCollection  string
 	devChecking    bool
 	devCheckAt     time.Time
 	devMessage     string
@@ -548,11 +549,11 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.devMessage = "dev build stale: " + statusTUISafe(msg.err.Error())
 		} else if msg.state.Active && msg.state.Build != nil && msg.state.Build.Generation != devRunningGeneration {
-			m.devRestart = &statusDevRestart{binary: msg.state.Build.Binary, generation: msg.state.Build.Generation}
+			m.devRestart = &statusDevRestart{collection: m.devCollection, binary: msg.state.Build.Binary, generation: msg.state.Build.Generation}
 			m.devMessage = "dev build ready; waiting for active work before restart"
 		} else if !msg.state.Active && devRunningGeneration != "" {
 			if devAmbientExecutable != "" {
-				m.devRestart = &statusDevRestart{binary: devAmbientExecutable}
+				m.devRestart = &statusDevRestart{collection: m.devCollection, binary: devAmbientExecutable}
 				m.devMessage = "dev mode inactive; returning to the selected CLI when idle"
 			} else {
 				m.devError = true
@@ -568,9 +569,17 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusTUITick()
 		}
 		if m.devAllowed && !m.devChecking && m.context != nil && time.Since(m.devCheckAt) >= 3*time.Second {
+			if m.devCollection == "" {
+				cwd, _ := os.Getwd()
+				m.devCollection = wtc.FindCollectionRoot(cwd)
+			}
+			if m.devCollection == "" {
+				m.devAllowed = false
+				return m, statusTUITick()
+			}
 			m.devChecking, m.devCheckAt = true, time.Now()
 			m.devMessage = "dev: checking source / building changes"
-			return m, tea.Batch(statusTUITick(), statusCheckDev(m.context.Collection))
+			return m, tea.Batch(statusTUITick(), statusCheckDev(m.devCollection))
 		}
 		if !m.refreshing && !m.nextRunning && !m.nextRefresh.IsZero() && !time.Now().Before(m.nextRefresh) {
 			m.startRefresh()
@@ -1799,6 +1808,8 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 	model := statusTUIModel{context: c, all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, fetchAge: fetchAge, interval: interval,
 		background: background, focused: true, refreshing: true}
 	model.devAllowed = os.Getenv(wtc.DevBuildDisableEnv) != "off" && version != "dev"
+	cwd, _ := os.Getwd()
+	model.devCollection = wtc.FindCollectionRoot(cwd)
 	model.devResume = takeStatusDevPresentation()
 	model.startRefresh()
 	if !all && !procs {
@@ -1826,7 +1837,7 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
 	if updated, ok := final.(statusTUIModel); err == nil && ok && updated.devAutoExit && updated.devRestart != nil && updated.devIdle() {
 		cleanup()
-		return restartStatusDev(updated.devRestart.binary, updated.devRestart.generation, updated.devPresentation())
+		return restartStatusDev(updated.devRestart.collection, updated.devRestart.binary, updated.devRestart.generation, updated.devPresentation())
 	}
 	if ctx.Err() != nil {
 		return nil // The watcher lease was cancelled.

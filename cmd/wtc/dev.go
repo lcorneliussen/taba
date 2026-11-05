@@ -31,7 +31,7 @@ const devAmbientEnv = "WTC_DEV_AMBIENT_EXE"
 const devGenerationEnv = "WTC_DEV_GENERATION"
 const devStatusStateEnv = "WTC_DEV_STATUS_STATE"
 
-func restartStatusDev(binary, generation string, presentation statusTUIPresentation) error {
+func restartStatusDev(collection, binary, generation string, presentation statusTUIPresentation) error {
 	state, err := json.Marshal(presentation)
 	if err != nil {
 		return err
@@ -41,13 +41,9 @@ func restartStatusDev(binary, generation string, presentation statusTUIPresentat
 		return syscall.Exec(target, os.Args, env)
 	}
 	if generation != "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return err
-		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		ran, err := wtc.WithDevGeneration(ctx, wtc.FindCollectionRoot(cwd), generation, func(current *wtc.DevBuild) error {
+		ran, err := wtc.WithDevGeneration(ctx, collection, generation, func(current *wtc.DevBuild) error {
 			return execute(current.Binary, current.Generation)
 		})
 		if ran || err != nil {
@@ -91,11 +87,24 @@ func takeDelegatedFrom() {
 			devRunningGeneration = candidate
 		}
 	}
+	if devAmbientExecutable == "" {
+		if self, err := os.Executable(); err == nil && !devArtifactExecutable(self) {
+			devAmbientExecutable = self
+		}
+	}
 }
 
-// handOverToDevBuild replaces this process with the collection's dev build
-// when that build is the same version as this one or newer. It returns only
-// when this binary should keep running.
+func devArtifactExecutable(path string) bool {
+	parent := filepath.Dir(path)
+	if filepath.Base(filepath.Dir(parent)) == "dev-generations" {
+		return true
+	}
+	return filepath.Base(parent) == "dev" && (filepath.Base(filepath.Dir(parent)) == ".wtc" || filepath.Base(filepath.Dir(parent)) == ".taba")
+}
+
+// handOverToDevBuild replaces this process with the invocation collection's
+// fresh followed source, or a same/newer legacy one-shot artifact. Nil permits
+// this executable to continue; an error aborts startup without running stale code.
 func handOverToDevBuild() error {
 	takeDelegatedFrom()
 	if delegatedFrom != "" || os.Getenv(wtc.DevBuildDisableEnv) == "off" || devControlInvocation(os.Args[1:]) {
@@ -172,7 +181,9 @@ func devControlInvocation(args []string) bool {
 func execDevBuild(build *wtc.DevBuild) error {
 	ambient := devAmbientExecutable
 	if ambient == "" {
-		ambient, _ = os.Executable()
+		if self, err := os.Executable(); err == nil && !devArtifactExecutable(self) {
+			ambient = self
+		}
 	}
 	env := append(os.Environ(), wtc.DevBuildDelegatedEnv+"="+version, devAmbientEnv+"="+ambient, devGenerationEnv+"="+build.Generation)
 	if build.Generation != "" {

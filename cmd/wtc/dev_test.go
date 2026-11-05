@@ -249,3 +249,19 @@ func TestDelegatedMarkerIsNotInherited(t *testing.T) {
 		t.Fatalf("a child process inherited the marker: %v", err)
 	}
 }
+
+func TestDevOrdinaryStartupCapturesAmbient(t *testing.T) {
+	oldFrom, oldAmbient, oldGeneration := delegatedFrom, devAmbientExecutable, devRunningGeneration
+	defer func() { delegatedFrom, devAmbientExecutable, devRunningGeneration = oldFrom, oldAmbient, oldGeneration }()
+	t.Setenv("WTC_DEV_DELEGATED_FROM", "")
+	t.Setenv(devAmbientEnv, "")
+	t.Setenv(devGenerationEnv, "")
+	takeDelegatedFrom()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if devAmbientExecutable != self {
+		t.Fatalf("ordinary startup lost ambient executable: got %q, want %q", devAmbientExecutable, self)
+	}
+}

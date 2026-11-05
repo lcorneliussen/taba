@@ -20,7 +20,7 @@ func devFollowFixture(t *testing.T) (string, string) {
 	collection := filepath.Join(root, "collection")
 	source := filepath.Join(collection, "ext.wtc-cli")
 	fixtureFile(t, filepath.Join(collection, "harness", ".harness-repos.yml"), "schema_version: 1\nrepos: [{name: wtc-cli, remote: 'https://github.com/example/cli.git'}]\n", 0644)
-	fixtureFile(t, filepath.Join(source, "go.mod"), "module "+wtcModule+"\n\ngo 1.27.0\n", 0644)
+	fixtureFile(t, filepath.Join(source, "go.mod"), "module github.com/lcorneliussen/wtc-cli\n\ngo 1.27.0\n", 0644)
 	fixtureFile(t, filepath.Join(source, "cmd", "wtc", "main.go"), `package main
 import ("fmt"; "os")
 var version = "dev"
@@ -104,7 +104,7 @@ func TestDevFollowRejectsAmbiguityAliasesAndUnsafeState(t *testing.T) {
 	collection, source := devFollowFixture(t)
 	fixtureFile(t, filepath.Join(collection, "harness", "wtc.toml"), "[dev]\nauto_source = 'wtc-cli'\n", 0644)
 	second := filepath.Join(collection, "other-cli")
-	fixtureFile(t, filepath.Join(second, "go.mod"), "module "+wtcModule+"\n", 0644)
+	fixtureFile(t, filepath.Join(second, "go.mod"), "module github.com/lcorneliussen/wtc-cli\n", 0644)
 	if _, err := DevFollowConfiguration(collection); err == nil {
 		t.Fatal("ambiguous module candidates accepted")
 	}
@@ -204,7 +204,7 @@ func TestDevFingerprintIncludesIgnoredEmbedsAndMutableLocalModules(t *testing.T)
 	lib := filepath.Join(dependency, "value.go")
 	fixtureFile(t, lib, "package library\nconst Value = 1\n", 0644)
 	fixtureFile(t, main, "package main\nimport(\"fmt\"; \"example.invalid/library\")\nfunc main(){fmt.Print(library.Value)}\n", 0644)
-	fixtureFile(t, filepath.Join(source, "go.mod"), "module "+wtcModule+"\n\ngo 1.27.0\nrequire example.invalid/library v0.0.0\nreplace example.invalid/library => ../../library\n", 0644)
+	fixtureFile(t, filepath.Join(source, "go.mod"), "module github.com/lcorneliussen/wtc-cli\n\ngo 1.27.0\nrequire example.invalid/library v0.0.0\nreplace example.invalid/library => ../../library\n", 0644)
 	a, err = devFingerprint(ctx, source)
 	if err != nil {
 		t.Fatal(err)
@@ -268,8 +268,13 @@ func TestDevFollowOffDuringBuildAndCachedInputRead(t *testing.T) {
 			if err := SetDevMode(collection, "on", source); err != nil {
 				t.Fatal(err)
 			}
+			generation := ""
 			if operation == "list" {
-				ensureDevTest(t, collection)
+				generation = ensureDevTest(t, collection).Build.Generation
+				selected, err := WithDevGeneration(context.Background(), collection, generation, func(*DevBuild) error { return nil })
+				if !selected || err != nil {
+					t.Fatalf("positive generation selection: %v %v", selected, err)
+				}
 			}
 			started, release, _ := devBlockGo(t, operation)
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -289,9 +294,11 @@ func TestDevFollowOffDuringBuildAndCachedInputRead(t *testing.T) {
 			if r.err == nil && r.state.Active {
 				t.Fatalf("OFF lost to %s: %+v", operation, r.state)
 			}
-			called, err := WithDevGeneration(ctx, collection, strings.Repeat("a", 64), func(*DevBuild) error { t.Fatal("disabled delegate executed"); return nil })
-			if called || err != nil {
-				t.Fatalf("disabled selection: %v %v", called, err)
+			if generation != "" {
+				called, err := WithDevGeneration(ctx, collection, generation, func(*DevBuild) error { t.Fatal("disabled delegate executed"); return nil })
+				if called || err != nil {
+					t.Fatalf("disabled selection: %v %v", called, err)
+				}
 			}
 			if operation == "build" && ReadDevBuild(collection) != nil {
 				t.Fatal("build published after OFF")
@@ -378,6 +385,10 @@ func TestDevFollowFailureBackoffAndUnsafePublication(t *testing.T) {
 	}
 	good := ensureDevTest(t, collection).Build
 	main := filepath.Join(source, "cmd", "wtc", "main.go")
+	validMain, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fixtureFile(t, main, "package main\nfunc main(){notDefined()}\n", 0644)
 	started, release, calls := devBlockGo(t, "build")
 	fixtureFile(t, release, "release", 0600)
@@ -398,9 +409,14 @@ func TestDevFollowFailureBackoffAndUnsafePublication(t *testing.T) {
 		t.Fatal("failure replaced good generation")
 	}
 	// A linked current pointer is never followed or replaced by a build.
+	fixtureFile(t, main, string(validMain), 0644)
 	current := filepath.Join(collection, ".wtc", "dev", "current.json")
+	validManifest, err := os.ReadFile(current)
+	if err != nil || ReadDevBuild(collection) == nil {
+		t.Fatalf("regular valid-manifest positive control: %v", err)
+	}
 	outside := filepath.Join(t.TempDir(), "keep.json")
-	fixtureFile(t, outside, "untouched", 0600)
+	fixtureFile(t, outside, string(validManifest), 0600)
 	if err := os.Remove(current); err != nil {
 		t.Fatal(err)
 	}
@@ -413,7 +429,7 @@ func TestDevFollowFailureBackoffAndUnsafePublication(t *testing.T) {
 	if _, err := EnsureDevFollow(ctx, collection); err == nil {
 		t.Fatal("linked manifest accepted")
 	}
-	if data, _ := os.ReadFile(outside); string(data) != "untouched" {
+	if data, _ := os.ReadFile(outside); string(data) != string(validManifest) {
 		t.Fatal("linked target changed")
 	}
 }
@@ -442,5 +458,23 @@ func TestDevFollowRequiresCompatibleCapabilityNotSuccessfulHelp(t *testing.T) {
 	}
 	if state := ensureDevTest(t, collection); state.Active || state.Mode != "off" {
 		t.Fatalf("legacy controls lost OFF: %+v", state)
+	}
+}
+
+func TestDevFollowExplicitCompatibleForkDoesNotWeakenAuto(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	fixtureFile(t, filepath.Join(source, "go.mod"), "module example.invalid/compatible-cli\n\ngo 1.27.0\n", 0644)
+	fixtureFile(t, filepath.Join(collection, "harness", "wtc.toml"), "[dev]\nauto_source = 'wtc-cli'\n", 0644)
+	if _, err := DevFollowConfiguration(collection); err == nil {
+		t.Fatal("AUTO accepted an unrecognized module")
+	}
+	if err := SetDevMode(collection, "on", source); err != nil {
+		t.Fatal(err)
+	}
+	if build := ensureDevTest(t, collection).Build; build == nil || build.FollowProtocol != 1 {
+		t.Fatalf("explicit compatible source failed: %+v", build)
+	}
+	if _, err := InstallDevBuild(collection, source); err == nil {
+		t.Fatal("historical one-shot module validation was weakened")
 	}
 }
