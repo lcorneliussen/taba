@@ -19,6 +19,8 @@ tools/upgrade-rehearsal/rehearse.sh \
 7. With `--registry-followup`, renames the harness's `wtc-cli` registry entry to `taba` with `aliases: [wtc-cli]` and points that entry's remote at `taba`; other entries are left alone. Then it catches up again and records a third time.
 8. Lists hard-coded references to the CLI repository and to `wtc_<version>` release archives in the harness, and counts its `WTC_*` variables.
 
+Releases are installed from, and `ext.wtc-cli` is cloned from, `--cli-repo` (default `lcorneliussen/wtc-cli`, the name 0.1.x pins use); the pin file holds only a version. `--work DIR` sets the work directory, which must not exist or be empty. `--help` lists every option.
+
 `report.md` in the work directory has the step results, the diffs between the recorded states, and the harness references. Logs for every step are under `logs/`. The exit status is 1 when a step failed or the rehearsal stopped early, for example on a repository without `.harness-repos.yml`; the report then lists the steps that ran.
 
 ## What to look for
