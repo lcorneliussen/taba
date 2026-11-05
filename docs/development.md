@@ -87,8 +87,11 @@ and keeps its last working display while a build fails. It blocks new actions
 on known-stale code. Successful replacements restart in the same terminal only
 after active actions and reads finish. Navigation is restored; confirmations
 and queued actions are never replayed. Disabling follows the same idle handover
-back to the original selected executable. A TUI started directly from a local
-artifact without an ambient executable needs an explicit restart to exit it.
+back to the original selected executable. A TUI started from a local artifact
+without a recorded ambient executable needs an explicit restart to exit it.
+Older bootstrap shims cannot supply that path or understand the new mode policy:
+use `dev uninstall` to remove their one-shot slot, then restart status explicitly
+with `WTC_DEV_BUILD=off`.
 Existing older TUIs need one initial restart before they can use this lifecycle.
 Following belongs to the invocation's collection. Displaying another collection
 with `status <name>` does not opt into or execute that collection's local source.

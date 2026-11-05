@@ -240,8 +240,9 @@ func UninstallDevBuild(collection string) (bool, error) {
 			return false, err
 		}
 	}
-	// OFF lives outside the artifacts. A builder already in flight cannot
-	// publish after this returns; immutable generations stay for running actions.
+	// OFF lives outside artifacts. An old-policy follow build cannot activate
+	// after OFF; generations stay for running actions. A concurrent one-shot
+	// install may still create an inert artifact, but cannot undo the policy.
 	if err := SetDevMode(collection, "off", ""); err != nil {
 		return false, err
 	}
