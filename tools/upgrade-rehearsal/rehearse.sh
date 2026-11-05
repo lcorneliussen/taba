@@ -20,10 +20,12 @@
 #   --from VERSION       start from this release instead of the harness pin
 #   --repos a,b          registry repositories to add before the upgrade
 #   --cli-checkout       add an unmanaged ext.wtc-cli sibling whose owner is a
-#                        clone outside .bare/, cloned from the old CLI URL
+#                        clone of --cli-repo outside .bare/
 #   --registry-followup  after the upgrade, rename the CLI registry entry to
 #                        taba (aliases: [wtc-cli]) and catch up again
-#   --cli-repo SLUG      CLI repository the 0.1.x pin names (default lcorneliussen/wtc-cli)
+#   --cli-repo SLUG      GitHub repository releases are installed from and the
+#                        ext.wtc-cli clone comes from (default lcorneliussen/wtc-cli,
+#                        the name 0.1.x pins use); the pin file holds only a version
 #   --work DIR           workspace parent; must not exist or be empty
 #
 # Output: <work>/report.md, plus logs/ and the before/after/followup
@@ -152,7 +154,9 @@ fi
 snapshot() {
   local out="$work/$1"
   mkdir -p "$out"
-  { wtc --version; command -v taba >/dev/null && taba --version || echo "taba: not on PATH"; } > "$out/versions.txt" 2>&1
+  # Only the release's own taba counts, not one elsewhere on the caller's PATH.
+  local bin; bin="$(dirname "$(command -v wtc)")"
+  { wtc --version; [ -x "$bin/taba" ] && "$bin/taba" --version || echo "taba: not in this release"; } > "$out/versions.txt" 2>&1
   wtc env list > "$out/env-list.txt" 2>&1
   [ -f .env.collection ] && sed -E 's/=.*$//' .env.collection | sort > "$out/env-collection-names.txt"
   for f in mise.toml .mcp.json .cursor/mcp.json .codex/config.toml; do
@@ -190,7 +194,8 @@ else
   step "upgrade with $to" manual_upgrade
 fi
 
-# The release may be installed under either key; take the one the
+# The release may be installed under github:<owner>/wtc-cli or
+# github:<owner>/taba; take the one the
 # collection's mise config now resolves, then any install of that version.
 to_dir="$(dirname "$(mise which wtc 2>/dev/null)" 2>/dev/null)"
 if [ ! -x "$to_dir/wtc" ] || [ "$("$to_dir/wtc" --version 2>/dev/null | awk '{print $3}')" != "$to" ]; then
@@ -213,9 +218,9 @@ fi
 
 if [ "$followup" = 1 ] && [ -x "${to_dir:-}/wtc" ]; then
   registry="$hdir/.harness-repos.yml"
-  if grep -qE '^\s*-\s*name:\s*wtc-cli\s*$' "$registry" 2>/dev/null; then
+  if grep -qE '^[[:blank:]]*-[[:blank:]]*name:[[:blank:]]*wtc-cli[[:blank:]]*$' "$registry" 2>/dev/null; then
     rename_entry() {
-      perl -0pi -e 's/^(\s*)-(\s*)name:\s*wtc-cli\s*\n/$1-$2name: taba\n$1 $2aliases: [wtc-cli]\n/m; s{(github\.com[:/][^/\s]+/)wtc-cli(\.git)?}{$1taba$2}g' "$registry"
+      perl -0pi -e 's/^([ \t]*)-([ \t]*)name:[ \t]*wtc-cli[ \t]*\n/$1-$2name: taba\n$1 $2aliases: [wtc-cli]\n/m; s{(github\.com[:/][^/\s]+/)wtc-cli(\.git)?}{$1taba$2}g' "$registry"
     }
     step "registry: name taba, aliases [wtc-cli]" rename_entry
     step "catch-up after registry rename" wtc catch-up --report "$logs/catch-up-followup.json"
@@ -226,8 +231,8 @@ if [ "$followup" = 1 ] && [ -x "${to_dir:-}/wtc" ]; then
 fi
 
 # Names the 0.2 compatibility aliases cannot cover: hard-coded CLI
-# repository paths (including github: mise keys) and release archive names. WTC_* variables keep working in 0.2,
-# so they are only counted.
+# repository paths (including github: mise keys) and release archive names.
+# WTC_* variables keep working in 0.2, so they are only counted.
 grep -rnIE "($cli_repo|wtc_[0-9]+\.|wtc_\\\$|wtc_\\\{)" "$hdir" --exclude-dir=.git \
   | sed "s|^$hdir/||" > "$work/harness-scan.txt"
 scan_count="$(wc -l < "$work/harness-scan.txt" | tr -d ' ')"
