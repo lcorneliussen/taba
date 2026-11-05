@@ -2653,11 +2653,19 @@ test("collapsed restore-all stays sequential, records partial failure and cancel
   try {
     const all=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all");assert.ok(all,"collapsed toolbar exposes recovery");
     all.click();await settle();assert.equal(requests.length,1);
+    const primary=[...host.all()].find(n=>n.className?.startsWith("wtc-toolbar-primary"));
+    assert.ok(primary.textContent.includes("Restoring 1/2"));
+    const queued=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Queued");
+    assert.ok(queued?.disabled,"waiting target is visibly queued and disabled");
+    await all.onclick();assert.equal(requests.length,1,"stale second click dispatches nothing");
+    assert.ok(readable(host).includes("already running"));
     finish({ok:false,error:"Snapshot unavailable"});await settle();await settle();
     assert.equal(requests.length,2,"second target starts only after first result and refresh");
     assert.equal(requests[1].payload.ownerSessionKey,"agent:main:owner:web");
     finish({ok:true,result:{message:"restored"}});await settle();await settle();
     assert.ok(!readable(host).includes("Restoring…"));
+    const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
+    try{assert.ok(readable(log.host).includes("api: restore failed"));assert.ok(readable(log.host).includes("web: restored"));}finally{log.view.dispose();}
   }finally{view.dispose();restoreResult=undefined;}
   const other=await mount("composer",collection([missing("api"),missing("web")]),undefined,"agent:main:restore-switch");
   requests.length=0;

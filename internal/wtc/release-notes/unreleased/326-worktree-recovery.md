@@ -1,3 +1,5 @@
+## OpenClaw
+
 - OpenClaw Collection cards and sidebars distinguish evicted, recoverable checkouts
   and offer explicit per-repository and collection restore actions. Native admin
   recovery preserves recorded identities and saved changes; progress and failures
