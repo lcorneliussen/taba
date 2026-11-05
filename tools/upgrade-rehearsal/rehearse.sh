@@ -28,7 +28,8 @@
 #
 # Output: <work>/report.md, plus logs/ and the before/after/followup
 # snapshots beside it. Exit status is 0 when every step ran and passed, 1
-# when a step failed (the report says which), 2 on usage errors.
+# when a step failed or the rehearsal could not continue (the report says
+# which), 2 on usage errors.
 set -uo pipefail
 
 usage() { sed -n '2,/^set -uo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2; }
@@ -93,6 +94,14 @@ step() {
   fi
 }
 skip() { results+=("| $1 | skipped | $2 |"); }
+# stop <reason>: end early with a short report of the steps so far.
+stop() {
+  { echo "# Upgrade rehearsal stopped: ${harness_name:-harness}"; echo
+    echo "$1"; echo; echo "| step | result | log |"; echo "| --- | --- | --- |"
+    printf '%s\n' "${results[@]}"; } > "$report"
+  echo "$1 Report: $report" >&2
+  exit 1
+}
 
 harness_name="$(basename "${harness%.git}")"
 coll="$ws/rehearsal"
@@ -106,23 +115,23 @@ clone_harness() {
   git --git-dir="$ws/.bare/$harness_name.git" worktree add --detach "$hdir" origin/HEAD
 }
 step "clone harness" clone_harness
-[ -d "$hdir" ] || { echo "harness clone failed; see $logs" >&2; exit 1; }
-[ -f "$hdir/.harness-repos.yml" ] || { echo "$harness has no .harness-repos.yml; it is not a harness collections are created from" >&2; exit 1; }
+[ -d "$hdir" ] || stop "The harness could not be cloned."
+[ -f "$hdir/.harness-repos.yml" ] || stop "$harness has no .harness-repos.yml; it is not a harness collections are created from."
 
 if [ -z "$from" ]; then
   for pin in .wtc-cli-version .taba-version; do
     [ -s "$hdir/$pin" ] && { from="$(tr -d ' \n' < "$hdir/$pin")"; break; }
   done
 fi
-[ -n "$from" ] || { echo "no CLI pin in the harness; pass --from" >&2; exit 1; }
+[ -n "$from" ] || stop "The harness has no CLI pin; pass --from."
 
 install_from() { mise install "github:$cli_repo@$from"; }
 step "install $from" install_from
 from_dir="$(mise where "github:$cli_repo@$from" 2>/dev/null)"
-[ -x "$from_dir/wtc" ] || { echo "could not install wtc $from" >&2; exit 1; }
+[ -x "$from_dir/wtc" ] || stop "wtc $from could not be installed."
 export PATH="$from_dir:$base_path"
 
-cd "$coll" || exit 1
+cd "$coll" || stop "The collection directory is missing."
 step "env setup ($from)" wtc env setup
 step "skills render ($from)" wtc skills render --seed-scope
 step "mcp render ($from)" wtc mcp render
@@ -189,14 +198,17 @@ if [ ! -x "$to_dir/wtc" ] || [ "$("$to_dir/wtc" --version 2>/dev/null | awk '{pr
 fi
 if [ -x "$to_dir/wtc" ]; then
   export PATH="$to_dir:$base_path"
-  if [ "$(printf '%s\n' 0.2.0-0 "$to" | sort -V | head -n 1)" = 0.2.0-0 ]; then
-    check_both() { wtc --version && taba --version; }
+  # Releases from 0.2.0 on, pre-releases included, ship taba next to wtc.
+  IFS=. read -r to_major to_minor _ <<< "${to%%-*}"
+  if [ "${to_major:-0}" -gt 0 ] || [ "${to_minor:-0}" -ge 2 ]; then
+    check_both() { "$to_dir/wtc" --version && "$to_dir/taba" --version; }
     step "wtc and taba $to on PATH" check_both
   fi
   step "catch-up ($to)" wtc catch-up --report "$logs/catch-up-after.json"
   snapshot after
 else
-  skip "catch-up ($to)" "release $to not installed"
+  results+=("| locate release $to | **fail** | the upgrade left no installed \`wtc $to\` |")
+  failures=$((failures + 1))
 fi
 
 if [ "$followup" = 1 ] && [ -x "${to_dir:-}/wtc" ]; then
@@ -213,8 +225,8 @@ if [ "$followup" = 1 ] && [ -x "${to_dir:-}/wtc" ]; then
   fi
 fi
 
-# Names the compatibility layer cannot cover: hard-coded repository paths,
-# mise keys and release archive names. WTC_* variables keep working in 0.2,
+# Names the compatibility layer cannot cover: hard-coded CLI repository paths
+# (including github: mise keys) and release archive names. WTC_* variables keep working in 0.2,
 # so they are only counted.
 grep -rnIE "($cli_repo|wtc_[0-9]+\.|wtc_\\\$|wtc_\\\{)" "$hdir" --exclude-dir=.git \
   | sed "s|^$hdir/||" > "$work/harness-scan.txt"
