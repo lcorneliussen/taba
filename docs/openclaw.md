@@ -891,7 +891,7 @@ recorded pixels-only grouping, rather than inferring hierarchy from the DOM alon
 
 When OpenClaw evicts an idle managed worktree but retains its snapshot, the
 Collection card and sidebar show **Evicted** and **Restore**. The header offers
-**Restore N** for the recoverable repositories, including while the card is
+**Restore all** for the recoverable repositories, including while the card is
 collapsed. Restoration needs the person's gateway `operator.admin` permission.
 It runs sequentially through OpenClaw's native restore command, rechecks the
 recorded owner, destination, branch and snapshot, then refreshes status. Each

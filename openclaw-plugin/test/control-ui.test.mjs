@@ -2651,7 +2651,7 @@ test("collapsed restore-all stays sequential, records partial failure and cancel
   const requests=[];let finish;
   restoreResult=params=>{requests.push(params);return new Promise(resolve=>{finish=resolve})};
   try {
-    const all=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore 2");assert.ok(all,"collapsed toolbar exposes recovery");
+    const all=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all");assert.ok(all,"collapsed toolbar exposes recovery");
     all.click();await settle();assert.equal(requests.length,1);
     finish({ok:false,error:"Snapshot unavailable"});await settle();await settle();
     assert.equal(requests.length,2,"second target starts only after first result and refresh");
@@ -2663,11 +2663,22 @@ test("collapsed restore-all stays sequential, records partial failure and cancel
   requests.length=0;
   restoreResult=params=>{requests.push(params);return new Promise(resolve=>{finish=resolve})};
   try{
-    [...other.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore 2").click();await settle();
+    [...other.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all").click();await settle();
     collections.set("agent:main:replacement",collection([repo("docs")]));
     other.context.props.sessionKey="agent:main:replacement";other.view.update(other.context);await settle();
     finish({ok:true,result:{message:"restored"}});await settle();await settle();
     assert.equal(requests.length,1,"switch cancels the second captured target");
     assert.ok(!readable(other.host).includes("api: restored"),"old result cannot appear in new conversation");
   }finally{other.view.dispose();restoreResult=undefined;}
+});
+
+test("evicted rows do not hide a prepared publication in the header", async () => {
+  personal={state:"connected",account:{login:"demo"},generation:"g1"};
+  const step={step:"push",by:"wtc",approve:"person",gateway:"github_publish",key:"api:push:h1",reason:"Push local commits"};
+  const {host,view}=await mount("composer",collection([repo("api",{unpublished:1,next:step,choices:{actions:[{...step,available:true}]}}),repo("web",{error:"checkout unavailable",recovery:{state:"restorable",key:"web"}})]));
+  try{
+    await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^1 commit to push/.test(n.title)).onclick();
+    const primary=[...host.all()].find(n=>n.className?.startsWith("wtc-toolbar-primary"));
+    assert.ok(primary.textContent.includes("Review push"),"prepared confirmation takes precedence over recovery");
+  }finally{view.dispose();personal=null;}
 });

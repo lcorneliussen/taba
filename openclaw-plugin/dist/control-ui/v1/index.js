@@ -725,7 +725,7 @@ const pullRequestRows = (repos) => {
 // Activity is shared by views of one collection for this browser session.
 // It is UI feedback, not an executable plan or a durable completion receipt.
 const activityStore = new Map();
-const recoveryQueues = new Set();
+const recoveryQueues = new Map();
 const feedbackStore = new Map();
 // Hand off the requested service locally, independently of optional host panel
 // props; log output stays in the panel that fetched it.
@@ -783,6 +783,9 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-next-step>:first-child { width:104px;flex:0 0 104px; }
 .wtc-next-step>:not(:first-child) { width:20px;flex:0 0 20px; }
 .wtc-step-status { width:104px;text-align:center; }
+.wtc-next-step.wtc-restore-step { justify-content:flex-end !important; }
+.wtc-restore-control { min-height:24px !important;height:24px;--wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
+.wtc-toolbar-primary>.wtc-restore-control:disabled { --wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
 .wtc-toolbar-primary:empty,.wtc-summary-facts:empty,.wtc-header-controls>button,.wtc-header-controls>span:last-child { align-self:center; }
 .wtc-action-control:not(:disabled):hover { --wtc-control-bg:var(--bg-hover,rgba(128,128,128,.16)); --wtc-control-border:var(--border-strong,rgba(128,128,128,.5)); --wtc-control-text:var(--text-strong,var(--text,inherit)); box-shadow:none; }
 .wtc-next-actions button:disabled { background:transparent !important;border-color:var(--border-strong,rgba(128,128,128,.35)) !important;color:var(--muted,#888) !important; }
@@ -887,18 +890,21 @@ function collectionTables(v) {
   // Mirror browser-local publication progress; this is not a gateway lock.
   const sharedPushBusy = (r) => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "push" && item.repoSessionKey === r.sessionKey && item.inFlight);
   const reserved = (r) => acting.has(r.sessionKey) || busy.has(r.sessionKey) || catching.has(r.sessionKey) || sharedPushBusy(r);
+  const recoveryQueueBusy = () => recoveryQueues.has(v.collectionKey?.() ?? v.key());
   const recoveryBusy = r => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "restore" && item.repoSessionKey === r.sessionKey && item.inFlight);
   async function restoreCheckouts(repos) {
     const conversation = v.key(), logKey = v.collectionKey?.() ?? conversation;
-    if (recoveryQueues.has(logKey)) return;
-    recoveryQueues.add(logKey);
+    if (recoveryQueues.has(logKey)) { v.say("A checkout restore is already running; wait for its results."); return; }
     const captured = repos.map(r => structuredClone(r));
+    const queue = { targets: new Set(captured.map(r => r.sessionKey)), index: 0, total: captured.length };
+    recoveryQueues.set(logKey, queue);
     try { for (const r of captured) {
       if (!active(conversation)) {
         recordActivity(logKey, uuid(), { repo: nameOf(r), repoSessionKey: r.sessionKey, action: "restore", state: "cancelled", status: "Restore cancelled before dispatch: the view closed or changed" });
         continue;
       }
       if (recoveryBusy(r) || r.recovery?.state !== "restorable") continue;
+      queue.index += 1;
       const id = uuid(), name = nameOf(r);
       const say = (text, failed = false) => { if (active(conversation)) v.say(text, failed, null, id); };
       recordActivity(logKey, id, { repo: name, repoSessionKey: r.sessionKey, action: "restore", inFlight: true, state: "running", status: `Restoring ${name}…` });
@@ -912,6 +918,7 @@ function collectionTables(v) {
         recordActivity(logKey, id, { state: "failed", status }); say(status, true);
       } finally {
         recordActivity(logKey, id, { inFlight: false });
+        queue.targets.delete(r.sessionKey);
         if (active(conversation)) { try { await v.refresh(); } catch {} v.rerender(); }
       }
     } } finally { recoveryQueues.delete(logKey); if (active(conversation)) v.rerender(); }
@@ -1148,8 +1155,10 @@ function collectionTables(v) {
   };
   const lastActivity = (r) => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].reverse().filter(item => item.repo === nameOf(r)).sort((a, b) => b.at - a.at)[0];
   const activityFailed = item => item?.state === "failed" || /^(Failed|Handoff failed|Cannot )/.test(item?.status ?? "");
+  const recoveryButton = (...args) => { const button = nextButton(...args); button.className += " wtc-restore-control"; return button; };
+  const recoveryQueued = r => recoveryQueues.get(v.collectionKey?.() ?? v.key())?.targets.has(r.sessionKey) && !recoveryBusy(r);
   function nextCell(r) {
-    if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return css(el("div", { className: "wtc-next-step" }, nextButton(recoveryBusy(r) ? "Restoring…" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryBusy(r))), "display:flex;align-items:baseline");
+    if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return css(el("div", { className: "wtc-next-step wtc-restore-step" }, recoveryButton(recoveryBusy(r) ? "Restoring…" : recoveryQueued(r) ? "Queued" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryQueueBusy())), "display:flex;align-items:baseline");
     if (!actionable(r)) return null;
     if (!r.next && r.choices && !r.dirty) return r.choices.actions?.length ? nextButton("Choose step…", "Inspect available actions and blocked reasons", () => { choosing = true; v.showActions?.(); v.rerender(); }) : null;
     const step = selection.get(r.sessionKey)?.step ?? r.next ?? { step: "commit", reason: "Review and commit intended changes locally" };
@@ -1263,7 +1272,7 @@ function collectionTables(v) {
     let primary = null;
     const prepared = repos.find(r => confirming.has(r.sessionKey));
     const recoverable = repos.filter(r => r.error === "checkout unavailable" && r.recovery?.state === "restorable");
-    if (recoverable.length) primary = nextButton(recoverable.some(recoveryBusy) ? "Restoring…" : `Restore${recoverable.length > 1 ? ` ${recoverable.length}` : ""}`, `Restore saved checkouts: ${recoverable.map(nameOf).join(", ")}. Each result is recorded in the Action log. Requires gateway admin permission.`, () => restoreCheckouts(recoverable), recoverable.some(recoveryBusy) || batchRunning);
+    if (recoverable.length && !batchRunning && !batchPreview && !prepared && !batchResults.size) primary = recoveryButton(recoveryQueueBusy() ? `Restoring ${recoveryQueues.get(v.collectionKey?.() ?? v.key()).index}/${recoveryQueues.get(v.collectionKey?.() ?? v.key()).total}` : recoverable.length > 1 ? "Restore all" : "Restore", `Restore saved checkouts: ${recoverable.map(nameOf).join(", ")}. Each result is recorded in the Action log. Requires gateway admin permission.`, () => restoreCheckouts(recoverable), recoveryQueueBusy());
     else if (prepared && !batchRunning && !batchPreview) primary = nextButton("Review push", `Review ${nameOf(prepared)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
     else if (single && !batchRunning && !batchPreview) {
       const { repo, step } = single;

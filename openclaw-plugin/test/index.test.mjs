@@ -878,3 +878,19 @@ test("recovery requires a matching native record and admin action; status never 
   release();assert.equal((await pending).ok,true);assert.equal(restores,2);
   assert.equal((await act()).ok,false,"an existing checkout is never overwritten");
 });
+
+for (const failure of ["nonzero", "invalid-json", "nonarray", "timeout"]) test(`native recovery listing ${failure} leaves collection usable; healthy rows do not list`, async () => {
+  const actions=new Map(),dir=mkdtempSync(path.join(os.tmpdir(),"taba-restore-read-"));
+  const entry={parentSessionKey:"task",projectId:"api",label:"task api",workspaceDir:path.join(dir,"missing"),worktree:{id:"api",branch:"openclaw/task",repoRoot:path.join(dir,"clone")}};
+  let healthy=true,lists=0;
+  plugin.register({pluginConfig:{},runtime:{state:{resolveStateDir:()=>dir},agent:{session:{listSessionEntries:()=>[{sessionKey:"owner",entry}],getSessionEntry:()=>entry}},system:{runCommandWithTimeout:async argv=>{
+    if(argv[0]==="openclaw") {lists++;if(failure==="timeout")throw Error("timed out");return failure==="nonzero"?{code:1,stdout:""}:{code:0,stdout:failure==="nonarray"?'{}':'invalid'};}
+    if(argv[1]==="status")return {code:0,stdout:JSON.stringify({task:{repos:healthy?[{repo:"api",path:entry.workspaceDir}]:[]}})};
+    if(argv[1]==="config")return {code:0,stdout:"https://github.com/example-org/api.git"};
+    return {code:0,stdout:"wtc version dev"};
+  }}},session:{controls:{registerSessionAction:a=>actions.set(a.id,a),registerControlUiDescriptor(){}}},registerHttpRoute(){},on(){},logger:{}});
+  const read=()=>actions.get("collection").handler({agentId:"main",sessionKey:"task",payload:{}});
+  assert.equal((await read()).ok,true);assert.equal(lists,0,"healthy collection never runs a native listing");
+  healthy=false;const out=await read();assert.equal(out.ok,true);assert.equal(lists,1);
+  assert.equal(out.result.repos[0].repo,"api");assert.equal(out.result.repos[0].recovery.state,"unknown");
+});
