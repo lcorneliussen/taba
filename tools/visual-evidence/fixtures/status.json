@@ -13,13 +13,13 @@
             "schema": 1,
             "collection": "sample",
             "repos": [
-              {"dir": "api", "branch_display": "topic/api", "tree": "clean", "pr": {"number": "7", "checks": "SUCCESS", "merge": "CLEAN", "review": "APPROVED"}},
-              {"dir": "web", "branch_display": "topic/web", "tree": "clean", "pr": {"number": "48", "checks": "PENDING", "merge": "UNKNOWN", "review": "REVIEW_REQUIRED"}}
+              {"dir": "api", "branch_display": "feature/alpha", "tree": "clean", "pr": {"number": "7", "checks": "SUCCESS", "merge": "CLEAN", "review": "APPROVED"}},
+              {"dir": "web", "branch_display": "feature/beta", "tree": "clean", "pr": {"number": "48", "checks": "PENDING", "merge": "UNKNOWN", "review": "REVIEW_REQUIRED"}}
             ]
           },
           "facts": [{"Repo": "api", "Head": "same", "BaseHead": "same"}, {"Repo": "web", "Head": "same", "BaseHead": "same"}],
           "keys": [],
-          "assert": {"contains": ["api", "web", "topic/api", "topic/web", "#7", "#48"], "same_row": [["api", "topic/api", "#7"], ["web", "topic/web", "#48"]], "aligned": [["topic/api", "topic/web"]]}
+          "assert": {"contains": ["api", "web", "feature/alpha", "feature/beta", "#7", "#48"], "same_row": [["api", "feature/alpha", "#7"], ["web", "feature/beta", "#48"]], "aligned": [["feature/alpha", "feature/beta"]]}
         }
       ]
     },
@@ -35,13 +35,13 @@
             "schema": 1,
             "collection": "sample",
             "repos": [
-              {"dir": "api", "branch_display": "topic/api", "tree": "clean"},
-              {"dir": "web", "branch_display": "topic/web", "tree": "clean"}
+              {"dir": "api", "branch_display": "feature/alpha", "tree": "clean"},
+              {"dir": "web", "branch_display": "feature/beta", "tree": "clean"}
             ]
           },
           "facts": [{"Repo": "api", "Head": "same", "BaseHead": "same"}, {"Repo": "web", "Head": "same", "BaseHead": "same"}],
           "keys": [],
-          "assert": {"contains": ["api", "web", "topic/api", "topic/web"], "same_row": [["api", "topic/api"], ["web", "topic/web"]], "aligned": [["topic/api", "topic/web"]]}
+          "assert": {"contains": ["api", "web", "feature/alpha", "feature/beta"], "same_row": [["api", "feature/alpha"], ["web", "feature/beta"]], "aligned": [["feature/alpha", "feature/beta"]]}
         }
       ]
     }

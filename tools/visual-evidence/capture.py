@@ -19,6 +19,7 @@ import re
 import select
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -41,7 +42,45 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run(command, cwd, env, timeout=300):
+def source_fingerprint(env):
+    """Hash tracked files and extra Go inputs; omit other untracked data."""
+    tracked = run(["git", "ls-files", "--cached", "-z"], ROOT, env, 10, strip_output=False)
+    # Include ignored Go inputs too: Git ignore rules do not affect compilation.
+    untracked = run(["git", "ls-files", "--others", "-z"], ROOT, env, 10, strip_output=False)
+    names = tracked + untracked
+    paths = sorted(set(name for name in tracked.split("\0") if name) |
+                   {name for name in untracked.split("\0") if name and (name.endswith(".go") or Path(name).name in ("go.mod", "go.sum"))})
+    if len(paths) > 20000 or "\ufffd" in names:
+        raise ValueError("source inventory is too large or cannot be decoded")
+    fingerprint, total = hashlib.sha256(), 0
+    for name in paths:
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("source inventory escapes checkout")
+        path = ROOT / relative
+        if not path.resolve().is_relative_to(ROOT.resolve()):
+            raise ValueError("source link escapes checkout")
+        fingerprint.update(name.encode() + b"\0")
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            fingerprint.update(b"missing\0")
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("source fingerprint requires regular checkout files")
+        fingerprint.update(str(stat.S_IMODE(metadata.st_mode)).encode() + b"\0")
+        file_hash = hashlib.sha256()
+        with path.open("rb") as source:
+            while data := source.read(65536):
+                total += len(data)
+                if total > 256 * 1024 * 1024:
+                    raise ValueError("source fingerprint exceeds byte limit")
+                file_hash.update(data)
+        fingerprint.update(file_hash.digest())
+    return fingerprint.hexdigest()
+
+
+def run(command, cwd, env, timeout=300, strip_output=True):
     """Bound both time and output, including descendants of a failed command."""
     process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, start_new_session=True)
@@ -65,7 +104,8 @@ def run(command, cwd, env, timeout=300):
             raise RuntimeError("process timed out") from error
         if code:
             raise RuntimeError(f"process exited {code}: " + output.decode(errors="replace")[-2000:])
-        return output.decode(errors="replace").strip()
+        text = output.decode(errors="replace")
+        return text.strip() if strip_output else text
     finally:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -220,6 +260,7 @@ def main():
         manifest["head"] = run(["git", "rev-parse", "HEAD"], ROOT, env, 10)
         source_status = run(["git", "status", "--porcelain", "--untracked-files=normal"], ROOT, env, 10)
         manifest["dirty"] = bool(source_status)
+        manifest["source_sha256"] = source_fingerprint(env)
         fixture = load_fixture(FIXTURE)
         manifest["fixture_sha256"] = digest(FIXTURE)
         recorder_path = ROOT / "docs/demos/record.py"
@@ -297,7 +338,8 @@ def main():
                 except (OSError, RuntimeError, ValueError, KeyError) as error:
                     result["error"] = str(error)
                     manifest["errors"].append(f"{name}: {error}")
-        if manifest["head"] != run(["git", "rev-parse", "HEAD"], ROOT, env, 10) or source_status != run(["git", "status", "--porcelain", "--untracked-files=normal"], ROOT, env, 10):
+        manifest["source_after_sha256"] = source_fingerprint(env)
+        if manifest["source_sha256"] != manifest["source_after_sha256"] or manifest["head"] != run(["git", "rev-parse", "HEAD"], ROOT, env, 10) or source_status != run(["git", "status", "--porcelain", "--untracked-files=normal"], ROOT, env, 10):
             manifest["errors"].append("source revision or working tree changed during capture")
     except (OSError, RuntimeError, ValueError, ImportError) as error:
         manifest["errors"].append(str(error))

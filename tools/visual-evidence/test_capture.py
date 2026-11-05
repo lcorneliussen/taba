@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -46,6 +47,19 @@ class FrameAssertionsTest(unittest.TestCase):
 
 
 class FixtureTest(unittest.TestCase):
+    def test_repository_cell_loss_and_swaps_fail_both_fixture_layouts(self):
+        for case in capture.load_fixture(capture.FIXTURE)["scenarios"]:
+            frame = case["frames"][0]
+            repos = frame["snapshot"]["repos"]
+            def rows(names):
+                return "\n".join(f"{name:6}{repo['branch_display']:16}" +
+                                 ("#" + repo["pr"]["number"] if repo.get("pr") else "")
+                                 for name, repo in zip(names, repos))
+            with self.subTest(layout=case["name"]):
+                self.assertEqual(capture.check_frame(rows([r["dir"] for r in repos]), case["columns"], case["rows"], frame["assert"])[1], [])
+                self.assertTrue(capture.check_frame(rows(["", ""]), case["columns"], case["rows"], frame["assert"])[1])
+                self.assertTrue(capture.check_frame(rows([r["dir"] for r in reversed(repos)]), case["columns"], case["rows"], frame["assert"])[1])
+
     def test_malformed_fixtures_fail_before_execution(self):
         valid = json.loads(capture.FIXTURE.read_text())
         cases = [[], {"version": True, "scenarios": []}, {"version": 1, "scenarios": []}]
@@ -110,6 +124,54 @@ class FixtureTest(unittest.TestCase):
             capture.render_html(destructive, 30, 10, "synthetic", recorder)
 
 
+class SourceFingerprintTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.env = {"PATH": os.environ["PATH"], "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+        self.git("init", "-q", "-b", "main")
+        (self.root / "renderer.go").write_text("package fixture\n")
+        self.git("add", "renderer.go")
+        self.git("-c", "user.name=Example", "-c", "user.email=example@example.invalid", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "Synthetic source fixture")
+
+    def git(self, *args):
+        return subprocess.check_output(["git", "-C", str(self.root), *args], env=self.env, text=True)
+
+    def fingerprint(self):
+        with patch.object(capture, "ROOT", self.root):
+            return capture.source_fingerprint(self.env)
+
+    def test_already_dirty_source_changes_despite_identical_head_and_status(self):
+        renderer = self.root / "renderer.go"
+        renderer.write_text("package fixture // first edit\n")
+        head, status, before = self.git("rev-parse", "HEAD"), self.git("status", "--porcelain"), self.fingerprint()
+        renderer.write_text("package fixture // second edit\n")
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(self.git("status", "--porcelain"), status)
+        self.assertNotEqual(self.fingerprint(), before)
+
+    def test_ignored_go_inputs_are_hashed_but_untracked_credentials_are_not(self):
+        (self.root / ".git/info/exclude").write_text("extra.go\ncredentials\n")
+        extra = self.root / "extra.go"
+        extra.write_text("package fixture // first\n")
+        credentials = self.root / "credentials"
+        credentials.write_text("synthetic credential marker one")
+        before = self.fingerprint()
+        credentials.write_text("synthetic credential marker two")
+        self.assertEqual(self.fingerprint(), before)
+        extra.write_text("package fixture // second\n")
+        self.assertNotEqual(self.fingerprint(), before)
+
+    def test_external_source_link_is_refused(self):
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside) / "external.go"
+            target.write_text("not a source input")
+            (self.root / "extra.go").symlink_to(target)
+            with self.assertRaisesRegex(ValueError, "source link escapes checkout"):
+                self.fingerprint()
+
+
 class ProcessBoundsTest(unittest.TestCase):
     def test_existing_output_file_and_nonempty_directory_are_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -159,11 +221,13 @@ class ProcessBoundsTest(unittest.TestCase):
             fixture_path = temporary / "fixture.json"
             fixture_path.write_text(json.dumps(fixture))
 
-            def fake_run(command, cwd, env, timeout=300):
+            def fake_run(command, cwd, env, timeout=300, **kwargs):
                 if command[:3] == ["git", "rev-parse", "HEAD"]:
                     return "a" * 40
                 if command[:2] == ["git", "status"]:
                     return ""
+                if command[:2] == ["git", "ls-files"]:
+                    return "go.mod\0" if "--cached" in command else ""
                 if command[:2] == ["go", "version"]:
                     return "go version test"
                 if command[:2] == ["go", "env"]:
@@ -184,6 +248,38 @@ class ProcessBoundsTest(unittest.TestCase):
             self.assertTrue((out / "wide-1.txt").is_file())
             self.assertTrue((out / "wide-1.html").is_file())
             self.assertIn("wide-1.txt", manifest["artifacts"])
+
+    def test_changed_source_fingerprint_fails_with_same_head_and_status(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            out = Path(temporary) / "artifacts"
+            def fake_run(command, cwd, env, timeout=300, **kwargs):
+                if command[:3] == ["git", "rev-parse", "HEAD"]:
+                    return "a" * 40
+                if command[:2] == ["git", "status"]:
+                    return "M renderer.go"
+                if command[:2] == ["go", "version"]:
+                    return "go version test"
+                if command[:2] == ["go", "env"]:
+                    return json.dumps({"GOCACHE": "/tmp/example-go-cache", "GOMODCACHE": "/tmp/example-module-cache"})
+                if command[:2] == ["go", "test"]:
+                    request = json.loads(Path(env["WTC_RECORDING_INPUT"]).read_text())
+                    frames = []
+                    for frame in request["frames"]:
+                        content = "\n".join(f"{repo['dir']:6}{repo['branch_display']:16}" +
+                                            ("#" + repo["pr"]["number"] if repo.get("pr") else "")
+                                            for repo in frame["snapshot"]["repos"])
+                        frames.append({"content": content, "phase": frame["phase"]})
+                    Path(env["WTC_RECORDING_OUTPUT"]).write_text(json.dumps({"frames": frames}))
+                    return "ok"
+                self.fail(f"unexpected command: {command}")
+
+            with patch.object(capture, "run", fake_run), patch.object(capture, "source_fingerprint", side_effect=["a" * 64, "b" * 64]), patch.object(capture.shutil, "which", return_value=None), patch.object(sys, "argv", ["capture.py", "--out", str(out)]):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(capture.main(), 1)
+            manifest = json.loads((out / "manifest.json").read_text())
+            self.assertFalse(manifest["passed"])
+            self.assertIn("source revision or working tree changed during capture", manifest["errors"])
+            self.assertTrue((out / "wide-1.txt").is_file())
 
 
 if __name__ == "__main__":
