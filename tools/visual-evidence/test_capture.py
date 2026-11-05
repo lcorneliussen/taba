@@ -97,8 +97,32 @@ class FixtureTest(unittest.TestCase):
         self.assertIn("api   topic/api", rendered)
         self.assertIn("web   topic/web", rendered)
 
+    def test_lossy_terminal_decoding_is_rejected(self):
+        spec = importlib.util.spec_from_file_location("recording", capture.ROOT / "docs/demos/record.py")
+        recorder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(recorder)
+        # A clear-screen sequence disappears from ANSI-stripped text but erases
+        # already visible cells. Accepting that screenshot would lose evidence.
+        destructive = "api\x1b[2Jweb"
+        checks = {"contains": ["apiweb"], "same_row": [], "aligned": []}
+        self.assertEqual(capture.check_frame(destructive, 30, 10, checks)[1], [])
+        with self.assertRaisesRegex(ValueError, "decoding changed visible frame text"):
+            capture.render_html(destructive, 30, 10, "synthetic", recorder)
+
 
 class ProcessBoundsTest(unittest.TestCase):
+    def test_existing_output_file_and_nonempty_directory_are_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            marker = temporary / "marker"
+            marker.write_text("preserve")
+            for destination in (marker, temporary, capture.ROOT):
+                with self.subTest(destination=destination), patch.object(sys, "argv", ["capture.py", "--out", str(destination)]):
+                    with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                        capture.main()
+                    self.assertEqual(error.exception.code, 2)
+                    self.assertEqual(marker.read_text(), "preserve")
+
     def test_ambient_credentials_and_profile_roots_are_not_forwarded(self):
         with tempfile.TemporaryDirectory() as temporary:
             temporary = Path(temporary)

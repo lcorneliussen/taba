@@ -204,11 +204,12 @@ def main():
     parser.add_argument("--require-png", action="store_true", help="fail if a PNG cannot be produced")
     args = parser.parse_args()
     out = args.out.resolve()
-    if out == ROOT or ROOT in out.parents or (out.exists() and any(out.iterdir())):
+    if out == ROOT or ROOT in out.parents or (out.exists() and (not out.is_dir() or any(out.iterdir()))):
         parser.error("--out must be an empty directory outside the source checkout")
     out.mkdir(parents=True, exist_ok=True)
     manifest = {"schema": 1, "kind": "native TUI renderer; synthetic facts; not full CLI/provider execution",
                 "limitations": ["Inspect text and screenshots before publishing; capture does not establish privacy or provider behavior.",
+                                "PNG is a local pyte/Chrome terminal-cell preview; terminal fonts and unsupported style attributes may differ.",
                                 "Screenshots supplement semantic assertions; they do not establish review approval or passing forge checks."],
                 "fixture_sha256": None, "generator_sha256": digest(Path(__file__)),
                 "scenarios": [], "errors": [], "tools": {}}
