@@ -572,7 +572,7 @@ func TestStatusTUIModelShowsCachedRowsAndControls(t *testing.T) {
 		width: 90, height: 20, focused: true, interval: 30 * time.Second, background: 5 * time.Minute,
 		lastRefresh: time.Now().Add(-time.Minute), nextRefresh: time.Now().Add(time.Minute)}
 	view := model.View().Content
-	if !strings.Contains(ansi.Strip(view), "wtc status · fixture") || !strings.Contains(view, "widget") || !strings.Contains(view, "archived (1)") || strings.Contains(view, "Old change") {
+	if !strings.Contains(ansi.Strip(view), "taba/wtc status · fixture") || !strings.Contains(view, "widget") || !strings.Contains(view, "archived (1)") || strings.Contains(view, "Old change") {
 		t.Fatalf("cached view wrong: %s", view)
 	}
 	updated, _ := model.Update(tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
@@ -733,6 +733,187 @@ func TestStatusOneShotTableCanHidePRSection(t *testing.T) {
 	repos := statusTable(snapshot, true, 80)
 	if !strings.Contains(full, "Synthetic PR") || strings.Contains(repos, "Synthetic PR") || !strings.Contains(repos, "widget") {
 		t.Fatalf("repository-only table wrong: full=%s repos=%s", full, repos)
+	}
+}
+
+func statusOverflowModel() statusTUIModel {
+	m := statusTUIModel{width: 100, height: 12, snapshot: wtc.StatusSnapshot{Collection: "overflow"}}
+	for i := 0; i < 36; i++ {
+		name := fmt.Sprintf("repo-%02d", i)
+		m.snapshot.Repos = append(m.snapshot.Repos, wtc.StatusRepo{Collection: "overflow", Repo: name, Dir: name,
+			Slug: "example/" + name, Forge: "github.com", BranchDisplay: "main"})
+	}
+	for i := 0; i < 20; i++ {
+		url := fmt.Sprintf("https://example.test/pull/%d", 100+i)
+		m.snapshot.PRs = append(m.snapshot.PRs, wtc.StatusPRRow{Repo: "repo-00", Number: fmt.Sprint(100 + i),
+			Title: fmt.Sprintf("Synthetic change %d", i), URL: &url})
+	}
+	return m
+}
+
+func statusScrollEvent(t *testing.T, m statusTUIModel, event tea.Msg) statusTUIModel {
+	t.Helper()
+	updated, command := m.Update(event)
+	if command != nil {
+		t.Fatal("scroll, resize or snapshot update dispatched work")
+	}
+	return updated.(statusTUIModel)
+}
+
+func TestStatusTUIOverflowKeyboardAndWheel(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	m := statusOverflowModel()
+	initial := m.View().Content
+	m = statusScrollEvent(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if m.View().Content == initial {
+		t.Fatal("wheel did not scroll overflowing content")
+	}
+	for i := 0; i < 150; i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'j'})
+	}
+	bottom := m.View().Content
+	if !strings.Contains(ansi.Strip(bottom), "#119") || !strings.Contains(strings.Split(ansi.Strip(bottom), "\n")[0], "status · overflow") {
+		t.Fatalf("last PR or pinned status header is inaccessible: %s", bottom)
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'k'})
+	if m.View().Content == bottom {
+		t.Fatal("excess down presses left scroll beyond the bottom")
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyHome})
+	if m.View().Content != initial {
+		t.Fatal("Home did not return to the initial viewport")
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.View().Content == initial {
+		t.Fatal("Page Down did not move the viewport")
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.View().Content != initial {
+		t.Fatal("Page Up did not undo one page movement")
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyEnd})
+	if m.View().Content != bottom {
+		t.Fatal("End did not reach the last viewport")
+	}
+	m = statusScrollEvent(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if m.View().Content == bottom {
+		t.Fatal("wheel could not leave the bottom viewport")
+	}
+}
+
+func TestStatusTUIOverflowRowsAndClicksStayTogether(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	m := statusOverflowModel()
+	m.showHelp = true
+	m.snapshot.Runtime = []wtc.RuntimeItem{{Collection: "overflow", Repo: "repo-00", Dir: "repo-00", Path: "repo-00/web/server",
+		Group: "repo-00/web", Kind: "service", State: "ready", URL: "http://localhost:43000"}}
+	wanted, seen := map[string]string{}, map[string]bool{}
+	for _, r := range m.snapshot.Repos {
+		wanted[r.Dir] = "https://github.com/" + r.Slug
+	}
+	for _, r := range m.snapshot.PRs {
+		wanted["#"+r.Number] = *r.URL
+	}
+	serviceSeen := false
+	for step := 0; step < 110; step++ {
+		for y, line := range strings.Split(ansi.Strip(m.View().Content), "\n") {
+			words := strings.Fields(line)
+			if len(words) > 0 && wanted[words[0]] != "" {
+				if got := m.buildClickTarget(1, y); got != wanted[words[0]] {
+					t.Fatalf("visible %s opens %q, want %q", words[0], got, wanted[words[0]])
+				}
+				seen[words[0]] = true
+			}
+			if at := strings.Index(line, ":43000"); at >= 0 {
+				if got := m.buildClickTarget(runewidth.StringWidth(line[:at]), y); got != "http://localhost:43000" {
+					t.Fatalf("scrolled service URL opened %q", got)
+				}
+				serviceSeen = true
+			}
+		}
+		if m.buildClickTarget(1, 0) != "" || m.buildClickTarget(1, m.height-2) != "" {
+			t.Fatal("header or footer opened an offscreen row")
+		}
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	if len(seen) != len(wanted) || !serviceSeen {
+		t.Fatalf("unreachable rows: saw %d of %d, service %v", len(seen), len(wanted), serviceSeen)
+	}
+}
+
+func TestStatusTUIOverflowRefreshAnchorAndResize(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	m := statusOverflowModel()
+	for i := 0; i < 15; i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	before := strings.Split(ansi.Strip(m.View().Content), "\n")
+	name := strings.Fields(before[2])[0]
+	fresh := m.snapshot
+	fresh.Repos = append([]wtc.StatusRepo{{Collection: "overflow", Repo: "inserted", Dir: "inserted"}}, fresh.Repos...)
+	m = statusScrollEvent(t, m, statusLoadedMsg{snapshot: fresh, at: time.Now()})
+	if after := strings.Split(ansi.Strip(m.View().Content), "\n"); !strings.HasPrefix(after[2], name+" ") {
+		t.Fatalf("refresh lost the visible repository anchor %q: %s", name, m.View().Content)
+	}
+	for _, size := range []struct{ width, height int }{{25, 5}, {80, 3}, {8, 1}, {80, 2}, {100, 12}, {100, 80}} {
+		m = statusScrollEvent(t, m, tea.WindowSizeMsg{Width: size.width, Height: size.height})
+		lines := strings.Split(m.View().Content, "\n")
+		if len(lines) > size.height {
+			t.Fatalf("%dx%d view has %d physical rows", size.width, size.height, len(lines))
+		}
+		for _, line := range lines {
+			if ansi.StringWidth(line) > size.width {
+				t.Fatalf("view wraps outside %d columns: %q", size.width, line)
+			}
+		}
+	}
+	if !strings.Contains(ansi.Strip(m.View().Content), "inserted") {
+		t.Fatal("expanded viewport did not clamp back to the beginning")
+	}
+}
+
+func TestStatusTUIOverflowNoClickAndWrappedLog(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	m := statusOverflowModel()
+	m.noClick = true
+	if m.View().MouseMode == tea.MouseModeNone {
+		t.Fatal("--no-click disabled overflow wheel input")
+	}
+	m = statusScrollEvent(t, m, tea.MouseClickMsg{X: 1, Y: 3, Button: tea.MouseLeft})
+	m = statusScrollEvent(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	m.showLog, m.width, m.height = true, 30, 8
+	m.progressLog = []string{strings.Repeat("synthetic diagnostic ", 20) + "final-marker"}
+	m.focusLogTail()
+	if !strings.Contains(ansi.Strip(m.View().Content), "final-marker") {
+		t.Fatal("wrapped diagnostic tail is inaccessible")
+	}
+	t.Setenv("TERM", "dumb")
+	if m.View().MouseMode != tea.MouseModeNone || strings.Contains(m.View().Content, "\x1b") {
+		t.Fatal("dumb terminal received mouse or styling controls")
+	}
+	short := statusTUIModel{width: 80, height: 40, snapshot: wtc.StatusSnapshot{Collection: "empty"}}
+	initial := short.View().Content
+	for i := 0; i < 5; i++ {
+		short = statusScrollEvent(t, short, tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	}
+	if short.View().Content != initial {
+		t.Fatal("short view overscrolled")
+	}
+}
+
+func TestStatusTUIOverflowProcessView(t *testing.T) {
+	m := statusTUIModel{procs: true, width: 80, height: 8}
+	for i := 0; i < 40; i++ {
+		m.processes = append(m.processes, wtc.StatusProcess{PID: 100 + i, Command: fmt.Sprintf("synthetic-process-%02d", i)})
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyEnd})
+	text := ansi.Strip(m.View().Content)
+	if !strings.Contains(text, "status · processes") || !strings.Contains(text, "synthetic-process-39") {
+		t.Fatalf("process rows/header are inaccessible: %s", text)
+	}
+	m = statusScrollEvent(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if ansi.Strip(m.View().Content) == text || m.buildClickTarget(1, 3) != "" {
+		t.Fatal("process scrolling stayed stuck or offered a repository action")
 	}
 }
 

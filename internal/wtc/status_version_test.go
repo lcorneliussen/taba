@@ -43,7 +43,7 @@ func TestStatusSnapshotRecordsRunningProducerVersion(t *testing.T) {
 		if err != nil || snapshot.CLIVersion != "1.2.3" || !strings.Contains(string(data), `"cli_version":"1.2.3"`) {
 			t.Fatalf("running producer version missing: %s (%v)", data, err)
 		}
-		if !strings.Contains(snapshot.Markdown(), "CLI: wtc 1.2.3") || !strings.Contains(snapshot.ReposMarkdown(), "CLI: wtc 1.2.3") {
+		if !strings.Contains(snapshot.Markdown(), "CLI: taba/wtc 1.2.3") || !strings.Contains(snapshot.ReposMarkdown(), "CLI: taba/wtc 1.2.3") {
 			t.Fatal("text lost producer observation")
 		}
 		if all {
@@ -63,7 +63,7 @@ func TestStatusSnapshotRecordsRunningProducerVersion(t *testing.T) {
 	// unknown, even when read by a known newer CLI.
 	fixtureFile(t, filepath.Join(c.Collection, ".wtc-status.json"), `{"schema":1,"collection":"main","repos":[],"prs":[],"orphans":[]}`, 0644)
 	cached, err := c.ReadStatusSnapshot()
-	if err != nil || cached.CLIVersion != "" || !strings.Contains(cached.Markdown(), "CLI: wtc unknown") {
+	if err != nil || cached.CLIVersion != "" || !strings.Contains(cached.Markdown(), "CLI: taba/wtc unknown") {
 		t.Fatalf("old cache compatibility: %+v (%v)", cached, err)
 	}
 	for _, input := range []string{"", " \n\u009b"} {

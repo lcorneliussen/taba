@@ -278,6 +278,31 @@ const ago = (at) => {
   return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
 };
 
+// Clock ticks change labels, not controls: replacing a hovered or focused node
+// resets its native tooltip and can dismiss an open menu.
+const timeLabel = (at, { prefix = "", updated = false } = {}) => Object.assign(el("span", { className:"wtc-time-label", textContent:prefix + ago(at) }), { wtcTimeAt:at, wtcTimePrefix:prefix, wtcUpdated:updated });
+const refreshTitle = (entry) => `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`;
+function syncTimeLabels(root, entry, { composer = false } = {}) {
+  for (const n of root.querySelectorAll?.(".wtc-time-label") ?? []) {
+    if (n.wtcUpdated) n.wtcTimeAt = entry.at;
+    const text = n.wtcTimePrefix + ago(n.wtcTimeAt);
+    if (n.textContent !== text) n.textContent = text;
+  }
+  for (const b of root.querySelectorAll?.(".wtc-refresh-control") ?? []) {
+    const busy = String(!!entry.inflight);
+    if (b.getAttribute("aria-busy") !== busy) b.setAttribute("aria-busy", busy);
+    // Changing a hovered title resets its tooltip; catch its age up when idle.
+    if (composer && !b.matches(":hover,:focus-visible")) {
+      const title = refreshTitle(entry);
+      if (b.title !== title) b.title = b.ariaLabel = title;
+    }
+  }
+}
+function collectionStamp(entry, sessionKey) {
+  const key = entry?.data?.collection?.sessionKey ?? sessionKey;
+  return JSON.stringify([entry?.data, entry?.error, feedbackStore.get(key), [...(activityStore.get(key)?.values() ?? [])]]);
+}
+
 const ciText = (pr) => ({ success: "CI passed", failure: `CI ${pr.failed} failed`, pending: `CI ${pr.running} running` })[pr.checks] ?? "no checks";
 // The state of an open pull request at a glance: CI, whether it merges, review.
 const prTone = (pr) => pr.mergeable === "conflicting" || pr.checks === "failure" || pr.review === "changes_requested" ? TONE.failure
@@ -295,17 +320,21 @@ const FORGE_PATHS = {
 const FORGE_COLORS = { github: "currentColor", bitbucket: "#2684FF" };
 function forgeIcon(forge, size = 14) {
   const d = FORGE_PATHS[forge];
-  if (!d) return css(el("span"), `flex:none;align-self:center;width:${size}px;height:${size}px;border-radius:3px;background:var(--muted, #888);opacity:.4`);
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("width", String(size));
   svg.setAttribute("height", String(size));
-  svg.setAttribute("aria-label", forge === "github" ? "GitHub" : "Bitbucket");
+  svg.setAttribute("aria-label", forge === "github" ? "GitHub" : forge === "bitbucket" ? "Bitbucket" : "Repository");
   svg.style.cssText = "flex:none;align-self:center";
   const pathEl = document.createElementNS(NS, "path");
-  pathEl.setAttribute("d", d);
-  pathEl.setAttribute("fill", FORGE_COLORS[forge]);
+  pathEl.setAttribute("d", d ?? "M4 3h16v18H4zM8 3v18M11 7h6M11 11h6");
+  pathEl.setAttribute("fill", d ? FORGE_COLORS[forge] : "none");
+  if (!d) {
+    pathEl.setAttribute("stroke", "currentColor");
+    pathEl.setAttribute("stroke-width", "1.6");
+    pathEl.setAttribute("stroke-linejoin", "round");
+  }
   svg.append(pathEl);
   return svg;
 }
@@ -409,11 +438,11 @@ async function svcRequest(host, sessionKey, agentId, payload) {
 // own portal, then a public link for when a portal does not work, a dev
 // tunnel for the person's account, and the tailnet when it is the team's.
 const TUNNEL_PROVIDERS = [
-  { name: "gateway", reach: "OpenClaw portal", portal: true },
-  { name: "cloudflare", reach: "public link", public: true },
-  { name: "ngrok", reach: "public link", public: true },
-  { name: "devtunnel", reach: "your account" },
-  { name: "tailscale", reach: "team tailnet", team: true },
+  { name: "gateway", label: "Gateway", reach: "OpenClaw portal", portal: true },
+  { name: "cloudflare", label: "Cloudflare", reach: "public link", public: true },
+  { name: "ngrok", label: "ngrok", reach: "public link", public: true },
+  { name: "devtunnel", label: "Dev Tunnel", reach: "your account" },
+  { name: "tailscale", label: "Tailscale", reach: "team tailnet", team: true },
 ];
 // portal.list leaves out a portal's URL with its access token; opening the
 // same port again returns it. Kept for the portals this page opened.
@@ -430,12 +459,22 @@ const unreachable = (url) => {
   } catch { return false; }
 };
 const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${g.group}. ${program} is not on the gateway's PATH: install it for this collection, then open the tunnel as the wtc-svc skill says.`;
+const serviceStateIcon = glyph => {
+  // Use a supported shell for the filled square, avoiding the unknown-glyph fallback.
+  const icon = controlIcon(glyph === "■" ? "▶" : glyph, 12);
+  const svg = icon.children[0], path = svg.children[0];
+  if (glyph === "▶" || glyph === "■") {
+    path.setAttribute("d", glyph === "▶" ? "M8 4l13 8-13 8V4z" : "M5 5h14v14H5z");
+    svg.setAttribute("fill", "currentColor"); svg.setAttribute("stroke", "none");
+  }
+  return icon;
+};
 // A button in front of a service, where a repository has its forge icon and
 // as small, that is also its state: ■ stops a running one, ▶ starts a
 // stopped one, ↻ restarts a failed one.
 function stateGlyph(glyph, title, tone, run) {
-  const b = css(el("button", { type: "button", className: glyph === "▶" ? "wtc-service-play" : "", title, ariaLabel: title }, glyph === "▶" ? controlIcon(glyph) : glyph),
-    `flex:none;box-sizing:border-box;width:var(--wtc-state-size,14px);height:var(--wtc-state-size,14px);display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:var(--wtc-service-play-bg,transparent);color:var(--wtc-service-play-color,${tone});cursor:pointer;font-size:${glyph === "↻" ? 13 : 10}px;line-height:1;padding:0`);
+  const b = css(el("button", { type: "button", className: "wtc-service-play", title, ariaLabel: title }, serviceStateIcon(glyph)),
+    `flex:none;box-sizing:border-box;width:var(--wtc-state-size,20px);height:var(--wtc-state-size,20px);display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:var(--wtc-service-play-bg,transparent);color:var(--wtc-service-play-color,${tone});cursor:pointer;font-size:${glyph === "↻" ? 13 : 10}px;line-height:1;padding:0`);
   b.onclick = (e) => { e?.preventDefault(); e?.stopPropagation(); return run(); };
   return b;
 }
@@ -513,11 +552,15 @@ function tunnelNode(g, t, svc, { label, opener } = {}) {
   }
   // Running, but not answering or not signed in: say so on it.
   const trouble = isFailed(t) ? css(el("span", { textContent: "⚠", title: serviceState(t) }), "color:var(--danger, #cf222e)") : null;
-  return css(el("span", {},
-    trouble,
-    t.url ? link(label ?? name, t.url) : label ?? name,
-    smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`))),
-  "display:inline-flex;align-items:center;gap:2px;white-space:nowrap");
+  const route = t.url ? link(label ?? name, t.url) : label ?? name;
+  if (typeof route === "object") {
+    css(route, "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap");
+    route.title = t.url;
+  }
+  const close = smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`));
+  close.style.flex = "none";
+  return css(el("span", {}, trouble, route, close),
+    "display:inline-flex;align-items:center;gap:2px;min-width:0;max-width:100%;white-space:nowrap");
 }
 // A new way to a service, or null when none is left. compact: a "+" only,
 // whose title and options name the ways.
@@ -538,45 +581,122 @@ function newTunnel(g, svc, data = {}, { compact = false } = {}) {
     if (r?.missing) await svc.ask(installTunnel(g, p.name, r.missing));
   };
   if (!g.main || g.loose || !free.length) return null;
-  // One way left is a button that names it; more are a choice.
+  const trigger = css(el("button", { type: "button", className: "wtc-tunnel-trigger", title: `Add a tunnel to ${g.label}`, ariaLabel: `Add a tunnel to ${g.label}` }, controlIcon("+"), compact ? null : " Tunnel…"),
+    `display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;${compact ? "width:24px;" : "padding:0 6px;"}height:24px;min-width:24px;border:1px solid transparent;border-radius:var(--radius-sm,6px);background:transparent;color:var(--muted,#888);font:inherit;font-size:12px;line-height:16px;cursor:pointer;${compact ? "padding:0;" : ""}`);
+  const wrap = (...nodes) => css(el("span", { className: "wtc-tunnel-control" }, ...nodes), "display:inline-flex;align-items:center;vertical-align:middle");
   if (free.length === 1) {
     const p = free[0];
-    return pill(compact ? "+" : `+ ${p.name}`, `Open ${p.name} (${p.reach}) to this service${p.public ? ": anyone with the link can use it" : ""}${!ready(p) ? "; the conversation installs it first" : p.portal && !ingress ? "; the gateway has no portal ingress, so it may not be reachable from here: a tunnel is" : ""}`, () => open(p));
+    if (!compact) trigger.replaceChildren(controlIcon("+"), ` ${p.label ?? p.name}`);
+    trigger.title = trigger.ariaLabel = `Open ${p.label ?? p.name} (${p.reach}) to this service${p.public ? ": anyone with the link can use it" : ""}${!ready(p) ? "; the conversation installs it first" : p.portal && !ingress ? "; the gateway has no portal ingress, so it may not be reachable from here: a tunnel is" : ""}`;
+    trigger.onclick = (e) => { e.preventDefault(); e.stopPropagation(); return open(p); };
+    return wrap(trigger);
   }
-  const pick = css(el("select", { title: "Open a way to this service from your browser: choose how" },
-    el("option", { value: "", textContent: compact ? "+" : "+ Tunnel…" }),
-    ...free.map((p) => el("option", { value: p.name, textContent: `${p.name} · ${p.reach}${note(p)}` }))),
-  `appearance:none;-webkit-appearance:none;font:inherit;font-size:12px;line-height:18px;color:inherit;background:transparent;border:1px solid var(--border-strong, rgba(128,128,128,.4));border-radius:999px;padding:0 ${compact ? 7 : 9}px;cursor:pointer;field-sizing:content;max-width:8em`);
-  pick.onclick = (e) => e.stopPropagation();
-  pick.onchange = async () => {
-    const p = free.find((x) => x.name === pick.value);
-    pick.value = "";
-    if (p) await open(p);
+  const menu = css(el("div", { id: `wtc-tunnels-${uuid()}`, className: "wtc-tunnel-menu", popover: "auto", role: "menu", ariaLabel: `Tunnel for ${g.label}` }),
+    "position:fixed;inset:auto;margin:0;padding:4px;box-sizing:border-box;width:252px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;border:1px solid var(--border-strong,var(--border,rgba(128,128,128,.3)));border-radius:var(--radius-md,8px);background:var(--card,var(--bg,#161920));color:var(--text,inherit);box-shadow:0 6px 20px rgba(0,0,0,.2);font:inherit;font-size:12px;line-height:16px;visibility:hidden");
+  trigger.popoverTargetElement = menu;
+  trigger.ariaHasPopup = "menu";
+  trigger.ariaControls = menu.id;
+  trigger.ariaExpanded = "false";
+  let shown = false, nextFocus = 0, cleanup = () => {};
+  const close = (focus = false) => {
+    if (shown) menu.hidePopover();
+    if (focus && trigger.isConnected) trigger.focus();
   };
-  return pick;
+  const items = free.map((p) => {
+    const item = css(el("button", { type: "button", role: "menuitem", value: p.name, tabIndex: -1, className: "wtc-tunnel-option", ariaLabel: `${p.label ?? p.name} · ${p.reach}${note(p)}` },
+      el("span", { textContent: p.label ?? p.name }),
+      css(el("span", { textContent: `${p.reach}${note(p)}` }), "display:block;font-size:11px;line-height:15px;color:var(--muted,#888)")),
+      "display:block;width:100%;box-sizing:border-box;margin:0;padding:6px 8px;border:0;border-radius:4px;background:transparent;color:inherit;text-align:left;white-space:normal;font:inherit;line-height:16px;cursor:pointer");
+    item.onclick = (e) => { e.preventDefault(); e.stopPropagation(); close(true); return open(p); };
+    return item;
+  });
+  menu.append(...items);
+  // Native popovers handle light dismissal. Open menus own temporary viewport
+  // listeners; closing the menu or removing its trigger releases them.
+  menu.onbeforetoggle = (e) => {
+    shown = e.newState === "open";
+    trigger.ariaExpanded = String(shown);
+    cleanup();
+    if (shown) menu.style.visibility = "hidden";
+  };
+  // A closed popover has no box: measure after it enters the top layer.
+  menu.ontoggle = (e) => {
+    if (e.newState !== "open" || !shown || !trigger.isConnected) return;
+    const viewport = globalThis.visualViewport;
+    const edge = 12, gap = 6;
+    const left = (viewport?.offsetLeft ?? 0) + edge, top = (viewport?.offsetTop ?? 0) + edge;
+    const right = left + (viewport?.width ?? globalThis.innerWidth ?? 1024) - 2 * edge;
+    const bottom = top + (viewport?.height ?? globalThis.innerHeight ?? 768) - 2 * edge;
+    menu.style.maxWidth = `${Math.max(0, right - left)}px`;
+    menu.style.maxHeight = `${Math.max(0, bottom - top)}px`;
+    const anchor = trigger.getBoundingClientRect(), box = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(left, Math.min(anchor.right - box.width, right - box.width))}px`;
+    const above = anchor.top - gap - box.height;
+    const y = above >= top ? above : anchor.bottom + gap;
+    menu.style.top = `${Math.max(top, Math.min(y, bottom - box.height))}px`;
+    menu.style.visibility = "visible";
+    items[nextFocus].focus(); nextFocus = 0;
+    if (!shown || !trigger.isConnected) return;
+    const events = new AbortController();
+    globalThis.addEventListener?.("resize", () => close(), { signal: events.signal });
+    viewport?.addEventListener("resize", () => close(), { signal: events.signal });
+    viewport?.addEventListener("scroll", () => close(), { signal: events.signal });
+    document.addEventListener("scroll", (event) => { if (!menu.contains(event.target)) close(); }, { capture: true, signal: events.signal });
+    const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => { if (!trigger.isConnected) { shown = false; cleanup(); } });
+    observer?.observe(document.documentElement, { childList: true, subtree: true });
+    cleanup = () => { events.abort(); observer?.disconnect(); };
+  };
+  trigger.onclick = (e) => e.stopPropagation();
+  trigger.onkeydown = (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault(); e.stopPropagation();
+    nextFocus = e.key === "ArrowUp" ? items.length - 1 : 0;
+    if (shown) { items[nextFocus].focus(); nextFocus = 0; }
+    else trigger.click();
+  };
+  menu.onkeydown = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(true); return; }
+    if (e.key === "Tab") { close(); return; }
+    const index = items.indexOf(document.activeElement);
+    const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1
+      : e.key === "ArrowDown" ? (index + 1) % items.length
+      : e.key === "ArrowUp" ? (index < 0 ? items.length - 1 : index + items.length - 1) % items.length : -1;
+    if (next >= 0) { e.preventDefault(); e.stopPropagation(); items[next].focus(); }
+  };
+  return wrap(trigger, menu);
 }
 
 // Geometric control glyphs avoid font-dependent centres and spinning hit targets.
-const controlIcon = glyph => {
-  const paths = { "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
+const controlIcon = (glyph, size = 14) => {
+  const paths = { "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg"), path = document.createElementNS(ns, "path");
-  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "14", height: "14", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
+  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: String(size), height: String(size), fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
   svg.setAttribute("class", "wtc-header-glyph"); svg.style.cssText = "display:block;transform-box:fill-box;transform-origin:center";
   path.setAttribute("d", paths[glyph] ?? paths["✕"]); svg.append(path);
-  return css(el("span", { className: "wtc-header-icon" }, svg), "display:inline-flex;width:14px;height:14px");
+  return css(el("span", { className: "wtc-header-icon" }, svg), `display:inline-flex;width:${size}px;height:${size}px`);
 };
 
 // A shared icon rail and text rail for the brand, repositories and services.
-const leadSlot = icon => css(el("span", { className: "wtc-lead-slot" },
-  css(el("span", { className: "wtc-lead-icon" }, icon), "position:absolute;left:50%;top:-.35em;transform:translate(-50%,-50%);display:grid;place-items:center")), "display:inline-block;position:relative;flex:0 0 20px;width:20px;height:0;align-self:baseline");
+const leadSlot = (icon, width = 20) => css(el("span", { className: "wtc-lead-slot" },
+  css(el("span", { className: "wtc-lead-icon" }, icon), "position:absolute;left:50%;top:-.35em;transform:translate(-50%,-50%);display:grid;place-items:center")), `display:inline-block;position:relative;flex:0 0 ${width}px;width:${width}px;height:0;align-self:baseline`);
 
 // Visible branding can change while the plugin and CLI keep their legacy IDs.
 // version is what the collection reports: the plugin's and the gateway's wtc.
 const versionText = (v) => (v?.plugin || v?.wtc ? `plugin ${v.plugin ?? "?"}, wtc ${v.wtc ?? "?"}` : "");
+// The published Taba mark, bundled as vectors so host fonts cannot change it.
+const brandMark = () => {
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  for (const [key, value] of Object.entries({ viewBox: "0 0 64 64", width: "18", height: "18", "aria-hidden": "true", focusable: "false", class: "wtc-brand-icon" })) svg.setAttribute(key, value);
+  const rect = (attrs) => { const node = document.createElementNS(ns, "rect"); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); svg.append(node); };
+  rect({ width: "64", height: "64", rx: "16", fill: "#234e42" });
+  for (const [x, y, width] of [[19, 17, 32], [11, 28.5, 36], [15, 40, 38]]) rect({ x, y, width, height: "7", rx: "3.5", fill: "#f7f7ed" });
+  rect({ x: "30", y: "12", width: "7", height: "40", rx: "3.5", fill: "#c9d98a", stroke: "#234e42", "stroke-width": "2.5" });
+  return css(svg, "display:block;flex:none");
+};
 // Keep the centered logo out of text flow so it cannot supply the link baseline.
 const brand = (size, version, compact = false) => css(el("span", {},
   css(el("a", { href: HOME, target: "_blank", rel: "noopener noreferrer", ariaLabel: "taba home", title: `taba — Make room for the whole task. (opens taba.sh)${version ? `\n${versionText(version)}` : ""}` },
-    leadSlot(css(el("span", { className: "wtc-brand-icon", textContent: "束", lang: "ja", ariaHidden: "true" }), "display:inline-grid;place-items:center;width:18px;height:18px;border-radius:5px;background:#234e42;color:#f7f7ed;font-family:'Hiragino Kaku Gothic ProN','Yu Gothic','Noto Sans CJK JP',sans-serif;font-size:15px;font-weight:500;letter-spacing:0;line-height:1")),
+    leadSlot(brandMark()),
     " ", el("span", { className: "wtc-brand-word", textContent: "taba" })),
     "display:inline-flex;align-items:baseline;gap:6px;min-height:1.5em;color:var(--text-strong, inherit);text-decoration:none;font-weight:700"),
   compact ? null : el("span", { className: "wtc-brand-suffix", textContent: "Collection" })), `display:inline-flex;align-items:baseline;gap:.3em;flex:none;white-space:nowrap;font-weight:600;font-size:${size}`);
@@ -650,6 +770,11 @@ const repositoryColumns = (narrow) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }]
   : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "108px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
+.wtc-tunnel-trigger:hover,.wtc-tunnel-existing:hover,.wtc-tunnel-option:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
+.wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
+.wtc-tunnel-option:focus-visible { outline-offset:-2px; }
+
+.wtc-service-bulk:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
 .wtc-service-play:is(:hover,:focus-visible) { --wtc-service-play-bg:var(--bg-hover,rgba(128,128,128,.12));--wtc-service-play-color:var(--text-strong,var(--text,inherit)); }
 
 .wtc-service-label:disabled { cursor:default !important;text-decoration:none !important; }
@@ -678,6 +803,10 @@ const actionFeedback = () => el("style", { textContent: `
 @media(prefers-reduced-motion:reduce) { .wtc-refresh-control[aria-busy="true"] .wtc-header-glyph { animation:none; opacity:.6; } }
 .wtc-action-control:focus-visible { outline:2px solid var(--accent,#75c8c1); outline-offset:-2px; }
 .wtc-collection-card summary:focus-visible { outline:2px solid var(--accent,#75c8c1); outline-offset:2px; border-radius:10px; }
+@media(pointer:coarse) {
+  .wtc-base-services { --wtc-state-size:24px; }
+  .wtc-base-services .wtc-table { row-gap:6px !important; }
+}
 @media(max-width:520px) {
   .wtc-collection-card { --wtc-header-top-extra:0px; }
   .wtc-collection-card>summary { column-gap:4px !important; }
@@ -1083,7 +1212,7 @@ function collectionTables(v) {
         css(el("summary", { title: item.detail ?? item.status },
           css(el("span", {}, css(el("span", { textContent: failed ? "⚠" : label === "Done" ? "✓" : "", ariaHidden: "true" }), "display:inline-block;width:14px;flex:none"), css(el("span", { textContent: `${item.repo}${item.action ? ` · ${nextLabel({ step: item.action })}` : ""}` }), "overflow:hidden;text-overflow:ellipsis;min-width:0")), "display:flex;align-items:baseline;min-width:0;overflow:hidden;white-space:nowrap"),
           css(el("span", { textContent: label }), `font-size:11px;color:${failed ? TONE.failure : "var(--muted,#888)"};white-space:nowrap`),
-          css(el("span", { textContent: ago(item.at) }), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
+          css(timeLabel(item.at), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
         css(el("div", {}, el("span", { textContent: item.detail ?? item.status }), resultAction(item.followUp, v.say)), "padding:6px 0 8px;white-space:normal;overflow-wrap:anywhere;font-size:12px;color:var(--muted,#888)")), "font-size:12px;min-width:0");
       return keepDisclosure(detail, `activity:${item.id ?? item.at}`);
     }), records.length > 3 ? nextButton(showAllActivity ? "Show latest 3" : `Earlier activity (${records.length - 3})`, "Show or hide earlier activity", () => { showAllActivity = !showAllActivity; v.rerender(); }) : null), "display:grid;gap:4px;min-width:0");
@@ -1495,7 +1624,9 @@ function collectionTables(v) {
             css(el("span", {}, below), "display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px")),
           `${align(c)}min-width:0;display:grid;gap:1px`);
         }
-        return css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? "width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;" : ""}min-width:0;overflow:${c.overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
+        // Absolute icon rails keep their full hit area; text cells still clip.
+        const overflow = c.overflow || value?.className === "wtc-lead-slot";
+        return css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? "width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;" : ""}min-width:0;overflow:${overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
       }));
     }
     return grid;
@@ -1565,7 +1696,8 @@ function collectionTables(v) {
         () => sendToAuthor(v.key(), "wtc-catch-up", `${nameOf(r)}: pull request #${pr.number} conflicts with ${baseOf(r)}.`))
       : null;
     const review = open ? { approved: toned("✓", TONE.success, "approved"), changes_requested: toned("✗", TONE.failure, "changes requested"), review_required: muted("○", "review required") }[pr.review] ?? null : null;
-    const branch = r.error ? toned(r.error, TONE.failure, r.error)
+    const errorLabel = r.error === "checkout unavailable" ? "No checkout" : r.error === "status unavailable" ? "No status" : r.error;
+    const branch = r.error ? toned(errorLabel, TONE.failure, r.error)
         : untouched(r)
           ? css(el("code", { textContent: `at ${baseOf(r)}`, title: `Checked out on branch ${r.branch}; no task commits ahead of ${baseOf(r)}` }), "font-size:12px;color:var(--muted, #888)")
           : css(el("code", { textContent: r.branch ?? `at ${baseOf(r)}`, title: r.branch ? `${r.branch}, ${r.ahead ?? 0} ahead of ${baseOf(r)}` : `Detached HEAD at ${baseOf(r)}; no branch is checked out` }), "font-size:12px;color:var(--muted, #888)");
@@ -1594,28 +1726,52 @@ function collectionTables(v) {
   // ▶/■ NAME REPO STATE URL, then a column per way in (gateway, cloudflare…)
   // and the + that opens a new one.
   const slug = (url) => { try { return new URL(url).hostname.split(".")[0]; } catch { return url; } };
+  function serviceControls(groups) {
+    if (groups.length < 2) return null;
+    if (v.svc.busy("*")) return muted("Working…");
+    const button = (text, op) => {
+      const b = css(el("button", { type: "button", className: "wtc-service-bulk", textContent: text, title: `${text} services`, ariaLabel: `${text} services` }), "display:inline-flex;align-items:center;min-height:var(--wtc-state-size,20px);border:0;padding:0 3px;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;font-size:11px;line-height:16px;cursor:pointer;white-space:nowrap");
+      b.onclick = e => { e?.preventDefault(); e?.stopPropagation(); return v.svc.run({ op }, `${op === "up" ? "Starting" : "Stopping"} all services…`); };
+      return b;
+    };
+    return css(el("span", {}, groups.some(g => !g.running) ? button("Start all", "up") : null, groups.some(g => g.running) ? button("Stop all", "down") : null), "display:inline-flex;align-items:baseline;gap:6px");
+  }
   function serviceTable(groups, data, narrow = false) {
     const ways = [];
     for (const g of groups) {
       if (portalsOf(g, data).length && !ways.includes("gateway")) ways.push("gateway");
       for (const t of g.tunnels) if (!ways.includes(tunnelName(t))) ways.push(tunnelName(t));
     }
-    const all = groups.length > 1 && !v.svc.busy("*")
-      ? css(el("span", {},
-        groups.some((g) => !g.running) ? stateGlyph("▶", "Start all services", TONE.none, () => v.svc.run({ op: "up" }, "Starting all services…")) : null,
-        groups.some((g) => g.running) ? stateGlyph("■", "Stop all services", TONE.success, () => v.svc.run({ op: "down" }, "Stopping all services…")) : null),
-      "display:inline-flex;gap:2px")
-      : v.svc.busy("*") ? busyMark() : "";
+    const foldWays = narrow && (ways.length > 1 || groups.some(g => g.loose));
+    const visibleWays = foldWays ? [] : ways;
+    const repair = (g) => count("Consolidate", "Ask the conversation to open it with wtc svc tunnel instead", "inherit", () => askConversation(v.host, v.key(), consolidate(g)));
+    const wayNode = (g, w) => {
+      if (w === "gateway") {
+        const ps = portalsOf(g, data);
+        return ps.length ? portalNode(g, ps[0], v.svc, foldWays ? "gateway" : "open") : null;
+      }
+      const t = g.tunnels.find(x => tunnelName(x) === w);
+      return t ? tunnelNode(g, t, v.svc, {
+        label: foldWays ? w : t.url ? slug(t.url) : "open",
+        opener: (title, run) => {
+          if (!foldWays) return leadSlot(stateGlyph("▶", title, TONE.none, run));
+          const b = css(el("button", {type:"button",className:"wtc-tunnel-existing",title,ariaLabel:title},controlIcon("▶"),w), "display:inline-flex;align-items:center;gap:3px;min-height:24px;padding:0 3px;border:0;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;cursor:pointer");
+          b.onclick = e => { e.preventDefault(); e.stopPropagation(); return run(); };
+          return b;
+        },
+      }) : null;
+    };
     const columns = [
-      { head: all ? leadSlot(all) : null, width: "20px" },
-      { head: "Service", width: narrow ? "minmax(64px,1fr)" : "minmax(0,max-content)" },
+      { head: "", width: "20px" },
+      { head: "Service", width: narrow ? `minmax(${visibleWays.length ? 48 : 64}px,1fr)` : "minmax(0,max-content)" },
       { head: "Repo", width: "minmax(0,max-content)", under: true },
-      { head: "State", width: narrow ? "56px" : "78px" },
-      { head: "URL", width: narrow ? "56px" : "80px", title: "Where it listens on the gateway" },
-      ...ways.map((w) => ({ head: w, title: w === "gateway" ? "OpenClaw portals" : `${w} tunnels` })),
-      { head: "", width: narrow ? "var(--wtc-control-width,20px)" : "minmax(0,1fr)", align: "end" },
+      { head: "State", width: narrow ? "minmax(44px,56px)" : "78px" },
+      { head: "URL", width: narrow ? "minmax(44px,56px)" : "80px", title: "Where it listens on the gateway" },
+      ...visibleWays.map((w) => ({ head: css(el("span", { textContent: w }), "display:block;min-width:0;overflow:hidden;text-overflow:ellipsis"), width: narrow ? "minmax(24px,max-content)" : "minmax(14px,max-content)", title: w === "gateway" ? "OpenClaw portals" : `${w} tunnels` })),
+      { head: "", width: !narrow && groups.some(g => g.loose) ? "minmax(32px,max-content)" : "32px", align: "center", overflow: true },
     ];
     const rows = groups.map((g) => {
+      const stateText = g.state === "absent" || g.state === "idle" ? "stopped" : g.state;
       const logMembers = g.members.filter(s => !["endpoint", "resources", "configuration"].includes(s.kind) && s.state !== "unconfigured");
       const targets = logMembers.filter(s => s.path === g.group || s.path?.startsWith(g.group + "/")).map(s => s.path);
       const canReadLogs = !!g.group && (logMembers.length > 0 || g.members.some(s => s.kind === "endpoint" && s.state !== "unconfigured"));
@@ -1624,23 +1780,24 @@ function collectionTables(v) {
         leadSlot(stateButton(g, v.svc)),
         Object.assign(css(el("button", { type: "button", className: "wtc-service-label", textContent: g.label, title: logTitle, ariaLabel: logTitle, disabled: !canReadLogs }), "display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit;line-height:inherit;font-weight:600;color:var(--text-strong, inherit);border:0;padding:0;background:transparent;text-align:left;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px"), { onclick: () => { if (canReadLogs) return loadServiceLogs(targets[0] ?? g.group, g.label, targets); } }),
         g.repo ? muted(g.repo) : null,
-        g.loose ? toned("separate tunnel", TONE.pending, "Started apart from the service it exposes")
-          : toned(g.state === "absent" || g.state === "idle" ? "stopped" : g.state, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none),
+        g.loose ? toned(narrow ? "separate" : "separate tunnel", TONE.pending, "Started apart from the service it exposes")
+          : toned(stateText, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none, stateText),
         g.url && !g.loose ? address(g.url) : null,
-        ...ways.map((w) => {
-          if (w === "gateway") {
-            const ps = portalsOf(g, data);
-            return ps.length ? portalNode(g, ps[0], v.svc, "open") : null;
-          }
-          const t = g.tunnels.find((x) => tunnelName(x) === w);
-          return t ? tunnelNode(g, t, v.svc, { label: t.url ? slug(t.url) : "open", opener: (title, run) => stateGlyph("▶", title, TONE.none, run) }) : null;
-        }),
-        css(el("span", {}, g.loose
-          ? count("Consolidate", "Ask the conversation to open it with wtc svc tunnel instead", "inherit", () => askConversation(v.host, v.key(), consolidate(g)))
-          : newTunnel(g, v.svc, data, { compact: true }) ?? ""), "justify-self:end"),
+        ...visibleWays.map(w => wayNode(g, w)),
+        g.loose && !narrow ? repair(g) : leadSlot(g.loose ? null : newTunnel(g, v.svc, data, { compact: true }), 32),
     ];
     });
-    return table(columns, rows, narrow);
+    const grid = table(columns, rows, narrow);
+    grid.style.gridAutoRows = "minmax(20px,auto)";
+    const cells = [...grid.children], width = columns.filter(c => !(narrow && c.under)).length;
+    if (foldWays) groups.forEach((g, index) => {
+      const links = ways.map(w => wayNode(g, w)).filter(Boolean);
+      if (!links.length && !g.loose) return;
+      const extra = css(el("span", {role:"group",ariaLabel:`Tunnels for ${g.label}`},muted("Tunnels"),...links,g.loose ? repair(g) : null), "grid-column:2 / -1;display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;min-width:0;margin-top:-4px;font-size:11px");
+      extra.setAttribute("data-service-tunnels", "true");
+      grid.insertBefore(extra, cells[(index + 2) * width] ?? null);
+    });
+    return grid;
   }
 
   // Collapsed, the same facts summed, in the same order: ± ↑ ↓, the pull
@@ -1780,7 +1937,7 @@ function collectionTables(v) {
         return narrow ? [identity, row[9]] : [row[0], row[1], changes, pr, row[9]];
       });
       return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow), table(columns, rows, false, true)), "min-width:0");
-    }, serviceTable, totals, prTable };
+    }, serviceTable, serviceControls, totals, prTable };
 }
 
 // The text of the latest message the person wrote, from chat.history.
@@ -1835,6 +1992,7 @@ function mountComposer(container, context) {
   let key = null;
   let entry = null;
   let note = "";
+  let renderedStamp;
 
   const card = css(el("details", { className: "wtc-collection-card", open: remembered() }),
     "container-type:inline-size;container-name:wtc-card;box-sizing:border-box;width:calc(100% - var(--chat-composer-side-inset, 36px));max-width:var(--chat-thread-max-width, 48rem);margin:4px auto 0;background:var(--card, #fff);color:var(--text, inherit);border:1px solid var(--border, rgba(0,0,0,.08));border-radius:14px;font:inherit;font-size:14px");
@@ -1908,7 +2066,7 @@ function mountComposer(container, context) {
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: () => key, agent: () => agentOf(ctx), svc, say,
     // What a push needs (the how-to of connecting GitHub) shows open.
     reveal: () => { if (!card.open) { card.open = true; remember(true); } },
-    refresh: () => watch?.refresh(), pause: () => pauseCollection(watch), rerender: () => entry && render(entry),
+    refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(entry); }, pause: () => pauseCollection(watch), rerender: () => entry && render(entry),
   });
 
   // A conversation without a collection: where the draft being typed, or
@@ -2007,6 +2165,7 @@ function mountComposer(container, context) {
 
   function render(next) {
     entry = next;
+    renderedStamp = collectionStamp(next, key);
     const repos = entry?.data?.repos ?? [];
     if (!ctx.presented || ctx.signal.aborted) {
       card.remove(); extra.remove();
@@ -2038,12 +2197,12 @@ function mountComposer(container, context) {
       css(el("span", {}, brand("12px", entry.data.version, repoNarrow)), "flex:none;display:inline-flex;align-items:baseline"),
       feedback ?? facts,
       css(el("span", { className: "wtc-header-controls" }, tables.actionToolbar(repos, true, { failed: headerFailed, text: headerNote }),
-        iconButton("↻", `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`, () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
+        iconButton("↻", refreshTitle(entry), () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
         iconButton("⤢", "Open the taba Collection panel", () => ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) })),
         css(el("span", { ariaHidden: "true" }, controlIcon(card.open ? "⌃" : "⌄")), "display:inline-flex;align-items:center;justify-content:center;color:var(--muted,#888);padding:0 2px")), "margin-left:auto;flex:none;display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap"));
     tables.checkAccount(repos);
     detail.replaceChildren(...[tables.repoTable(repos, repoNarrow, entry.data.subSessions),
-      groups.length ? css(el("section", { className: "wtc-base-services", ariaLabel: "Collection services" }, css(el("h3", { textContent: "Services" }), "margin:0 0 4px;font-size:12px;line-height:16px;font-weight:600;color:var(--text-strong,inherit)"), tables.serviceTable(groups, entry.data, narrow)), "min-width:0;border-top:1px solid var(--border,rgba(128,128,128,.2));margin-top:4px;padding-top:8px") : null].filter(Boolean));
+      groups.length ? css(el("section", { className: "wtc-base-services", ariaLabel: "Collection services" }, css(el("div", {}, css(el("h3", { textContent: "Services" }), "margin:0;font-size:12px;line-height:16px;font-weight:600;color:var(--text-strong,inherit)"), tables.serviceControls(groups)), "display:flex;align-items:baseline;gap:10px;margin-bottom:4px"), tables.serviceTable(groups, entry.data, narrow)), "min-width:0;border-top:1px solid var(--border,rgba(128,128,128,.2));margin-top:4px;padding-top:8px") : null].filter(Boolean));
     const confirmations = tables.publicationConfirmations(repos);
     const temporary = [confirmations, tables.nextActions(repos), tables.notice()].filter(Boolean);
     extra.replaceChildren(...temporary);
@@ -2070,17 +2229,29 @@ function mountComposer(container, context) {
     note = "";
     noteFailed = false;
     card.remove(); extra.remove();
-    if (sessionKey) watch = watchCollection(next.host, sessionKey, agentOf(next), render);
+    renderedStamp = undefined;
+    if (sessionKey) watch = watchCollection(next.host, sessionKey, agentOf(next), show);
+  }
+  function show(next) {
+    const changed = renderedStamp !== collectionStamp(next, key);
+    entry = next;
+    if (!ctx.presented || ctx.signal.aborted) { card.remove(); extra.remove(); return; }
+    if (changed) render(next);
+    else {
+      syncTimeLabels(card, next, { composer: true }); syncTimeLabels(extra, next);
+      tables.checkAccount(next.data?.repos ?? []);
+      if (next.data && !next.data.repos?.length && !next.data.subSessions?.length) void suggestFor(key);
+    }
   }
   follow(ctx);
-  // "Updated … ago" stays honest between refreshes.
-  const tick = setInterval(() => { if (entry && card.isConnected) render(entry); }, 15000);
+  const tick = setInterval(() => { if (entry && card.isConnected) { syncTimeLabels(card, entry, { composer: true }); syncTimeLabels(extra, entry); tables.checkAccount(entry.data?.repos ?? []); } }, 15000);
   return {
     update(next) {
+      const visibilityChanged = next.presented !== ctx.presented || next.signal?.aborted !== ctx.signal?.aborted;
       ctx = next;
       follow(next);
       draftChanged();
-      if (entry) render(entry);
+      if (entry) visibilityChanged ? render(entry) : show(entry);
     },
     dispose() {
       disposed = true;
@@ -2182,7 +2353,7 @@ function mountCollection(container, context) {
     showServiceLogs: () => { focusSection = "service-logs"; },
     showActions: () => { focusSection = "actions"; render(); },
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: sessionKeyOf, agent: () => ctx.props.agentId, svc, say,
-    refresh: () => watch?.refresh(), pause: () => pauseCollection(watch), rerender: () => render(),
+    refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(); }, pause: () => pauseCollection(watch), rerender: () => render(),
   });
   let narrow = false, repoNarrow = false;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
@@ -2387,6 +2558,7 @@ function mountCollection(container, context) {
   const footer = (data) => (versionText(data.version) ? muted(versionText(data.version), "font-size:11px;display:block") : null);
   let focusSection = ctx.props?.focus;
   function render() {
+    renderedStamp = collectionStamp(entry, sessionKeyOf());
     if (!entry?.data) {
       header.replaceChildren(css(el("div", { textContent: entry?.error ? `The collection could not be loaded: ${entry.error}` : "Loading…" }), "color:var(--muted, #888)"));
       body.replaceChildren();
@@ -2411,7 +2583,7 @@ function mountCollection(container, context) {
     }
     const toolbar = tables.actionToolbar(repos);
     header.replaceChildren(
-      row(brand("14px", data.version), css(el("span", {}, muted(`Updated ${ago(entry.at)}`),
+      row(brand("14px", data.version), css(el("span", {}, css(timeLabel(entry.at, { prefix: "Updated ", updated: true }), "font-size:12px;color:var(--muted,#888)"),
         iconButton("↻", "Refresh", () => trackedRefresh(watch, sessionKeyOf(), say, sessionKeyOf, () => !disposed))), "margin-left:auto;display:flex;align-items:center;gap:2px")),
       css(el("div", { textContent: data.collection.label ?? data.collection.sessionKey }), "font-size:16px;font-weight:600;color:var(--text-strong, inherit);overflow-wrap:anywhere"),
       row(data.collection.project ? muted(data.collection.project === "ad-hoc" ? "ad-hoc taba project" : `taba project ${data.collection.project}`) : null,
@@ -2433,7 +2605,7 @@ function mountCollection(container, context) {
 
     const prSection = pullRequestRows(repos).length ? el("div", { className: "wtc-pr-history" }, heading("Pull requests"), tables.prTable(repos, narrow)) : null;
 
-    const serviceSection = el("div", { className: "wtc-base-services" }, heading("Services"));
+    const serviceSection = el("div", { className: "wtc-base-services" }, heading("Services", tables.serviceControls(groups)));
     if (groups.length === 0) serviceSection.append(muted(data.servicesNote ?? "None running. Start them in the collection folder with wtc svc.", "font-size:13px"));
     else serviceSection.append(tables.serviceTable(groups, data, narrow));
 
@@ -2459,12 +2631,21 @@ function mountCollection(container, context) {
     void tables.loadServiceLogs(intent.group, intent.label, intent.targets);
   };
   serviceLogListeners.add(consumeServiceLogIntent);
-  const show = (next) => { if (!ctx.signal.aborted) { entry = next; render(); consumeServiceLogIntent(); } };
+  let renderedStamp;
+  const show = (next) => {
+    if (ctx.signal.aborted) return;
+    const changed = renderedStamp !== collectionStamp(next, sessionKeyOf());
+    entry = next;
+    if (changed) render();
+    else { syncTimeLabels(root, next); tables.checkAccount(next.data?.repos ?? []); }
+    consumeServiceLogIntent();
+  };
   function follow() {
     tables.clearServiceLogs();
     watch?.dispose();
     watch = null;
     entry = null;
+    renderedStamp = undefined;
     say("");
     const { sessionKey, agentId } = ctx.props ?? {};
     if (!sessionKey) {
@@ -2475,13 +2656,16 @@ function mountCollection(container, context) {
     watch = watchCollection(ctx.host, sessionKey, agentId, show);
   }
   follow();
-  const tick = setInterval(() => { if (entry?.data) render(); }, 15000);
+  const tick = setInterval(() => { if (entry?.data) { syncTimeLabels(root, entry); tables.checkAccount(entry.data.repos ?? []); } }, 15000);
   return {
     update(next) {
       const changed = next.props?.sessionKey !== ctx.props?.sessionKey;
+      const focusChanged = next.props?.focus !== ctx.props?.focus || (!!next.presented && !ctx.presented);
       ctx = next;
-      if (changed || next.props?.focus) focusSection = next.props?.focus;
-      if (changed) follow(); else { render(); consumeServiceLogIntent(); }
+      if (changed || focusChanged) focusSection = next.props?.focus;
+      if (changed) follow();
+      else if (focusChanged && next.props?.focus) { render(); consumeServiceLogIntent(); }
+      else if (entry) show(entry);
     },
     dispose() {
       disposed = true;

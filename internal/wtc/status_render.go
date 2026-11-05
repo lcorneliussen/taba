@@ -114,7 +114,7 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 	if collection == "" {
 		collection = "(all)"
 	}
-	fmt.Fprintf(&b, "# %s\n\nGenerated: %s\nCLI: %s %s\n\n## Repos\n\n", collection, s.GeneratedAt, branding.Name(), StatusVersionLabel(s.CLIVersion))
+	fmt.Fprintf(&b, "# %s\n\nGenerated: %s\nCLI: %s %s\n\n## Repos\n\n", collection, s.GeneratedAt, branding.Product, StatusVersionLabel(s.CLIVersion))
 	if len(s.Repos) == 0 {
 		b.WriteString("- (none)\n")
 	}

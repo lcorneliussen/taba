@@ -268,6 +268,11 @@ func addRepoIntents(repos []string, worktree, baseRef, harnessFlag string, separ
 				return fmt.Errorf("%s is not on the gateway yet. Ask the person to add %s with Add repository in the Collection panel, then run this again. Only if they want %s as a conversation of its own: --separate", repo, arg, repo)
 			}
 		}
+		if recordsGatewayState && gitURL == "" {
+			if dir := openclaw.GatewayProjectDirByName(gatewayStateDir(), project); dir != "" {
+				project = filepath.Base(dir)
+			}
+		}
 		if recordsGatewayState && gitURL == "" && branch != "" {
 			if dir := openclaw.GatewayProjectDirByName(gatewayStateDir(), project); dir != "" {
 				if err := openclaw.RecordBase(dir, target, branch); err != nil {
@@ -523,32 +528,111 @@ func unlistedError(h openclaw.Harness, worktree string, repos, unlisted []string
 // the harness at its configured ref. Local resolution retains the path;
 // sandbox snapshots carry only presence and safe metadata.
 type harnessRegistry struct {
-	destination  string
-	destinations map[string]string
-	hasWorktree  bool // current collection presence without exposing the gateway path
-	projectID    string
-	projectIDs   map[string]string
-	repos        []wtc.Repo
-	worktree     string
-	err          error
+	originAliases     map[string][]string
+	registeredRemotes map[string]string
+	destination       string
+	destinations      map[string]string
+	hasWorktree       bool // current collection presence without exposing the gateway path
+	projectID         string
+	projectIDs        map[string]string
+	repos             []wtc.Repo
+	worktree          string
+	err               error
 }
 
 func (r harnessRegistry) hasHarnessWorktree() bool { return r.worktree != "" || r.hasWorktree }
 
 func (r harnessRegistry) find(name string) (wtc.Repo, bool) {
+	if !metadataRepoPart.MatchString(name) || name == "." || name == ".." {
+		return wtc.Repo{}, false
+	}
 	for _, repo := range r.repos {
 		if repo.Name == name {
 			return repo, true
 		}
 	}
+	var named *wtc.Repo
+	for _, repo := range r.repos {
+		if repo.Answers(name) {
+			if named != nil {
+				return wtc.Repo{}, false
+			}
+			copy := repo
+			named = &copy
+		}
+	}
+	if named != nil {
+		return *named, true
+	}
+	var found *wtc.Repo
+	for _, repo := range r.repos {
+		origin := openclaw.ParseOrigin(repo.Remote)
+		matches := origin.Forge != openclaw.ForgeUnknown && strings.EqualFold(origin.Repo, name)
+		for _, remote := range r.originAliases[repo.Name] {
+			matches = matches || strings.EqualFold(openclaw.ParseOrigin(remote).Repo, name)
+		}
+		if openclaw.GatewayFromEnv(os.Getenv) == nil {
+			if dir := openclaw.GatewayProjectDir(gatewayStateDir(), origin); dir != "" {
+				for _, o := range openclaw.GatewayProjectOrigins(dir) {
+					matches = matches || strings.EqualFold(o.Repo, name)
+				}
+			}
+		}
+		if matches {
+			if found != nil {
+				return wtc.Repo{}, false
+			}
+			copy := repo
+			found = &copy
+		}
+	}
+	if found != nil {
+		return *found, true
+	}
 	return wtc.Repo{}, false
 }
 
 func (r harnessRegistry) findRemote(url string) (wtc.Repo, bool) {
+	// A registered remote takes precedence over another clone's old URL.
+	var exact *wtc.Repo
 	for _, repo := range r.repos {
-		if openclaw.SameRepository(repo.Remote, url) {
-			return repo, true
+		registered := r.registeredRemotes[repo.Name]
+		if registered == "" {
+			registered = repo.Remote
 		}
+		if openclaw.SameRepository(registered, url) {
+			if exact != nil {
+				return wtc.Repo{}, false
+			}
+			copy := repo
+			exact = &copy
+		}
+	}
+	if exact != nil {
+		return *exact, true
+	}
+	var found *wtc.Repo
+	for _, repo := range r.repos {
+		matches := false
+		// Logical registry names never grant a forge URL. These aliases come
+		// only from the operator-verified clone record in permitted metadata.
+		for _, alias := range r.originAliases[repo.Name] {
+			matches = matches || openclaw.SameRepository(alias, url)
+		}
+		if !matches && openclaw.GatewayFromEnv(os.Getenv) == nil {
+			dir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(repo.Remote))
+			matches = dir != "" && openclaw.CheckoutOf(dir, url)
+		}
+		if matches {
+			if found != nil {
+				return wtc.Repo{}, false
+			}
+			copy := repo
+			found = &copy
+		}
+	}
+	if found != nil {
+		return *found, true
 	}
 	return wtc.Repo{}, false
 }

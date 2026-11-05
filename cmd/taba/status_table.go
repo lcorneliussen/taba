@@ -14,7 +14,7 @@ func statusTable(snapshot wtc.StatusSnapshot, reposOnly bool, width int) string 
 	if name == "" {
 		name = "(all)"
 	}
-	header := fmt.Sprintf(branding.Text("{{command}} status · %s · %s"), name, snapshot.GeneratedAt)
+	header := fmt.Sprintf("%s status · %s · %s", branding.Product, name, snapshot.GeneratedAt)
 	if remaining := width - runewidth.StringWidth(header); remaining > 0 {
 		header += statusTUIFit(" · "+wtc.StatusVersionLabel(snapshot.CLIVersion), remaining)
 	}

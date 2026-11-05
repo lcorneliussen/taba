@@ -148,12 +148,10 @@ func statusEnrichRecordMetadata(record PRRecord, slug, forge string) statusPRDet
 			return statusEnrichListed(record, slug, forge, item)
 		}
 		if truncated {
-			if cached, ok := statusReadForgeEntryAny("pr", forge, slug, record.Number); ok {
-				if detail, parseErr := statusParseForgeDetail(forge, cached, record); parseErr == nil {
-					return statusConfirmFullPR(record, slug, forge, detail, "capped")
-				}
+			if detail, ok := statusReadCachedDetail(record, slug, forge); ok {
+				return statusConfirmFullPR(record, slug, forge, detail, "capped")
 			}
-			return statusViewPR(record, slug, forge, false)
+			return statusViewFreshPR(record, slug, forge)
 		}
 		if detail, ok := statusReadCachedDetail(record, slug, forge); ok && detail.State != "OPEN" && detail.State != "DRAFT" {
 			return statusConfirmFullPR(record, slug, forge, detail, "list-omitted")
@@ -192,6 +190,14 @@ func statusEnrichListed(record PRRecord, slug, forge string, item statusOpenPR) 
 }
 
 func statusViewPR(record PRRecord, slug, forge string, bypassCache bool) statusPRDetail {
+	return statusViewPRWithFreshness(record, slug, forge, bypassCache, false)
+}
+
+func statusViewFreshPR(record PRRecord, slug, forge string) statusPRDetail {
+	return statusViewPRWithFreshness(record, slug, forge, false, true)
+}
+
+func statusViewPRWithFreshness(record PRRecord, slug, forge string, bypassCache, requireFresh bool) statusPRDetail {
 	fetch := func() ([]byte, error) {
 		switch forge {
 		case "github.com":
@@ -208,6 +214,7 @@ func statusViewPR(record PRRecord, slug, forge string, bypassCache bool) statusP
 	}
 	var raw []byte
 	var err error
+	var live bool
 	if bypassCache {
 		unlock, lockErr := statusLockCache(statusForgeEntryPath("pr", forge, slug, record.Number))
 		if lockErr == nil {
@@ -220,14 +227,22 @@ func statusViewPR(record PRRecord, slug, forge string, bypassCache bool) statusP
 		}
 		stale, _ := statusReadForgeEntryAny("pr", forge, slug, record.Number)
 		started := time.Now()
-		var live bool
 		raw, live, err = statusWithForgeBudget(forge, stale, fetch)
 		if live && len(raw) > 0 {
 			statusWriteForgeEntrySince("pr", forge, slug, record.Number, raw, started)
 			statusWriteForgeEntry("omit", forge, slug, record.Number, []byte("ok"))
 		}
 	} else {
-		raw, err = statusSingleFlight("pr", forge, slug, record.Number, fetch)
+		raw, live, err = statusFetchShared("pr", forge, slug, record.Number, fetch)
+	}
+	if requireFresh && err == nil && !live {
+		// Shared reads can fall back to expired data during cooling or a
+		// spent allowance. An incomplete list cannot make that data current.
+		var ok bool
+		raw, ok = statusReadForgeCache(forge, slug, record.Number)
+		if !ok {
+			return statusDeferredDetail(record)
+		}
 	}
 	if err == nil {
 		if detail, parseErr := statusParseForgeDetail(forge, raw, record); parseErr == nil {

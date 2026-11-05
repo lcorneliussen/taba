@@ -13,7 +13,7 @@ A fragment holds one or more topic sections, each with at least one entry:
   ([#46](https://github.com/lcorneliussen/taba/issues/46)).
 ```
 
-Use `## <topic>` headings only; `# wtc <version>` is added when the notes are
+Use `## <topic>` headings only; `# taba/wtc <version>` is added when the notes are
 assembled. Start entries at the left margin and use inline links: reference
 definitions are document-wide and would collide with other fragments' labels. `wtc release-notes unreleased` shows the fragments assembled:
 sections with the same heading are merged, in issue order. Cutting a release

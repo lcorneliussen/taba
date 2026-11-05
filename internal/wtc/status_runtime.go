@@ -51,7 +51,7 @@ func (c *Context) statusRuntime(snapshot *StatusSnapshot, all bool) {
 				continue
 			}
 			m.Binary = binary
-			add(target.runtimeStatus(m))
+			add(runtimeTaskDiagnostics(target.runtimeStatus(m)))
 		}
 	}
 	for i := range snapshot.Repos {

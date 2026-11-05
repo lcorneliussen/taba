@@ -269,7 +269,7 @@ func statusRuntimeTrouble(item wtc.RuntimeItem) bool {
 // list: the LOCAL marks of the service and its tunnels, repo, name, the state
 // that most needs attention, the local URL, then one column per tunnel
 // provider holding the tunnel's slug; hover and click give the full address.
-func statusTUIRuntimeLines(snapshot wtc.StatusSnapshot, width int, styled bool) []string {
+func statusTUIRuntimeLines(snapshot wtc.StatusSnapshot, width int, styled bool, position ...func(int, statusRuntimeGroup)) []string {
 	if len(snapshot.Runtime) == 0 {
 		return nil
 	}
@@ -350,6 +350,9 @@ func statusTUIRuntimeLines(snapshot wtc.StatusSnapshot, width int, styled bool) 
 			line = statusTUIFitANSI(line, width)
 		} else {
 			line = statusTUIFit(line, width)
+		}
+		if len(position) > 0 {
+			position[0](len(lines), g)
 		}
 		lines = append(lines, line)
 	}

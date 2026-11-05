@@ -1,7 +1,7 @@
 // The gateway side of the plugin, where it needs no gateway.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import plugin, { agentGitIdentity, collectionFolder, decideProjects, matchProjects, openaiDecisions, pullRequestChanges, pullRequestWatch, versionWarning, wtcVersionOf } from "../index.js";
+import plugin, { agentGitIdentity, collectionFolder, decideProjects, matchProjects, openaiDecisions, pullRequestChanges, pullRequestWatch, repositoryOrigin, versionWarning, wtcVersionOf } from "../index.js";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -764,4 +764,70 @@ test("failed async session reads never retry legacy reads or execute an action",
     assert.equal(legacy, 0);
     assert.equal(commands, 0);
   }
+});
+
+test("unavailable checkouts retain canonical identity without fetching or inventing status", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "wtc-identity-"));
+  const actions = new Map(), calls = [];
+  const entries = ["api", "web", "other", "api-copy"].map((repo, i) => ({
+    sessionKey: `agent:main:repo:${repo}`,
+    entry: { parentSessionKey: "agent:main:c", projectId: repo, worktree: { branch: "openclaw/test", repoRoot: `/clones/${i === 3 ? "api" : repo}` }, workspaceDir: path.join(root, repo) },
+  }));
+  mkdirSync(path.join(root, "web", ".git"), { recursive: true });
+  let fail = false, taskHealthy = false;
+  plugin.register({
+    pluginConfig: {},
+    runtime: {
+      state: { resolveStateDir: () => root },
+      agent: { session: { listSessionEntries: () => entries, getSessionEntry: () => undefined } },
+      system: { runCommandWithTimeout: async argv => {
+        calls.push(argv);
+        if (argv[1] === "--version") return { code: 0, stdout: "wtc version dev" };
+        if (argv[1] === "status") {
+          if (taskHealthy && argv[2] === "test") return { code: 0, stdout: JSON.stringify({ test: { repos: [{path: path.join(root, "api"), repo:"api", forge:"github", branch:"openclaw/test"}], subSessions:[{path:path.join(root,"worker"),repo:"api",toMerge:3,behind:2}] } }) };
+          if (fail) throw new Error("status timed out");
+          return { code: 0, stdout: JSON.stringify({ test: { repos: [] } }) };
+        }
+        assert.deepEqual(argv.slice(0, 4), ["git", "config", "--no-includes", "--file"]);
+        assert.equal(argv.at(-1), "remote.origin.url");
+        const remote = argv[4].includes("/api/") ? "git@github.com:example-org/api.git" : argv[4].includes("/web/") ? "https://user:secret@bitbucket.org/example-team/web.git" : "https://elsewhere.invalid/other.git";
+        return { code: 0, stdout: remote };
+      } },
+    },
+    session: { controls: { registerSessionAction: a => actions.set(a.id, a), registerControlUiDescriptor() {} } },
+    registerHttpRoute() {}, on() {}, logger: {},
+  });
+  const load = async () => (await actions.get("collection").handler({ sessionKey: "agent:main:c", agentId: "main", payload: {} })).result;
+  const first = await load();
+  const api = first.repos.find(r => r.project === "api"), web = first.repos.find(r => r.project === "web"), other = first.repos.find(r => r.project === "other");
+  assert.deepEqual([api.forge, api.owner, api.repo, api.error], ["github", "example-org", "api", "checkout unavailable"]);
+  assert.deepEqual([web.forge, web.owner, web.repo, web.error], ["bitbucket", "example-team", "web", "status unavailable"]);
+  assert.equal(other.forge, undefined, "unknown origins are never guessed from project names");
+  assert.equal(JSON.stringify(first).includes("secret"), false);
+  assert(first.repos.every(r => !r.next && !r.choices && !r.pullRequest && r.ahead === undefined));
+  assert.equal(calls.filter(a => a[0] === "git").length, 3, "shared canonical roots coalesce local config reads");
+  fail = true;
+  const second = await load();
+  assert.match(second.warnings[0], /status timed out/);
+  assert.equal(second.repos.find(r => r.project === "api").forge, "github");
+  assert.equal(calls.filter(a => a[0] === "git").length, 3, "cached identity avoids repeated reads during failures");
+  entries.push({ sessionKey: "agent:main:worker:api", entry: { parentSessionKey: "agent:main:c", projectId: "api", worktree: { branch: "openclaw/test--helper", repoRoot: "/clones/api" }, workspaceDir: path.join(root, "worker") } });
+  const worker = (await load()).subSessions[0].repos[0];
+  assert.equal(worker.taskSessionKey, null, "display identity cannot make an unavailable checkout a merge target");
+  assert.equal(worker.taskBranch, null, "catch-up cannot target an unavailable task checkout");
+  taskHealthy = true;
+  const failedWorker = (await load()).subSessions[0].repos[0];
+  assert.equal(failedWorker.taskSessionKey, null, "a healthy task cannot make a failed worker actionable");
+  assert.equal(failedWorker.taskBranch, null);
+  assert.equal(failedWorker.toMerge, null);
+  assert.equal(failedWorker.behind, null);
+});
+
+
+test("fallback repository identity accepts supported SSH origins without credentials", () => {
+  for (const url of ["bitbucket.org:example-team/docs.git", "git@bitbucket.org:example-team/docs.git", "ssh://git@bitbucket.org:22/example-team/docs.git", "https://user:secret@bitbucket.org/example-team/docs.git"]) {
+    assert.deepEqual(repositoryOrigin(url), {forge:"bitbucket",owner:"example-team",repo:"docs"});
+  }
+  assert.deepEqual(repositoryOrigin("ssh://git@github.com:22/example-org/api.git"), {forge:"github",owner:"example-org",repo:"api"});
+  for (const url of ["https://elsewhere.invalid/team/repo", "https://github.com.evil.invalid/team/repo", "file:///github.com/team/repo", "https://github.com/team/../repo", "garbage"]) assert.deepEqual(repositoryOrigin(url), {});
 });

@@ -13,6 +13,9 @@ import (
 // RuntimeItem is a repository-owned dekit task. Ready means its startup probe
 // passed, not that it has continuous health monitoring.
 type RuntimeItem struct {
+	// runnerStarting distinguishes runner readiness from an observed task state.
+	runnerStarting bool
+
 	Collection string `json:"collection"`
 	Repo       string `json:"repo"`
 	Dir        string `json:"dir"`
@@ -316,7 +319,7 @@ func runtimeTaskPath(path string) bool {
 // tunnel-provider logins. It never renders configuration, sources shell env,
 // starts a runner, or executes repository hooks.
 func (c *Context) RuntimeStatus() []RuntimeItem {
-	items := c.runtimeStatusOnly()
+	items := runtimeTaskDiagnostics(c.runtimeStatusOnly())
 	// What people are shown is also looked at now: whether each ready
 	// address answers, and whether each tunnel's provider can serve.
 	runtimeTunnelLogins(items, runtimeLoginCheck)
@@ -397,6 +400,18 @@ func (c *Context) runtimeResourceItems(m *runtimeManifest, checking bool) []Runt
 	return items
 }
 
+// runtimeTaskDiagnostics changes publication only; control decisions retain the
+// existing raw runner observation until task discovery succeeds.
+func runtimeTaskDiagnostics(items []RuntimeItem) []RuntimeItem {
+	for i := range items {
+		if items[i].runnerStarting {
+			items[i].State = "checking"
+			items[i].Reason = "runner reports starting; task state is unavailable"
+		}
+	}
+	return items
+}
+
 func (c *Context) runtimeStatus(m *runtimeManifest) []RuntimeItem {
 	items := make([]RuntimeItem, len(m.Tasks))
 	items = append(items, c.runtimeResourceItems(m, false)...)
@@ -405,6 +420,7 @@ func (c *Context) runtimeStatus(m *runtimeManifest) []RuntimeItem {
 	for i, task := range m.Tasks {
 		items[i] = task.RuntimeItem
 		items[i].State = state
+		items[i].runnerStarting = err == nil && state == "starting"
 		if err != nil {
 			items[i].State = "unknown"
 			items[i].Error = err.Error()

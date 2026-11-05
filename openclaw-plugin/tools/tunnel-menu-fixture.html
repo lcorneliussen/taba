@@ -1,0 +1,33 @@
+<!-- Synthetic host for the tunnel-menu browser check; no gateway or account. -->
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Collection UI demo</title>
+<style>
+:root {color-scheme:dark;--bg:#151a22;--card:#202733;--text:#e4eaf2;--text-strong:#fff;--muted:#aab7c9;--border:#3c4757;--accent:#75c8c1;--accent-foreground:#151a22;--chat-thread-max-width:960px;--chat-composer-side-inset:0px}
+*{box-sizing:border-box}body{margin:0;padding:36px;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif}h1{font-size:28px;margin:0 0 4px}p{color:var(--muted);margin:0 0 24px}a{color:#8edbd5}#stage{max-width:1024px;margin:auto}#panel{background:var(--card);border:1px solid var(--border);border-radius:16px;min-height:480px}#panel[hidden]{display:none}.composer{margin:16px auto;padding:18px 24px;border:1px solid var(--border);border-radius:22px;max-width:960px;color:var(--muted)}#caption{margin-top:24px;font-size:18px;color:var(--text)}footer{margin-top:22px;font-size:12px;color:var(--muted)}
+</style>
+<div id="stage"><h1>One task. Every repository.</h1><p>wtc for OpenClaw · real plugin renderer, synthetic demo data</p><div id="card"></div><div id="panel" hidden></div><p id="caption">Expand the collection card to see changes, pull requests and previews.</p><footer>Isolated UI demonstration · no gateway connection or publication</footer></div>
+<script type="module">
+import plugin from '/plugin.js';
+const mounts = {};
+const repo = (name, extra = {}) => ({repo:name,owner:'example-org',forge:'github',sessionKey:`demo:${name}`,branch:'openclaw/add-search',base:'origin/main',ahead:0,behind:0,...extra});
+const data = {
+ collection:{label:'add-search',project:'example',sessionKey:'demo:collection',folder:'/demo/collections/add-search'},
+ repos:[repo('api',{ahead:2,unpublished:2,behind:1,pullRequest:{number:42,state:'open',title:'Add search endpoint',url:'https://example.invalid/api/pull/42',checks:'success',passed:3,failed:0,running:0,mergeable:'mergeable',review:'approved'}}),repo('web',{dirty:3})],
+ services:[{group:'web/preview',path:'web/preview',repo:'web',kind:'service',label:'preview',state:'ready',url:'http://127.0.0.1:4321'}]
+};
+const request = async (method, params) => {
+ if(method==='plugins.sessionAction' && params.actionId==='collection') return {ok:true,result:data};
+ if(method==='sessions.github.options') return {personal:{state:'connected',account:{login:'demo-user'},generation:1}};
+ if(method==='portal.list') return {portals:[]};
+ if(method==='chat.history') return {messages:[]};
+ throw new Error(`Unexpected demo request: ${method}/${params?.actionId ?? ''}`);
+};
+const host = {request,ui:{registerPanel:p=>{mounts.panel=p.mount},registerReplacement:r=>{mounts.card=r.mount},registerAction:()=>{},selectReplacement:()=>{},openPanel:()=>{
+ document.querySelector('#card').hidden=true;
+ document.querySelector('#panel').hidden=false;
+ mounts.panel(document.querySelector('#panel'),ctx);
+ document.querySelector('#caption').textContent='The Collection panel adds task context, pull request details and repository search.';
+}}};
+const ctx={host,props:{sessionKey:'demo:collection',agentId:'demo'},signal:new AbortController().signal,presented:true,mountDefault:container=>{const input=document.createElement('div');input.className='composer';input.textContent='Ask your agent to work across api and web…';container.append(input);return()=>input.remove()}};
+plugin.activate(host);
+mounts.card(document.querySelector('#card'),ctx);
+</script></html>

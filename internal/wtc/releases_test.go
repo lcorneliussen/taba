@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/Masterminds/semver/v3"
+	"taba.sh/taba/internal/branding"
 )
 
 func TestEmbeddedReleaseNotes(t *testing.T) {
@@ -17,7 +20,12 @@ func TestEmbeddedReleaseNotes(t *testing.T) {
 		t.Fatalf("missing historical or upcoming notes: %d documents", len(notes))
 	}
 	for i, note := range notes {
-		header := "# wtc " + note.Version + "\n"
+		// 0.1.x notes keep their original "# wtc" heading; from 0.2.0-0 on,
+		// pre-releases included, notes are headed with branding.Product.
+		header := "# " + branding.Product + " " + note.Version + "\n"
+		if v, err := releaseVersion(note.Version); err == nil && v.LessThan(semver.MustParse("0.2.0-0")) {
+			header = "# wtc " + note.Version + "\n"
+		}
 		if !strings.HasPrefix(note.Content, header) || strings.TrimSpace(strings.TrimPrefix(note.Content, header)) == "" {
 			t.Fatalf("missing heading or body for %s", note.Version)
 		}
@@ -173,7 +181,7 @@ func TestAssembleReleaseNotesMergesSectionsInIssueOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := AssembleReleaseNotes("1.2.3", fragments)
-	want := "# wtc 1.2.3\n\n## Review\n\n- first review\n\n- middle review\n\n- later review\n\n## Retire\n\n- retire\n\n## Docs\n\n- unnumbered\n"
+	want := "# taba/wtc 1.2.3\n\n## Review\n\n- first review\n\n- middle review\n\n- later review\n\n## Retire\n\n- retire\n\n## Docs\n\n- unnumbered\n"
 	if got != want {
 		t.Fatalf("assembled notes:\n%s\nwant:\n%s", got, want)
 	}
@@ -185,7 +193,7 @@ func TestAssembleReleaseNotesKeepsEachChangeABlock(t *testing.T) {
 		{Name: "2.md", Sections: []ReleaseSection{{Heading: "Steps", Body: "2. second"}}},
 		{Name: "3.md", Sections: []ReleaseSection{{Heading: "Steps", Body: "Prose."}}},
 	}
-	want := "# wtc 1.0.0\n\n## Steps\n\n- first\n  continued\n\n2. second\n\nProse.\n"
+	want := "# taba/wtc 1.0.0\n\n## Steps\n\n- first\n  continued\n\n2. second\n\nProse.\n"
 	if got := AssembleReleaseNotes("1.0.0", fragments); got != want {
 		t.Fatalf("got:\n%q\nwant:\n%q", got, want)
 	}
@@ -199,7 +207,7 @@ func TestReleaseNotesWithoutFragments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(notes) != 2 || notes[1].Version != "unreleased" || notes[1].Content != "# wtc unreleased\n\nNo unreleased changes.\n" {
+	if len(notes) != 2 || notes[1].Version != "unreleased" || notes[1].Content != "# taba/wtc unreleased\n\nNo unreleased changes.\n" {
 		t.Fatalf("got %#v", notes)
 	}
 }
@@ -259,7 +267,7 @@ func TestCutReleaseNotes(t *testing.T) {
 		t.Fatalf("wrote %s", path)
 	}
 	data, err := os.ReadFile(path)
-	if err != nil || string(data) != "# wtc 1.2.3\n\n## Status\n\n- first\n\n- second\n" {
+	if err != nil || string(data) != "# taba/wtc 1.2.3\n\n## Status\n\n- first\n\n- second\n" {
 		t.Fatalf("release file %q: %v", data, err)
 	}
 	left, _ := os.ReadDir(filepath.Join(dir, UnreleasedDir))

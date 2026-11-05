@@ -23,7 +23,7 @@ func TestStatusTUIRunningVersionSurvivesCollectorStates(t *testing.T) {
 		t.Helper()
 		view := model.View().Content
 		header := strings.TrimRight(ansi.Strip(strings.Split(view, "\n")[0]), " ")
-		if header != model.headerLine()+" · 1.2.3" || !strings.HasPrefix(header, "wtc status · ") || !strings.Contains(view, ansi.SetHyperlink("https://github.com/lcorneliussen/taba/releases/tag/v1.2.3")) {
+		if header != model.headerLine()+" · 1.2.3" || !strings.HasPrefix(header, "taba/wtc status · ") || !strings.Contains(view, ansi.SetHyperlink("https://github.com/lcorneliussen/taba/releases/tag/v1.2.3")) {
 			t.Fatalf("%s lost running version/link: %q", state, view)
 		}
 		if strings.Contains(strings.Split(ansi.Strip(view), "\n")[0], "9.9.9") {
@@ -43,14 +43,14 @@ func TestStatusTUIRunningVersionSurvivesCollectorStates(t *testing.T) {
 	assertVersion("error")
 	model.showLog = true
 	assertVersion("log")
-	for _, width := range []int{1, 8, 14, 20, 40, 80} {
+	for _, width := range []int{1, 8, 16, 20, 40, 80} {
 		model.width = width
 		for _, line := range strings.Split(model.View().Content, "\n") {
 			if ansi.StringWidth(line) > width {
 				t.Fatalf("version header exceeds width %d: %q", width, line)
 			}
 		}
-		if width >= 14 && !strings.HasPrefix(ansi.Strip(model.View().Content), "wtc status") {
+		if width >= 16 && !strings.HasPrefix(ansi.Strip(model.View().Content), "taba/wtc status") {
 			t.Fatalf("primary title lost at width %d", width)
 		}
 	}
@@ -103,7 +103,7 @@ func TestStatusTUIVersionSuffixIsMutedAndYieldsToPrimaryHeading(t *testing.T) {
 		primary := model.headerLine()
 		label := wtc.RunningCLIVersion()
 		header := strings.Split(model.View().Content, "\n")[0]
-		if !strings.HasPrefix(primary, "wtc status · fixture · ") || !strings.HasSuffix(primary, "s old · refreshing") ||
+		if !strings.HasPrefix(primary, "taba/wtc status · fixture · ") || !strings.HasSuffix(primary, "s old · refreshing") ||
 			strings.TrimRight(ansi.Strip(header), " ") != primary+" · "+label ||
 			!strings.Contains(header, "\x1b[2m · "+label) {
 			t.Fatalf("version %q is not a muted suffix after timing: %q", version, header)
@@ -130,10 +130,10 @@ func TestStatusTUIVersionSuffixIsMutedAndYieldsToPrimaryHeading(t *testing.T) {
 func TestStatusTableUsesSnapshotProducer(t *testing.T) {
 	snapshot := wtc.StatusSnapshot{CLIVersion: "9.9.9", Collection: "fixture"}
 	snapshot.GeneratedAt = "2026-10-28T00:00:00Z"
-	if got := statusTable(snapshot, false, 80); !strings.HasPrefix(got, "wtc status · fixture · 2026-10-28T00:00:00Z · 9.9.9") {
+	if got := statusTable(snapshot, false, 80); !strings.HasPrefix(got, "taba/wtc status · fixture · 2026-10-28T00:00:00Z · 9.9.9") {
 		t.Fatalf("table lost snapshot producer: %q", got)
 	}
-	primary := "wtc status · fixture · " + snapshot.GeneratedAt
+	primary := "taba/wtc status · fixture · " + snapshot.GeneratedAt
 	header := strings.Split(statusTable(snapshot, false, ansi.StringWidth(primary)), "\n")[0]
 	if header != primary {
 		t.Fatalf("one-shot version suffix displaced primary metadata: %q", header)
