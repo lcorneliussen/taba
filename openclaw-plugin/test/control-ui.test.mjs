@@ -46,6 +46,15 @@ class Node {
     siblings.splice(siblings.indexOf(this), 1);
     this.parentNode = null;
   }
+  focus() { document.activeElement = this; }
+  getBoundingClientRect() { return this.role === "menu" ? { width:this.popoverShown ? 252 : 0,height:this.popoverShown ? 180 : 0 } : { left:280,top:700,right:304,bottom:724,width:24,height:24 }; }
+  showPopover() { this.onbeforetoggle?.({ newState: "open" }); this.popoverShown = true; this.ontoggle?.({ newState: "open" }); }
+  hidePopover() { this.onbeforetoggle?.({ newState: "closed" }); this.popoverShown = false; this.ontoggle?.({ newState: "closed" }); }
+  click() {
+    this.onclick?.({ preventDefault() {}, stopPropagation() {} });
+    const target = this.popoverTargetElement;
+    if (target) target.popoverShown ? target.hidePopover() : target.showPopover();
+  }
   scrollIntoView() { this.scrolled = true; }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
@@ -104,6 +113,7 @@ let serviceLogsResult = { ok: true, result: { logs: "" } };
 let preserved = {};
 let catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
 let nextResult;
+let restoreResult;
 let githubPublishResult = { status: "needs_confirmation", requestId: "req-1" };
 let githubConfirmResult;
 let githubStatusResult;
@@ -154,6 +164,7 @@ const hostRequest = async (method, params) => {
   if (method === "plugins.sessionAction" && params.actionId === "svc-logs") return typeof serviceLogsResult === "function" ? serviceLogsResult(params) : serviceLogsResult;
   if (method === "plugins.sessionAction" && params.actionId === "catch-up") return catchUpResult;
   if (method === "plugins.sessionAction" && params.actionId === "next") return typeof nextResult === "function" ? nextResult(params) : nextResult;
+  if (method === "plugins.sessionAction" && params.actionId === "restore-checkout") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
   if (method === "sessions.delete") return { ok: true, key: params.key, deleted: true, archived: [], ...(preserved[params.key] ? { worktreePreserved: preserved[params.key] } : {}) };
   if (method === "sessions.github.publish") return typeof githubPublishResult === "function" ? githubPublishResult(params) : githubPublishResult;
   if (method === "sessions.github.confirm") return typeof githubConfirmResult === "function" ? githubConfirmResult(params) : githubConfirmResult ?? { status: "published", url: "https://github.com/octo/api/pull/7" };
@@ -166,7 +177,7 @@ const contexts = new WeakMap();
 const detailViews = [];
 afterEach(() => { for (const view of detailViews.splice(0)) view.dispose(); });
 // Include full outcome text from accessible status/details labels in feedback assertions.
-const readable = node => [node.textContent, ...[...node.all()].filter(n => n.className?.includes("wtc-header-feedback") || n.className?.includes("wtc-batch-result") || n.className === "wtc-step-status").map(n => n.ariaLabel ?? n.title ?? "")].join("\n");
+const readable = node => [node.textContent, ...[...node.all()].filter(n => n.className?.includes("wtc-header-feedback") || n.className?.includes("wtc-batch-result") || n.className?.split(" ").includes("wtc-step-status")).map(n => n.ariaLabel ?? n.title ?? "")].join("\n");
 async function reviewAction(host) {
   let action = [...host.all()].find(n => n.tagName === "BUTTON" && n.textContent === "Review PR text");
   if (action) return action;
@@ -223,13 +234,17 @@ const busy = collection([
 // The card's cells, row by row: a table is a grid of a header and rows of
 // as many cells.
 const tables = (node) => [...node.all()].filter((n) => n.className === "wtc-table").map((t) => {
-  const cells = t.children;
+  const cells = t.children.filter(n => !n.attributes["data-service-tunnels"]);
   const width = Number(t.attributes["data-columns"]);
   const rows = [];
   for (let i = 0; i < cells.length; i += width) rows.push(cells.slice(i, i + width).map((c) => {
     // A choice reads as its prompt, not its options.
     const pick = [...c.all()].find((n) => n.tagName === "SELECT");
-    return pick ? pick.children[0].textContent : c.textContent;
+    if (pick) return pick.children[0].textContent;
+    const action = [...c.all()].find(n => n.className?.split(" ").includes("wtc-next-step"));
+    if (action) return action.children.find(n=>n.className?.includes("wtc-primary-action"))?.textContent ?? "";
+    const tunnel = [...c.all()].find(n => n.className === "wtc-tunnel-trigger");
+    return tunnel ? "+" : c.textContent;
   }));
   return rows;
 });
@@ -249,11 +264,19 @@ test("panel: no collection yet says what one is, not the conversation's label", 
   bare.view.dispose();
 });
 
+test("service hover hints retain the readable stopped label in both views", async () => {
+  for (const kind of ["composer", "panel"]) for (const state of ["idle", "absent"]) {
+    const { host, view } = await mount(kind, collection([repo("api")], [{ group: "api/worker", path: "api/worker", repo: "api", kind: "service", label: "Worker", state }]));
+    try { assert.ok([...host.all()].some(n => n.tagName === "SPAN" && n.textContent === "stopped" && n.title === "stopped")); }
+    finally { view.dispose(); }
+  }
+});
+
 test("the branded link names the plugin's and gateway's versions in both views", async () => {
   for (const kind of ["composer", "panel"]) {
     const { host, view } = await mount(kind, { ...busy, version: { plugin: "1.2.3", wtc: "1.2.4-dev+gabc1234" } });
     await settle();
-    const brandLink = [...host.all()].find((n) => n.tagName === "A" && n.textContent === "束 taba");
+    const brandLink = [...host.all()].find((n) => n.tagName === "A" && n.ariaLabel === "taba home");
     assert.equal(brandLink.href, "https://taba.sh/");
     assert.match(brandLink.title, /\nplugin 1\.2\.3, wtc 1\.2\.4-dev\+gabc1234$/);
     view.dispose();
@@ -656,13 +679,14 @@ test("publication keeps the successful PR result and shows a local-status warnin
   }
 });
 
-test("Bitbucket dirty files offer local commits instead of an empty push", async () => {
+test("Bitbucket dirty files offer commits; push appears only as a disabled alternative", async () => {
   bitbucket = { user: "ada@example.com", name: "Ada" };
   for (const kind of ["composer", "panel"]) {
     const { host, view } = await mount(kind, collection([repo("docs", { forge: "bitbucket", dirty: 2, ahead: 3, unpublished: 0, published: true })]));
     try {
       assert.ok([...host.all()].some((n) => n.tagName === "BUTTON" && n.textContent === "Commit changes"));
-      assert.equal([...host.all()].some((n) => n.tagName === "BUTTON" && /to push/.test(n.title)), false);
+      const pushes=[...host.all()].filter(n=>n.tagName==="BUTTON"&&/to push/.test(n.title));
+      assert.ok(pushes.every(n=>n.disabled&&n.role==="menuitem"),"only disabled menu explanations may mention a push; no executable empty push");
     } finally { view.dispose(); }
   }
   bitbucket = undefined;
@@ -970,19 +994,17 @@ test("panel: a new tunnel, and one whose client is missing", async () => {
   const { host, view } = await mount("panel", collection([repo("api")], [
     { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" },
   ]));
-  const pick = [...host.all()].find((n) => n.tagName === "SELECT");
+  const pick = [...host.all()].find((n) => n.className === "wtc-tunnel-menu");
   // The gateway's portal first; without tunnel clients, the others are
   // installed first, and Tailscale is not offered on a personal tailnet.
-  assert.deepEqual(pick.children.map((o) => o.value), ["", "gateway", "cloudflare", "ngrok", "devtunnel"]);
-  assert.equal(pick.children[0].textContent, "+");
-  assert.equal(pick.children[1].textContent, "gateway · OpenClaw portal");
-  assert.equal(pick.children[2].textContent, "cloudflare · public link · install first");
+  assert.deepEqual(pick.children.map((o) => o.value), ["gateway", "cloudflare", "ngrok", "devtunnel"]);
+  assert.equal(pick.children[0].ariaLabel, "Gateway · OpenClaw portal");
+  assert.equal(pick.children[1].ariaLabel, "Cloudflare · public link · install first");
   // Only reachable on the gateway: the port, not a link.
   assert.ok(texts(host).includes(":42201"));
   calls.length = 0;
   svcResult = { ok: true, result: { missing: "cloudflared" } };
-  pick.value = "cloudflare";
-  await pick.onchange();
+  await pick.children.find(o => o.value === "cloudflare").onclick({ preventDefault() {}, stopPropagation() {} });
   svcResult = { ok: true, result: { message: "done" } };
   assert.deepEqual(calls[0].payload, { op: "tunnel", group: "api/web", provider: "cloudflare", public: true, add: true });
   const asked = calls.find((c) => c.method === "sessions.send");
@@ -1002,20 +1024,20 @@ test("composer: start and stop all only with more than one service", async () =>
 test("panel: the ways to a service", async () => {
   const web = { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" };
   const team = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["tailscale", "cloudflare"], teamTailnet: true });
-  const pick = [...team.host.all()].find((n) => n.tagName === "SELECT");
-  assert.deepEqual(pick.children.map((o) => o.textContent),
-    ["+", "gateway · OpenClaw portal", "cloudflare · public link", "ngrok · public link · install first", "devtunnel · your account · install first", "tailscale · team tailnet"]);
+  const pick = [...team.host.all()].find((n) => n.className === "wtc-tunnel-menu");
+  assert.deepEqual(pick.children.map((o) => o.ariaLabel),
+    ["Gateway · OpenClaw portal", "Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Tailscale · team tailnet"]);
   team.view.dispose();
   // Without portal ingress, the gateway's portal comes last, marked.
   const bare = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["cloudflare"], portalIngress: false });
-  const choice = [...bare.host.all()].find((n) => n.tagName === "SELECT");
-  assert.deepEqual(choice.children.map((o) => o.textContent),
-    ["+", "cloudflare · public link", "ngrok · public link · install first", "devtunnel · your account · install first", "gateway · OpenClaw portal · needs ingress"]);
+  const choice = [...bare.host.all()].find((n) => n.className === "wtc-tunnel-menu");
+  assert.deepEqual(choice.children.map((o) => o.ariaLabel),
+    ["Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Gateway · OpenClaw portal · needs ingress"]);
   bare.view.dispose();
   // With every other way taken, the one left is named.
   const tunnels = ["cloudflare", "ngrok", "devtunnel"].map((p) => ({ group: "api/web", path: `api/web/${p}`, repo: "api", kind: "endpoint", provider: p, state: "idle" }));
   const last = await mount("panel", { ...collection([repo("api")], [web, ...tunnels]), tunnelProviders: [] });
-  assert.ok([...last.host.all()].some((n) => n.tagName === "BUTTON" && n.textContent === "+" && n.title.startsWith("Open gateway (OpenClaw portal)")), "one way left: no choice to make");
+  assert.ok([...last.host.all()].some((n) => n.tagName === "BUTTON" && n.title.startsWith("Open Gateway (OpenClaw portal)")), "one way left: no choice to make");
   last.view.dispose();
 });
 
@@ -1035,7 +1057,7 @@ test("panel: a portal of the gateway beside its service", async () => {
   listed.view.dispose();
   portals = [{ ...portals[0], id: "p42201", url: "http://172.30.0.2:41553/?openclaw_portal=t" }];
   // Open already: not offered again.
-  assert.equal([...open.host.all()].find((n) => n.tagName === "SELECT").children.some((o) => o.value === "gateway"), false);
+  assert.equal([...open.host.all()].find((n) => n.className === "wtc-tunnel-menu").children.some((o) => o.value === "gateway"), false);
   calls.length = 0;
   titled(open.host, "Close the portal").onclick({ preventDefault() {}, stopPropagation() {} });
   await settle();
@@ -1477,7 +1499,7 @@ const withChoices = (name, kind = "fix-checks") => {
   return repo(name, { next: step, choices: { recommended: step.key, actions: [{ ...step, available: true }, { ...alternative, available: true }, { ...step, step: "review", key: `${name}:review`, available: false, blocked: "No review adapter" }] } });
 };
 const clickText = async (host, text) => {
-  const b = [...host.all()].find((n) => n.tagName === "BUTTON" && (n.textContent === text || text === "Catch up 2 repos →" && n.textContent === "Catch up 2" || text === "Choose steps…" && n.title === "Choose alternatives or combine steps across repositories" || text === "Cancel queued" && n.title === "Stop queued dispatches; active work continues" || text === "Allow retry" && n.title === "Check the conversation before retrying unchanged work"));
+  const b = [...host.all()].find((n) => n.tagName === "BUTTON" && (n.textContent === text || text === "Catch up 2 repos →" && n.textContent === "Catch up 2" || text === "Choose steps…" && n.ariaLabel === "Choose steps…" || text === "Cancel queued" && n.title === "Stop queued dispatches; active work continues" || text === "Allow retry" && n.title === "Check the conversation before retrying unchanged work"));
   assert.ok(b, text); b.onclick({ preventDefault() {}, stopPropagation() {} });
   for (let i = 0; i < 6; i++) await settle();
 };
@@ -2208,7 +2230,7 @@ test("sidebar Review push explicitly reveals the temporary section without autom
     assert.equal(scrolled[0].node.className,"wtc-transient-actions");
     assert.equal(scrolled[0].options.block,"nearest");
     scrolled.length=0;
-    await [...host.all()].find(n=>n.tagName === "BUTTON" && n.textContent === "Choose steps…").onclick();
+    await [...host.all()].find(n=>n.tagName === "BUTTON" && n.ariaLabel === "Choose steps…").onclick();
     assert.equal(scrolled.length,1,"explicit selection also reveals its controls");
     assert.equal(scrolled[0].node.className,"wtc-transient-actions");
   } finally {view.dispose();personal=null;if(previous)Node.prototype.scrollIntoView=previous;else delete Node.prototype.scrollIntoView;}
@@ -2341,7 +2363,7 @@ test("an opened action-log result survives an unrelated refresh", async () => {
     opened.open=true;opened.ontoggle();
     view.update(context);await settle();
     const restored=[...host.all()].find(n=>n.className==="wtc-activity-item"&&n.ariaLabel===opened.ariaLabel);
-    assert.notEqual(restored,opened);assert.equal(restored.open,true);
+    assert.equal(restored,opened,"unchanged updates keep the disclosure connected");assert.equal(restored.open,true);
   } finally {view.dispose();catchUpResult=previous;}
 });
 
@@ -2468,4 +2490,282 @@ test("a Next publication keeps its single activity through a personally confirme
   assert.equal([...panel.host.all()].filter(n=>n.className==="wtc-activity-item").length,1);
   assert.match(readable(panel.host),/Done/);assert.doesNotMatch(readable(panel.host),/Awaiting confirm|Publication response received/);
  }finally{panel?.view.dispose();view.dispose();githubConfirmResult=previous;personal=null;nextResult=undefined;}
+});
+
+test("tunnel menu keys navigate without starting a tunnel, and Escape restores its trigger", async () => {
+  const {host,view}=await mount("composer", collection([repo("api")],[{group:"api/web",repo:"api",kind:"service",label:"preview",state:"ready",url:"http://127.0.0.1:42201"}]));
+  const oldWidth=globalThis.innerWidth; globalThis.innerWidth=320;
+  try {
+    const trigger=[...host.all()].find(n=>n.className==="wtc-tunnel-trigger");
+    const menu=[...host.all()].find(n=>n.className==="wtc-tunnel-menu");
+    const key=key=>({key,preventDefault(){},stopPropagation(){}});
+    calls.length=0;
+    trigger.onkeydown(key("ArrowUp")); await settle();
+    assert.equal(trigger.ariaExpanded,"true");
+    assert.ok(Number.parseFloat(menu.style.left)+252<=308,"placement uses the shown menu width and fits the viewport");
+    assert.ok(Number.parseFloat(menu.style.top)+180<=756,"the menu fits above a trigger near the bottom");
+    assert.equal(document.activeElement.value,"devtunnel");
+    menu.onkeydown(key("ArrowDown")); assert.equal(document.activeElement.value,"gateway");
+    menu.onkeydown(key("End")); assert.equal(document.activeElement.value,"devtunnel");
+    menu.onkeydown(key("Home")); assert.equal(document.activeElement.value,"gateway");
+    menu.onkeydown(key("Escape"));
+    assert.equal(trigger.ariaExpanded,"false"); assert.equal(document.activeElement,trigger);
+    assert.equal(calls.length,0,"opening, navigation and dismissal never start a provider");
+  } finally {globalThis.innerWidth=oldWidth;view.dispose();}
+});
+
+test("unchanged composer updates preserve the focused suggestion and its current action", async () => {
+ const data=collection([]),key="agent:main:dashboard:hover-start";
+ histories.set(key,[{role:"user",content:"Work on the site documentation"}]);
+ const {host,view,context}=await mount("composer",data,undefined,key);
+ try {
+  await settle();
+  const start=titled(host,"Ask the conversation to start this collection");assert.ok(start);start.focus();
+  for(let i=0;i<30;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Ask the conversation to start this collection"),start);
+  assert.equal(start.isConnected,true);assert.equal(document.activeElement,start);
+  calls.length=0;await start.onclick({preventDefault(){},stopPropagation(){}});await settle();
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+  assert.equal(calls.find(c=>c.method==="sessions.send").key,key);
+ }finally{view.dispose();histories.delete(key);}
+});
+
+for(const kind of ["composer","panel"])test(`${kind}: unchanged context preserves focused service controls but real status changes update them`,async()=>{
+ const data=collection([repo("api")],[{group:"api/web",repo:"api",kind:"service",label:"Preview",state:"idle"}]);
+ const {host,view,context}=await mount(kind,data);
+ try{
+  const starter=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&/^(Start Preview|Preview: idle\. Start it)$/.test(n.title));
+  const start=starter();assert.ok(start);start.focus();
+  for(let i=0;i<30;i++)view.update({...context,props:{...context.props}});
+  assert.equal(starter(),start);assert.equal(document.activeElement,start);
+  data.services[0].state="ready";view.update(context);
+  assert.equal(starter(),undefined);assert.ok([...host.all()].some(n=>n.tagName==="BUTTON"&&/Preview.*Stop it/.test(n.title)));
+ }finally{view.dispose();}
+});
+
+test("a panel focus intent retained in host props does not rebuild its controls",async()=>{
+ const {host,view,context}=await mount("panel",collection([repo("api")]),undefined,undefined,{focus:"activity"});
+ try{
+  const refresh=titled(host,"Refresh");assert.ok(refresh);refresh.focus();
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Refresh"),refresh);assert.equal(document.activeElement,refresh);
+ }finally{view.dispose();}
+});
+
+
+for(const kind of ["composer","panel"])test(`${kind}: unchanged status still rechecks a newly connected account on its existing cadence`,async()=>{
+ const realNow=Date.now;let now=realNow();Date.now=()=>now;personal=null;
+ const {view,context}=await mount(kind,collection([repo("api",{unpublished:1})]));
+ let options=0;const request=context.host.request;
+ context.host.request=(method,params)=>{if(method==="sessions.github.options")options++;return request(method,params);};
+ try{
+  await settle();personal={state:"connected",account:{login:"demo"},generation:"new"};now+=31000;
+  view.update(context);await settle();assert.equal(options,1);
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  await settle();assert.equal(options,1,"host updates must not bypass the account-check throttle");
+ }finally{Date.now=realNow;personal=null;view.dispose();}
+});
+
+for(const mode of ["hidden","aborted","workers"])test(`unchanged ${mode} composer updates do not start suggestion reads`,async()=>{
+ const realNow=Date.now;let now=realNow();Date.now=()=>now;
+ const data=mode==="workers"?{...collection([]),subSessions:[{name:"helper",collection:"test--helper",repos:[repo("api")]}]}:collection([]);
+ const {view,context,abort}=await mount("composer",data);
+ let history=0;const request=context.host.request;
+ context.host.request=(method,params)=>{if(method==="chat.history")history++;return request(method,params);};
+ try{
+  const next=mode==="hidden"?{...context,presented:false}:context;if(mode==="aborted")abort();
+  view.update(next);now+=11000;
+  for(let i=0;i<20;i++)view.update(next);
+  await settle();assert.equal(history,0);
+ }finally{Date.now=realNow;view.dispose();}
+});
+
+
+test("panel feedback renders once and keeps its refreshed stamp for later host updates",async()=>{
+ const {host,view,context}=await mount("panel",collection([repo("api")]));
+ try{
+  const input=[...host.all()].find(n=>n.tagName==="INPUT"&&n.placeholder==="Find or add a repository");
+  input.value="";input.onkeydown({key:"Enter",preventDefault(){}});
+  assert.match(readable(host),/Pick a repository from the list/);
+  const refresh=titled(host,"Refresh");refresh.focus();
+  for(let i=0;i<20;i++)view.update({...context,props:{...context.props}});
+  assert.equal(titled(host,"Refresh"),refresh);assert.equal(refresh.isConnected,true);assert.equal(document.activeElement,refresh);
+ }finally{view.dispose();}
+});
+
+
+for (const kind of ["composer", "panel"]) test(`${kind}: an action refresh from a previous conversation keeps the new controls connected`, async () => {
+  const data = collection([repo("api", { behind: 3 })]);
+  const { host, view, context } = await mount(kind, data);
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  controlledCollection = params => params.sessionKey === context.props.sessionKey
+    ? pending : { ok: true, result: collections.get(params.sessionKey) };
+  try {
+    const action = [...host.all()].find(n => n.tagName === "BUTTON" && /^3 new on main/.test(n.title)).onclick();
+    await settle();
+    const nextKey = `agent:main:other:${++sessions}`;
+    collections.set(nextKey, collection([repo("web")]));
+    view.update({ ...context, props: { sessionKey: nextKey, agentId: "main" } });
+    await settle();
+    const refreshControl = () => [...host.all()].find(n => n.className === "wtc-refresh-control");
+    const refresh = refreshControl();
+    refresh.focus();
+    release({ ok: true, result: data });
+    await action;
+    await settle();
+    assert.equal(refreshControl(), refresh);
+    assert.equal(refresh.isConnected, true);
+    assert.equal(document.activeElement, refresh);
+  } finally { release({ ok: true, result: data }); controlledCollection = undefined; view.dispose(); }
+});
+
+for (const kind of ["composer", "panel"]) test(`native checkout recovery from ${kind} logs errors and refreshes successes`, async () => {
+  const r=repo("api",{error:"checkout unavailable",recovery:{state:"restorable",key:"recovery-key",removedAt:1000}});
+  const key=`agent:main:restore-${kind}`;
+  const {host,view}=await mount(kind,collection([r]),undefined,key);
+  try {
+    assert.ok(texts(host).some(t=>t.includes("Evicted")));
+    const button=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore"&&n.title.startsWith("Restore api from"));
+    assert.ok(button());
+    let finish;restoreResult=new Promise(resolve=>{finish=resolve});
+    button().click();await settle();
+    assert.ok(buttons(host).includes("Restoring…"));
+    assert.equal(calls.at(-1).actionId,"restore-checkout");
+    assert.deepEqual(calls.at(-1).payload,{ownerSessionKey:r.sessionKey,key:"recovery-key"});
+    finish({ok:false,error:"missing scope: operator.admin"});await settle();await settle();
+    assert.ok(readable(host).includes("operator.admin"),"permission failure remains accessible in result details");
+    restoreResult=()=>{collections.set(key,collection([repo("api")]));return {ok:true,result:{message:"Checkout restored from its saved snapshot"}}};
+    button().click();await settle();await settle();
+    assert.ok(!texts(host).some(t=>t==="Evicted"));
+    assert.ok(!button(),"the refreshed row no longer offers recovery");
+  } finally {view.dispose();restoreResult=undefined;}
+});
+
+test("recovery without a recorded snapshot never offers Restore", async () => {
+  const {host,view}=await mount("panel",collection([repo("api",{error:"checkout unavailable",recovery:{state:"unavailable",reason:"No recovery snapshot is recorded"}})]));
+  try{assert.ok(!buttons(host).includes("Restore"));assert.ok(texts(host).some(t=>t.includes("Snapshot unavailable")));}finally{view.dispose();}
+});
+
+test("collapsed restore-all stays sequential, records partial failure and cancels queued work on switch", async () => {
+  const missing=name=>repo(name,{error:"checkout unavailable",recovery:{state:"restorable",key:name}});
+  const key="agent:main:restore-queue";
+  const {host,view}=await mount("composer",collection([missing("api"),missing("web")]),undefined,key);
+  const requests=[];let finish;
+  restoreResult=params=>{requests.push(params);return new Promise(resolve=>{finish=resolve})};
+  try {
+    const all=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all");assert.ok(all,"collapsed toolbar exposes recovery");
+    all.click();await settle();assert.equal(requests.length,1);
+    const primary=[...host.all()].find(n=>n.className?.startsWith("wtc-toolbar-primary"));
+    assert.ok(primary.textContent.includes("Restoring 1/2"));
+    const queued=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Queued");
+    assert.ok(queued?.disabled,"waiting target is visibly queued and disabled");
+    await all.onclick();assert.equal(requests.length,1,"stale second click dispatches nothing");
+    assert.ok(readable(host).includes("already running"));
+    finish({ok:false,error:"Snapshot unavailable"});await settle();await settle();
+    assert.equal(requests.length,2,"second target starts only after first result and refresh");
+    assert.equal(requests[1].payload.ownerSessionKey,"agent:main:owner:web");
+    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    assert.ok(!readable(host).includes("Restoring…"));
+    const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
+    try{assert.ok(readable(log.host).includes("api: restore failed"));assert.ok(readable(log.host).includes("web: restored"));}finally{log.view.dispose();}
+  }finally{view.dispose();restoreResult=undefined;}
+  const other=await mount("composer",collection([missing("api"),missing("web")]),undefined,"agent:main:restore-switch");
+  requests.length=0;
+  restoreResult=params=>{requests.push(params);return new Promise(resolve=>{finish=resolve})};
+  try{
+    [...other.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all").click();await settle();
+    collections.set("agent:main:replacement",collection([repo("docs")]));
+    other.context.props.sessionKey="agent:main:replacement";other.view.update(other.context);await settle();
+    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    assert.equal(requests.length,1,"switch cancels the second captured target");
+    assert.ok(!readable(other.host).includes("api: restored"),"old result cannot appear in new conversation");
+  }finally{other.view.dispose();restoreResult=undefined;}
+});
+
+test("evicted rows do not hide a prepared publication in the header", async () => {
+  personal={state:"connected",account:{login:"demo"},generation:"g1"};
+  const step={step:"push",by:"wtc",approve:"person",gateway:"github_publish",key:"api:push:h1",reason:"Push local commits"};
+  const {host,view}=await mount("composer",collection([repo("api",{unpublished:1,next:step,choices:{actions:[{...step,available:true}]}}),repo("web",{error:"checkout unavailable",recovery:{state:"restorable",key:"web"}})]));
+  try{
+    await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^1 commit to push/.test(n.title)).onclick();
+    const primary=[...host.all()].find(n=>n.className?.startsWith("wtc-toolbar-primary"));
+    assert.ok(primary.textContent.includes("Review push"),"prepared confirmation takes precedence over recovery");
+  }finally{view.dispose();personal=null;}
+});
+
+for (const kind of ["composer", "panel"]) test(`mixed recovery and checkout actions stay available in ${kind} menus`, async () => {
+  const step={step:"catch-up",by:"wtc",approve:"agent",command:["wtc","catch-up"],key:"api:catch-up:head",reason:"12 new on main"};
+  const follow={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+  const clean=repo("api",{behind:12,next:step,choices:{actions:[{...step,available:true},follow]}});
+  const commit={step:"commit",by:"agent",skill:"wtc",key:"web:commit:head",reason:"Save local changes"};
+  const dirty=repo("web",{dirty:2,behind:7,next:commit,choices:{actions:[{...commit,available:true}]}});
+  const missing=repo("docs",{error:"checkout unavailable",recovery:{state:"restorable",key:"docs"}});
+  const {host,view}=await mount(kind,collection([clean,dirty,missing]));
+  try{
+    const menus=[...host.all()].filter(n=>n.className==="wtc-context-menu");
+    const header=menus.find(n=>n.ariaLabel==="Collection actions");
+    const item=(menu,label)=>menu.children.find(n=>n.ariaLabel===label);
+    assert.ok(!item(header,"Catch up (1)").disabled,"one clean checkout remains eligible beside recovery");
+    assert.equal(item(header,"Restore (1)"),undefined,"primary recovery is not duplicated in overflow");
+    assert.ok(buttons(host).includes("Restore"));
+    const web=menus.find(n=>n.ariaLabel==="Actions for web");
+    assert.ok(item(web,"Catch up").disabled);
+    assert.match(item(web,"Catch up").textContent,/Save or stash/);
+    const api=menus.find(n=>n.ariaLabel==="Actions for api");
+    assert.ok(!item(api,"Check PR progress").disabled);
+    const trigger=[...host.all()].find(n=>n.ariaLabel==="More actions for api");
+    const event=key=>({key,preventDefault(){},stopPropagation(){}});
+    calls.length=0;trigger.onkeydown(event("ArrowDown"));
+    assert.equal(trigger.ariaExpanded,"true");
+    assert.equal(document.activeElement,item(api,"Check PR progress"));
+    api.onkeydown(event("Escape"));assert.equal(document.activeElement,trigger);
+    assert.equal(calls.length,0,"opening and navigating menus dispatches nothing");
+    nextResult={ok:true,result:{performed:true,repo:clean,code:0,json:{summary:"caught up"}}};
+    await item(header,"Catch up (1)").onclick(event());for(let i=0;i<6;i++)await settle();
+    const invoked=calls.filter(c=>c.actionId==="next");assert.equal(invoked.length,1);
+    assert.equal(invoked[0].payload.ownerSessionKey,clean.sessionKey);
+    assert.equal(invoked[0].payload.approveCatchUp,true);
+    assert.ok(!calls.some(c=>c.actionId==="restore-checkout"),"choosing catch-up does not restore another row");
+  }finally{view.dispose();nextResult=undefined;}
+});
+
+test("blocked repository alternatives remain visible and cannot dispatch", async()=>{
+ const step={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+ const r=repo("api",{next:step,choices:{actions:[step,{step:"review",by:"agent",skill:"wtc-local-review",key:"api:review:head",available:false,blocked:"Independent review adapter unavailable"}]}});
+ const {host,view}=await mount("panel",collection([r]));
+ try{const menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");const blocked=menu.children.find(n=>n.ariaLabel==="Run independent review");assert.ok(blocked.disabled);assert.match(blocked.textContent,/adapter unavailable/);calls.length=0;await blocked.onclick();assert.equal(calls.length,0);}finally{view.dispose();}
+});
+
+test("already dispatched repository steps are disabled in the alternative menu", async()=>{
+ const step={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+ const r=repo("api",{next:step,choices:{actions:[step]}});
+ const {host,view}=await mount("panel",collection([r]));
+ try{
+   nextResult={ok:true,result:{performed:false,repo:r}};
+   let menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");
+   const main=[...host.all()].find(n=>n.className?.includes("wtc-primary-action")&&n.textContent==="Check PR progress");
+   await main.onclick();for(let i=0;i<6;i++)await settle();
+   menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");const sent=menu.children.find(n=>n.ariaLabel==="Check PR progress");
+   assert.ok(sent.disabled);assert.match(sent.textContent,/Already sent/);
+   calls.length=0;await sent.onclick();assert.equal(calls.length,0);
+ }finally{view.dispose();nextResult=undefined;}
+});
+
+for(const kind of ["composer","panel"]) test(`responsive ${kind} actions surface available choices and keep overflow left`,async()=>{
+ const observers=[];globalThis.ResizeObserver=class{constructor(fn){this.fn=fn;observers.push(this)}observe(){}disconnect(){}};
+ const primary={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow",reason:"Inspect current PR",available:true};
+ const fix={step:"fix-checks",by:"agent",skill:"wtc",key:"api:fix",reason:"Fix checks",available:true};
+ const review={step:"address-review",by:"agent",skill:"wtc",key:"api:review",reason:"Address review",available:true};
+ const blocked={step:"merge-pr",by:"person",key:"api:merge",available:false,blocked:"Approval required"};
+ let view;
+ try{
+  const mounted=await mount(kind,collection([repo("api",{next:primary,choices:{actions:[primary,fix,review,blocked]}})]));view=mounted.view;const host=mounted.host;
+  const resize=width=>{for(const o of observers)o.fn([{contentRect:{width}}])};
+  resize(320);let row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children[0].className,"wtc-action-menu");assert.equal(row.children.at(-1).textContent,"Check PR progress");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,0);
+  resize(760);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,1);assert.equal(row.children.at(-2).textContent,"Fix checks");
+  resize(1100);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,2);assert.deepEqual(row.children.slice(1,-1).map(n=>n.textContent),["Address review","Fix checks"]);assert.equal(row.children.at(-1).textContent,"Check PR progress");
+  const menu=row.children[0].children.find(n=>n.role==="menu");assert.deepEqual(menu.children.map(n=>n.ariaLabel),["Open pull request"]);assert.ok(menu.children[0].disabled);
+  calls.length=0;resize(320);assert.equal(calls.length,0,"resizing never dispatches an action");
+ }finally{view?.dispose();delete globalThis.ResizeObserver;}
 });

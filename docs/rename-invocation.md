@@ -2,7 +2,7 @@
 
 Phase 0 of the taba rename ([#201](https://github.com/lcorneliussen/wtc-cli/issues/201)) made the executable invocation-aware; phase 1 ([#202](https://github.com/lcorneliussen/wtc-cli/issues/202)) ships it under both names. Use a release's notes to determine whether it includes this groundwork. The packaging is described under [Both executables](#both-executables).
 
-The command reads its invoked executable name from `argv[0]`. Invoking the same binary through a `taba` symlink or renamed executable selects `taba` for command paths in help, examples, diagnostic prefixes, command hints and terminal headings. Invoking it as `wtc` keeps the existing text. The corresponding `.exe` names are recognized too; unknown executable names retain `wtc`. A shell alias that executes `wtc` still supplies `wtc` as the executable name.
+The command reads its invoked executable name from `argv[0]`. Invoking the same binary through a `taba` symlink or renamed executable selects `taba` for command paths in help, examples, diagnostic prefixes and command hints. Invoking it as `wtc` keeps the existing text. Status headers and release-note headings do not follow the invocation: they use the fixed product label `taba/wtc` in 0.2 releases and `taba` from 0.3.0. The corresponding `.exe` names are recognized too; unknown executable names retain `wtc`. A shell alias that executes `wtc` still supplies `wtc` as the executable name.
 
 A pinned executable that hands over to a collection-local dev build retains the caller's invocation name, even though the dev artifact remains `.wtc/dev/wtc`.
 

@@ -481,6 +481,45 @@ gateway, and herdr layouts do not apply. Several projects in one collection,
 stacked rather than merged, are tracked in
 [#100](https://github.com/lcorneliussen/wtc-cli/issues/100).
 
+### Repository renames
+
+A gateway project's ID and its existing worktree paths stay stable when its
+forge repository is renamed. A clone registered as `widget` can keep that ID
+and directory while its origin becomes `example-org/gadget`. Lookup does not
+require the directory to have the new forge name. Registry `aliases` retain old
+logical names; the current remote's short name also resolves. Plans reuse the
+existing project ID instead of requesting a second clone.
+
+Before changing a clone's origin, an operator must verify that old and new URLs
+resolve to the same permanent forge repository ID. Record that evidence in
+`wtc-origin-aliases.json` inside its Git common directory, as reported by
+`git rev-parse --path-format=absolute --git-common-dir`:
+
+```json
+{
+  "version": 1,
+  "origin": "https://github.com/example-org/gadget.git",
+  "repositoryId": "12345",
+  "aliases": ["https://github.com/example-org/widget.git"]
+}
+```
+
+Keep this untracked Git metadata private and write it atomically, then update
+`origin` to the verified new URL. Do not record aliases merely because names
+look similar. A record applies only while its canonical origin matches the
+clone; repointing the clone elsewhere invalidates the old aliases. Discovery
+reads the record without changing Git state or making forge requests.
+
+Old collections keep their older registry worktrees and conversation IDs.
+Permitted sandbox metadata reports the verified current origin as its remote,
+while retaining the registered remote for exact-match lookup. It carries declared
+logical aliases separately from inferred origin short names and verified origin
+aliases, together with the stable project ID,
+without exposing the record or local paths. This grants no clone or publish
+permission. Ambiguous short names require an explicit registered name or URL;
+logical aliases never grant a forge URL. Exact registered remotes take precedence
+over verified old URLs, so a reused repository name cannot shadow an exact match.
+
 ## The collection in the Control UI
 
 OpenClaw shows a session's changes and pull request for its own checkout only,
@@ -582,10 +621,15 @@ exercises rendering and interaction contracts against a minimal DOM.
 
 ## Install
 
-The plugin's visible name is **taba**, formerly wtc, with the selectable
-**束 taba** wordmark linking to [taba.sh](https://taba.sh/). This branding does
+The plugin's visible name is **taba**, formerly wtc, with the bundled SVG mark and selectable
+**taba** wordmark linking to [taba.sh](https://taba.sh/). This branding does
 not change its installed identity: the plugin ID is still `wtc`, its package
 is `openclaw-plugin-wtc`, and its settings stay under `plugins.entries.wtc`.
+Service start, stop and restart controls share the same icon rail as their names;
+Start all and Stop all appear beside Services. The alignment check
+`node openclaw-plugin/tools/check-service-alignment.mjs <playwright-module> <output-directory>`
+uses synthetic data and saves screenshots with measured baseline and icon guides.
+
 Use the existing install/reload commands below. When upgrading to a release
 with this branding, install the matching CLI and plugin, then reload open
 Control UI tabs. The technical ID/config migration remains a later step in
@@ -741,7 +785,8 @@ such as **Catch up 2 repos →** or **Do next (2) →** captures those exact ste
 Catch-up and local steps start directly. Publication selections show a preview
 and retain each repository's account/commit confirmation.
 
-**⋯** in the compact top bar (**Choose steps…** in the sidebar) reveals alternatives and mixed selection controls. Choose an
+The header **⋯** menu, in both the card and sidebar, lists **Choose steps…**
+for alternatives and mixed selection controls. Choose an
 action per repository, check its selection, or use **Select suggested**. Existing
 alternative choices are preserved. **Run selected** rechecks the exact targets.
 A changed head, base, worktree state or PR observation makes an old selection
@@ -842,3 +887,47 @@ repositories, but the section is not nested under the final repository row.
 Browser table labels use normal capitalization; the terminal keeps its uppercase
 headings. Visual review compares intended section regions with a separately
 recorded pixels-only grouping, rather than inferring hierarchy from the DOM alone.
+
+### Restore an evicted checkout
+
+When OpenClaw evicts an idle managed worktree but retains its snapshot, the
+Collection card and sidebar show **Evicted** and **Restore**. The header offers
+**Restore all** for the recoverable repositories, including while the card is
+collapsed. Restoration needs the person's gateway `operator.admin` permission.
+It runs sequentially through OpenClaw's native restore command, rechecks the
+recorded owner, destination, branch and snapshot, then refreshes status. Each
+repository's success or error appears in the Action log. If the conversation
+changes, queued repositories are left alone.
+
+Restore keeps the existing native record and session binding, including saved
+uncommitted changes. It does not fetch a newer branch, clone a replacement,
+start services or overwrite an occupied destination. A stale record, missing
+snapshot, changed branch or native permission failure is reported for inspection.
+A directory that is merely missing, with no verified recovery record, does not
+get a Restore action. Older hosts without recovery commands still show its
+repository identity and **No checkout**.
+
+Status refreshes never restore or extend activity. Recovery metadata uses a
+coalesced native worktree listing only while checkout rows are unavailable; the
+native service can reconcile its own registry during that listing. Restoration
+does not change OpenClaw's idle cleanup or snapshot retention policy.
+
+Repository actions use a shared fixed column: the main button and its `⋯` menu
+keep the same positions for Catch up, Commit changes and Restore. The menu
+shows available alternatives and explains blocked ones. If local changes keep
+catch-up out of the current plan, the menu says to save or stash them first;
+it does not override the plan or bypass the gateway's checks.
+
+The header `⋯` menu keeps collection-wide Catch up, Restore and push preparation
+available even when a different action occupies the main button. Counts include
+only eligible repositories; catch-up excludes dirty and unavailable checkouts.
+Pushes retain their personal confirmation. **Choose steps…** opens mixed
+selection across repositories. Merely opening or navigating a menu runs nothing.
+
+Action groups are right-aligned, with `⋯` on the left. The recommended action
+stays at the right edge. Wider views show additional available actions inline;
+narrower views move those choices into the menu. Unavailable alternatives stay
+in the menu with their reasons. Each repository uses the same action-column
+width, and space already exposed during the conversation is retained while
+work is running so progress does not shift the repository facts. Changing the
+viewport never runs or selects an action.

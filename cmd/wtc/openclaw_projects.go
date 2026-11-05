@@ -45,7 +45,7 @@ func localGatewayProjects(allowed []string, worktree string) ([]gatewayProject, 
 			p.Error = reg.err.Error()
 		}
 		for _, r := range reg.repos {
-			p.Repos = append(p.Repos, gatewayProjectRepo{Name: r.Name, Remote: r.Remote, Role: r.Role})
+			p.Repos = append(p.Repos, gatewayProjectRepo{Name: r.Name, Aliases: r.Aliases, Remote: r.Remote, Role: r.Role})
 		}
 		if allowed != nil {
 			p = sandboxProjectMetadata(p, h, reg, worktree)
@@ -55,8 +55,9 @@ func localGatewayProjects(allowed []string, worktree string) ([]gatewayProject, 
 	return projects, nil
 }
 
-// sandboxProjectMetadata projects registry data without credentials, local
-// paths, arbitrary config keys, or command diagnostics. Unsupported remotes
+// sandboxProjectMetadata projects the registry, current clone origins and
+// operator-verified origin aliases without credentials, local paths, arbitrary
+// config keys, or command diagnostics. Unsupported remotes
 // make the project's registry unavailable rather than exposing filesystem data.
 func sandboxProjectMetadata(p gatewayProject, h openclaw.Harness, reg harnessRegistry, worktree string) gatewayProject {
 	var err error
@@ -83,10 +84,31 @@ func sandboxProjectMetadata(p gatewayProject, h openclaw.Harness, reg harnessReg
 			p.Repos = []gatewayProjectRepo{}
 			return p
 		}
-		repo := gatewayProjectRepo{Name: r.Name, Remote: remote, Role: r.Role, DefaultRef: r.DefaultRef}
+		repo := gatewayProjectRepo{Name: r.Name, Aliases: append([]string{}, r.Aliases...), RegisteredRemote: remote, Remote: remote, Role: r.Role, DefaultRef: r.DefaultRef}
 		if dir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(remote)); dir != "" {
 			repo.ProjectID = filepath.Base(dir)
 			repo.Destination = openclaw.ProjectDestination(dir, worktree)
+			for _, alias := range openclaw.GatewayProjectOrigins(dir) {
+				host := "github.com"
+				if alias.Forge == openclaw.ForgeBitbucket {
+					host = "bitbucket.org"
+				}
+				if remote, err := projectMetadataRemote("https://" + host + "/" + alias.Owner + "/" + alias.Repo + ".git"); err == nil {
+					repo.OriginAliases = append(repo.OriginAliases, remote)
+				}
+			}
+			previous := openclaw.ParseOrigin(remote)
+			current := openclaw.GatewayProjectOrigin(dir)
+			if current.Forge == previous.Forge {
+				host := "github.com"
+				if current.Forge == openclaw.ForgeBitbucket {
+					host = "bitbucket.org"
+				}
+				if canonical, err := projectMetadataRemote("https://" + host + "/" + current.Owner + "/" + current.Repo + ".git"); err == nil {
+					repo.Remote = canonical
+
+				}
+			}
 		}
 		p.Repos = append(p.Repos, repo)
 	}

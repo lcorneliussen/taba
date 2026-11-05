@@ -6,6 +6,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -544,5 +545,210 @@ func TestRuntimeTeardownSkipsReposItNeverProvisioned(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("teardown ran for a repo with nothing provisioned: %v", err)
+	}
+}
+
+func TestRuntimeStatusRunnerStartingDiagnostics(t *testing.T) {
+	for _, sweep := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sweep=%v", sweep), func(t *testing.T) {
+			c := runtimeFixture(t)
+			if _, err := c.RenderRuntime(false); err != nil {
+				t.Fatal(err)
+			}
+			m, err := c.runtimeManifest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixtureFile(t, m.Binary, `#!/bin/sh
+if [ "$1" = --version ]; then echo 'dekit 0.10.0'; exit; fi
+shift 3
+printf '%s\n' "$*" >> "$0.calls"
+case "$*" in
+ 'runner status') echo '{"status":"starting"}' ;;
+ *) exit 99 ;;
+esac
+`, 0755)
+			fixtureFile(t, filepath.Join(c.Collection, ".env.collection.local"), "exit 99\n", 0600)
+			m.Resources = []runtimeResource{{Dir: "widget", Repo: "widget", State: "provision-hook-completed"}}
+			m.Tasks[1].TunnelIntent = "on"
+			m.Tasks[1].URL = "https://example.invalid"
+			if err := runtimeSaveManifest(m); err != nil {
+				t.Fatal(err)
+			}
+			before := discoverySnapshot(t, c.Collection)
+			var items []RuntimeItem
+			if sweep {
+				var snapshot StatusSnapshot
+				c.statusRuntime(&snapshot, true)
+				items = snapshot.Runtime
+			} else {
+				items = c.RuntimeStatus()
+			}
+			if len(items) != 3 {
+				t.Fatalf("items = %+v", items)
+			}
+			for _, item := range items[:2] {
+				if item.State != "checking" || !strings.Contains(item.Reason, "runner reports starting") || !strings.Contains(item.Reason, "task state is unavailable") || item.Error != "" {
+					t.Errorf("runner readiness presented as task observation: %+v", item)
+				}
+			}
+			if items[2].State != "provision-hook-completed" {
+				t.Fatalf("lost resource fact: %+v", items[2])
+			}
+			if items[1].TunnelIntent != "on" || items[1].URL != "https://example.invalid" || items[1].Lifecycle != "" {
+				t.Fatalf("lost saved tunnel facts: %+v", items[1])
+			}
+			encoded, err := json.Marshal(items)
+			if err != nil || strings.Contains(string(encoded), "runnerStarting") || strings.Contains(string(encoded), "runner_starting") {
+				t.Fatalf("published internal provenance: %s, %v", encoded, err)
+			}
+
+			calls, err := os.ReadFile(m.Binary + ".calls")
+			if err != nil || string(calls) != "runner status\n" {
+				t.Fatalf("unexpected backend actions %q: %v", calls, err)
+			}
+			if after := discoverySnapshot(t, c.Collection); !reflect.DeepEqual(before, after) {
+				t.Fatal("status mutated collection state")
+			}
+		})
+	}
+}
+
+func TestRuntimeStatusTaskObservationsAndControlPolling(t *testing.T) {
+	c := runtimeFixture(t)
+	if _, err := c.RenderRuntime(false); err != nil {
+		t.Fatal(err)
+	}
+	m, err := c.runtimeManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, m.Binary, `#!/bin/sh
+if [ "$1" = --version ]; then echo 'dekit 0.10.0'; exit; fi
+root=$2
+shift 3
+printf '%s\n' "$*" >> "$0.calls"
+case "$*" in
+ 'runner status') cat "$root/runner-response" ;;
+ 'ls') cat "$root/task-response" ;;
+ *) exit 99 ;;
+esac
+`, 0755)
+	for _, tc := range []struct {
+		name, runner, tasks, state, reason string
+		hasError                           bool
+	}{
+		{name: "runner starting control remains pending", runner: `{"status":"starting"}`, state: "starting"},
+		{name: "observed starting", runner: `{"status":"running"}`, tasks: `{"tasks":[{"path":"widget/web/server","state":"starting","reason":"waiting for startup probe"}]}`, state: "starting", reason: "waiting for startup probe"},
+		{name: "observed ready", runner: `{"status":"running"}`, tasks: `{"tasks":[{"path":"widget/web/server","state":"ready"}]}`, state: "ready"},
+		{name: "observed stopped", runner: `{"status":"running"}`, tasks: `{"tasks":[{"path":"widget/web/server","state":"exited","exit_code":17,"reason":"task stopped"}]}`, state: "exited", reason: "task stopped"},
+		{name: "missing task", runner: `{"status":"running"}`, tasks: `{"tasks":[]}`, state: "missing"},
+		{name: "absent runner", runner: `{"status":"absent"}`, state: "absent"},
+		{name: "unknown runner", runner: `{"status":"unknown"}`, state: "unknown"},
+		{name: "malformed runner", runner: `{`, state: "unknown", hasError: true},
+		{name: "malformed task response", runner: `{"status":"running"}`, tasks: `{`, state: "unknown", hasError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixtureFile(t, filepath.Join(m.Root, "runner-response"), tc.runner, 0600)
+			fixtureFile(t, filepath.Join(m.Root, "task-response"), tc.tasks, 0600)
+			raw := c.runtimeStatusOnly()
+			if raw[0].State != tc.state || raw[0].Reason != tc.reason || (raw[0].Error != "") != tc.hasError {
+				t.Fatalf("control observation changed: %+v", raw[0])
+			}
+			visible := c.RuntimeStatus()
+			wantState, wantReason := tc.state, tc.reason
+			if tc.name == "runner starting control remains pending" {
+				wantState, wantReason = "checking", "runner reports starting; task state is unavailable"
+			}
+			if visible[0].State != wantState || visible[0].Reason != wantReason || (visible[0].Error != "") != tc.hasError {
+				t.Fatalf("display observation = %+v", visible[0])
+			}
+			if tc.name == "observed stopped" && (visible[0].ExitCode == nil || *visible[0].ExitCode != 17) {
+				t.Fatal("lost task exit status")
+			}
+		})
+	}
+	calls, err := os.ReadFile(m.Binary + ".calls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+		if call != "runner status" && call != "ls" {
+			t.Fatalf("status executed %q", call)
+		}
+	}
+}
+
+func TestRuntimeUpRunnerStartingWaitAndTimeout(t *testing.T) {
+	for _, scenario := range []string{"ready", "timeout", "failed"} {
+		t.Run(scenario, func(t *testing.T) {
+			c := runtimeFixture(t)
+			fixtureFile(t, filepath.Join(c.Collection, "widget/.harness/dekit.tasks.yaml"), `tasks:
+ web/server:
+  cmd: [sh, -c, 'sleep 60']
+  autostart: true
+  ready: {log: READY}
+`, 0644)
+			if _, err := c.RenderRuntime(false); err != nil {
+				t.Fatal(err)
+			}
+			m, err := c.runtimeManifest()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixtureFile(t, m.Tasks[0].Log, "synthetic startup output\n", 0600)
+			t.Setenv("RUNTIME_TEST_STARTING_MODE", scenario)
+			fixtureFile(t, m.Binary, `#!/bin/sh
+if [ "$1" = --version ]; then echo 'dekit 0.10.0'; exit; fi
+root=$2
+shift 3
+printf '%s\n' "$*" >> "$0.calls"
+case "$*" in
+ 'start widget/web/server') echo '{}' ;;
+ 'runner status')
+  if [ "$RUNTIME_TEST_STARTING_MODE" = timeout ] || [ ! -f "$0.checked" ]; then
+   touch "$0.checked"
+   echo '{"status":"starting"}'
+  else echo '{"status":"running"}'; fi ;;
+ 'ls')
+  if [ "$RUNTIME_TEST_STARTING_MODE" = failed ]; then
+   echo '{"tasks":[{"path":"widget/web/server","state":"failed","exit_code":17}]}'
+  else echo '{"tasks":[{"path":"widget/web/server","state":"ready"}]}'; fi ;;
+ *) exit 99 ;;
+esac
+`, 0755)
+			wait := 5 * time.Second
+			if scenario == "timeout" {
+				wait = 50 * time.Millisecond
+			}
+			result, err := c.RuntimeAction("up", "widget/web/server", wait)
+			if scenario == "ready" {
+				if err != nil || len(result.Items) != 1 || result.Items[0].State != "ready" {
+					t.Fatalf("startup did not wait for task observation: %+v, %v", result, err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("unconfirmed startup succeeded")
+				}
+				if scenario == "timeout" && !strings.Contains(err.Error(), "timed out") {
+					t.Fatalf("unexpected timeout: %v", err)
+				}
+				if scenario == "failed" && !strings.Contains(err.Error(), "failed") {
+					t.Fatalf("unexpected failure: %v", err)
+				}
+				if len(result.Logs) != 1 || result.Logs[0].Tail != "synthetic startup output" {
+					t.Fatalf("lost existing startup failure tail: %+v", result)
+				}
+			}
+			calls, err := os.ReadFile(m.Binary + ".calls")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, call := range strings.Split(strings.TrimSpace(string(calls)), "\n") {
+				if call != "start widget/web/server" && call != "runner status" && call != "ls" {
+					t.Fatalf("unexpected backend operation: %q", call)
+				}
+			}
+		})
 	}
 }

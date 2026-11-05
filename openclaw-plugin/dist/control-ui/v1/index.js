@@ -278,6 +278,31 @@ const ago = (at) => {
   return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
 };
 
+// Clock ticks change labels, not controls: replacing a hovered or focused node
+// resets its native tooltip and can dismiss an open menu.
+const timeLabel = (at, { prefix = "", updated = false } = {}) => Object.assign(el("span", { className:"wtc-time-label", textContent:prefix + ago(at) }), { wtcTimeAt:at, wtcTimePrefix:prefix, wtcUpdated:updated });
+const refreshTitle = (entry) => `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`;
+function syncTimeLabels(root, entry, { composer = false } = {}) {
+  for (const n of root.querySelectorAll?.(".wtc-time-label") ?? []) {
+    if (n.wtcUpdated) n.wtcTimeAt = entry.at;
+    const text = n.wtcTimePrefix + ago(n.wtcTimeAt);
+    if (n.textContent !== text) n.textContent = text;
+  }
+  for (const b of root.querySelectorAll?.(".wtc-refresh-control") ?? []) {
+    const busy = String(!!entry.inflight);
+    if (b.getAttribute("aria-busy") !== busy) b.setAttribute("aria-busy", busy);
+    // Changing a hovered title resets its tooltip; catch its age up when idle.
+    if (composer && !b.matches(":hover,:focus-visible")) {
+      const title = refreshTitle(entry);
+      if (b.title !== title) b.title = b.ariaLabel = title;
+    }
+  }
+}
+function collectionStamp(entry, sessionKey) {
+  const key = entry?.data?.collection?.sessionKey ?? sessionKey;
+  return JSON.stringify([entry?.data, entry?.error, feedbackStore.get(key), [...(activityStore.get(key)?.values() ?? [])]]);
+}
+
 const ciText = (pr) => ({ success: "CI passed", failure: `CI ${pr.failed} failed`, pending: `CI ${pr.running} running` })[pr.checks] ?? "no checks";
 // The state of an open pull request at a glance: CI, whether it merges, review.
 const prTone = (pr) => pr.mergeable === "conflicting" || pr.checks === "failure" || pr.review === "changes_requested" ? TONE.failure
@@ -295,17 +320,21 @@ const FORGE_PATHS = {
 const FORGE_COLORS = { github: "currentColor", bitbucket: "#2684FF" };
 function forgeIcon(forge, size = 14) {
   const d = FORGE_PATHS[forge];
-  if (!d) return css(el("span"), `flex:none;align-self:center;width:${size}px;height:${size}px;border-radius:3px;background:var(--muted, #888);opacity:.4`);
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("width", String(size));
   svg.setAttribute("height", String(size));
-  svg.setAttribute("aria-label", forge === "github" ? "GitHub" : "Bitbucket");
+  svg.setAttribute("aria-label", forge === "github" ? "GitHub" : forge === "bitbucket" ? "Bitbucket" : "Repository");
   svg.style.cssText = "flex:none;align-self:center";
   const pathEl = document.createElementNS(NS, "path");
-  pathEl.setAttribute("d", d);
-  pathEl.setAttribute("fill", FORGE_COLORS[forge]);
+  pathEl.setAttribute("d", d ?? "M4 3h16v18H4zM8 3v18M11 7h6M11 11h6");
+  pathEl.setAttribute("fill", d ? FORGE_COLORS[forge] : "none");
+  if (!d) {
+    pathEl.setAttribute("stroke", "currentColor");
+    pathEl.setAttribute("stroke-width", "1.6");
+    pathEl.setAttribute("stroke-linejoin", "round");
+  }
   svg.append(pathEl);
   return svg;
 }
@@ -409,11 +438,11 @@ async function svcRequest(host, sessionKey, agentId, payload) {
 // own portal, then a public link for when a portal does not work, a dev
 // tunnel for the person's account, and the tailnet when it is the team's.
 const TUNNEL_PROVIDERS = [
-  { name: "gateway", reach: "OpenClaw portal", portal: true },
-  { name: "cloudflare", reach: "public link", public: true },
-  { name: "ngrok", reach: "public link", public: true },
-  { name: "devtunnel", reach: "your account" },
-  { name: "tailscale", reach: "team tailnet", team: true },
+  { name: "gateway", label: "Gateway", reach: "OpenClaw portal", portal: true },
+  { name: "cloudflare", label: "Cloudflare", reach: "public link", public: true },
+  { name: "ngrok", label: "ngrok", reach: "public link", public: true },
+  { name: "devtunnel", label: "Dev Tunnel", reach: "your account" },
+  { name: "tailscale", label: "Tailscale", reach: "team tailnet", team: true },
 ];
 // portal.list leaves out a portal's URL with its access token; opening the
 // same port again returns it. Kept for the portals this page opened.
@@ -430,12 +459,22 @@ const unreachable = (url) => {
   } catch { return false; }
 };
 const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${g.group}. ${program} is not on the gateway's PATH: install it for this collection, then open the tunnel as the wtc-svc skill says.`;
+const serviceStateIcon = glyph => {
+  // Use a supported shell for the filled square, avoiding the unknown-glyph fallback.
+  const icon = controlIcon(glyph === "■" ? "▶" : glyph, 12);
+  const svg = icon.children[0], path = svg.children[0];
+  if (glyph === "▶" || glyph === "■") {
+    path.setAttribute("d", glyph === "▶" ? "M8 4l13 8-13 8V4z" : "M5 5h14v14H5z");
+    svg.setAttribute("fill", "currentColor"); svg.setAttribute("stroke", "none");
+  }
+  return icon;
+};
 // A button in front of a service, where a repository has its forge icon and
 // as small, that is also its state: ■ stops a running one, ▶ starts a
 // stopped one, ↻ restarts a failed one.
 function stateGlyph(glyph, title, tone, run) {
-  const b = css(el("button", { type: "button", className: glyph === "▶" ? "wtc-service-play" : "", title, ariaLabel: title }, glyph === "▶" ? controlIcon(glyph) : glyph),
-    `flex:none;box-sizing:border-box;width:var(--wtc-state-size,14px);height:var(--wtc-state-size,14px);display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:var(--wtc-service-play-bg,transparent);color:var(--wtc-service-play-color,${tone});cursor:pointer;font-size:${glyph === "↻" ? 13 : 10}px;line-height:1;padding:0`);
+  const b = css(el("button", { type: "button", className: "wtc-service-play", title, ariaLabel: title }, serviceStateIcon(glyph)),
+    `flex:none;box-sizing:border-box;width:var(--wtc-state-size,20px);height:var(--wtc-state-size,20px);display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:4px;background:var(--wtc-service-play-bg,transparent);color:var(--wtc-service-play-color,${tone});cursor:pointer;font-size:${glyph === "↻" ? 13 : 10}px;line-height:1;padding:0`);
   b.onclick = (e) => { e?.preventDefault(); e?.stopPropagation(); return run(); };
   return b;
 }
@@ -513,11 +552,15 @@ function tunnelNode(g, t, svc, { label, opener } = {}) {
   }
   // Running, but not answering or not signed in: say so on it.
   const trouble = isFailed(t) ? css(el("span", { textContent: "⚠", title: serviceState(t) }), "color:var(--danger, #cf222e)") : null;
-  return css(el("span", {},
-    trouble,
-    t.url ? link(label ?? name, t.url) : label ?? name,
-    smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`))),
-  "display:inline-flex;align-items:center;gap:2px;white-space:nowrap");
+  const route = t.url ? link(label ?? name, t.url) : label ?? name;
+  if (typeof route === "object") {
+    css(route, "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap");
+    route.title = t.url;
+  }
+  const close = smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`));
+  close.style.flex = "none";
+  return css(el("span", {}, trouble, route, close),
+    "display:inline-flex;align-items:center;gap:2px;min-width:0;max-width:100%;white-space:nowrap");
 }
 // A new way to a service, or null when none is left. compact: a "+" only,
 // whose title and options name the ways.
@@ -538,45 +581,170 @@ function newTunnel(g, svc, data = {}, { compact = false } = {}) {
     if (r?.missing) await svc.ask(installTunnel(g, p.name, r.missing));
   };
   if (!g.main || g.loose || !free.length) return null;
-  // One way left is a button that names it; more are a choice.
+  const trigger = css(el("button", { type: "button", className: "wtc-tunnel-trigger", title: `Add a tunnel to ${g.label}`, ariaLabel: `Add a tunnel to ${g.label}` }, controlIcon("+"), compact ? null : " Tunnel…"),
+    `display:inline-flex;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;${compact ? "width:24px;" : "padding:0 6px;"}height:24px;min-width:24px;border:1px solid transparent;border-radius:var(--radius-sm,6px);background:transparent;color:var(--muted,#888);font:inherit;font-size:12px;line-height:16px;cursor:pointer;${compact ? "padding:0;" : ""}`);
+  const wrap = (...nodes) => css(el("span", { className: "wtc-tunnel-control" }, ...nodes), "display:inline-flex;align-items:center;vertical-align:middle");
   if (free.length === 1) {
     const p = free[0];
-    return pill(compact ? "+" : `+ ${p.name}`, `Open ${p.name} (${p.reach}) to this service${p.public ? ": anyone with the link can use it" : ""}${!ready(p) ? "; the conversation installs it first" : p.portal && !ingress ? "; the gateway has no portal ingress, so it may not be reachable from here: a tunnel is" : ""}`, () => open(p));
+    if (!compact) trigger.replaceChildren(controlIcon("+"), ` ${p.label ?? p.name}`);
+    trigger.title = trigger.ariaLabel = `Open ${p.label ?? p.name} (${p.reach}) to this service${p.public ? ": anyone with the link can use it" : ""}${!ready(p) ? "; the conversation installs it first" : p.portal && !ingress ? "; the gateway has no portal ingress, so it may not be reachable from here: a tunnel is" : ""}`;
+    trigger.onclick = (e) => { e.preventDefault(); e.stopPropagation(); return open(p); };
+    return wrap(trigger);
   }
-  const pick = css(el("select", { title: "Open a way to this service from your browser: choose how" },
-    el("option", { value: "", textContent: compact ? "+" : "+ Tunnel…" }),
-    ...free.map((p) => el("option", { value: p.name, textContent: `${p.name} · ${p.reach}${note(p)}` }))),
-  `appearance:none;-webkit-appearance:none;font:inherit;font-size:12px;line-height:18px;color:inherit;background:transparent;border:1px solid var(--border-strong, rgba(128,128,128,.4));border-radius:999px;padding:0 ${compact ? 7 : 9}px;cursor:pointer;field-sizing:content;max-width:8em`);
-  pick.onclick = (e) => e.stopPropagation();
-  pick.onchange = async () => {
-    const p = free.find((x) => x.name === pick.value);
-    pick.value = "";
-    if (p) await open(p);
+  const menu = css(el("div", { id: `wtc-tunnels-${uuid()}`, className: "wtc-tunnel-menu", popover: "auto", role: "menu", ariaLabel: `Tunnel for ${g.label}` }),
+    "position:fixed;inset:auto;margin:0;padding:4px;box-sizing:border-box;width:252px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;border:1px solid var(--border-strong,var(--border,rgba(128,128,128,.3)));border-radius:var(--radius-md,8px);background:var(--card,var(--bg,#161920));color:var(--text,inherit);box-shadow:0 6px 20px rgba(0,0,0,.2);font:inherit;font-size:12px;line-height:16px;visibility:hidden");
+  trigger.popoverTargetElement = menu;
+  trigger.ariaHasPopup = "menu";
+  trigger.ariaControls = menu.id;
+  trigger.ariaExpanded = "false";
+  let shown = false, nextFocus = 0, cleanup = () => {};
+  const close = (focus = false) => {
+    if (shown) menu.hidePopover();
+    if (focus && trigger.isConnected) trigger.focus();
   };
-  return pick;
+  const items = free.map((p) => {
+    const item = css(el("button", { type: "button", role: "menuitem", value: p.name, tabIndex: -1, className: "wtc-tunnel-option", ariaLabel: `${p.label ?? p.name} · ${p.reach}${note(p)}` },
+      el("span", { textContent: p.label ?? p.name }),
+      css(el("span", { textContent: `${p.reach}${note(p)}` }), "display:block;font-size:11px;line-height:15px;color:var(--muted,#888)")),
+      "display:block;width:100%;box-sizing:border-box;margin:0;padding:6px 8px;border:0;border-radius:4px;background:transparent;color:inherit;text-align:left;white-space:normal;font:inherit;line-height:16px;cursor:pointer");
+    item.onclick = (e) => { e.preventDefault(); e.stopPropagation(); close(true); return open(p); };
+    return item;
+  });
+  menu.append(...items);
+  // Native popovers handle light dismissal. Open menus own temporary viewport
+  // listeners; closing the menu or removing its trigger releases them.
+  menu.onbeforetoggle = (e) => {
+    shown = e.newState === "open";
+    trigger.ariaExpanded = String(shown);
+    cleanup();
+    if (shown) menu.style.visibility = "hidden";
+  };
+  // A closed popover has no box: measure after it enters the top layer.
+  menu.ontoggle = (e) => {
+    if (e.newState !== "open" || !shown || !trigger.isConnected) return;
+    const viewport = globalThis.visualViewport;
+    const edge = 12, gap = 6;
+    const left = (viewport?.offsetLeft ?? 0) + edge, top = (viewport?.offsetTop ?? 0) + edge;
+    const right = left + (viewport?.width ?? globalThis.innerWidth ?? 1024) - 2 * edge;
+    const bottom = top + (viewport?.height ?? globalThis.innerHeight ?? 768) - 2 * edge;
+    menu.style.maxWidth = `${Math.max(0, right - left)}px`;
+    menu.style.maxHeight = `${Math.max(0, bottom - top)}px`;
+    const anchor = trigger.getBoundingClientRect(), box = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(left, Math.min(anchor.right - box.width, right - box.width))}px`;
+    const above = anchor.top - gap - box.height;
+    const y = above >= top ? above : anchor.bottom + gap;
+    menu.style.top = `${Math.max(top, Math.min(y, bottom - box.height))}px`;
+    menu.style.visibility = "visible";
+    items[nextFocus].focus(); nextFocus = 0;
+    if (!shown || !trigger.isConnected) return;
+    const events = new AbortController();
+    globalThis.addEventListener?.("resize", () => close(), { signal: events.signal });
+    viewport?.addEventListener("resize", () => close(), { signal: events.signal });
+    viewport?.addEventListener("scroll", () => close(), { signal: events.signal });
+    document.addEventListener("scroll", (event) => { if (!menu.contains(event.target)) close(); }, { capture: true, signal: events.signal });
+    const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => { if (!trigger.isConnected) { shown = false; cleanup(); } });
+    observer?.observe(document.documentElement, { childList: true, subtree: true });
+    cleanup = () => { events.abort(); observer?.disconnect(); };
+  };
+  trigger.onclick = (e) => e.stopPropagation();
+  trigger.onkeydown = (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault(); e.stopPropagation();
+    nextFocus = e.key === "ArrowUp" ? items.length - 1 : 0;
+    if (shown) { items[nextFocus].focus(); nextFocus = 0; }
+    else trigger.click();
+  };
+  menu.onkeydown = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(true); return; }
+    if (e.key === "Tab") { close(); return; }
+    const index = items.indexOf(document.activeElement);
+    const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1
+      : e.key === "ArrowDown" ? (index + 1) % items.length
+      : e.key === "ArrowUp" ? (index < 0 ? items.length - 1 : index + items.length - 1) % items.length : -1;
+    if (next >= 0) { e.preventDefault(); e.stopPropagation(); items[next].focus(); }
+  };
+  return wrap(trigger, menu);
+}
+
+// Native popovers escape table clipping; disabled alternatives keep their reason visible.
+function actionMenu(trigger, options, label, fail) {
+  const menu = css(el("div", { id: `wtc-actions-${uuid()}`, className: "wtc-context-menu", popover: "auto", role: "menu", ariaLabel: label }),
+    "position:fixed;inset:auto;margin:0;padding:4px;box-sizing:border-box;width:264px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;border:1px solid var(--border-strong,var(--border,#444));border-radius:8px;background:var(--card,var(--bg,#161920));color:var(--text,inherit);box-shadow:0 6px 20px rgba(0,0,0,.2);font:inherit;font-size:12px;line-height:16px;visibility:hidden");
+  trigger.popoverTargetElement = menu; trigger.ariaHasPopup = "menu"; trigger.ariaControls = menu.id; trigger.ariaExpanded = "false";
+  let shown = false, focusIndex = 0, cleanup = () => {};
+  const close = (focus = false) => { if (shown) menu.hidePopover(); if (focus && trigger.isConnected) trigger.focus(); };
+  const items = options.map(option => {
+    const navigate = !option.disabled && /^https?:\/\//.test(option.href ?? "");
+    const item = css(el(navigate ? "a" : "button", { ...(navigate ? {href:option.href,target:"_blank",rel:"noopener noreferrer"} : {type:"button"}), role: "menuitem", tabIndex: -1, disabled: !!option.disabled, ariaLabel: option.label, title: option.detail ?? option.label, className: "wtc-context-option" },
+      el("span", { textContent: option.label }), option.detail ? css(el("span", { textContent: option.detail }), "display:block;font-size:11px;color:var(--muted,#888);line-height:15px") : null),
+      `display:block;width:100%;margin:0;padding:6px 8px;box-sizing:border-box;border:0;border-radius:4px;background:transparent;color:inherit;text-decoration:none;text-align:left;white-space:normal;font:inherit;line-height:16px;cursor:${option.disabled ? "default" : "pointer"};opacity:${option.disabled ? ".65" : "1"}`);
+    item.onclick = async e => { if (!navigate) e?.preventDefault(); e?.stopPropagation(); if (item.disabled) return; close(true); if (navigate) return; try { await option.run?.(); } catch (err) { fail(String(err?.message ?? err)); } };
+    return item;
+  });
+  menu.append(...items);
+  const available = items.filter(item => !item.disabled);
+  menu.onbeforetoggle = e => { shown = e.newState === "open"; trigger.ariaExpanded = String(shown); cleanup(); if (shown) menu.style.visibility = "hidden"; };
+  menu.ontoggle = e => {
+    if (e.newState !== "open" || !shown || !trigger.isConnected) return;
+    const viewport = globalThis.visualViewport, edge = 12;
+    const left = (viewport?.offsetLeft ?? 0) + edge, top = (viewport?.offsetTop ?? 0) + edge;
+    const right = left + (viewport?.width ?? globalThis.innerWidth ?? 1024) - 2 * edge, bottom = top + (viewport?.height ?? globalThis.innerHeight ?? 768) - 2 * edge;
+    menu.style.maxWidth = `${right-left}px`; menu.style.maxHeight = `${bottom-top}px`;
+    const small = right - left <= 496; menu.style.width = small ? `${right-left}px` : "264px";
+    const a = trigger.getBoundingClientRect(), box = menu.getBoundingClientRect();
+    menu.style.left = `${small ? left : Math.max(left,Math.min(a.right-box.width,right-box.width))}px`;
+    menu.style.top = `${Math.max(top,Math.min(a.top-6-box.height >= top ? a.top-6-box.height : a.bottom+6,bottom-box.height))}px`;
+    menu.style.visibility = "visible"; available[focusIndex]?.focus(); focusIndex = 0;
+    if (!shown || !trigger.isConnected) return;
+    const events = new AbortController();
+    globalThis.addEventListener?.("resize", () => close(), {signal:events.signal}); viewport?.addEventListener("resize", () => close(), {signal:events.signal});
+    viewport?.addEventListener("scroll", () => close(), {signal:events.signal});
+    document.addEventListener("scroll", e => { if (!menu.contains(e.target)) close(); }, {capture:true,signal:events.signal});
+    const observer = typeof MutationObserver === "undefined" ? null : new MutationObserver(() => { if (!trigger.isConnected) { shown=false; cleanup(); } });
+    observer?.observe(document.documentElement,{childList:true,subtree:true}); cleanup=()=>{events.abort();observer?.disconnect();};
+  };
+  trigger.onclick = e => e?.stopPropagation();
+  trigger.onkeydown = e => { if (!["ArrowDown","ArrowUp"].includes(e.key)) return; e.preventDefault();e.stopPropagation();focusIndex=e.key==="ArrowUp"?Math.max(0,available.length-1):0;if(shown)available[focusIndex]?.focus();else trigger.click(); };
+  menu.onkeydown = e => {
+    if(e.key==="Escape"){e.preventDefault();e.stopPropagation();close(true);return;}if(e.key==="Tab"){close();return;}
+    const i=available.indexOf(document.activeElement), n=available.length;
+    const next=e.key==="Home"?0:e.key==="End"?n-1:e.key==="ArrowDown"?(i+1)%n:e.key==="ArrowUp"?(i<0?n-1:(i+n-1)%n):-1;
+    if(next>=0&&n){e.preventDefault();e.stopPropagation();available[next].focus();}
+  };
+  return css(el("span",{className:"wtc-action-menu"},trigger,menu),"display:inline-flex;width:24px;flex:0 0 24px;align-items:baseline;justify-content:center");
 }
 
 // Geometric control glyphs avoid font-dependent centres and spinning hit targets.
-const controlIcon = glyph => {
-  const paths = { "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
+const controlIcon = (glyph, size = 14) => {
+  const paths = { "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg"), path = document.createElementNS(ns, "path");
-  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "14", height: "14", fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
+  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: String(size), height: String(size), fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
   svg.setAttribute("class", "wtc-header-glyph"); svg.style.cssText = "display:block;transform-box:fill-box;transform-origin:center";
   path.setAttribute("d", paths[glyph] ?? paths["✕"]); svg.append(path);
-  return css(el("span", { className: "wtc-header-icon" }, svg), "display:inline-flex;width:14px;height:14px");
+  return css(el("span", { className: "wtc-header-icon" }, svg), `display:inline-flex;width:${size}px;height:${size}px`);
 };
 
 // A shared icon rail and text rail for the brand, repositories and services.
-const leadSlot = icon => css(el("span", { className: "wtc-lead-slot" },
-  css(el("span", { className: "wtc-lead-icon" }, icon), "position:absolute;left:50%;top:-.35em;transform:translate(-50%,-50%);display:grid;place-items:center")), "display:inline-block;position:relative;flex:0 0 20px;width:20px;height:0;align-self:baseline");
+const leadSlot = (icon, width = 20) => css(el("span", { className: "wtc-lead-slot" },
+  css(el("span", { className: "wtc-lead-icon" }, icon), "position:absolute;left:50%;top:-.35em;transform:translate(-50%,-50%);display:grid;place-items:center")), `display:inline-block;position:relative;flex:0 0 ${width}px;width:${width}px;height:0;align-self:baseline`);
 
 // Visible branding can change while the plugin and CLI keep their legacy IDs.
 // version is what the collection reports: the plugin's and the gateway's wtc.
 const versionText = (v) => (v?.plugin || v?.wtc ? `plugin ${v.plugin ?? "?"}, wtc ${v.wtc ?? "?"}` : "");
+// The published Taba mark, bundled as vectors so host fonts cannot change it.
+const brandMark = () => {
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  for (const [key, value] of Object.entries({ viewBox: "0 0 64 64", width: "18", height: "18", "aria-hidden": "true", focusable: "false", class: "wtc-brand-icon" })) svg.setAttribute(key, value);
+  const rect = (attrs) => { const node = document.createElementNS(ns, "rect"); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); svg.append(node); };
+  rect({ width: "64", height: "64", rx: "16", fill: "#234e42" });
+  for (const [x, y, width] of [[19, 17, 32], [11, 28.5, 36], [15, 40, 38]]) rect({ x, y, width, height: "7", rx: "3.5", fill: "#f7f7ed" });
+  rect({ x: "30", y: "12", width: "7", height: "40", rx: "3.5", fill: "#c9d98a", stroke: "#234e42", "stroke-width": "2.5" });
+  return css(svg, "display:block;flex:none");
+};
 // Keep the centered logo out of text flow so it cannot supply the link baseline.
 const brand = (size, version, compact = false) => css(el("span", {},
   css(el("a", { href: HOME, target: "_blank", rel: "noopener noreferrer", ariaLabel: "taba home", title: `taba — Make room for the whole task. (opens taba.sh)${version ? `\n${versionText(version)}` : ""}` },
-    leadSlot(css(el("span", { className: "wtc-brand-icon", textContent: "束", lang: "ja", ariaHidden: "true" }), "display:inline-grid;place-items:center;width:18px;height:18px;border-radius:5px;background:#234e42;color:#f7f7ed;font-family:'Hiragino Kaku Gothic ProN','Yu Gothic','Noto Sans CJK JP',sans-serif;font-size:15px;font-weight:500;letter-spacing:0;line-height:1")),
+    leadSlot(brandMark()),
     " ", el("span", { className: "wtc-brand-word", textContent: "taba" })),
     "display:inline-flex;align-items:baseline;gap:6px;min-height:1.5em;color:var(--text-strong, inherit);text-decoration:none;font-weight:700"),
   compact ? null : el("span", { className: "wtc-brand-suffix", textContent: "Collection" })), `display:inline-flex;align-items:baseline;gap:.3em;flex:none;white-space:nowrap;font-weight:600;font-size:${size}`);
@@ -605,6 +773,7 @@ const pullRequestRows = (repos) => {
 // Activity is shared by views of one collection for this browser session.
 // It is UI feedback, not an executable plan or a durable completion receipt.
 const activityStore = new Map();
+const recoveryQueues = new Map();
 const feedbackStore = new Map();
 // Hand off the requested service locally, independently of optional host panel
 // props; log output stays in the panel that fetched it.
@@ -645,18 +814,34 @@ async function trackedRefresh(watch, sessionKey, say, currentSession = () => ses
   }
 }
 
-const REPO_NEXT_WIDTH = 128, REPO_COLUMN_GAP = 10;
-const repositoryColumns = (narrow) => narrow
-  ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }]
-  : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "108px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${REPO_NEXT_WIDTH}px`, align: "end" }];
+const REPO_NEXT_WIDTH = 132, REPO_COLUMN_GAP = 10;
+const inlineActionCapacity = (width, narrow = false) => narrow ? 1 : Math.max(1, Math.floor(((width || 0) - 484) / 108));
+const headerActionCapacity = width => Math.max(1, Math.min(4, Math.floor(((width || 0) - 300) / 108)));
+const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH) => narrow
+  ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${actionWidth}px`, align: "end" }]
+  : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "116px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${actionWidth}px`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
+.wtc-tunnel-trigger:hover,.wtc-tunnel-existing:hover,.wtc-tunnel-option:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
+.wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
+.wtc-tunnel-option:focus-visible { outline-offset:-2px; }
+
+.wtc-service-bulk:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
 .wtc-service-play:is(:hover,:focus-visible) { --wtc-service-play-bg:var(--bg-hover,rgba(128,128,128,.12));--wtc-service-play-color:var(--text-strong,var(--text,inherit)); }
 
 .wtc-service-label:disabled { cursor:default !important;text-decoration:none !important; }
-.wtc-next-step { width:${REPO_NEXT_WIDTH}px;justify-content:flex-start !important; }
-.wtc-next-step>:first-child { width:104px;flex:0 0 104px; }
-.wtc-next-step>:not(:first-child) { width:20px;flex:0 0 20px; }
+.wtc-next-step { width:var(--wtc-action-width,${REPO_NEXT_WIDTH}px);justify-content:flex-end !important; }
+ .wtc-next-step>.wtc-action-control,.wtc-next-step>select,.wtc-next-step>.wtc-step-status,.wtc-next-step>.wtc-primary-spacer { width:104px;flex:0 0 104px; }
+.wtc-next-step>.wtc-action-menu { width:24px;flex:0 0 24px; }
+.wtc-toolbar-inline { width:104px;flex:0 0 104px; }
+.wtc-action-toolbar>.wtc-action-control,.wtc-toolbar-primary>.wtc-action-control { min-height:24px !important;height:24px; }
+.wtc-action-menu>button { width:24px !important;min-width:24px !important;padding:0 !important; }
 .wtc-step-status { width:104px;text-align:center; }
+/* Primary actions and their menu rail share one fixed layout in every row. */
+.wtc-next-step { display:flex;align-items:baseline;gap:4px; }
+.wtc-table .wtc-next-step>.wtc-action-control,.wtc-next-step .wtc-action-menu>.wtc-action-control { min-height:24px !important;height:24px; }
+.wtc-context-option:not(:disabled):is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;outline:2px solid var(--accent,#75c8c1);outline-offset:-2px; }
+.wtc-restore-control { min-height:24px !important;height:24px;--wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
+.wtc-toolbar-primary>.wtc-restore-control:disabled { --wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
 .wtc-toolbar-primary:empty,.wtc-summary-facts:empty,.wtc-header-controls>button,.wtc-header-controls>span:last-child { align-self:center; }
 .wtc-action-control:not(:disabled):hover { --wtc-control-bg:var(--bg-hover,rgba(128,128,128,.16)); --wtc-control-border:var(--border-strong,rgba(128,128,128,.5)); --wtc-control-text:var(--text-strong,var(--text,inherit)); box-shadow:none; }
 .wtc-next-actions button:disabled { background:transparent !important;border-color:var(--border-strong,rgba(128,128,128,.35)) !important;color:var(--muted,#888) !important; }
@@ -666,8 +851,9 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-action-toolbar .wtc-toolbar-primary>.wtc-action-control:not(:disabled) { --wtc-control-border:var(--border-strong,rgba(128,128,128,.35));--wtc-control-text:var(--text,inherit); }
 
 
-.wtc-count-control { box-sizing:border-box;width:32px;min-width:0 !important;padding:0 1px !important;display:inline-grid !important;grid-template-columns:8px minmax(0,1fr);column-gap:1px;align-content:center;align-items:baseline !important; }
+.wtc-count-control,.wtc-repositories .wtc-count-control.wtc-action-control { box-sizing:border-box;width:36px;min-width:0 !important;min-height:24px !important;height:24px;align-self:baseline;padding:0 1px !important;display:inline-grid !important;grid-template-columns:8px minmax(0,1fr);column-gap:1px;align-content:center;align-items:baseline !important; }
 .wtc-count-icon { text-align:center;font-size:12px; }
+.wtc-repo-facts>span { min-height:24px !important; }
 .wtc-count-value { min-width:0;text-align:right;font-size:11px;overflow:hidden;text-overflow:ellipsis; }
 @container wtc-panel (max-width:326px) { .wtc-brand-suffix { display:none; } }
 .wtc-collection>header>div:first-child { flex-wrap:nowrap !important; }
@@ -678,6 +864,10 @@ const actionFeedback = () => el("style", { textContent: `
 @media(prefers-reduced-motion:reduce) { .wtc-refresh-control[aria-busy="true"] .wtc-header-glyph { animation:none; opacity:.6; } }
 .wtc-action-control:focus-visible { outline:2px solid var(--accent,#75c8c1); outline-offset:-2px; }
 .wtc-collection-card summary:focus-visible { outline:2px solid var(--accent,#75c8c1); outline-offset:2px; border-radius:10px; }
+@media(pointer:coarse) {
+  .wtc-base-services { --wtc-state-size:24px; }
+  .wtc-base-services .wtc-table { row-gap:6px !important; }
+}
 @media(max-width:520px) {
   .wtc-collection-card { --wtc-header-top-extra:0px; }
   .wtc-collection-card>summary { column-gap:4px !important; }
@@ -702,6 +892,7 @@ const actionFeedback = () => el("style", { textContent: `
 
 ` });
 function collectionTables(v) {
+  let inlineCapacity = 1, actionColumns = 1;
   // Repositories being pushed, and being caught up.
   const busy = new Set();
   const catching = new Set();
@@ -757,6 +948,39 @@ function collectionTables(v) {
   // Mirror browser-local publication progress; this is not a gateway lock.
   const sharedPushBusy = (r) => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "push" && item.repoSessionKey === r.sessionKey && item.inFlight);
   const reserved = (r) => acting.has(r.sessionKey) || busy.has(r.sessionKey) || catching.has(r.sessionKey) || sharedPushBusy(r);
+  const recoveryQueueBusy = () => recoveryQueues.has(v.collectionKey?.() ?? v.key());
+  const recoveryBusy = r => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "restore" && item.repoSessionKey === r.sessionKey && item.inFlight);
+  async function restoreCheckouts(repos) {
+    const conversation = v.key(), logKey = v.collectionKey?.() ?? conversation;
+    if (recoveryQueues.has(logKey)) { v.say("A checkout restore is already running; wait for its results."); return; }
+    const captured = repos.map(r => structuredClone(r));
+    const queue = { targets: new Set(captured.map(r => r.sessionKey)), index: 0, total: captured.length };
+    recoveryQueues.set(logKey, queue);
+    try { for (const r of captured) {
+      if (!active(conversation)) {
+        recordActivity(logKey, uuid(), { repo: nameOf(r), repoSessionKey: r.sessionKey, action: "restore", state: "cancelled", status: "Restore cancelled before dispatch: the view closed or changed" });
+        continue;
+      }
+      if (recoveryBusy(r) || r.recovery?.state !== "restorable") continue;
+      queue.index += 1;
+      const id = uuid(), name = nameOf(r);
+      const say = (text, failed = false) => { if (active(conversation)) v.say(text, failed, null, id); };
+      recordActivity(logKey, id, { repo: name, repoSessionKey: r.sessionKey, action: "restore", inFlight: true, state: "running", status: `Restoring ${name}…` });
+      say(`Restoring ${name}…`); v.rerender();
+      try {
+        const out = await call(v.host, "restore-checkout", conversation, v.agent(), { ownerSessionKey: r.sessionKey, key: r.recovery.key });
+        const status = `${name}: ${out.message ?? "checkout restored"}`;
+        recordActivity(logKey, id, { state: "completed", status }); say(status);
+      } catch (err) {
+        const status = `${name}: restore failed — ${String(err?.message ?? err)}`;
+        recordActivity(logKey, id, { state: "failed", status }); say(status, true);
+      } finally {
+        recordActivity(logKey, id, { inFlight: false });
+        queue.targets.delete(r.sessionKey);
+        if (active(conversation)) { try { await v.refresh(); } catch {} v.rerender(); }
+      }
+    } } finally { recoveryQueues.delete(logKey); if (active(conversation)) v.rerender(); }
+  }
   async function sendToAuthor(conversation, skill, input) {
     if (!active(conversation)) throw Error("The view closed or changed before handoff");
     if (authorSending) throw Error("An author handoff is already pending; wait before dispatching another");
@@ -966,6 +1190,7 @@ function collectionTables(v) {
   function syncConversation() {
     if (batchKey === v.key()) return;
     batchKey = v.key();
+    actionColumns = 1;
     cancelPreparations("Preparation discarded after conversation switch; nothing was pushed.");
     choosing = false; selection = new Map(); batchResults = new Map(); batchLabels = new Map(); batchKeys = new Map(); batchKinds = new Map(); batchPreview = null; dispatched = new Set(); batchCancelled = true;
   }
@@ -989,9 +1214,44 @@ function collectionTables(v) {
   };
   const lastActivity = (r) => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].reverse().filter(item => item.repo === nameOf(r)).sort((a, b) => b.at - a.at)[0];
   const activityFailed = item => item?.state === "failed" || /^(Failed|Handoff failed|Cannot )/.test(item?.status ?? "");
+  const recoveryButton = (...args) => { const button = nextButton(...args); button.className += " wtc-restore-control"; return button; };
+  const recoveryQueued = r => recoveryQueues.get(v.collectionKey?.() ?? v.key())?.targets.has(r.sessionKey) && !recoveryBusy(r);
+  function repoActionOptions(r) {
+    const options = choicesOf(r).map(step => ({ id: step.key, label: nextLabel(step), detail: dispatched.has(handoffKey(r, step)) ? "Already sent to the conversation; wait for its result" : step.available ? step.reason : step.blocked ?? step.reason,
+      disabled: !!r.error || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || dispatched.has(handoffKey(r, step)) || batchRunning || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => actNext({ ...r, next: step }) }));
+    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({id:"commit",label:"Commit changes",detail:"Review intended changes and save local commits",disabled:reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>askCommit(r)});
+    if (r.error === "checkout unavailable") options.unshift({ id: "restore", label: "Restore", detail: r.recovery?.reason ?? "Restore the saved checkout before running repository actions", disabled: r.recovery?.state !== "restorable" || recoveryQueueBusy(), run: () => restoreCheckouts([r]) });
+    if (r.behind > 0 && !options.some(o => o.label === "Catch up")) options.push({ id: "catch-up-blocked", label: "Catch up", detail: r.error ? "Restore the checkout first" : r.dirty ? "Save or stash local changes before catching up" : "Not offered by the current repository plan; refresh its status", disabled: true });
+    return options;
+  }
+  function optionButton(option) {
+    const button = option.href && !option.disabled ? link(option.label, option.href) : nextButton(option.label, option.detail, option.run, option.disabled);
+    if (button.tagName === "A") { button.className = "wtc-action-control"; button.style.cssText = nextControlStyle + ";text-decoration:none"; button.title = option.detail; }
+    return button;
+  }
+  const primaryActionId = r => r.error === "checkout unavailable" && r.recovery?.state === "restorable" ? "restore" : selection.get(r.sessionKey)?.step?.key ?? r.next?.key ?? (r.dirty ? "commit" : null);
+  const actionSlot = (r, action, picker = null) => {
+    const main = picker ?? action ?? el("span", { className: "wtc-primary-spacer", ariaHidden: "true" });
+    main.className = `${main.className ?? ""} wtc-primary-action`;
+    const primaryId = primaryActionId(r);
+    const options = repoActionOptions(r);
+    const extras = picker || batchRunning || reserved(r) || recoveryQueueBusy() ? [] : options.filter(o => !o.disabled && o.id !== primaryId).slice(0, inlineCapacity - 1);
+    const overflow = options.filter(o => !extras.includes(o) && (o.id !== primaryId || o.disabled));
+    const menu = overflow.length ? actionMenu(nextButton("⋯", `More actions for ${nameOf(r)}`, () => {}), overflow, `Actions for ${nameOf(r)}`, text => v.say(text, true)) : null;
+    return css(el("div", { className: "wtc-next-step" }, menu, ...[...extras].reverse().map(o => {const button=optionButton(o);button.className+=" wtc-inline-action";return button;}), main), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
+  };
   function nextCell(r) {
-    if (!actionable(r)) return null;
-    if (!r.next && r.choices && !r.dirty) return r.choices.actions?.length ? nextButton("Choose step…", "Inspect available actions and blocked reasons", () => { choosing = true; v.showActions?.(); v.rerender(); }) : null;
+    if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return actionSlot(r, recoveryButton(recoveryBusy(r) ? "Restoring…" : recoveryQueued(r) ? "Queued" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryQueueBusy()));
+    if (!actionable(r)) {
+      // Keep the completed recovery row's geometry; its result lives in the Action log.
+      if (lastActivity(r)?.action === "restore" && lastActivity(r)?.state === "completed") {
+        const space = recoveryButton("Restored", "", () => {}, true);
+        space.ariaHidden = "true"; space.tabIndex = -1; space.style.visibility = "hidden";
+        return actionSlot(r, space);
+      }
+      return actionSlot(r, null);
+    }
+    if (!r.next && r.choices && !r.dirty) return actionSlot(r, null);
     const step = selection.get(r.sessionKey)?.step ?? r.next ?? { step: "commit", reason: "Review and commit intended changes locally" };
     const phase = batchKeys.get(r.sessionKey) === step.key ? batchResults.get(r.sessionKey) : null;
     // Informational results belong in the log; after dispatch they must not
@@ -1000,7 +1260,7 @@ function collectionTables(v) {
       const complete = phase === "Completed";
       const failed = /^Failed|^Handoff failed|^Cannot /.test(phase);
       const label = complete ? step.step === "catch-up" ? "✓ Caught up" : "✓ Done" : failed ? "⚠ Failed" : /Cancel/.test(phase) ? "Cancelled" : phase === "Queued" ? "Queued" : /pending|Sent/.test(phase) ? "Sent to agent" : step.step === "catch-up" ? "Catching up…" : "Running…";
-      return css(el("span", { className: "wtc-step-status", textContent: label, title: phase, ariaLabel: phase, role: "status" }), `font-size:11px;white-space:nowrap;color:${failed ? TONE.failure : complete ? TONE.success : "var(--muted,#888)"}`);
+      return actionSlot(r, css(el("span", { className: "wtc-step-status", textContent: label, title: phase, ariaLabel: phase, role: "status" }), `font-size:11px;white-space:nowrap;color:${failed ? TONE.failure : complete ? TONE.success : "var(--muted,#888)"}`));
     }
     const pending = !!step.key && dispatched.has(handoffKey(r, step));
     const running = reserved(r);
@@ -1018,7 +1278,7 @@ function collectionTables(v) {
       action.ariaLabel = `${retry ? "Retry " : ""}${nextLabel(step)}: ${step.reason}`;
       if (action.disabled) { action.style.color = "var(--muted,#888)"; action.style.cursor = "default"; }
     }
-    if (confirming.has(r.sessionKey)) return css(el("div", { className: "wtc-next-step" }, nextButton("Review push", `Review ${nameOf(r)}'s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); })), "display:flex;justify-content:flex-end");
+    if (confirming.has(r.sessionKey)) return actionSlot(r, nextButton("Review push", `Review ${nameOf(r)}'s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); }));
     const available = choicesOf(r);
     let picker = null;
     if (choosing && available.length > 1) {
@@ -1026,8 +1286,7 @@ function collectionTables(v) {
       picker.style.cssText = "font:inherit;font-size:11px;max-width:104px;min-width:0;padding:2px;border:1px solid var(--border-strong,#666);border-radius:4px;background:var(--bg,#151a22);color:inherit";
       picker.onchange = () => { const chosen = available.find(a => a.available && a.key === picker.value); if (chosen) selection.set(r.sessionKey, { repo: r, step: chosen }); batchPreview = null; v.rerender(); };
     }
-    return css(el("div", { className: "wtc-next-step" }, picker ?? action,
-      !choosing && choicesOf(r).length > 1 ? nextButton("⋯", `Choose another action for ${nameOf(r)}`, () => { choosing = !choosing; if (choosing) v.showActions?.(); v.rerender(); }) : el("span", { ariaHidden: "true" })), "display:flex;align-items:center;justify-content:flex-start;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
+    return actionSlot(r, action, picker);
   }
   function actionRows(repos) {
     const rows = repos.filter(actionable);
@@ -1083,7 +1342,7 @@ function collectionTables(v) {
         css(el("summary", { title: item.detail ?? item.status },
           css(el("span", {}, css(el("span", { textContent: failed ? "⚠" : label === "Done" ? "✓" : "", ariaHidden: "true" }), "display:inline-block;width:14px;flex:none"), css(el("span", { textContent: `${item.repo}${item.action ? ` · ${nextLabel({ step: item.action })}` : ""}` }), "overflow:hidden;text-overflow:ellipsis;min-width:0")), "display:flex;align-items:baseline;min-width:0;overflow:hidden;white-space:nowrap"),
           css(el("span", { textContent: label }), `font-size:11px;color:${failed ? TONE.failure : "var(--muted,#888)"};white-space:nowrap`),
-          css(el("span", { textContent: ago(item.at) }), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
+          css(timeLabel(item.at), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
         css(el("div", {}, el("span", { textContent: item.detail ?? item.status }), resultAction(item.followUp, v.say)), "padding:6px 0 8px;white-space:normal;overflow-wrap:anywhere;font-size:12px;color:var(--muted,#888)")), "font-size:12px;min-width:0");
       return keepDisclosure(detail, `activity:${item.id ?? item.at}`);
     }), records.length > 3 ? nextButton(showAllActivity ? "Show latest 3" : `Earlier activity (${records.length - 3})`, "Show or hide earlier activity", () => { showAllActivity = !showAllActivity; v.rerender(); }) : null), "display:grid;gap:4px;min-width:0");
@@ -1102,7 +1361,9 @@ function collectionTables(v) {
     const title = (batchRunning ? `Running: ${processed} of ${batchResults.size} selected steps handled.\n` : "") + targets.map(({ repo, step }) => `${nameOf(repo)}: ${nextLabel(step)} — ${step.reason}`).join("\n");
     let primary = null;
     const prepared = repos.find(r => confirming.has(r.sessionKey));
-    if (prepared && !batchRunning && !batchPreview) primary = nextButton("Review push", `Review ${nameOf(prepared)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
+    const recoverable = repos.filter(r => r.error === "checkout unavailable" && r.recovery?.state === "restorable");
+    if (recoverable.length && !batchRunning && !batchPreview && !prepared && !batchResults.size) primary = recoveryButton(recoveryQueueBusy() ? `Restoring ${recoveryQueues.get(v.collectionKey?.() ?? v.key()).index}/${recoveryQueues.get(v.collectionKey?.() ?? v.key()).total}` : recoverable.length > 1 ? "Restore all" : "Restore", `Restore saved checkouts: ${recoverable.map(nameOf).join(", ")}. Each result is recorded in the Action log. Requires gateway admin permission.`, () => restoreCheckouts(recoverable), recoveryQueueBusy());
+    else if (prepared && !batchRunning && !batchPreview) primary = nextButton("Review push", `Review ${nameOf(prepared)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
     else if (single && !batchRunning && !batchPreview) {
       const { repo, step } = single;
       if (nextRoute(step) === "pr" && repo.pullRequest?.url) {
@@ -1137,25 +1398,39 @@ function collectionTables(v) {
       const last = [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].reverse().sort((a,b) => b.at-a.at)[0];
       if (last) {
         const label = last.state === "published" && last.action === "push" ? "✓ Pushed"
+          : last.state === "completed" && last.action === "restore" ? "✓ Restored"
           : last.state === "completed" && last.action === "refresh" ? "✓ Refreshed"
           : last.state === "confirmation" ? "Awaiting confirm"
           : last.state === "blocked" ? "Needs attention"
           : activityFailed(last) ? "⚠ Failed"
           : last.state === "running" && last.action === "push" ? publicationProgress
           : last.status === "Completed" ? last.action === "catch-up" ? "✓ Caught up" : "✓ Done" : "Action log";
-        primary = nextButton(label, "Open details in the sidebar action log", openActivity, last.state === "running" && last.action === "push");
+        primary = (last.action === "restore" ? recoveryButton : nextButton)(label, "Open details in the sidebar action log", openActivity, last.state === "running" && last.action === "push");
       }
     }
     if (!batchRunning && !prepared && (catching.size || busy.size || currentPublications.length)) primary = nextButton(catching.size ? "Catching up…" : publicationProgress, "The current operation is still running or rechecking its result", () => {}, true);
     if (feedback?.failed && !batchRunning) primary = nextButton("⚠ Failed", `${feedback.text}. Open full action details`, openActivity);
     if (primary) primary.style.width = "104px";
     const slot = css(el("span", { className: `wtc-toolbar-primary${confirming.size || batchRunning || selection.size ? " wtc-toolbar-primary-required" : ""}` }, primary), "display:inline-flex;align-items:baseline;justify-content:flex-end;flex:0 0 104px;width:104px;min-width:104px;min-height:var(--wtc-control-height,20px)");
+    const catches = repos.filter(r => toCatchUp(r) && !r.dirty && (!r.next || !dispatched.has(handoffKey(r, r.next))));
+    const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
+    const more = [
+      {id:"catch-up",label: `Catch up (${catches.length})`, detail: catches.length ? "Merge the base into clean checkouts" : "No clean checkout needs catching up", disabled: !catches.length || batchRunning || catches.some(reserved) || recoveryQueueBusy(), run: () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({repo,step:repo.next}))) : catchUp([...catches])},
+      {id:"restore",label: `Restore (${recoverable.length})`, detail: recoverable.length ? "Recover saved checkouts; gateway admin required" : "No recoverable checkout is currently evicted", disabled: !recoverable.length || batchRunning || recoveryQueueBusy(), run: () => restoreCheckouts(recoverable)},
+      {id:"push",label: `Prepare pushes (${pushes.length})`, detail: pushes.length ? "Review each push before confirming" : "No unpublished commits ready to push", disabled: !pushes.length || batchRunning || pushes.some(reserved) || recoveryQueueBusy(), run: () => pushAll([...pushes])},
+      {label: "Refresh status", detail: "Recheck the collection without running an action", run: () => v.refresh()},
+      {label: "Choose steps…", detail: "Select different steps per repository", disabled: !rows.length || batchRunning || recoveryQueueBusy(), run: () => {choosing=true;v.reveal?.();v.showActions?.();v.rerender();}},
+    ];
+    const primaryId = feedback?.failed ? null : recoverable.length && !batchRunning && !batchPreview && !prepared && !batchResults.size ? "restore" : prepared ? "push" : single ? single.step.step : same && targets.length ? targets[0].step.step : null;
+    const extras = batchRunning || batchPreview || currentPublications.length || catching.size || busy.size || recoveryQueueBusy() ? [] : more.filter(o => o.id && !o.disabled && o.id !== primaryId).slice(0, headerActionCapacity(v.width?.()) - 1);
+    const overflow = more.filter(o => !extras.includes(o) && (o.id !== primaryId || o.disabled));
     const secondary = batchRunning
       ? nextButton(compact ? "Stop" : "Cancel queued", "Stop queued dispatches; active work continues", () => { batchCancelled = true; v.rerender(); })
-      : nextButton(compact ? "⋯" : "Choose steps…", "Choose alternatives or combine steps across repositories", () => { choosing = true; v.reveal?.(); v.showActions?.(); v.rerender(); }, !rows.length);
-    secondary.style.width = compact ? "36px" : "104px";
+      : actionMenu(nextButton("⋯", "More collection actions", () => {}), overflow, "Collection actions", text => v.say(text, true));
+    secondary.style.width = compact ? "36px" : "24px";
     secondary.style.flexShrink = "0";
-    return css(el("span", { className: "wtc-action-toolbar" }, ...(compact ? [slot, secondary] : [secondary, slot])), `display:inline-flex;align-items:baseline;gap:${compact ? 4 : 8}px;min-width:0;flex-wrap:nowrap;white-space:nowrap`);
+    secondary.style.flexBasis = compact ? "36px" : "24px";
+    return css(el("span", { className: "wtc-action-toolbar" }, secondary, ...[...extras].reverse().map(o => { const button = optionButton(o); button.className += " wtc-toolbar-inline"; return button; }), slot), `display:inline-flex;align-items:baseline;gap:${compact ? 4 : 8}px;min-width:0;flex-wrap:nowrap;white-space:nowrap`);
   }
   function publicationConfirmations(repos) {
     const pending = repos.filter(r => confirming.has(r.sessionKey));
@@ -1181,22 +1456,22 @@ function collectionTables(v) {
           nextButton("Cancel", `Cancel preparation for ${nameOf(r)}; nothing will be pushed`, () => { if (!active(prepared.conversationKey) || confirming.get(r.sessionKey) !== prepared) return; confirming.delete(r.sessionKey); if (prepared.activityId) recordActivity(prepared.logKey, prepared.activityId, { state: "cancelled", status: `${nameOf(r)}: publication cancelled.` }); v.say(`${nameOf(r)}: publication cancelled.`); v.rerender(); }, reserved(r))), "display:flex;align-items:center;gap:8px;padding-top:4px")), "display:grid;gap:4px;padding:10px 12px;border:1px solid var(--border-strong,rgba(128,128,128,.35));border-radius:8px;background:var(--bg,transparent)");
     })), "display:grid;gap:8px;min-width:0");
   }
-  function bulkActions(repos, narrow) {
+  function bulkActions(repos, narrow, actionWidth = REPO_NEXT_WIDTH) {
     if (!repos.length) return null;
     const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
-    const catches = repos.filter(toCatchUp);
+    const catches = repos.filter(r => toCatchUp(r) && !r.dirty && (!r.next || !dispatched.has(handoffKey(r, r.next))));
     const push = nextButton("↑", `Push all ${pushes.length} eligible repositories; prepare each personal confirmation`, () => pushAll([...pushes]), !pushes.length || pushes.some(reserved) || batchRunning || choosing);
     const catchAll = nextButton("↓", `Catch up all ${catches.length} eligible repositories`, () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({ repo, step: repo.next }))) : catchUp([...catches]), !catches.length || catches.some(reserved) || batchRunning || choosing);
     for (const [button, glyph] of [[push, "↑"], [catchAll, "↓"]]) {
       button.className += " wtc-count-control";
       button.replaceChildren(el("span", { className: "wtc-count-icon", textContent: glyph }), el("span", { className: "wtc-count-value" }));
-      button.style.cssText += ";width:32px;min-width:0;justify-self:start";
+      button.style.cssText += ";width:36px;min-width:0;justify-self:start";
     }
     const label = css(el("span", { textContent: narrow ? "All" : "All repos" }), "color:var(--muted,#888);font-size:11px;white-space:nowrap;" + (narrow ? "width:20px;text-align:center" : "padding-left:26px"));
-    const arrows = css(el("span", {}, narrow ? label : el("span"), push, catchAll), "display:grid;grid-template-columns:24px 32px 32px;gap:4px;align-items:baseline");
+    const arrows = css(el("span", {}, narrow ? label : el("span"), push, catchAll), "display:grid;grid-template-columns:24px 36px 36px;gap:4px;align-items:baseline");
     return css(el("div", { className: "wtc-bulk-actions", role: "group", ariaLabel: "All repositories" }, ...(narrow ? [arrows] : [label, el("span"), arrows, el("span"), el("span")])), narrow
-      ? "display:grid;grid-template-columns:96px minmax(0,1fr);column-gap:4px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0"
-      : `display:grid;grid-template-columns:${repositoryColumns(false).map(c => c.width).join(" ")};column-gap:10px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`);
+      ? "display:grid;grid-template-columns:104px minmax(0,1fr);column-gap:4px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0"
+      : `display:grid;grid-template-columns:${repositoryColumns(false, actionWidth).map(c => c.width).join(" ")};column-gap:10px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`);
   }
   // What a repository's push would send: its commits not on the forge yet,
   // or, before its first pull request, everything ahead of the base.
@@ -1495,7 +1770,9 @@ function collectionTables(v) {
             css(el("span", {}, below), "display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px")),
           `${align(c)}min-width:0;display:grid;gap:1px`);
         }
-        return css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? "width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;" : ""}min-width:0;overflow:${c.overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
+        // Absolute icon rails keep their full hit area; text cells still clip.
+        const overflow = c.overflow || value?.className === "wtc-lead-slot";
+        return css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? "width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;" : ""}min-width:0;overflow:${overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
       }));
     }
     return grid;
@@ -1565,7 +1842,8 @@ function collectionTables(v) {
         () => sendToAuthor(v.key(), "wtc-catch-up", `${nameOf(r)}: pull request #${pr.number} conflicts with ${baseOf(r)}.`))
       : null;
     const review = open ? { approved: toned("✓", TONE.success, "approved"), changes_requested: toned("✗", TONE.failure, "changes requested"), review_required: muted("○", "review required") }[pr.review] ?? null : null;
-    const branch = r.error ? toned(r.error, TONE.failure, r.error)
+    const errorLabel = r.error === "checkout unavailable" ? r.recovery?.state === "restorable" ? "Evicted" : r.recovery?.state === "unavailable" ? "Snapshot unavailable" : "No checkout" : r.error === "status unavailable" ? "No status" : r.error;
+    const branch = r.error ? toned(errorLabel, r.recovery?.state === "restorable" ? TONE.pending : TONE.failure, r.recovery?.state === "restorable" ? "OpenClaw evicted this checkout; a recovery snapshot is recorded. Restore to resume." : r.recovery?.reason ?? r.error)
         : untouched(r)
           ? css(el("code", { textContent: `at ${baseOf(r)}`, title: `Checked out on branch ${r.branch}; no task commits ahead of ${baseOf(r)}` }), "font-size:12px;color:var(--muted, #888)")
           : css(el("code", { textContent: r.branch ?? `at ${baseOf(r)}`, title: r.branch ? `${r.branch}, ${r.ahead ?? 0} ahead of ${baseOf(r)}` : `Detached HEAD at ${baseOf(r)}; no branch is checked out` }), "font-size:12px;color:var(--muted, #888)");
@@ -1594,28 +1872,52 @@ function collectionTables(v) {
   // ▶/■ NAME REPO STATE URL, then a column per way in (gateway, cloudflare…)
   // and the + that opens a new one.
   const slug = (url) => { try { return new URL(url).hostname.split(".")[0]; } catch { return url; } };
+  function serviceControls(groups) {
+    if (groups.length < 2) return null;
+    if (v.svc.busy("*")) return muted("Working…");
+    const button = (text, op) => {
+      const b = css(el("button", { type: "button", className: "wtc-service-bulk", textContent: text, title: `${text} services`, ariaLabel: `${text} services` }), "display:inline-flex;align-items:center;min-height:var(--wtc-state-size,20px);border:0;padding:0 3px;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;font-size:11px;line-height:16px;cursor:pointer;white-space:nowrap");
+      b.onclick = e => { e?.preventDefault(); e?.stopPropagation(); return v.svc.run({ op }, `${op === "up" ? "Starting" : "Stopping"} all services…`); };
+      return b;
+    };
+    return css(el("span", {}, groups.some(g => !g.running) ? button("Start all", "up") : null, groups.some(g => g.running) ? button("Stop all", "down") : null), "display:inline-flex;align-items:baseline;gap:6px");
+  }
   function serviceTable(groups, data, narrow = false) {
     const ways = [];
     for (const g of groups) {
       if (portalsOf(g, data).length && !ways.includes("gateway")) ways.push("gateway");
       for (const t of g.tunnels) if (!ways.includes(tunnelName(t))) ways.push(tunnelName(t));
     }
-    const all = groups.length > 1 && !v.svc.busy("*")
-      ? css(el("span", {},
-        groups.some((g) => !g.running) ? stateGlyph("▶", "Start all services", TONE.none, () => v.svc.run({ op: "up" }, "Starting all services…")) : null,
-        groups.some((g) => g.running) ? stateGlyph("■", "Stop all services", TONE.success, () => v.svc.run({ op: "down" }, "Stopping all services…")) : null),
-      "display:inline-flex;gap:2px")
-      : v.svc.busy("*") ? busyMark() : "";
+    const foldWays = narrow && (ways.length > 1 || groups.some(g => g.loose));
+    const visibleWays = foldWays ? [] : ways;
+    const repair = (g) => count("Consolidate", "Ask the conversation to open it with wtc svc tunnel instead", "inherit", () => askConversation(v.host, v.key(), consolidate(g)));
+    const wayNode = (g, w) => {
+      if (w === "gateway") {
+        const ps = portalsOf(g, data);
+        return ps.length ? portalNode(g, ps[0], v.svc, foldWays ? "gateway" : "open") : null;
+      }
+      const t = g.tunnels.find(x => tunnelName(x) === w);
+      return t ? tunnelNode(g, t, v.svc, {
+        label: foldWays ? w : t.url ? slug(t.url) : "open",
+        opener: (title, run) => {
+          if (!foldWays) return leadSlot(stateGlyph("▶", title, TONE.none, run));
+          const b = css(el("button", {type:"button",className:"wtc-tunnel-existing",title,ariaLabel:title},controlIcon("▶"),w), "display:inline-flex;align-items:center;gap:3px;min-height:24px;padding:0 3px;border:0;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;cursor:pointer");
+          b.onclick = e => { e.preventDefault(); e.stopPropagation(); return run(); };
+          return b;
+        },
+      }) : null;
+    };
     const columns = [
-      { head: all ? leadSlot(all) : null, width: "20px" },
-      { head: "Service", width: narrow ? "minmax(64px,1fr)" : "minmax(0,max-content)" },
+      { head: "", width: "20px" },
+      { head: "Service", width: narrow ? `minmax(${visibleWays.length ? 48 : 64}px,1fr)` : "minmax(0,max-content)" },
       { head: "Repo", width: "minmax(0,max-content)", under: true },
-      { head: "State", width: narrow ? "56px" : "78px" },
-      { head: "URL", width: narrow ? "56px" : "80px", title: "Where it listens on the gateway" },
-      ...ways.map((w) => ({ head: w, title: w === "gateway" ? "OpenClaw portals" : `${w} tunnels` })),
-      { head: "", width: narrow ? "var(--wtc-control-width,20px)" : "minmax(0,1fr)", align: "end" },
+      { head: "State", width: narrow ? "minmax(44px,56px)" : "78px" },
+      { head: "URL", width: narrow ? "minmax(44px,56px)" : "80px", title: "Where it listens on the gateway" },
+      ...visibleWays.map((w) => ({ head: css(el("span", { textContent: w }), "display:block;min-width:0;overflow:hidden;text-overflow:ellipsis"), width: narrow ? "minmax(24px,max-content)" : "minmax(14px,max-content)", title: w === "gateway" ? "OpenClaw portals" : `${w} tunnels` })),
+      { head: "", width: !narrow && groups.some(g => g.loose) ? "minmax(32px,max-content)" : "32px", align: "center", overflow: true },
     ];
     const rows = groups.map((g) => {
+      const stateText = g.state === "absent" || g.state === "idle" ? "stopped" : g.state;
       const logMembers = g.members.filter(s => !["endpoint", "resources", "configuration"].includes(s.kind) && s.state !== "unconfigured");
       const targets = logMembers.filter(s => s.path === g.group || s.path?.startsWith(g.group + "/")).map(s => s.path);
       const canReadLogs = !!g.group && (logMembers.length > 0 || g.members.some(s => s.kind === "endpoint" && s.state !== "unconfigured"));
@@ -1624,23 +1926,24 @@ function collectionTables(v) {
         leadSlot(stateButton(g, v.svc)),
         Object.assign(css(el("button", { type: "button", className: "wtc-service-label", textContent: g.label, title: logTitle, ariaLabel: logTitle, disabled: !canReadLogs }), "display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:inherit;line-height:inherit;font-weight:600;color:var(--text-strong, inherit);border:0;padding:0;background:transparent;text-align:left;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px"), { onclick: () => { if (canReadLogs) return loadServiceLogs(targets[0] ?? g.group, g.label, targets); } }),
         g.repo ? muted(g.repo) : null,
-        g.loose ? toned("separate tunnel", TONE.pending, "Started apart from the service it exposes")
-          : toned(g.state === "absent" || g.state === "idle" ? "stopped" : g.state, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none),
+        g.loose ? toned(narrow ? "separate" : "separate tunnel", TONE.pending, "Started apart from the service it exposes")
+          : toned(stateText, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none, stateText),
         g.url && !g.loose ? address(g.url) : null,
-        ...ways.map((w) => {
-          if (w === "gateway") {
-            const ps = portalsOf(g, data);
-            return ps.length ? portalNode(g, ps[0], v.svc, "open") : null;
-          }
-          const t = g.tunnels.find((x) => tunnelName(x) === w);
-          return t ? tunnelNode(g, t, v.svc, { label: t.url ? slug(t.url) : "open", opener: (title, run) => stateGlyph("▶", title, TONE.none, run) }) : null;
-        }),
-        css(el("span", {}, g.loose
-          ? count("Consolidate", "Ask the conversation to open it with wtc svc tunnel instead", "inherit", () => askConversation(v.host, v.key(), consolidate(g)))
-          : newTunnel(g, v.svc, data, { compact: true }) ?? ""), "justify-self:end"),
+        ...visibleWays.map(w => wayNode(g, w)),
+        g.loose && !narrow ? repair(g) : leadSlot(g.loose ? null : newTunnel(g, v.svc, data, { compact: true }), 32),
     ];
     });
-    return table(columns, rows, narrow);
+    const grid = table(columns, rows, narrow);
+    grid.style.gridAutoRows = "minmax(20px,auto)";
+    const cells = [...grid.children], width = columns.filter(c => !(narrow && c.under)).length;
+    if (foldWays) groups.forEach((g, index) => {
+      const links = ways.map(w => wayNode(g, w)).filter(Boolean);
+      if (!links.length && !g.loose) return;
+      const extra = css(el("span", {role:"group",ariaLabel:`Tunnels for ${g.label}`},muted("Tunnels"),...links,g.loose ? repair(g) : null), "grid-column:2 / -1;display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;min-width:0;margin-top:-4px;font-size:11px");
+      extra.setAttribute("data-service-tunnels", "true");
+      grid.insertBefore(extra, cells[(index + 2) * width] ?? null);
+    });
+    return grid;
   }
 
   // Collapsed, the same facts summed, in the same order: ± ↑ ↓, the pull
@@ -1759,13 +2062,17 @@ function collectionTables(v) {
     dispose: () => { clearServiceLogs(); cancelPreparations("Preparation discarded when the view closed; nothing was pushed."); },
     repoTable: (repos, narrow, workers) => {
       syncConversation();
-      const columns = repositoryColumns(narrow);
+      // Retain space already exposed during this conversation so progress cannot move facts.
+      actionColumns = Math.max(actionColumns, ...repos.map(r => 1 + repoActionOptions(r).filter(o => !o.disabled && o.id !== primaryActionId(r)).length));
+      inlineCapacity = Math.min(actionColumns, inlineActionCapacity(v.width?.(), narrow));
+      const actionWidth = inlineCapacity * 108 + 24;
+      const columns = repositoryColumns(narrow, actionWidth);
       const rows = repoRows(repos, workers).map((row) => {
         if (row[1]?.style) row[1].style.fontFamily = "inherit";
         const changes = css(el("span", { className: "wtc-change-slots" },
           css(el("span", {}, row[2] ? el("span", {}, muted("± "), row[2]) : null), "min-width:0"),
           css(el("span", {}, row[3]), "min-width:0"),
-          css(el("span", {}, row[4]), "min-width:0")), "display:grid;grid-template-columns:24px 32px 32px;gap:4px;align-items:baseline;font-size:12px;font-variant-numeric:tabular-nums");
+          css(el("span", {}, row[4]), "min-width:0")), "display:grid;grid-template-columns:24px 36px 36px;gap:4px;align-items:baseline;font-size:12px;font-variant-numeric:tabular-nums");
         const currentPR = css(el("span", {}, row[5],
           row[6] || row[7] || row[8] ? css(el("span", {}, ...[row[6], row[7], row[8]].map((mark) => css(el("span", {}, mark), "display:inline-flex;justify-content:center;width:16px;flex:none"))), "display:inline-flex;align-items:baseline;gap:2px;flex:none") : null), "display:flex;gap:4px;align-items:baseline;min-width:0;overflow:hidden");
         const hint = row[10];
@@ -1776,11 +2083,11 @@ function collectionTables(v) {
         if (narrow && row[1]?.style) row[1].style.cssText += ";flex:1 1 0;min-width:32px;font-size:11px";
         const hasFacts = row.slice(2,9).some(Boolean) || !!row[10];
         const identity = css(el("div", {}, nameAndBranch,
-          narrow && hasFacts ? css(el("div", { className: "wtc-repo-facts" }, factSlot(changes), row[5] || row[6] || row[7] || row[8] || row[10] ? factSlot(pr) : null), `display:grid;grid-template-columns:96px minmax(0,1fr);width:calc(100% + ${REPO_NEXT_WIDTH + REPO_COLUMN_GAP}px);min-width:0;column-gap:4px;align-items:baseline;box-sizing:border-box`) : null), "min-width:0;padding:0;width:100%;flex:1 1 0");
+          narrow && hasFacts ? css(el("div", { className: "wtc-repo-facts" }, factSlot(changes), row[5] || row[6] || row[7] || row[8] || row[10] ? factSlot(pr) : null), `display:grid;grid-template-columns:104px minmax(0,1fr);width:calc(100% + ${actionWidth + REPO_COLUMN_GAP}px);min-width:0;column-gap:4px;align-items:baseline;box-sizing:border-box`) : null), "min-width:0;padding:0;width:100%;flex:1 1 0");
         return narrow ? [identity, row[9]] : [row[0], row[1], changes, pr, row[9]];
       });
-      return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow), table(columns, rows, false, true)), "min-width:0");
-    }, serviceTable, totals, prTable };
+      return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow, actionWidth), table(columns, rows, false, true)), `min-width:0;--wtc-action-width:${actionWidth}px`);
+    }, serviceTable, serviceControls, totals, prTable };
 }
 
 // The text of the latest message the person wrote, from chat.history.
@@ -1835,6 +2142,7 @@ function mountComposer(container, context) {
   let key = null;
   let entry = null;
   let note = "";
+  let renderedStamp;
 
   const card = css(el("details", { className: "wtc-collection-card", open: remembered() }),
     "container-type:inline-size;container-name:wtc-card;box-sizing:border-box;width:calc(100% - var(--chat-composer-side-inset, 36px));max-width:var(--chat-thread-max-width, 48rem);margin:4px auto 0;background:var(--card, #fff);color:var(--text, inherit);border:1px solid var(--border, rgba(0,0,0,.08));border-radius:14px;font:inherit;font-size:14px");
@@ -1868,11 +2176,13 @@ function mountComposer(container, context) {
       note = ""; if (!disposed && entry) render(entry);
     }, 8000);
   };
-  let narrow = false, repoNarrow = false;
+  let narrow = false, repoNarrow = false, contentWidth = 0;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
     const now = e.contentRect.width > 0 && e.contentRect.width < NARROW_PX;
     const compactRepos = e.contentRect.width > 0 && e.contentRect.width < REPO_NARROW_PX;
-    if (now !== narrow || compactRepos !== repoNarrow) { narrow = now; repoNarrow = compactRepos; if (entry) render(entry); }
+    const changed = inlineActionCapacity(contentWidth, repoNarrow) !== inlineActionCapacity(e.contentRect.width, compactRepos) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
+    contentWidth = e.contentRect.width;
+    if (now !== narrow || compactRepos !== repoNarrow || changed) { narrow = now; repoNarrow = compactRepos; if (entry) render(entry); }
   });
   sized?.observe(card);
   const svcBusy = new Set();
@@ -1904,11 +2214,12 @@ function mountComposer(container, context) {
       ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) });
       for (const notify of serviceLogListeners) notify();
     },
+    width: () => contentWidth,
     publicationBesideCollapsedBar: true,
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: () => key, agent: () => agentOf(ctx), svc, say,
     // What a push needs (the how-to of connecting GitHub) shows open.
     reveal: () => { if (!card.open) { card.open = true; remember(true); } },
-    refresh: () => watch?.refresh(), pause: () => pauseCollection(watch), rerender: () => entry && render(entry),
+    refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(entry); }, pause: () => pauseCollection(watch), rerender: () => entry && render(entry),
   });
 
   // A conversation without a collection: where the draft being typed, or
@@ -2007,6 +2318,7 @@ function mountComposer(container, context) {
 
   function render(next) {
     entry = next;
+    renderedStamp = collectionStamp(next, key);
     const repos = entry?.data?.repos ?? [];
     if (!ctx.presented || ctx.signal.aborted) {
       card.remove(); extra.remove();
@@ -2038,12 +2350,12 @@ function mountComposer(container, context) {
       css(el("span", {}, brand("12px", entry.data.version, repoNarrow)), "flex:none;display:inline-flex;align-items:baseline"),
       feedback ?? facts,
       css(el("span", { className: "wtc-header-controls" }, tables.actionToolbar(repos, true, { failed: headerFailed, text: headerNote }),
-        iconButton("↻", `${entry.inflight ? "Refreshing… " : ""}Updated ${ago(entry.at)}. Refresh`, () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
+        iconButton("↻", refreshTitle(entry), () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
         iconButton("⤢", "Open the taba Collection panel", () => ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) })),
         css(el("span", { ariaHidden: "true" }, controlIcon(card.open ? "⌃" : "⌄")), "display:inline-flex;align-items:center;justify-content:center;color:var(--muted,#888);padding:0 2px")), "margin-left:auto;flex:none;display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap"));
     tables.checkAccount(repos);
     detail.replaceChildren(...[tables.repoTable(repos, repoNarrow, entry.data.subSessions),
-      groups.length ? css(el("section", { className: "wtc-base-services", ariaLabel: "Collection services" }, css(el("h3", { textContent: "Services" }), "margin:0 0 4px;font-size:12px;line-height:16px;font-weight:600;color:var(--text-strong,inherit)"), tables.serviceTable(groups, entry.data, narrow)), "min-width:0;border-top:1px solid var(--border,rgba(128,128,128,.2));margin-top:4px;padding-top:8px") : null].filter(Boolean));
+      groups.length ? css(el("section", { className: "wtc-base-services", ariaLabel: "Collection services" }, css(el("div", {}, css(el("h3", { textContent: "Services" }), "margin:0;font-size:12px;line-height:16px;font-weight:600;color:var(--text-strong,inherit)"), tables.serviceControls(groups)), "display:flex;align-items:baseline;gap:10px;margin-bottom:4px"), tables.serviceTable(groups, entry.data, narrow)), "min-width:0;border-top:1px solid var(--border,rgba(128,128,128,.2));margin-top:4px;padding-top:8px") : null].filter(Boolean));
     const confirmations = tables.publicationConfirmations(repos);
     const temporary = [confirmations, tables.nextActions(repos), tables.notice()].filter(Boolean);
     extra.replaceChildren(...temporary);
@@ -2070,17 +2382,29 @@ function mountComposer(container, context) {
     note = "";
     noteFailed = false;
     card.remove(); extra.remove();
-    if (sessionKey) watch = watchCollection(next.host, sessionKey, agentOf(next), render);
+    renderedStamp = undefined;
+    if (sessionKey) watch = watchCollection(next.host, sessionKey, agentOf(next), show);
+  }
+  function show(next) {
+    const changed = renderedStamp !== collectionStamp(next, key);
+    entry = next;
+    if (!ctx.presented || ctx.signal.aborted) { card.remove(); extra.remove(); return; }
+    if (changed) render(next);
+    else {
+      syncTimeLabels(card, next, { composer: true }); syncTimeLabels(extra, next);
+      tables.checkAccount(next.data?.repos ?? []);
+      if (next.data && !next.data.repos?.length && !next.data.subSessions?.length) void suggestFor(key);
+    }
   }
   follow(ctx);
-  // "Updated … ago" stays honest between refreshes.
-  const tick = setInterval(() => { if (entry && card.isConnected) render(entry); }, 15000);
+  const tick = setInterval(() => { if (entry && card.isConnected) { syncTimeLabels(card, entry, { composer: true }); syncTimeLabels(extra, entry); tables.checkAccount(entry.data?.repos ?? []); } }, 15000);
   return {
     update(next) {
+      const visibilityChanged = next.presented !== ctx.presented || next.signal?.aborted !== ctx.signal?.aborted;
       ctx = next;
       follow(next);
       draftChanged();
-      if (entry) render(entry);
+      if (entry) visibilityChanged ? render(entry) : show(entry);
     },
     dispose() {
       disposed = true;
@@ -2178,17 +2502,20 @@ function mountCollection(container, context) {
   };
 
   const tables = collectionTables({
+    width: () => contentWidth,
     collectionKey: sessionKeyOf,
     showServiceLogs: () => { focusSection = "service-logs"; },
     showActions: () => { focusSection = "actions"; render(); },
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: sessionKeyOf, agent: () => ctx.props.agentId, svc, say,
-    refresh: () => watch?.refresh(), pause: () => pauseCollection(watch), rerender: () => render(),
+    refresh: async () => { const source = watch; await source?.refresh(); if (!disposed && watch === source && entry) render(); }, pause: () => pauseCollection(watch), rerender: () => render(),
   });
-  let narrow = false, repoNarrow = false;
+  let narrow = false, repoNarrow = false, contentWidth = 0;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
     const now = e.contentRect.width > 0 && e.contentRect.width < NARROW_PX;
     const compactRepos = e.contentRect.width > 0 && e.contentRect.width < REPO_NARROW_PX;
-    if (now !== narrow || compactRepos !== repoNarrow) { narrow = now; repoNarrow = compactRepos; render(); }
+    const changed = inlineActionCapacity(contentWidth, repoNarrow) !== inlineActionCapacity(e.contentRect.width, compactRepos) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
+    contentWidth = e.contentRect.width;
+    if (now !== narrow || compactRepos !== repoNarrow || changed) { narrow = now; repoNarrow = compactRepos; render(); }
   });
   sized?.observe(root);
 
@@ -2387,6 +2714,7 @@ function mountCollection(container, context) {
   const footer = (data) => (versionText(data.version) ? muted(versionText(data.version), "font-size:11px;display:block") : null);
   let focusSection = ctx.props?.focus;
   function render() {
+    renderedStamp = collectionStamp(entry, sessionKeyOf());
     if (!entry?.data) {
       header.replaceChildren(css(el("div", { textContent: entry?.error ? `The collection could not be loaded: ${entry.error}` : "Loading…" }), "color:var(--muted, #888)"));
       body.replaceChildren();
@@ -2411,7 +2739,7 @@ function mountCollection(container, context) {
     }
     const toolbar = tables.actionToolbar(repos);
     header.replaceChildren(
-      row(brand("14px", data.version), css(el("span", {}, muted(`Updated ${ago(entry.at)}`),
+      row(brand("14px", data.version), css(el("span", {}, css(timeLabel(entry.at, { prefix: "Updated ", updated: true }), "font-size:12px;color:var(--muted,#888)"),
         iconButton("↻", "Refresh", () => trackedRefresh(watch, sessionKeyOf(), say, sessionKeyOf, () => !disposed))), "margin-left:auto;display:flex;align-items:center;gap:2px")),
       css(el("div", { textContent: data.collection.label ?? data.collection.sessionKey }), "font-size:16px;font-weight:600;color:var(--text-strong, inherit);overflow-wrap:anywhere"),
       row(data.collection.project ? muted(data.collection.project === "ad-hoc" ? "ad-hoc taba project" : `taba project ${data.collection.project}`) : null,
@@ -2433,7 +2761,7 @@ function mountCollection(container, context) {
 
     const prSection = pullRequestRows(repos).length ? el("div", { className: "wtc-pr-history" }, heading("Pull requests"), tables.prTable(repos, narrow)) : null;
 
-    const serviceSection = el("div", { className: "wtc-base-services" }, heading("Services"));
+    const serviceSection = el("div", { className: "wtc-base-services" }, heading("Services", tables.serviceControls(groups)));
     if (groups.length === 0) serviceSection.append(muted(data.servicesNote ?? "None running. Start them in the collection folder with wtc svc.", "font-size:13px"));
     else serviceSection.append(tables.serviceTable(groups, data, narrow));
 
@@ -2459,12 +2787,21 @@ function mountCollection(container, context) {
     void tables.loadServiceLogs(intent.group, intent.label, intent.targets);
   };
   serviceLogListeners.add(consumeServiceLogIntent);
-  const show = (next) => { if (!ctx.signal.aborted) { entry = next; render(); consumeServiceLogIntent(); } };
+  let renderedStamp;
+  const show = (next) => {
+    if (ctx.signal.aborted) return;
+    const changed = renderedStamp !== collectionStamp(next, sessionKeyOf());
+    entry = next;
+    if (changed) render();
+    else { syncTimeLabels(root, next); tables.checkAccount(next.data?.repos ?? []); }
+    consumeServiceLogIntent();
+  };
   function follow() {
     tables.clearServiceLogs();
     watch?.dispose();
     watch = null;
     entry = null;
+    renderedStamp = undefined;
     say("");
     const { sessionKey, agentId } = ctx.props ?? {};
     if (!sessionKey) {
@@ -2475,13 +2812,16 @@ function mountCollection(container, context) {
     watch = watchCollection(ctx.host, sessionKey, agentId, show);
   }
   follow();
-  const tick = setInterval(() => { if (entry?.data) render(); }, 15000);
+  const tick = setInterval(() => { if (entry?.data) { syncTimeLabels(root, entry); tables.checkAccount(entry.data.repos ?? []); } }, 15000);
   return {
     update(next) {
       const changed = next.props?.sessionKey !== ctx.props?.sessionKey;
+      const focusChanged = next.props?.focus !== ctx.props?.focus || (!!next.presented && !ctx.presented);
       ctx = next;
-      if (changed || next.props?.focus) focusSection = next.props?.focus;
-      if (changed) follow(); else { render(); consumeServiceLogIntent(); }
+      if (changed || focusChanged) focusSection = next.props?.focus;
+      if (changed) follow();
+      else if (focusChanged && next.props?.focus) { render(); consumeServiceLogIntent(); }
+      else if (entry) show(entry);
     },
     dispose() {
       disposed = true;

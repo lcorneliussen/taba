@@ -258,3 +258,225 @@ func TestStatusNextCompactHintAndScrolling(t *testing.T) {
 		t.Fatal(text)
 	}
 }
+
+func TestStatusNextViewportUsesRenderedRows(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	m := statusOverflowModel()
+	m.showHelp = true
+	for i := range m.snapshot.Repos {
+		r := &m.snapshot.Repos[i]
+		r.Next = &next.Step{Step: "commit", By: next.ByAgent, Key: r.Dir, Reason: "Synthetic action reason"}
+		if i%3 == 0 {
+			r.Choices = &next.Choices{Actions: []next.Choice{{Step: next.Step{Step: "push"}, Blocked: "Publish is not authorized"},
+				{Step: next.Step{Step: "merge-pr"}, Blocked: "Current checks required"}}}
+		}
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'n'})
+	assertFocus := func() {
+		t.Helper()
+		name := m.snapshot.Repos[m.selectedNext].Dir
+		if visible := ansi.Strip(m.View().Content); !strings.Contains(visible, "› [ ] "+name) {
+			t.Fatalf("focused %s is offscreen: %s", name, visible)
+		}
+	}
+	assertFocus()
+	for i := 1; i < len(m.snapshot.Repos); i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+		if m.selectedNext != i {
+			t.Fatalf("Down selected %d, want %d", m.selectedNext, i)
+		}
+		assertFocus()
+	}
+	for i := 1; i < len(m.snapshot.Repos); i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+		if want := len(m.snapshot.Repos) - 1 - i; m.selectedNext != want {
+			t.Fatalf("Up selected %d, want %d", m.selectedNext, want)
+		}
+		assertFocus()
+	}
+	top := m.View().Content
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+	if m.View().Content == top || m.selectedNext != 0 {
+		t.Fatal("Page Down did not scroll independently of action selection")
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if m.View().Content != top || m.selectedNext != 0 {
+		t.Fatal("Page Up did not undo the page without changing action selection")
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyEnd})
+	if !strings.Contains(ansi.Strip(m.View().Content), "repo-35") || m.selectedNext != 0 {
+		t.Fatal("End did not reach the view tail while retaining action focus")
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyHome})
+	if !strings.Contains(ansi.Strip(m.View().Content), "n next actions") || m.selectedNext != 0 {
+		t.Fatal("Home did not reach the help/top without changing action focus")
+	}
+	for i := 1; i < len(m.snapshot.Repos); i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m = statusScrollEvent(t, m, tea.WindowSizeMsg{Width: 80, Height: 5})
+	assertFocus()
+	if m.nextRunning || len(m.nextSelected) != 0 || len(m.nextPending) != 0 {
+		t.Fatal("navigation changed action execution or selection state")
+	}
+}
+
+func TestStatusNextViewportRefreshRetainsFocusedIdentity(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	m := statusOverflowModel()
+	for i := range m.snapshot.Repos {
+		r := &m.snapshot.Repos[i]
+		r.Next = &next.Step{Step: "commit", By: next.ByAgent, Key: r.Dir, Reason: "Synthetic action reason"}
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'n'})
+	for i := 0; i < 15; i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'j'})
+	}
+	wanted := m.snapshot.Repos[m.selectedNext].Dir
+	fresh := m.snapshot
+	fresh.Repos = append([]wtc.StatusRepo(nil), fresh.Repos...)
+	for i, j := 0, len(fresh.Repos)-1; i < j; i, j = i+1, j-1 {
+		fresh.Repos[i], fresh.Repos[j] = fresh.Repos[j], fresh.Repos[i]
+	}
+	m = statusScrollEvent(t, m, statusLoadedMsg{snapshot: fresh})
+	if got := m.snapshot.Repos[m.selectedNext].Dir; got != wanted || !strings.Contains(ansi.Strip(m.View().Content), "› [ ] "+wanted) {
+		t.Fatalf("refresh changed/obscured focused %s: selected %s, %s", wanted, got, m.View().Content)
+	}
+}
+
+func TestStatusNextKeyboardReadsConfirmationsAndResults(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	fixture := func() statusTUIModel {
+		m := statusOverflowModel()
+		for i := range m.snapshot.Repos {
+			r := &m.snapshot.Repos[i]
+			r.Next = &next.Step{Step: "push", By: next.ByWTC, Approve: next.ApprovePerson, Key: r.Dir, Reason: "Synthetic confirmation"}
+		}
+		return statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'n'})
+	}
+	t.Run("preview", func(t *testing.T) {
+		m := fixture()
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 's'})
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+		if !strings.Contains(ansi.Strip(m.View().Content), "Selected single steps:") {
+			t.Fatal("confirmation began offscreen")
+		}
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyEnd})
+		if !strings.Contains(ansi.Strip(m.View().Content), "Enter confirms") {
+			t.Fatal("keyboard cannot reach the end of the confirmation")
+		}
+		if m.nextRunning || len(m.nextPreview) != len(m.snapshot.Repos) {
+			t.Fatal("reading the confirmation executed or changed its targets")
+		}
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+		if !strings.Contains(ansi.Strip(m.View().Content), "› [x] repo-01") {
+			t.Fatal("arrow navigation did not return to the selected actions")
+		}
+	})
+	t.Run("result", func(t *testing.T) {
+		m := fixture()
+		m.refreshing = true // No collector command is needed for this fixture.
+		var lines []string
+		for i := 0; i < 30; i++ {
+			lines = append(lines, fmt.Sprintf("synthetic result line %d", i))
+		}
+		lines = append(lines, "result-tail-marker")
+		m = statusScrollEvent(t, m, statusNextDoneMsg{text: strings.Join(lines, "\n"), err: errors.New("synthetic failure")})
+		if !strings.Contains(ansi.Strip(m.View().Content), "synthetic failure") {
+			t.Fatal("new error result began offscreen")
+		}
+		for i := 0; i < 10; i++ {
+			m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyPgDown})
+		}
+		if !strings.Contains(ansi.Strip(m.View().Content), "result-tail-marker") {
+			t.Fatal("keyboard cannot page to the result tail")
+		}
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyHome})
+		if strings.Contains(ansi.Strip(m.View().Content), "result-tail-marker") {
+			t.Fatal("Home did not leave the result tail")
+		}
+	})
+}
+
+func TestStatusNextLogOverlayRoutesKeysToVisibleView(t *testing.T) {
+	m := statusOverflowModel()
+	m.showNext, m.refreshing = true, true
+	for i := range m.snapshot.Repos {
+		r := &m.snapshot.Repos[i]
+		r.Next = &next.Step{Step: "commit", By: next.ByAgent, Key: r.Dir, Reason: "Synthetic action"}
+		m.progressLog = append(m.progressLog, fmt.Sprintf("synthetic progress %d", i))
+	}
+	for i := 0; i < 15; i++ {
+		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'j'})
+	}
+	m = statusScrollEvent(t, m, tea.MouseClickMsg{X: strings.Index(m.headerLine(), "refreshing"), Y: 0, Button: tea.MouseLeft})
+	if !m.showLog {
+		t.Fatal("refresh control did not open the log")
+	}
+	if view := ansi.Strip(m.View().Content); strings.Contains(view, "Enter run") || strings.Contains(view, "Esc back") || strings.Contains(view, "↑/↓ choose") {
+		t.Fatal("log overlay advertises hidden action bindings")
+	}
+	bottom := m.View().Content
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'k'})
+	if m.View().Content == bottom || m.selectedNext != 15 {
+		t.Fatal("log scrolling changed the hidden action focus or stayed stuck")
+	}
+	m.refreshing = false
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.nextRunning || m.nextPreview != nil {
+		t.Fatal("Enter in the log acted on hidden actions")
+	}
+	m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'l'})
+	if m.showLog || !strings.Contains(ansi.Strip(m.View().Content), "› [ ] repo-15") {
+		t.Fatal("leaving the log did not reveal the retained action focus")
+	}
+}
+
+func TestStatusNextRefreshRetainsNoticeReadingPosition(t *testing.T) {
+	for _, change := range []string{"removed", "reordered"} {
+		t.Run(change, func(t *testing.T) {
+			m := statusOverflowModel()
+			m.showNext = true
+			for i := range m.snapshot.Repos {
+				r := &m.snapshot.Repos[i]
+				r.Next = &next.Step{Step: "commit", By: next.ByAgent, Key: r.Dir, Reason: "Synthetic action"}
+			}
+			m.selectedNext = 7
+			selected := m.snapshot.Repos[m.selectedNext].Dir
+			var notice []string
+			for i := 0; i < 30; i++ {
+				notice = append(notice, fmt.Sprintf("notice-line-%02d", i))
+			}
+			m.nextNotice = strings.Join(notice, "\n")
+			m.revealNextNotice()
+			m.scrollBy(5)
+			firstBodyLine := func() string {
+				return strings.TrimSpace(strings.Split(ansi.Strip(m.View().Content), "\n")[m.viewport(m.contentLayout()).header])
+			}
+			if got := firstBodyLine(); got != "notice-line-05" {
+				t.Fatalf("fixture is not reading the notice: %q", got)
+			}
+			fresh := m.snapshot
+			fresh.Repos = append([]wtc.StatusRepo(nil), fresh.Repos...)
+			if change == "removed" {
+				for i := range fresh.Repos {
+					fresh.Repos[i].Next = nil
+				}
+			} else {
+				for i, j := 0, len(fresh.Repos)-1; i < j; i, j = i+1, j-1 {
+					fresh.Repos[i], fresh.Repos[j] = fresh.Repos[j], fresh.Repos[i]
+				}
+			}
+			m = statusScrollEvent(t, m, statusLoadedMsg{snapshot: fresh})
+			if got := firstBodyLine(); got != "notice-line-05" {
+				t.Fatalf("refresh %s actions skipped the notice being read: %q", change, got)
+			}
+			if change == "reordered" && statusNextRepos(m.snapshot)[m.selectedNext].Dir != selected {
+				t.Fatal("notice anchoring changed the selected action")
+			}
+			if m.nextRunning || m.nextPreview != nil || len(m.nextSelected) != 0 {
+				t.Fatal("refresh dispatched or selected an action")
+			}
+		})
+	}
+}
