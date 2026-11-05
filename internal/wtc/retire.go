@@ -141,10 +141,34 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 				result.Warnings = append(result.Warnings, warning)
 			}
 		}
+		unlockDev, err := lockDevRetirement(target)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if unlockDev != nil {
+				unlockDev()
+			}
+		}()
+		// Publish the existing guard before removing locks and generated roots.
+		// A late dev publisher must reject this folder, including the short
+		// guard-removal window when its collection boundary is already gone.
+		if !runtimeTarget.AdHoc {
+			if err := writeRetiredMarker(target, nil); err != nil {
+				return err
+			}
+		}
 		if err := removeRetiredGeneratedFiles(target, runtimeTarget.AdHoc); err != nil {
 			return err
 		}
-		if err := os.Remove(target); err == nil {
+		if !runtimeTarget.AdHoc {
+			finished, err := removeRetiredFolder(target)
+			if err != nil {
+				return err
+			}
+			result.FolderRemoved, result.Leftovers = finished.FolderRemoved, finished.Leftovers
+			result.Warnings = append(result.Warnings, finished.Warnings...)
+		} else if err := os.Remove(target); err == nil {
 			result.FolderRemoved = true
 		} else {
 			leftovers, readErr := retireLeftovers(target)
@@ -152,17 +176,10 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 				return fmt.Errorf("remove collection folder: %w", err)
 			}
 			result.Leftovers = leftovers
-			// Without a marker the folder reads as a damaged collection: a
-			// stray harness/ would revive it for sweeps, and processes that
-			// outlived the retire would write back into it. An ad-hoc folder is the
-			// user's own directory, outside any sweep, and may be initialized
-			// again.
-			if !runtimeTarget.AdHoc {
-				if err := writeRetiredMarker(target, leftovers); err != nil {
-					result.Warnings = append(result.Warnings, "could not write "+RetiredMarkerFile+": "+err.Error())
-				}
-			}
+			// Ad-hoc folders belong to the user and may be initialized again.
 		}
+		unlockDev()
+		unlockDev = nil
 		if !opt.Self {
 			if err := c.RunHook("retire.post", values); err != nil {
 				return err
@@ -356,6 +373,8 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 		".taba-prs", ".last-taba-status.yml", ".taba-status.json", ".taba-status.md",
 		".taba-catch-up.json", ".taba-catch-up.json.md",
 		".taba-review-mode", ".taba-runtime.lock", ".taba-status-watchers.lock",
+		".wtc-dev-mode.json", ".wtc-dev-mode.lock", ".wtc-dev-build.lock",
+		".taba-dev-mode.json", ".taba-dev-mode.lock", ".taba-dev-build.lock",
 	}
 	if adHoc {
 		// An ad-hoc registry is remembered per user. Hand-written local
@@ -400,7 +419,7 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 			}
 		}
 		// review-hooks holds the pre-push hook of a review-only collection.
-		for _, generated := range []string{"instructions", "skills", "dev", "review-hooks"} {
+		for _, generated := range []string{"instructions", "skills", "dev", "dev-generations", "review-hooks"} {
 			if err := os.RemoveAll(filepath.Join(root, generated)); err != nil {
 				return err
 			}

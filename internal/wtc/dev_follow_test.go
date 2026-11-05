@@ -593,3 +593,275 @@ func (c *devObservedContext) Done() <-chan struct{} {
 	c.once.Do(func() { close(c.waiting) })
 	return c.Context.Done()
 }
+
+func TestDevFollowRetirementRemovesGeneratedState(t *testing.T) {
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"off", "install", "follow"} {
+		for _, namespace := range []string{".wtc", ".taba"} {
+			t.Run(mode+namespace, func(t *testing.T) {
+				c := newWorkspaceFixture(t)
+				t.Setenv("PATH", filepath.Dir(realGo)+string(os.PathListSeparator)+os.Getenv("PATH"))
+				made, err := c.NewCollection(NewOptions{Slug: "finished", Repos: []string{"widget"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				target := made.Collection
+				if err := os.Remove(filepath.Join(target, "widget", "init-ran")); err != nil {
+					t.Fatal(err)
+				}
+				if err := SetDevMode(target, "off", ""); err != nil {
+					t.Fatal(err)
+				}
+				if mode != "off" {
+					_, source := devFollowFixture(t)
+					if mode == "install" {
+						if _, err := InstallDevBuild(target, source); err != nil {
+							t.Fatal(err)
+						}
+					} else {
+						if err := SetDevMode(target, "on", source); err != nil {
+							t.Fatal(err)
+						}
+						ensureDevTest(t, target)
+					}
+				}
+				if namespace == ".taba" {
+					if mode != "off" {
+						if err := os.Rename(filepath.Join(target, ".wtc"), filepath.Join(target, namespace)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for _, suffix := range []string{"-dev-mode.json", "-dev-mode.lock", "-dev-build.lock"} {
+						if err := os.Rename(filepath.Join(target, ".wtc"+suffix), filepath.Join(target, namespace+suffix)); err != nil && !os.IsNotExist(err) {
+							t.Fatal(err)
+						}
+					}
+				}
+				retired, err := c.RetireCollection(RetireOptions{Name: "finished"})
+				if err != nil || !retired.FolderRemoved {
+					t.Fatalf("generated dev state prevented retirement: %+v %v", retired, err)
+				}
+			})
+		}
+	}
+}
+
+func TestDevFollowRetirementPreservesUnknownAndLinkedState(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	made, err := c.NewCollection(NewOptions{Slug: "finished", Repos: []string{"widget"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := made.Collection
+	if err := os.Remove(filepath.Join(target, "widget", "init-ran")); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetDevMode(target, "off", ""); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(target, "keep.txt")
+	fixtureFile(t, keep, "user state", 0600)
+	retired, err := c.RetireCollection(RetireOptions{Name: "finished"})
+	if err != nil || retired.FolderRemoved || strings.Join(retired.Leftovers, ",") != "keep.txt" {
+		t.Fatalf("unknown state not preserved: %+v %v", retired, err)
+	}
+	// Exercise the same cleanup through the repeated-retirement entry point.
+	fixtureFile(t, filepath.Join(target, ".taba-dev-mode.json"), "generated", 0600)
+	fixtureFile(t, filepath.Join(target, ".taba", "dev-generations", "retained", "wtc"), "generated", 0700)
+	if err := os.Remove(keep); err != nil {
+		t.Fatal(err)
+	}
+	retired, err = c.RetireCollection(RetireOptions{Name: "finished"})
+	if err != nil || !retired.FolderRemoved {
+		t.Fatalf("repeated retirement left dev state: %+v %v", retired, err)
+	}
+	for _, namespace := range []string{".wtc", ".taba"} {
+		root, outside := t.TempDir(), t.TempDir()
+		sentinel := filepath.Join(outside, "dev-generations", "keep")
+		fixtureFile(t, sentinel, "external state", 0600)
+		if err := os.Symlink(outside, filepath.Join(root, namespace)); err != nil {
+			t.Fatal(err)
+		}
+		if err := removeRetiredGeneratedFiles(root, false); err != nil {
+			t.Fatal(err)
+		}
+		if raw, err := os.ReadFile(sentinel); err != nil || string(raw) != "external state" {
+			t.Fatalf("linked namespace followed: %s %v", raw, err)
+		}
+		if _, err := os.Lstat(filepath.Join(root, namespace)); err != nil {
+			t.Fatal("linked namespace was removed")
+		}
+	}
+}
+
+func TestDevFollowOneShotNamespaceMove(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	installed, err := InstallDevBuild(collection, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(collection, ".wtc"), filepath.Join(collection, ".taba")); err != nil {
+		t.Fatal(err)
+	}
+	selected := ReadDevBuild(collection)
+	if selected == nil || selected.Generation != "" || selected.Binary != filepath.Join(collection, ".taba", "dev", "wtc") || selected.Version != installed.Version {
+		t.Fatalf("successful moved one-shot not selected: %+v", selected)
+	}
+	if err := os.Chmod(selected.Binary, 0775); err != nil {
+		t.Fatal(err)
+	}
+	if ReadDevBuild(collection) != nil {
+		t.Fatal("unsafe moved binary selected")
+	}
+	if err := os.Chmod(selected.Binary, 0755); err != nil {
+		t.Fatal(err)
+	}
+	installed.Binary = filepath.Join(t.TempDir(), "wtc")
+	raw, _ := json.Marshal(installed)
+	fixtureFile(t, filepath.Join(collection, ".taba", "dev", "current.json"), string(raw), 0600)
+	if ReadDevBuild(collection) != nil {
+		t.Fatal("arbitrary published path was remapped")
+	}
+}
+
+func TestDevFollowGenerationNamespaceMove(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	if err := SetDevMode(collection, "on", source); err != nil {
+		t.Fatal(err)
+	}
+	build := ensureDevTest(t, collection).Build
+	if err := os.Rename(filepath.Join(collection, ".wtc"), filepath.Join(collection, ".taba")); err != nil {
+		t.Fatal(err)
+	}
+	expected := filepath.Join(collection, ".taba", "dev-generations", build.Generation, "wtc")
+	selected := ReadDevBuild(collection)
+	if selected == nil || selected.Binary != expected {
+		t.Fatalf("moved generation not selected: %+v", selected)
+	}
+	called, err := WithDevGeneration(context.Background(), collection, build.Generation, func(current *DevBuild) error {
+		if current.Binary != expected {
+			t.Fatalf("handover used old namespace: %+v", current)
+		}
+		return nil
+	})
+	if err != nil || !called {
+		t.Fatalf("valid moved generation not eligible for handover: %v %v", called, err)
+	}
+}
+
+func TestDevFollowRetirementRejectsWaitingAndReplacementLocks(t *testing.T) {
+	collection, source := devFollowFixture(t)
+	if err := SetDevMode(collection, "on", source); err != nil {
+		t.Fatal(err)
+	}
+	root, err := devCollectionRoot(collection, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := lockDevRetirement(collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	observed := &devObservedContext{Context: ctx, waiting: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { _, err := EnsureDevFollow(observed, collection); done <- err }()
+	select {
+	case <-observed.waiting:
+	case <-ctx.Done():
+		t.Fatal("publisher did not acknowledge its blocked lock")
+	}
+	// Simulate the exact finalization interval: worktree boundary gone,
+	// existing guard written, generated lock names unlinked, then guard removed.
+	if err := os.RemoveAll(filepath.Join(collection, "harness")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRetiredMarker(collection, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeRetiredGeneratedFiles(collection, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(collection, RetiredMarkerFile)); err != nil {
+		t.Fatal(err)
+	}
+	// The folder still exists and has no guard. A replacement-inode caller
+	// must nevertheless refuse its missing collection boundary.
+	for _, operation := range []func() error{
+		func() error { return SetDevMode(collection, "off", "") },
+		func() error { _, err := InstallDevBuild(collection, source); return err },
+		func() error { _, err := EnsureDevFollow(ctx, collection); return err },
+	} {
+		if err := operation(); err == nil {
+			t.Fatal("publisher accepted final-removal gap")
+		}
+	}
+	for _, name := range []string{".wtc-dev-build.lock", ".wtc-dev-mode.lock", ".wtc-dev-mode.json", ".wtc"} {
+		if _, err := os.Lstat(filepath.Join(collection, name)); !os.IsNotExist(err) {
+			t.Fatalf("publisher recreated generated state: %s %v", name, err)
+		}
+	}
+	unlock()
+	unlock = nil
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "lock was removed or replaced") {
+		t.Fatalf("orphaned-inode publisher was not rejected: %v", err)
+	}
+	// Reusing the same pathname for a new valid root cannot satisfy a caller
+	// that captured the previous directory's identity before waiting.
+	if err := os.Rename(collection, collection+"-old"); err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, filepath.Join(collection, "harness", ".harness-repos.yml"), "repos: []\n", 0644)
+	if _, err := devCollectionRoot(collection, root); err == nil {
+		t.Fatal("replaced root satisfied old publisher")
+	}
+}
+
+func TestDevFollowRetirementDoesNotLockAcrossTeardown(t *testing.T) {
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := newWorkspaceFixture(t)
+	made, err := c.NewCollection(NewOptions{Slug: "finished", Repos: []string{"widget"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe, marker := filepath.Join(t.TempDir(), "probe"), filepath.Join(t.TempDir(), "hook-ran")
+	program := probe + ".go"
+	fixtureFile(t, program, `package main
+import("os";"syscall")
+func main(){for _,name:=range []string{".wtc-dev-build.lock",".wtc-dev-mode.lock"}{
+ f,e:=os.OpenFile(os.Args[1]+"/"+name,os.O_CREATE|os.O_RDWR,0600);if e!=nil{panic(e)}
+ if e=syscall.Flock(int(f.Fd()),syscall.LOCK_EX|syscall.LOCK_NB);e!=nil{panic(e)};f.Close()
+};if e:=os.WriteFile(os.Args[2],[]byte("hook"),0600);e!=nil{panic(e)}}
+`, 0600)
+	if out, err := exec.Command(realGo, "build", "-o", probe, program).CombinedOutput(); err != nil {
+		t.Fatalf("build lock probe: %v %s", err, out)
+	}
+	widget := filepath.Join(made.Collection, "widget")
+	if err := os.Remove(filepath.Join(widget, "init-ran")); err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, filepath.Join(widget, ".harness", "teardown.sh"), "#!/bin/sh\n\""+probe+"\" \"$PWD/..\" \""+marker+"\"\n", 0755)
+	fixtureGit(t, "-C", widget, "add", ".harness/teardown.sh")
+	fixtureGit(t, "-C", widget, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "teardown lock fixture")
+	head := fixtureGit(t, "-C", widget, "rev-parse", "HEAD")
+	fixtureGit(t, "--git-dir="+filepath.Join(c.Workspace, ".bare", "widget.git"), "update-ref", "refs/remotes/origin/teardown-fixture", head)
+	retired, err := c.RetireCollection(RetireOptions{Name: "finished"})
+	if err != nil || !retired.FolderRemoved {
+		t.Fatalf("retire with dev-aware hook: %+v %v", retired, err)
+	}
+	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "hook" {
+		t.Fatalf("teardown ran under dev locks: %s %v", raw, err)
+	}
+}

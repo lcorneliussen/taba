@@ -43,6 +43,7 @@ func TestDevVersionSortsBetweenReleases(t *testing.T) {
 
 func writeDevBuild(t *testing.T, collection, version string, mode os.FileMode) string {
 	t.Helper()
+	fixtureFile(t, filepath.Join(collection, "harness", ".harness-repos.yml"), "repos: []\n", 0644)
 	dir := filepath.Join(collection, ".wtc", "dev")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
@@ -121,6 +122,7 @@ func TestInstallAndUninstallDevBuild(t *testing.T) {
 		t.Skip("checkout has no release tag (shallow clone)")
 	}
 	collection := t.TempDir()
+	fixtureFile(t, filepath.Join(collection, "harness", ".harness-repos.yml"), "repos: []\n", 0644)
 	fixtureFile(t, filepath.Join(collection, ".taba", "dev", "wtc"), "#!/bin/sh\n", 0755)
 	fixtureFile(t, filepath.Join(collection, ".taba", "dev", "version"), "0.1.40-dev.1+dev.gabc1234\n", 0644)
 	build, err := InstallDevBuild(collection, source)

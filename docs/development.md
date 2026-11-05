@@ -77,6 +77,8 @@ An unversioned `go build` binary retains its existing no-delegation behavior.
 It persists separately from generated artifacts, including after `dev uninstall`.
 Uninstall removes the active artifact but retains immutable generations until
 collection retirement so running actions can finish from their original binary.
+Final retirement removes this generated state. Ad-hoc directories retain their
+existing reuse rules; retirement does not permanently prevent reinitialization.
 Use `mode on` or `mode auto` explicitly to enable following again. The existing
 `WTC_DEV_BUILD=off` escape works even with broken source; mode/status/uninstall
 commands do not require a successful rebuild. Legacy one-shot `dev install`

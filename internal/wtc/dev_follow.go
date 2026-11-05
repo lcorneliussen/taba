@@ -19,6 +19,29 @@ import (
 
 const devPolicyFile = ".wtc-dev-mode.json"
 
+// Check the exact collection boundary again after waiting for a lock. A retired
+// or removed root must not be recreated by a publisher that started earlier.
+func devCollectionRoot(collection string, previous os.FileInfo) (os.FileInfo, error) {
+	info, err := os.Lstat(collection)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || !ownedByCurrentUser(info) || info.Mode()&0022 != 0 || previous != nil && !os.SameFile(previous, info) {
+		return nil, fmt.Errorf("unsafe or replaced dev collection root")
+	}
+	if RetiredFolder(collection) {
+		return nil, retiredFolderError(collection)
+	}
+	present, err := collectionMarker(collection)
+	if err != nil {
+		return nil, fmt.Errorf("dev collection boundary is unavailable: %w", err)
+	}
+	if !present {
+		return nil, fmt.Errorf("dev collection boundary is unavailable")
+	}
+	return info, nil
+}
+
 // DevMode is the only selection input. Generations and versions are build
 // observations, not additional release pins. An absent policy inherits AUTO.
 type DevMode struct {
@@ -92,6 +115,9 @@ func devReviewContext(collection string) bool {
 
 // DevFollowConfiguration only reads selection; it does not run Go or install.
 func DevFollowConfiguration(collection string) (DevFollowState, error) {
+	if _, err := devCollectionRoot(collection, nil); err != nil {
+		return DevFollowState{}, err
+	}
 	policy, err := readDevMode(collection)
 	state := DevFollowState{Mode: policy.Mode}
 	if err != nil {
@@ -173,6 +199,10 @@ func devSourcePath(source string) (string, error) {
 // SetDevMode publishes OFF without waiting for compilation. A separate short
 // lock serializes the policy change with generation publication.
 func SetDevMode(collection, mode, source string) error {
+	root, err := devCollectionRoot(collection, nil)
+	if err != nil {
+		return err
+	}
 	if mode != "auto" && mode != "on" && mode != "off" {
 		return fmt.Errorf("mode must be auto, on or off")
 	}
@@ -198,6 +228,9 @@ func SetDevMode(collection, mode, source string) error {
 		return err
 	}
 	defer unlock()
+	if _, err := devCollectionRoot(collection, root); err != nil {
+		return err
+	}
 	// Even recovery must not replace a link or special file. Malformed regular
 	// JSON can be repaired by explicitly selecting a new mode.
 	for _, name := range []string{devPolicyFile, ".taba-dev-mode.json"} {
@@ -257,7 +290,7 @@ func validateDevPublishedBuild(collection, dir string, build *DevBuild) error {
 	if !validDevBuildVersion(build.Version) {
 		return fmt.Errorf("invalid dev build version")
 	}
-	expected := filepath.Join(dir, "wtc")
+	relative := filepath.Join("dev", "wtc")
 	if build.Generation != "" {
 		if build.FollowProtocol != 1 {
 			return fmt.Errorf("dev generation lacks follow capability; use dev install for one-shot builds")
@@ -268,17 +301,21 @@ func validateDevPublishedBuild(collection, dir string, build *DevBuild) error {
 		if _, err := hex.DecodeString(build.Generation); err != nil {
 			return err
 		}
-		expected = filepath.Join(filepath.Dir(dir), "dev-generations", build.Generation, "wtc")
+		relative = filepath.Join("dev-generations", build.Generation, "wtc")
 	} else if build.FollowProtocol != 0 {
 		return fmt.Errorf("invalid one-shot artifact protocol")
 	}
-	if build.Binary != expected || build.Collection != collection || safeGeneratedParent(collection, filepath.Dir(expected)) != nil {
+	expected := filepath.Join(filepath.Dir(dir), relative)
+	// A supported namespace move changes only the selected generated root.
+	// Never remap an arbitrary manifest path into an executable slot.
+	if build.Binary != filepath.Join(collection, ".wtc", relative) && build.Binary != filepath.Join(collection, ".taba", relative) || build.Collection != collection || safeGeneratedParent(collection, filepath.Dir(expected)) != nil {
 		return fmt.Errorf("unsafe dev generation path")
 	}
 	info, err := os.Lstat(expected)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&0111 == 0 || info.Mode()&0022 != 0 || !ownedByCurrentUser(info) {
 		return fmt.Errorf("unsafe dev generation executable")
 	}
+	build.Binary = expected
 	return nil
 }
 
@@ -301,6 +338,10 @@ func publishDevBuild(collection, dir string, build *DevBuild) error {
 // EnsureDevFollow is the shared strict freshness path for startup and passive
 // TUI checks. Errors never present an expired artifact as a fresh executable.
 func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, error) {
+	root, err := devCollectionRoot(collection, nil)
+	if err != nil {
+		return DevFollowState{}, err
+	}
 	state, err := DevFollowConfiguration(collection)
 	if err != nil || !state.Active {
 		return state, err
@@ -310,6 +351,9 @@ func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, er
 		return state, err
 	}
 	defer unlock()
+	if _, err := devCollectionRoot(collection, root); err != nil {
+		return state, err
+	}
 	state, err = DevFollowConfiguration(collection)
 	if err != nil || !state.Active {
 		return state, err
@@ -462,11 +506,18 @@ func WithDevGeneration(ctx context.Context, collection, generation string, run f
 	if len(generation) != 64 {
 		return false, nil
 	}
+	root, err := devCollectionRoot(collection, nil)
+	if err != nil {
+		return false, err
+	}
 	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-mode.lock"))
 	if err != nil {
 		return false, err
 	}
 	defer unlock()
+	if _, err := devCollectionRoot(collection, root); err != nil {
+		return false, err
+	}
 	state, err := DevFollowConfiguration(collection)
 	if err != nil || !state.Active {
 		return false, err

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -29,6 +30,11 @@ func lockDevFile(ctx context.Context, path string) (func(), error) {
 	for {
 		err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
+			current, statErr := os.Lstat(path)
+			if statErr != nil || !os.SameFile(info, current) {
+				f.Close()
+				return nil, fmt.Errorf("dev lock was removed or replaced while waiting")
+			}
 			return func() { _ = f.Close() }, nil
 		}
 		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
@@ -42,4 +48,32 @@ func lockDevFile(ctx context.Context, path string) (func(), error) {
 		case <-time.After(25 * time.Millisecond):
 		}
 	}
+}
+
+func lockDevRetirement(collection string) (func(), error) {
+	root, err := os.Lstat(collection)
+	if err != nil {
+		return nil, err
+	}
+	if !root.IsDir() || !ownedByCurrentUser(root) || root.Mode()&0022 != 0 {
+		return nil, fmt.Errorf("unsafe dev collection root")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	build, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-build.lock"))
+	if err != nil {
+		return nil, err
+	}
+	policy, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-mode.lock"))
+	if err != nil {
+		build()
+		return nil, err
+	}
+	current, err := os.Lstat(collection)
+	if err != nil || !os.SameFile(root, current) {
+		policy()
+		build()
+		return nil, fmt.Errorf("dev collection root changed during retirement")
+	}
+	return func() { policy(); build() }, nil
 }

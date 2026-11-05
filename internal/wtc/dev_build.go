@@ -194,6 +194,10 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	if goModule(filepath.Join(source, "go.mod")) != wtcModule {
 		return nil, fmt.Errorf("%s is not a wtc-cli checkout", source)
 	}
+	root, err := devCollectionRoot(collection, nil)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-build.lock"))
@@ -201,6 +205,9 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 		return nil, err
 	}
 	defer unlock()
+	if _, err := devCollectionRoot(collection, root); err != nil {
+		return nil, err
+	}
 	build, err := installDevBuild(context.Background(), collection, source, os.Stderr)
 	if err != nil {
 		return nil, err
@@ -214,6 +221,9 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 		return nil, err
 	}
 	defer publishUnlock()
+	if _, err := devCollectionRoot(collection, root); err != nil {
+		return nil, err
+	}
 	dir := devBuildDir(collection)
 	if err := publishDevBuild(collection, dir, build); err != nil {
 		return nil, err
