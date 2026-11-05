@@ -26,6 +26,55 @@ repos:
     default_ref: origin/main
 `
 
+func TestGatewayProjectPortsRepairOnStatus(t *testing.T) {
+	state, git := harnessGateway(t)
+	withGatewayConfig(t, `{"harnesses":[{"name":"platform","remote":"https://github.com/example-org/platform-harness.git","ref":"main"}]}`)
+	harness := filepath.Join(state, "repos", "platform-harness")
+	registry := "repos:\n  - name: docs\n    aliases: [old-docs]\n    remote: https://github.com/example-org/web.git\n    port_offset: 1\n    owner: /not-a-gateway-owner\n"
+	if err := os.WriteFile(filepath.Join(harness, ".harness-repos.yml"), []byte(registry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(harness, "add", ".")
+	git(harness, "commit", "-qm", "port registry")
+	git(harness, "update-ref", "refs/remotes/origin/main", "HEAD")
+	folder := openclaw.NewCollectionFolder(state, "ports", "platform")
+	if err := wtc.RecordGatewayHarness(folder, "platform", "https://github.com/example-org/platform-harness.git"); err != nil {
+		t.Fatal(err)
+	}
+	rows := []openclaw.CheckoutStatus{{Repo: "web", Path: filepath.Join(state, "repos", "web")}, {Repo: "tools", Path: filepath.Join(state, "repos", "tools")}}
+	for range 2 {
+		_, _, warning := linkGatewayFolder("ports", rows)
+		if warning != "" {
+			t.Fatal(warning)
+		}
+		data, err := os.ReadFile(filepath.Join(folder, ".env.collection"))
+		if err != nil || !strings.Contains(string(data), "DOCS_PORT=42001\n") || !strings.Contains(string(data), "OLD_DOCS_PORT=42001\n") || strings.Contains(string(data), "TOOLS_PORT=") {
+			t.Fatalf("gateway env lost selected project ports: %s %v", data, err)
+		}
+		c, err := wtc.OpenCollection(folder)
+		if err != nil || c.Registry.Repos[0].Owner != "" {
+			t.Fatalf("copied project owner or invalid registry: %v", err)
+		}
+		// An already-linked registry must also repair a missing generated env.
+		if err := os.Remove(filepath.Join(folder, ".env.collection")); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestGatewayPortOriginRequiresFullRepositoryIdentity(t *testing.T) {
+	for _, remote := range []string{"https://github.com/example-org/web.git", "git@github.com:example-org/web.git", "ssh://git@bitbucket.org/example-org/web.git"} {
+		if _, ok := gatewayPortOrigin(remote); !ok {
+			t.Errorf("valid origin rejected: %s", remote)
+		}
+	}
+	for _, remote := range []string{"web", "https://github.com/other", "https://github.com/example-org/web/extra", "https://github.com/example-org/web?token=example", "https://github.com/example-org/%77eb", "https://unknown.invalid/example-org/web", "https://github.com/../web"} {
+		if _, ok := gatewayPortOrigin(remote); ok {
+			t.Errorf("invalid origin accepted: %s", remote)
+		}
+	}
+}
+
 // harnessGateway is a gateway state dir with clones of a harness and of the
 // repositories its registry names, as projects.add and the plugin make them.
 func harnessGateway(t *testing.T) (state string, git func(dir string, args ...string) string) {
