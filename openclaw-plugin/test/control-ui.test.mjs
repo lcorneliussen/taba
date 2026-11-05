@@ -679,13 +679,14 @@ test("publication keeps the successful PR result and shows a local-status warnin
   }
 });
 
-test("Bitbucket dirty files offer local commits instead of an empty push", async () => {
+test("Bitbucket dirty files offer commits; push appears only as a disabled alternative", async () => {
   bitbucket = { user: "ada@example.com", name: "Ada" };
   for (const kind of ["composer", "panel"]) {
     const { host, view } = await mount(kind, collection([repo("docs", { forge: "bitbucket", dirty: 2, ahead: 3, unpublished: 0, published: true })]));
     try {
       assert.ok([...host.all()].some((n) => n.tagName === "BUTTON" && n.textContent === "Commit changes"));
-      assert.equal([...host.all()].some((n) => n.tagName === "BUTTON" && !n.disabled && /to push/.test(n.title)), false);
+      const pushes=[...host.all()].filter(n=>n.tagName==="BUTTON"&&/to push/.test(n.title));
+      assert.ok(pushes.every(n=>n.disabled&&n.role==="menuitem"),"only disabled menu explanations may mention a push; no executable empty push");
     } finally { view.dispose(); }
   }
   bitbucket = undefined;
@@ -2732,4 +2733,18 @@ test("blocked PR alternatives remain visible and cannot dispatch", async()=>{
  const r=repo("api",{next:step,choices:{actions:[step,{step:"review",by:"agent",skill:"wtc-local-review",key:"api:review:head",available:false,blocked:"Independent review adapter unavailable"}]}});
  const {host,view}=await mount("panel",collection([r]));
  try{const menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");const blocked=menu.children.find(n=>n.ariaLabel==="Run independent review");assert.ok(blocked.disabled);assert.match(blocked.textContent,/adapter unavailable/);calls.length=0;await blocked.onclick();assert.equal(calls.length,0);}finally{view.dispose();}
+});
+
+test("already dispatched repository steps are disabled in the alternative menu", async()=>{
+ const step={step:"follow-pr",by:"agent",skill:"wtc-follow",key:"api:follow:head",reason:"Inspect PR progress",available:true};
+ const r=repo("api",{next:step,choices:{actions:[step]}});
+ const {host,view}=await mount("panel",collection([r]));
+ try{
+   nextResult={ok:true,result:{performed:false,repo:r}};
+   let menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");
+   await menu.children.find(n=>n.ariaLabel==="Check PR progress").onclick();for(let i=0;i<6;i++)await settle();
+   menu=[...host.all()].find(n=>n.ariaLabel==="Actions for api");const sent=menu.children.find(n=>n.ariaLabel==="Check PR progress");
+   assert.ok(sent.disabled);assert.match(sent.textContent,/Already sent/);
+   calls.length=0;await sent.onclick();assert.equal(calls.length,0);
+ }finally{view.dispose();nextResult=undefined;}
 });
