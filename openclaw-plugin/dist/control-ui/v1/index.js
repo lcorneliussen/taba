@@ -784,7 +784,7 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-next-step>:not(:first-child) { width:20px;flex:0 0 20px; }
 .wtc-step-status { width:104px;text-align:center; }
 .wtc-next-step.wtc-restore-step { justify-content:flex-end !important; }
-.wtc-restore-control { min-height:24px !important;height:24px;--wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
+.wtc-restore-control,.wtc-next-step.wtc-restore-step>.wtc-restore-control { min-height:24px !important;height:24px;--wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
 .wtc-toolbar-primary>.wtc-restore-control:disabled { --wtc-control-border:var(--border-strong,rgba(128,128,128,.35)); }
 .wtc-toolbar-primary:empty,.wtc-summary-facts:empty,.wtc-header-controls>button,.wtc-header-controls>span:last-child { align-self:center; }
 .wtc-action-control:not(:disabled):hover { --wtc-control-bg:var(--bg-hover,rgba(128,128,128,.16)); --wtc-control-border:var(--border-strong,rgba(128,128,128,.5)); --wtc-control-text:var(--text-strong,var(--text,inherit)); box-shadow:none; }
@@ -1159,7 +1159,15 @@ function collectionTables(v) {
   const recoveryQueued = r => recoveryQueues.get(v.collectionKey?.() ?? v.key())?.targets.has(r.sessionKey) && !recoveryBusy(r);
   function nextCell(r) {
     if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return css(el("div", { className: "wtc-next-step wtc-restore-step" }, recoveryButton(recoveryBusy(r) ? "Restoring…" : recoveryQueued(r) ? "Queued" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryQueueBusy())), "display:flex;align-items:baseline");
-    if (!actionable(r)) return null;
+    if (!actionable(r)) {
+      // Keep the completed recovery row's geometry; its result lives in the Action log.
+      if (lastActivity(r)?.action === "restore" && lastActivity(r)?.state === "completed") {
+        const space = recoveryButton("Restored", "", () => {}, true);
+        space.ariaHidden = "true"; space.tabIndex = -1; space.style.visibility = "hidden";
+        return el("div", { className: "wtc-next-step wtc-restore-step" }, space);
+      }
+      return null;
+    }
     if (!r.next && r.choices && !r.dirty) return r.choices.actions?.length ? nextButton("Choose step…", "Inspect available actions and blocked reasons", () => { choosing = true; v.showActions?.(); v.rerender(); }) : null;
     const step = selection.get(r.sessionKey)?.step ?? r.next ?? { step: "commit", reason: "Review and commit intended changes locally" };
     const phase = batchKeys.get(r.sessionKey) === step.key ? batchResults.get(r.sessionKey) : null;
@@ -1315,7 +1323,7 @@ function collectionTables(v) {
           : activityFailed(last) ? "⚠ Failed"
           : last.state === "running" && last.action === "push" ? publicationProgress
           : last.status === "Completed" ? last.action === "catch-up" ? "✓ Caught up" : "✓ Done" : "Action log";
-        primary = nextButton(label, "Open details in the sidebar action log", openActivity, last.state === "running" && last.action === "push");
+        primary = (last.action === "restore" ? recoveryButton : nextButton)(label, "Open details in the sidebar action log", openActivity, last.state === "running" && last.action === "push");
       }
     }
     if (!batchRunning && !prepared && (catching.size || busy.size || currentPublications.length)) primary = nextButton(catching.size ? "Catching up…" : publicationProgress, "The current operation is still running or rechecking its result", () => {}, true);
