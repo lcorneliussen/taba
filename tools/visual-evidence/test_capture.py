@@ -173,6 +173,22 @@ class SourceFingerprintTest(unittest.TestCase):
 
 
 class ProcessBoundsTest(unittest.TestCase):
+    def test_parent_go_workspace_is_not_selected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            repo, sealed = temporary / "repo", temporary / "sealed"
+            repo.mkdir()
+            sealed.mkdir()
+            (repo / "go.mod").write_text("module example.invalid/fixture\n\ngo 1.27.0\n")
+            (repo / "fixture.go").write_text("package fixture\n")
+            (temporary / "go.work").write_text("not a valid workspace\n")
+            base = {key: os.environ[key] for key in ("PATH", "TMPDIR") if key in os.environ}
+            base.update({"GOENV": "off", "GOAUTH": "off"})
+            with patch.object(capture, "ROOT", repo):
+                env = capture.renderer_environment(sealed, base)
+            self.assertEqual(env["GOWORK"], "off")
+            capture.run(["go", "test", "./..."], repo, env, 30)
+
     def test_existing_output_file_and_nonempty_directory_are_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
             temporary = Path(temporary)

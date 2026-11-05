@@ -194,6 +194,7 @@ def renderer_environment(temporary, base):
     # caches. Renderer/Chrome children get no HOME, no ambient token/profile
     # variables, and explicit temporary config/data roots. This is environment
     # isolation, not a filesystem sandbox for arbitrary source code.
+    base = {**base, "GOWORK": "off"}
     cache_env = dict(base)
     if "HOME" in os.environ:
         cache_env["HOME"] = os.environ["HOME"]
