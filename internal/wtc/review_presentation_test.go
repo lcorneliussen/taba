@@ -106,6 +106,9 @@ func TestBitbucketReviewPreservesFencesAndUnknownSections(t *testing.T) {
 		}
 	}
 	for _, change := range []string{
+		"### Concerns\n\n|\n",
+		"### Concerns\n\n  |  \n",
+		"### Run stats\n\n|\n\nWall-clock for the whole run: 1s (agent time summed: 1s).\n",
 		strings.Replace(table, "| example | ok | 0 | - |", "| example | ok | 1 | Unresolved. |", 1),
 		strings.Replace(table, "| example | ok | 0 | - |", "| example | skipped | 0 | - |", 1),
 		strings.Replace(table, "| example | ok | 0 | - |", "| example | unknown | 0 | Evidence. |", 1),

@@ -182,7 +182,7 @@ func presentBitbucketReview(body string) string {
 
 func reviewPresentationCells(line string, count int) []string {
 	line = strings.TrimSpace(line)
-	if !strings.HasPrefix(line, "|") || !strings.HasSuffix(line, "|") {
+	if len(line) < 2 || !strings.HasPrefix(line, "|") || !strings.HasSuffix(line, "|") {
 		return nil
 	}
 	cells := strings.Split(line[1:len(line)-1], "|")
