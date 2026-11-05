@@ -390,6 +390,38 @@ func TestStatusPRCompactRowsPreserveDraftAndConflictPriority(t *testing.T) {
 	}
 }
 
+func TestStatusPRCompactRowsKeepIdentifiersBeforeOptionalSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	for _, number := range []string{"123", "1234", "12345"} {
+		for _, styled := range []bool{false, true} {
+			for _, width := range []int{24, 31, 39} {
+				target := "https://example.invalid/pull/" + number
+				snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{{
+					Dir: "widget", BranchDisplay: "synthetic-topic", PR: &wtc.StatusPRFacts{
+						Number: number, URL: target, Checks: "SUCCESS", Merge: "CLEAN", Review: "approved",
+					},
+				}}, PRs: []wtc.StatusPRRow{{Repo: "widget", Number: number, URL: &target,
+					Checks: statusStringPtr("SUCCESS"), Merge: statusStringPtr("CLEAN"), Review: statusStringPtr("approved")}}}
+				for table, lines := range [][]string{statusTUIRepoLines(snapshot, width, styled), statusTUIPRLines(snapshot, width, false, styled)} {
+					found := false
+					for _, line := range lines {
+						plain := ansi.Strip(line)
+						if strings.Contains(plain, "#"+number) && (table == 0 || strings.HasPrefix(plain, "#"+number)) {
+							found = true
+						}
+						if ansi.StringWidth(line) > width {
+							t.Fatalf("identifier row overflows width %d: %q", width, lines)
+						}
+					}
+					if !found {
+						t.Fatalf("PR #%s clipped before optional signals at width %d styled %t: %q", number, width, styled, lines)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestStatusPRSignalsKeepUnknownPendingAndReviewMeaning(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")

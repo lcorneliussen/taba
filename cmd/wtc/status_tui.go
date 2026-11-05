@@ -753,17 +753,24 @@ func statusTUIPRSuffix(pr *wtc.StatusPRFacts, styled bool) string {
 	return suffix
 }
 
-// Numbers are padded to the cohort width; two following cells reserve " ↗".
-// Missing URLs therefore leave the signal columns in the same positions.
+// Numbers use the cohort width. Reserve " ↗" when it fits; the identifier
+// takes priority over that optional marker within the same column.
 func statusTUIPRNumberCell(number, target string, width int, styled bool, tone string) string {
-	label := statusTUIFit(statusTUIPRNumber(number), max(1, width-2))
+	labelWidth, slot := max(1, width-2), "  "
+	if ansi.StringWidth(statusTUIPRNumber(number)) > labelWidth {
+		labelWidth, slot = width, ""
+	}
+	label := statusTUIFit(statusTUIPRNumber(number), labelWidth)
 	if styled && number != "" && statusTUIURL(target) != "" {
-		return statusTUILinkTone(label+" ↗", target, tone)
+		if slot != "" {
+			slot = " ↗"
+		}
+		return statusTUILinkTone(label+slot, target, tone)
 	}
 	if styled {
 		label = statusTUIStyle(label, statusToneLabel)
 	}
-	return label + "  "
+	return label + slot
 }
 
 type statusRepoLayout struct {
@@ -951,7 +958,7 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 		n = numberWidth[0]
 	}
 	cell := statusTUIPRNumberCell(pr.Number, pr.URL, n+2, styled, statusToneLink) + " " + statusTUIPRSuffix(pr, styled)
-	if (statusTUIPRConflict(pr) || pr.Draft) && ansi.StringWidth(cell) > width {
+	if ansi.StringWidth(cell) > width || ansi.StringWidth(statusTUIPRNumber(pr.Number)) > n {
 		// Preserve PR state before optional signals when the full cell cannot fit.
 		marker, label := "", statusTUIPRNumber(pr.Number)
 		if statusTUIPRConflict(pr) {
@@ -1281,8 +1288,10 @@ type statusPRLayout struct {
 
 func statusTUIPRLayout(width int, rows ...wtc.StatusPRRow) statusPRLayout {
 	l := statusPRLayout{number: 5, repo: 16, state: 10, signalWidths: [3]int{1, 1, 1}, signals: true}
+	identifier := 1
 	for _, row := range rows {
-		l.number = max(l.number, ansi.StringWidth(statusTUIPRNumber(row.Number))+2)
+		identifier = max(identifier, ansi.StringWidth(statusTUIPRNumber(row.Number)))
+		l.number = max(l.number, identifier+2)
 	}
 	switch {
 	case width >= 52:
@@ -1305,7 +1314,18 @@ func statusTUIPRLayout(width int, rows ...wtc.StatusPRRow) statusPRLayout {
 			signalWidth += n + 1
 		}
 	}
-	l.number = min(l.number, max(3, width-l.repo-l.state-signalWidth-4))
+	// Prefer the identifier to optional signals and wider descriptive columns.
+	numberBudget := func() int { return width - l.repo - l.state - signalWidth - 4 }
+	if identifier > numberBudget() && l.signals {
+		l.signals, signalWidth = false, 0
+	}
+	if identifier > numberBudget() {
+		l.repo -= min(identifier-numberBudget(), max(0, l.repo-len("REPO")))
+	}
+	if identifier > numberBudget() {
+		l.state -= min(identifier-numberBudget(), max(0, l.state-len("STATE")))
+	}
+	l.number = min(l.number, max(3, numberBudget()))
 	prefix := l.number + 1 + l.repo + 1 + l.state + 1 + signalWidth
 	l.title = max(1, width-prefix)
 	return l
