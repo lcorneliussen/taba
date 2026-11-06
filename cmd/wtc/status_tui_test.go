@@ -491,7 +491,7 @@ func TestStatusPRCompactRowsGiveUpLinkSlotBeforeFittingSignals(t *testing.T) {
 			for _, width := range []int{24, 25, 26, 28} {
 				if draft && width < 26 {
 					// Eight REPO cells, six BRANCH cells and two gaps leave
-					// ten PR cells at width 26 for "#7 ✓ ✓ ✓ ◇".
+					// ten PR cells at width 26 for "#7 ◇ ✓ ✓ ✓".
 					continue
 				}
 				snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{{Dir: "widget", BranchDisplay: "topic",
@@ -556,22 +556,29 @@ func TestStatusPRCompactMixedStatesKeepAlignedFittingSignals(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")
 	for _, state := range []struct {
-		draft          bool
-		merge, signals string
-	}{{true, "CLEAN", "✗ ✓ ✗"}, {false, "DIRTY", "✗ ✗ ✗"}, {true, "DIRTY", "✗ ✗ ✗"}} {
+		draft, longDraft                       bool
+		merge, longMerge, signals, longSignals string
+		minWidth                               int
+	}{
+		{draft: true, merge: "CLEAN", longMerge: "CLEAN", signals: "✗ ✓ ✗", longSignals: "✓ ✓ ✓", minWidth: 28},
+		{merge: "DIRTY", longMerge: "CLEAN", signals: "✗ ✗ ✗", longSignals: "✓ ✓ ✓", minWidth: 28},
+		{draft: true, merge: "DIRTY", longMerge: "CLEAN", signals: "✗ ✗ ✗", longSignals: "✓ ✓ ✓", minWidth: 28},
+		// Eight REPO cells, eight BRANCH cells and two gaps leave fourteen PR cells at width 32.
+		{longDraft: true, merge: "DIRTY", longMerge: "DIRTY", signals: "✗ ✗ ✗", longSignals: "✓ ✗ ✓", minWidth: 32},
+	} {
 		snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{
 			{Dir: "widget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "7", URL: "https://example.invalid/pull/7", Checks: "FAILURE", Merge: state.merge, Review: "changes", Draft: state.draft}},
-			{Dir: "gadget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "12345", URL: "https://example.invalid/pull/12345", Checks: "SUCCESS", Merge: "CLEAN", Review: "approved"}},
+			{Dir: "gadget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "12345", URL: "https://example.invalid/pull/12345", Checks: "SUCCESS", Merge: state.longMerge, Review: "approved", Draft: state.longDraft}},
 		}}
 		for _, styled := range []bool{false, true} {
-			for width := 28; width <= 45; width++ {
+			for width := state.minWidth; width <= 45; width++ {
 				lines := statusTUIRepoLines(snapshot, width, styled)
 				numberColumn, signalColumn := -1, -1
-				for i, signals := range []string{state.signals, "✓ ✓ ✓"} {
+				for i, signals := range []string{state.signals, state.longSignals} {
 					plain := ansi.Strip(lines[i+1])
 					numberStart, signalStart := strings.Index(plain, "#"+snapshot.Repos[i].PR.Number), strings.Index(plain, signals)
-					if numberStart < 0 || signalStart < 0 || (i == 0 && state.draft && !strings.Contains(plain, "◇")) {
-						t.Errorf("fitting state/signals lost at width %d draft %t merge %s styled %t: %q", width, state.draft, state.merge, styled, plain)
+					if numberStart < 0 || signalStart < 0 || (snapshot.Repos[i].PR.Draft && !strings.Contains(plain, "◇")) {
+						t.Errorf("fitting state/signals lost at width %d draft %t long draft %t merge %s styled %t: %q", width, state.draft, state.longDraft, state.merge, styled, plain)
 						continue
 					}
 					nc, sc := ansi.StringWidth(plain[:numberStart]), ansi.StringWidth(plain[:signalStart])
