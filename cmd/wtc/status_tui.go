@@ -782,6 +782,7 @@ type statusRepoLayout struct {
 func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayout {
 	l := statusRepoLayout{name: 16, branch: 30, pr: 15, number: 1, tree: 4, ahead: 3, behind: 3, tip: 8, prod: 8,
 		showTree: true, showSync: true}
+	compactPRWidth := 1
 	for _, row := range snapshot.Repos {
 		if marks := len(statusRuntimeSlots(statusRuntimeItems(snapshot, row))); marks > 0 && width >= 60 {
 			l.showRuntime = true
@@ -796,7 +797,15 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 		l.ahead = max(l.ahead, len(fmt.Sprint(row.Ahead)))
 		l.behind = max(l.behind, runewidth.StringWidth(statusTUIBehind(row)))
 		if row.PR != nil && row.PR.Number != "" {
-			l.number = max(l.number, ansi.StringWidth(statusTUIPRNumber(row.PR.Number)))
+			identifierWidth := ansi.StringWidth(statusTUIPRNumber(row.PR.Number))
+			l.number = max(l.number, identifierWidth)
+			if row.PR.Draft {
+				identifierWidth += 2
+			}
+			if statusTUIPRConflict(row.PR) {
+				identifierWidth += 2
+			}
+			compactPRWidth = max(compactPRWidth, identifierWidth)
 		}
 	}
 	l.pr = max(l.pr, l.number+8)
@@ -859,6 +868,9 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 	if other()+minBranch+1 > width {
 		l.showTree = false
 	}
+	// Reclaim descriptive space before clipping an identifier and its state markers.
+	compactBudget := width - (other() - l.pr) - minBranch - 1
+	l.name -= min(max(0, compactPRWidth-compactBudget), max(0, l.name-len("REPO")))
 	l.pr = min(l.pr, max(1, width-(other()-l.pr)-minBranch-1))
 	l.branch = max(minBranch, min(l.branch, width-other()-1))
 	l.number = min(l.number, max(3, l.pr-8))
@@ -958,8 +970,8 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 		n = numberWidth[0]
 	}
 	cell := statusTUIPRNumberCell(pr.Number, pr.URL, n+2, styled, statusToneLink) + " " + statusTUIPRSuffix(pr, styled)
-	if ansi.StringWidth(cell) > width || ansi.StringWidth(statusTUIPRNumber(pr.Number)) > n {
-		// Preserve PR state before optional signals when the full cell cannot fit.
+	if ansi.StringWidth(cell) > width || ansi.StringWidth(statusTUIPRNumber(pr.Number)) > n+2 {
+		// Preserve PR state before optional signals if the cell or full identifier exceeds its column.
 		marker, label := "", statusTUIPRNumber(pr.Number)
 		if statusTUIPRConflict(pr) {
 			marker = "✗ "

@@ -422,6 +422,67 @@ func TestStatusPRCompactRowsKeepIdentifiersBeforeOptionalSignals(t *testing.T) {
 	}
 }
 
+func TestStatusPRCompactRowsReserveFullDraftConflictIdentifiers(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	for _, number := range []string{"1234", "12345"} {
+		for _, styled := range []bool{false, true} {
+			for width := 24; width <= 40; width++ {
+				target := "https://example.invalid/pull/" + number
+				snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{{
+					Dir: "widget", BranchDisplay: "synthetic-topic", PR: &wtc.StatusPRFacts{
+						Number: number, URL: target, Draft: true, Merge: "DIRTY",
+					},
+				}}}
+				lines := statusTUIRepoLines(snapshot, width, styled)
+				plain := ansi.Strip(lines[1])
+				if !strings.Contains(plain, "#"+number) || !strings.Contains(plain, "◇") || !strings.Contains(plain, "✗") {
+					t.Errorf("identifier/state lost at width %d styled %t: %q", width, styled, plain)
+				}
+				for _, line := range lines {
+					if ansi.StringWidth(line) > width {
+						t.Fatalf("row overflows width %d: %q", width, line)
+					}
+				}
+				layout := statusTUIRepoLayout(snapshot, width)
+				model := statusTUIModel{snapshot: snapshot, width: width, height: 20}
+				if got := model.buildClickTarget(layout.prStart(), 3); got != target {
+					t.Fatalf("compact PR click = %q, want %q", got, target)
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRCompactMixedRowsKeepFittingSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	snapshot := wtc.StatusSnapshot{}
+	for _, number := range []string{"7", "12345"} {
+		snapshot.Repos = append(snapshot.Repos, wtc.StatusRepo{Dir: "widget", BranchDisplay: "topic",
+			PR: &wtc.StatusPRFacts{Number: number, URL: "https://example.invalid/pull/" + number,
+				Checks: "SUCCESS", Merge: "CLEAN", Review: "approved"}})
+	}
+	for _, styled := range []bool{false, true} {
+		for _, width := range []int{28, 29, 30} {
+			lines := statusTUIRepoLines(snapshot, width, styled)
+			signalColumn := -1
+			for i, line := range lines[1:] {
+				plain := ansi.Strip(line)
+				if !strings.Contains(plain, "#"+snapshot.Repos[i].PR.Number) || !strings.Contains(plain, "✓ ✓ ✓") {
+					t.Errorf("fitting identifier/signals lost at width %d styled %t: %q", width, styled, plain)
+				}
+				column := ansi.StringWidth(strings.Split(plain, "✓")[0])
+				if signalColumn >= 0 && column != signalColumn {
+					t.Errorf("mixed signals misaligned at width %d: %q", width, lines)
+				}
+				signalColumn = column
+				if ansi.StringWidth(line) > width {
+					t.Fatalf("row overflows width %d: %q", width, line)
+				}
+			}
+		}
+	}
+}
+
 func TestStatusPRSignalsKeepUnknownPendingAndReviewMeaning(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")
