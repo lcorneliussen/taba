@@ -1601,7 +1601,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
 			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
-			"◇ draft; ↗ opens a link. Completed PR signals are ·; follow-up state appears in STATE.",
+			"◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up.",
 		}
 		for _, text := range help {
 			lines = append(lines, strings.Split(ansi.Wrap(text, width, ""), "\n")...)

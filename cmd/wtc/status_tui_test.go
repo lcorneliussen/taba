@@ -662,7 +662,7 @@ func TestStatusPRHelpWrapsAndKeyboardScrollKeepsMouseTargets(t *testing.T) {
 		model = updated.(statusTUIModel)
 		content := model.contentLayout()
 		help := strings.Join(strings.Fields(ansi.Strip(strings.Join(content.lines, " "))), " ")
-		for _, meaning := range []string{"C checks", "M mergeability", "R reviews", "absent/unknown", "pending/expected", "changes requested", "commented (not approval)", "no reviewers", "blocked", "behind base", "◇ draft"} {
+		for _, meaning := range []string{"C checks", "M mergeability", "R reviews", "absent/unknown", "pending/expected", "changes requested", "commented (not approval)", "no reviewers", "blocked", "behind base", "◇ draft", "Merged PRs off their branch use · signals", "retained branches keep recorded observations", "See STATE for follow-up"} {
 			if !strings.Contains(help, meaning) {
 				t.Fatalf("help lost %q at width %d: %s", meaning, width, help)
 			}
