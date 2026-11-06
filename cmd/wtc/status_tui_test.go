@@ -510,6 +510,48 @@ func TestStatusPRCompactRowsGiveUpLinkSlotBeforeFittingSignals(t *testing.T) {
 	}
 }
 
+func TestStatusPRCompactConflictDoesNotHideOtherRowsFittingSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{
+		{Dir: "widget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "7", URL: "https://example.invalid/pull/7", Checks: "SUCCESS", Merge: "DIRTY", Review: "approved"}},
+		{Dir: "gadget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "48", URL: "https://example.invalid/pull/48", Checks: "SUCCESS", Merge: "CLEAN", Review: "commented"}},
+		{Dir: "toolkit", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "12345", URL: "https://example.invalid/pull/12345", Checks: "FAILURE", Merge: "CLEAN", Review: "changes"}},
+	}}
+	for _, styled := range []bool{false, true} {
+		for width := 28; width <= 45; width++ {
+			lines := statusTUIRepoLines(snapshot, width, styled)
+			if plain := ansi.Strip(lines[1]); !strings.Contains(plain, "#7") || !strings.Contains(plain, "✗") {
+				t.Errorf("conflict state lost at width %d styled %t: %q", width, styled, plain)
+			}
+			signalColumn := -1
+			for i, signals := range []string{"✓ ✓ ✎", "✗ ✓ ✗"} {
+				plain := ansi.Strip(lines[i+2])
+				start := strings.Index(plain, signals)
+				if start < 0 || !strings.Contains(plain, "#"+snapshot.Repos[i+1].PR.Number) {
+					t.Errorf("conflict displaced fitting signals at width %d styled %t: %q", width, styled, plain)
+					continue
+				}
+				column := ansi.StringWidth(plain[:start])
+				if signalColumn >= 0 && column != signalColumn {
+					t.Errorf("mixed signals misaligned at width %d styled %t: %q", width, styled, lines)
+				}
+				signalColumn = column
+			}
+			layout := statusTUIRepoLayout(snapshot, width)
+			model := statusTUIModel{snapshot: snapshot, width: width, height: 20}
+			for i, row := range snapshot.Repos {
+				if ansi.StringWidth(lines[i+1]) > width {
+					t.Fatalf("row overflows width %d: %q", width, lines[i+1])
+				}
+				if got := model.buildClickTarget(layout.prStart(), 3+i); got != row.PR.URL {
+					t.Errorf("PR #%s click = %q, want %q", row.PR.Number, got, row.PR.URL)
+				}
+			}
+		}
+	}
+}
+
 func TestStatusPRSignalsKeepUnknownPendingAndReviewMeaning(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")

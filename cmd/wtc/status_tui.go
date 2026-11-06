@@ -875,6 +875,16 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 	l.name -= min(max(0, compactPRWidth-compactBudget), max(0, l.name-len("REPO")))
 	l.pr = min(l.pr, max(1, width-(other()-l.pr)-minBranch-1))
 	l.branch = max(minBranch, min(l.branch, width-other()-1))
+	// Rows that need compact state markers must not consume other rows' signal space.
+	suffixWidth = 5
+	for _, row := range snapshot.Repos {
+		if row.PR != nil && row.PR.Number != "" {
+			rowSuffixWidth := ansi.StringWidth(statusTUIPRSuffix(row.PR, false))
+			if l.number+1+rowSuffixWidth <= l.pr {
+				suffixWidth = max(suffixWidth, rowSuffixWidth)
+			}
+		}
+	}
 	// Shrink the shared number cell, including its optional link slot, before dropping fitting signals.
 	l.number = min(l.number, max(0, l.pr-3-suffixWidth))
 	return l
