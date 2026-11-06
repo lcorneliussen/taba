@@ -73,10 +73,27 @@ Inspect current-head local review trust with `wtc review status <repo> <pr>
 
 ## PR checks versus TEST and PROD
 
-PR C describes checks for the observed PR head. TEST describes `default_ref`;
-PROD describes `production_ref` when configured. A project build hook can
-replace or refine the built-in provider. Columns exist for reported tiers
-and yield at narrower widths.
+PR C describes checks for the observed PR head. Shared-branch builds use a
+separate tier mapping. The production branch comes from `production_ref`,
+then `release_ref`. When neither is set, a development branch named `dev`
+uses `master` for production; other development branches use themselves.
+An empty `default_ref` falls back to `main` for this mapping.
+
+When development and production resolve to different branches, TEST builds
+the development branch and PROD builds the production branch. When they
+resolve to the same branch, there is only a PROD tier and no TEST tier.
+`origin/` prefixes are removed when matching these branch names.
+
+| Configuration | Build tiers |
+| --- | --- |
+| `default_ref: origin/main`, no production/release ref | PROD: main only |
+| `default_ref: origin/dev`, no production/release ref | TEST: dev; PROD: master |
+| `default_ref: origin/main`, `release_ref: origin/release` | TEST: main; PROD: release |
+| `default_ref: origin/main`, `production_ref: origin/main` | PROD: main only |
+
+A project build hook can replace or refine the built-in provider. Columns
+exist for reported observations and yield at narrower widths; a configured
+tier with no reported build need not have a visible column.
 
 | Build cell | Meaning |
 | --- | --- |
@@ -98,8 +115,9 @@ exclusion. Inspect `head_in_build` in JSON for the distinction.
 
 ### After merge
 
-Completed PRs use dots in C/M/R. STATE instead describes the first followed
-tier that has not passed with the merge contained in its commit:
+In the PR table, merged entries no longer associated with their retained
+branch use dots in C/M/R. STATE instead describes the first followed tier
+that has not passed with the merge contained in its commit:
 
 | STATE | Reading |
 | --- | --- |
@@ -110,12 +128,16 @@ tier that has not passed with the merge contained in its commit:
 | `✓ built` | Followed, available tiers passed with the merge contained. |
 | `merged` | Merged without a more specific established follow-up observation. |
 
-Follow-up starts at the tier corresponding to the PR's base. A base no tier
-builds is not followed through this mechanism. Missing providers/tiers do not
-turn `✓ built` into a universal release certificate.
+Follow-up starts at the tier corresponding to the PR's base. An absent
+recorded base falls back to the first tier; a recorded base no tier builds
+is not followed through this mechanism. A missing recorded merge commit
+leaves the entry plainly `merged`. Missing providers/tiers do not turn
+`✓ built` into a universal release certificate.
 
 A merged PR still associated with its retained branch instead shows
 `⚠ catch-up`, `⚠ extra` for follow-up commits, or `unknown` landing evidence.
+Such an on-branch PR row retains its recorded C/M/R observations; they are
+not cleared merely because it merged, and are not a new post-merge gate.
 Its title and JSON give the fuller explanation. Older merged entries move
 behind the `a` archive toggle after the configured age; hiding does not delete.
 Closed, declined or superseded enlisted PRs leave the active PR rows. If their
