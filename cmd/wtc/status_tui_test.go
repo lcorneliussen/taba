@@ -552,6 +552,47 @@ func TestStatusPRCompactConflictDoesNotHideOtherRowsFittingSignals(t *testing.T)
 	}
 }
 
+func TestStatusPRCompactMixedStatesKeepAlignedFittingSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	for _, state := range []struct {
+		draft          bool
+		merge, signals string
+	}{{true, "CLEAN", "✗ ✓ ✗"}, {false, "DIRTY", "✗ ✗ ✗"}, {true, "DIRTY", "✗ ✗ ✗"}} {
+		snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{
+			{Dir: "widget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "7", URL: "https://example.invalid/pull/7", Checks: "FAILURE", Merge: state.merge, Review: "changes", Draft: state.draft}},
+			{Dir: "gadget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "12345", URL: "https://example.invalid/pull/12345", Checks: "SUCCESS", Merge: "CLEAN", Review: "approved"}},
+		}}
+		for _, styled := range []bool{false, true} {
+			for width := 28; width <= 45; width++ {
+				lines := statusTUIRepoLines(snapshot, width, styled)
+				numberColumn, signalColumn := -1, -1
+				for i, signals := range []string{state.signals, "✓ ✓ ✓"} {
+					plain := ansi.Strip(lines[i+1])
+					numberStart, signalStart := strings.Index(plain, "#"+snapshot.Repos[i].PR.Number), strings.Index(plain, signals)
+					if numberStart < 0 || signalStart < 0 || (i == 0 && state.draft && !strings.Contains(plain, "◇")) {
+						t.Errorf("fitting state/signals lost at width %d draft %t merge %s styled %t: %q", width, state.draft, state.merge, styled, plain)
+						continue
+					}
+					nc, sc := ansi.StringWidth(plain[:numberStart]), ansi.StringWidth(plain[:signalStart])
+					if numberColumn >= 0 && (nc != numberColumn || sc != signalColumn) {
+						t.Errorf("mixed identifiers/signals misaligned at width %d: %q", width, lines)
+					}
+					numberColumn, signalColumn = nc, sc
+					if ansi.StringWidth(lines[i+1]) > width {
+						t.Fatalf("row overflows width %d: %q", width, lines[i+1])
+					}
+					layout := statusTUIRepoLayout(snapshot, width)
+					model := statusTUIModel{snapshot: snapshot, width: width, height: 20}
+					if got := model.buildClickTarget(layout.prStart(), 3+i); got != snapshot.Repos[i].PR.URL {
+						t.Errorf("PR click = %q, want %q", got, snapshot.Repos[i].PR.URL)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestStatusPRSignalsKeepUnknownPendingAndReviewMeaning(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")
@@ -735,8 +776,9 @@ func TestStatusLongConflictingPRFitsAndKeepsClickTarget(t *testing.T) {
 	if ansi.StringWidth(styledCell) != plainWidth || ansi.Strip(styledCell) != strings.Replace(plain, "   ", " ↗ ", 1) || !strings.Contains(styledCell, ansi.SetHyperlink(prURL)) {
 		t.Fatalf("reserved link slot should fit the styled conflict cell exactly: %q", styledCell)
 	}
-	if got := ansi.Strip(statusTUIRepoPRCell(pr, plainWidth-1, true)); !strings.HasPrefix(got, "✗ ") {
-		t.Fatalf("clipped cell should retain compact conflict warning: %q", got)
+	compact := statusTUIRepoPRCell(pr, plainWidth-1, true)
+	if strings.TrimSpace(ansi.Strip(compact)) != "#1234567 ↗ ✓ ✗ ·" || ansi.StringWidth(compact) > plainWidth-1 || !strings.Contains(compact, ansi.SetHyperlink(prURL)) {
+		t.Fatalf("compact cell should retain the identifier, merge conflict signal and link: %q", compact)
 	}
 	for _, number := range []string{"1234567", "123456789012345"} {
 		snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{{

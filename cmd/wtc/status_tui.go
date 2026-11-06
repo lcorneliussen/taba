@@ -984,6 +984,25 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 	}
 	cell := statusTUIPRNumberCell(pr.Number, pr.URL, n+2, styled, statusToneLink) + " " + statusTUIPRSuffix(pr, styled)
 	if ansi.StringWidth(cell) > width || ansi.StringWidth(statusTUIPRNumber(pr.Number)) > n+2 {
+		// Draft state can use spare number-field cells while signals stay aligned.
+		// The merge signal itself preserves conflict state without the long label.
+		draft := ""
+		if pr.Draft {
+			draft = " ◇"
+			if styled {
+				draft = statusTUIStyle(draft, statusToneDim)
+			}
+		}
+		signals := statusTUIPRSignals(&pr.Checks, &pr.Merge, &pr.Review, styled)
+		suffix := strings.Join(signals[:], " ")
+		numberCells, draftWidth := n+2, ansi.StringWidth(draft)
+		if ansi.StringWidth(statusTUIPRNumber(pr.Number))+draftWidth <= numberCells && numberCells+1+ansi.StringWidth(suffix) <= width {
+			compact := statusTUIPRNumberCell(pr.Number, pr.URL, numberCells-draftWidth, styled, statusToneLink) + draft + " " + suffix
+			if !styled {
+				return statusTUIFit(compact, width)
+			}
+			return statusTUIFitANSI(compact, width)
+		}
 		// Preserve PR state before optional signals if the cell or full identifier exceeds its column.
 		marker, label := "", statusTUIPRNumber(pr.Number)
 		if statusTUIPRConflict(pr) {

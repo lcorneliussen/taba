@@ -62,7 +62,11 @@ can coexist with failing checks. A comment is not approval.
 `◇` adds draft state. Wide repository cells put the conflict label and draft
 marker after the three signal slots. A conflict warning remains visible even
 with passing checks. Compact repository cells prioritize the draft/conflict markers and
-identifier over optional signals where width permits. In the PR table,
+identifier over optional signals where width permits. When signals fit,
+draft state can use spare cells beside the PR number, keeping identifiers
+and C/M/R aligned; the merge-slot `✗` carries conflict state without its long
+label. If the complete representation cannot fit, prefix markers retain
+state and identity before optional signals. In the PR table,
 conflict takes priority over draft in STATE. A clean working tree can have a
 conflicting proposed PR merge; see [mergeability](status-mergeability.md).
 

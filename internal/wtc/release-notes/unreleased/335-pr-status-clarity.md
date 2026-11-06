@@ -8,4 +8,4 @@
 
 - A status guide explains complete Git, PR, review and build representations, provider coverage, build containment, freshness and compact layouts.
 
-- Wide repository rows place the conflict label and draft marker after the fixed checks/merge/review slots; compact rows can move those markers before the identifier to retain priority state.
+- Wide repository rows place the conflict label and draft marker after the fixed checks/merge/review slots. Compact rows can place draft state beside the number and use the merge signal for conflict to retain aligned C/M/R; prefix markers preserve state and identity when optional signals cannot fit.
