@@ -490,7 +490,9 @@ func TestStatusPRCompactRowsGiveUpLinkSlotBeforeFittingSignals(t *testing.T) {
 		for _, styled := range []bool{false, true} {
 			for _, width := range []int{24, 25, 26, 28} {
 				if draft && width < 26 {
-					continue // The identifier, signals and draft marker need ten cells.
+					// Eight REPO cells, six BRANCH cells and two gaps leave
+					// ten PR cells at width 26 for "#7 ✓ ✓ ✓ ◇".
+					continue
 				}
 				snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{{Dir: "widget", BranchDisplay: "topic",
 					PR: &wtc.StatusPRFacts{Number: "7", URL: "https://example.invalid/pull/7", Draft: draft,
