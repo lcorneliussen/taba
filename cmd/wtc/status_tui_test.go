@@ -483,6 +483,31 @@ func TestStatusPRCompactMixedRowsKeepFittingSignals(t *testing.T) {
 	}
 }
 
+func TestStatusPRCompactRowsGiveUpLinkSlotBeforeFittingSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	for _, draft := range []bool{false, true} {
+		for _, styled := range []bool{false, true} {
+			for _, width := range []int{24, 25, 26, 28} {
+				if draft && width < 26 {
+					continue // The identifier, signals and draft marker need ten cells.
+				}
+				snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{{Dir: "widget", BranchDisplay: "topic",
+					PR: &wtc.StatusPRFacts{Number: "7", URL: "https://example.invalid/pull/7", Draft: draft,
+						Checks: "SUCCESS", Merge: "CLEAN", Review: "approved"}}}}
+				lines := statusTUIRepoLines(snapshot, width, styled)
+				plain := ansi.Strip(lines[1])
+				if !strings.Contains(plain, "#7") || !strings.Contains(plain, "✓ ✓ ✓") || (draft && !strings.Contains(plain, "◇")) {
+					t.Errorf("link slot displaced fitting facts at width %d draft %t styled %t: %q", width, draft, styled, plain)
+				}
+				if ansi.StringWidth(lines[1]) > width {
+					t.Fatalf("row overflows width %d: %q", width, lines[1])
+				}
+			}
+		}
+	}
+}
+
 func TestStatusPRSignalsKeepUnknownPendingAndReviewMeaning(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")

@@ -809,11 +809,13 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 		}
 	}
 	l.pr = max(l.pr, l.number+8)
+	suffixWidth := 5
 	for _, row := range snapshot.Repos {
 		if row.PR != nil && row.PR.Number != "" {
-			l.pr = max(l.pr, l.number+3+ansi.StringWidth(statusTUIPRSuffix(row.PR, false)))
+			suffixWidth = max(suffixWidth, ansi.StringWidth(statusTUIPRSuffix(row.PR, false)))
 		}
 	}
+	l.pr = max(l.pr, l.number+3+suffixWidth)
 	// Build columns exist only for the tiers a provider reported on.
 	l.showBuilds = l.hasTip || l.hasProd
 	if !l.hasTip {
@@ -873,7 +875,8 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 	l.name -= min(max(0, compactPRWidth-compactBudget), max(0, l.name-len("REPO")))
 	l.pr = min(l.pr, max(1, width-(other()-l.pr)-minBranch-1))
 	l.branch = max(minBranch, min(l.branch, width-other()-1))
-	l.number = min(l.number, max(3, l.pr-8))
+	// Shrink the shared number cell, including its optional link slot, before dropping fitting signals.
+	l.number = min(l.number, max(0, l.pr-3-suffixWidth))
 	return l
 }
 
