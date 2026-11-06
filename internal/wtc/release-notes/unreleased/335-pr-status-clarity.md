@@ -7,3 +7,5 @@
 - Compact repository rows reserve draft/conflict markers and full PR numbers before descriptive columns, and retain checks, mergeability, and review signals whenever the complete cell fits.
 
 - A status guide explains complete Git, PR, review and build representations, provider coverage, build containment, freshness and compact layouts.
+
+- Wide repository rows place the conflict label and draft marker after the fixed checks/merge/review slots; compact rows can move those markers before the identifier to retain priority state.

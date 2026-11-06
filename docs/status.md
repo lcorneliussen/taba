@@ -59,8 +59,9 @@ when it fits, including rows without URLs.
 merge decision. Checks can pass while review requests changes; an approval
 can coexist with failing checks. A comment is not approval.
 
-`◇` adds draft state. A conflict warning remains visible even with passing
-checks. Compact repository cells prioritize the draft/conflict markers and
+`◇` adds draft state. Wide repository cells put the conflict label and draft
+marker after the three signal slots. A conflict warning remains visible even
+with passing checks. Compact repository cells prioritize the draft/conflict markers and
 identifier over optional signals where width permits. In the PR table,
 conflict takes priority over draft in STATE. A clean working tree can have a
 conflicting proposed PR merge; see [mergeability](status-mergeability.md).
