@@ -2837,10 +2837,10 @@ test("partial commits settle the fact feedback while preserving the remaining di
   await localChangeButton(host).onclick();
   collections.set(context.props.sessionKey,collection([repo("site",{dirty:1,unpublished:1})]));
   await titled(host,"Refresh").onclick({preventDefault(){},stopPropagation(){}});await settle();
-  assert.match(localChangeButton(host).textContent,/✓/);
+  assert.doesNotMatch(localChangeButton(host).textContent,/✓/);
   assert.match(localChangeButton(host).textContent,/1/);
   assert.equal(localChangeButton(host).attributes["aria-busy"],undefined);
-  assert.match(localChangeButton(host).title,/1 changed file/);
+  assert.equal(localChangeButton(host).disabled,false);
  }finally{view.dispose();}
 });
 
@@ -2856,4 +2856,50 @@ test("a pending commit times out to an honest unknown result instead of spinning
   calls.length=0;await localChangeButton(host).onclick();await settle();
   assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"unknown result opens details rather than blindly resending");
  }finally{globalThis.setTimeout=set;view.dispose();}
+});
+
+test("sparse facts use one line at intermediate widths and observed columns stay reserved", async () => {
+ const observers=[];globalThis.ResizeObserver=class{constructor(fn){this.fn=fn;observers.push(this)}observe(){}disconnect(){}};
+ try { for(const kind of ["composer","panel"]) {
+  const start=observers.length;const data=collection([repo("agent-harness"),repo("site",{dirty:1})]);
+  const {host,view,context}=await mount(kind,data);
+  const resize=width=>observers.slice(start).forEach(o=>o.fn([{contentRect:{width}}]));
+  const refresh=async()=>{await [...host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();};
+  try {
+   resize(390);assert.deepEqual(tables(host)[0][0],["Repository","Branch","Changes","Next"]);
+   assert.equal([...host.all()].some(n=>n.className==="wtc-repo-facts"),false);
+   const tracks=[...host.all()].find(n=>n.className==="wtc-change-slots").style.cssText;
+   collections.set(context.props.sessionKey,collection([repo("agent-harness"),repo("site",{dirty:0})]));await refresh();
+   assert.equal([...host.all()].find(n=>n.className==="wtc-change-slots").style.cssText,tracks,"clearing facts does not collapse the observed columns");
+   collections.set(context.props.sessionKey,busy);await refresh();
+   assert.deepEqual(tables(host)[0][0],["Repository","Next"],"a PR and more facts need folding at the same width");
+   resize(560);assert.deepEqual(tables(host)[0][0],["Repository","Branch","Changes","Pull request","Next"]);
+   calls.length=0;resize(390);resize(560);assert.equal(calls.length,0,"layout changes never dispatch actions");
+  }finally{view.dispose();}
+ }}finally{delete globalThis.ResizeObserver;}
+});
+
+test("pending commit choices do not create a second disabled action menu", async () => {
+ const step={step:"commit",by:"agent",skill:"wtc",key:"site:commit",reason:"Save changes",available:true};
+ const r=repo("site",{dirty:1,next:step,choices:{actions:[step]}});const {host,view}=await mount("panel",collection([r]));
+ let release;try {
+  nextResult={ok:true,result:{performed:false,repo:r}};controlledSend=new Promise(resolve=>release=resolve);
+  const running=localChangeButton(host).onclick();await settle();
+  assert.equal([...host.all()].filter(n=>n.className==="wtc-action-menu"&&/Actions for site/.test(n.textContent)).length,0);
+  release({runId:"commit"});await running;
+ }finally{release?.({runId:"cleanup"});controlledSend=undefined;nextResult=undefined;view.dispose();}
+});
+
+test("a planner-routed commit can open its unconfirmed result even though redispatch is blocked", async () => {
+ const set=globalThis.setTimeout;let expire;
+ globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expire=fn,{unref(){}}):set(fn,delay,...args);
+ const step={step:"commit",by:"agent",skill:"wtc",key:"site:commit",reason:"Save changes",available:true};
+ const r=repo("site",{dirty:1,next:step,choices:{actions:[step]}});const {host,view}=await mount("panel",collection([r]));
+ try {
+  nextResult={ok:true,result:{performed:false,repo:r}};
+  await localChangeButton(host).onclick();expire();await settle();
+  assert.equal(localChangeButton(host).disabled,false,"reading an outcome is distinct from redispatching");
+  calls.length=0;await localChangeButton(host).onclick();await settle();
+  assert.equal(calls.some(c=>c.method==="sessions.send"||c.actionId==="next"),false);
+ }finally{nextResult=undefined;globalThis.setTimeout=set;view.dispose();}
 });

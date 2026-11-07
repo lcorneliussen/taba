@@ -753,9 +753,8 @@ const sectionHeading = (text, ...extra) => css(el("div", {},
   css(el("h3", { textContent: text }), "margin:0;font-size:14px;font-weight:600;color:var(--text-strong,inherit)"), ...extra),
   "display:flex;align-items:baseline;gap:8px;margin-bottom:6px");
 
-// Browser surfaces share the CLI's facts and actions. Repository, branch,
-// changes, PR and next step keep fixed columns aligned with the header action;
-// narrow views fold facts beneath the name.
+// Browser surfaces share the CLI's facts and actions. Rows share occupied
+// columns; narrow views fold facts beneath the repository text.
 // Actions stay on the relevant fact, in the row's next-step slot, or in the
 // header toolbar, which remains available when the card is collapsed.
 // v supplies the view lifecycle, conversation and gateway operations.
@@ -858,6 +857,8 @@ const actionFeedback = () => el("style", { textContent: `
 @keyframes wtc-cell-spin { to { transform:rotate(360deg); } }
 .wtc-cell-spinner { display:inline-block;animation:wtc-cell-spin 1s linear infinite; }
 @media (prefers-reduced-motion:reduce) { .wtc-cell-spinner { animation:none; } }
+.wtc-repositories .wtc-count-control:disabled { opacity:.5;cursor:default !important; }
+.wtc-repositories .wtc-count-control[data-feedback="completed"] { opacity:1; }
 .wtc-repositories .wtc-count-control { border-color:transparent !important;background:transparent !important; }
 .wtc-repositories { --wtc-control-height:24px; }
 .wtc-repositories .wtc-count-control:is(:hover,:focus-visible):not(:disabled) { border-color:var(--border-strong,rgba(128,128,128,.4)) !important;background:var(--bg-hover,rgba(128,128,128,.12)) !important; }
@@ -1258,7 +1259,7 @@ function collectionTables(v) {
     main.className = `${main.className ?? ""} wtc-primary-action`;
     if (onFact || !actionColumns) main.style.cssText = "display:none;width:0;flex:0 0 0;overflow:hidden";
     const primaryId = primaryActionId(r);
-    const options = repoActionOptions(r);
+    const options = repoActionOptions(r).filter(o => !r.dirty || o.label !== "Commit changes");
     const extras = picker || batchRunning || reserved(r) || recoveryQueueBusy() ? [] : options.filter(o => !o.disabled && o.id !== primaryId).slice(0, inlineCapacity - 1);
     const overflow = options.filter(o => !extras.includes(o) && !(onFact && o.id === primaryId) && (o.id !== primaryId || o.disabled));
     const menu = overflow.length ? actionMenu(nextButton("⋯", `More actions for ${nameOf(r)}`, () => {}), overflow, `Actions for ${nameOf(r)}`, text => v.say(text, true)) : null;
@@ -1412,7 +1413,7 @@ function collectionTables(v) {
     }
     else {
       const dirty = rows.find((r) => !r.next && !r.choices && r.dirty > 0);
-      if (dirty) primary = nextButton("Commit changes", `Review and commit intended changes in ${nameOf(dirty)}`, () => askCommit(dirty), reserved(dirty));
+      if (dirty) primary = nextButton("Commit changes", `Review and commit intended changes in ${nameOf(dirty)}`, () => commitFromFact(dirty), reserved(dirty));
     }
     if (!primary) {
       const publishers = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
@@ -1740,9 +1741,8 @@ function collectionTables(v) {
     }
   }
 
-  // PR and service tables keep one column per fact, with dots for empty cells.
-  // Repository rows group their facts and leave unused groups blank. Actions
-  // stay on the relevant fact: ↑ pushes, ↓ catches up, service state toggles it.
+  // PR and service tables retain their fact columns. Repository groups omit
+  // unused columns while keeping the dimensions of actionable facts stable.
   const DOT = () => css(el("span", { textContent: "·" }), "color:var(--muted, #888)");
   const muted = (text, title) => css(el("span", { textContent: text, title: title ?? "" }), "color:var(--muted, #888)");
   const toned = (text, tone, title) => css(el("span", { textContent: text, title: title ?? "" }), `color:${tone}`);
@@ -1815,10 +1815,10 @@ function collectionTables(v) {
     // New commits can be observed even when intentionally uncommitted files remain.
     // A lower dirty count alone never earns a commit-success mark.
     if (["pending", "unconfirmed"].includes(state?.phase) && !r.error && (toPush(r) > state.before || r.dirty < state.dirty)) {
-      state.phase = toPush(r) > state.before ? "completed" : "settled";
+      state.phase = toPush(r) > state.before && !r.dirty ? "completed" : "settled";
       state.at = Date.now();
       const outcome = state.phase;
-      queueMicrotask(() => recordActivity(collection,state.id,{state:outcome,status:outcome === "completed" ? "New local commits observed" : "Changes decreased; commit outcome unverified"}));
+      queueMicrotask(() => recordActivity(collection,state.id,{state:outcome,status:outcome === "completed" ? "New local commits observed; working tree clean" : toPush(r) > state.before ? "New local commits observed; intended changes may remain" : "Changes decreased; commit outcome unverified"}));
       const timer = setTimeout(() => { if (commitFeedback.get(key) === state && state.phase === "completed") state.phase = "settled"; notifyFactFeedback(collection); }, 5100); timer.unref?.();
     }
     if (state?.phase === "failed" && !r.dirty) state.phase = "settled";
@@ -1829,7 +1829,8 @@ function collectionTables(v) {
     const title = done ? `New local commits observed; ${plural(r.dirty || 0,"changed file")} remain` : state?.phase === "unconfirmed" ? "Commit outcome unconfirmed. Open the Action log and check the conversation before retrying" : state?.phase === "failed" ? `Commit request failed: ${state.error}. Retry` : pending ? "Commit requested; awaiting the conversation and refreshed repository facts" : option?.disabled ? option.detail : `${plural(r.dirty, "file")} changed. Commit changes for ${nameOf(r)}; publication is separate`;
     const button = count(`± ${r.dirty || 0}`, title, done ? TONE.success : state?.phase === "failed" ? TONE.failure : TONE.pending, () => state?.phase === "unconfirmed" ? openActivity() : commitFromFact(r));
     button.className += " wtc-local-change";
-    button.disabled = pending || done || !option || option.disabled;
+    if(done)button.setAttribute("data-feedback","completed");
+    button.disabled = pending || done || state?.phase !== "unconfirmed" && (!option || option.disabled);
     const icon = button.children[0];
     if (icon && (pending || done || state?.phase === "failed" || state?.phase === "unconfirmed")) { if(pending) icon.replaceChildren(working()); else icon.textContent = done ? "✓" : state?.phase === "failed" ? "!" : "?"; }
     if (button.children[1] && r.dirty > 999) { button.children[1].textContent = new Intl.NumberFormat("en",{notation:"compact",maximumFractionDigits:0}).format(r.dirty);button.children[1].style.fontSize="10px"; }
@@ -2168,7 +2169,6 @@ function collectionTables(v) {
       repoFacts.ahead ||= repos.some(r => r.dirty > 0 || toPush(r) > 0) || (workers ?? []).some(w => w.repos.some(r => r.toMerge > 0 || r.mergeError));
       repoFacts.behind ||= repos.some(r => toCatchUp(r)) || (workers ?? []).some(w => w.repos.some(r => r.behind > 0));
       repoFacts.pr ||= repos.some(r => r.pullRequest || otherPRs(r).length);
-      // Retain space already exposed during this conversation so progress cannot move facts.
       actionColumns = Math.max(actionColumns, choosing ? 1 : 0, ...repos.map(r => repoActionOptions(r).filter(o => !o.disabled && o.label !== "Commit changes").length));
       const availableWidth = v.repoWidth?.() ?? v.width?.() ?? 0;
       narrow = repositoryCompact(availableWidth);
