@@ -550,7 +550,7 @@ test("composer: the card for a busy collection", async () => {
   assert.deepEqual(repos, [
     ["Repository", "Branch", "Changes", "Pull request", "Next"],
     ["api", "openclaw/test", "↑ 2↓ 3", "#7✗✗○", ""],
-    ["web", "openclaw/test", "± 1", "", "Commit changes"],
+    ["web", "openclaw/test", "± 1", "", ""],
     ["hooks", "openclaw/test", "↑ 1", "", ""],
   ]);
   // A service and its tunnel are one row; the tunnel has its column.
@@ -1366,8 +1366,8 @@ test("composer: a sub-session has its own rows, merges into the task's checkout,
   // site once for the task; the worker's site is a sub-row under it, with the
   // same columns against the task: ± its files, ↑ into the task, no PR.
   assert.deepEqual(repos.slice(1), [
-    ["site", "at main", "", "", ""],
-    ["↳docs✕", "openclaw/test--docs", "± 13↑ 2", "", ""],
+    ["site", "at main", "", ""],
+    ["↳docs✕", "openclaw/test--docs", "± 13↑ 2", ""],
   ]);
   const named = (re) => [...card.all()].find((n) => n.tagName === "BUTTON" && re.test(n.title));
 
@@ -1471,7 +1471,7 @@ test("composer: a sub-session with uncommitted files is reviewed by the conversa
   const dirty = await mount("composer", sub({ dirty: 3,
     uncommitted: [{ path: "a.md", state: "same" }, { path: "b.md", state: "differs" }, { path: "c.mjs", state: "only" }] }));
   let card = [...dirty.host.all()].find((n) => n.className === "wtc-collection-card");
-  assert.deepEqual(tables(card)[0][2], ["↳nav✕", "openclaw/13-docs-nav", "± 3↓ 2", "", ""]);
+  assert.deepEqual(tables(card)[0][2], ["↳nav✕", "openclaw/13-docs-nav", "± 3↓ 2", ""]);
   const buttons = () => [...card.all()].filter((n) => n.tagName === "BUTTON");
   // With uncommitted files there is no catch-up to click: it would refuse.
   assert.equal(buttons().find((n) => /^2 commits of the collection's site/.test(n.title)), undefined);
@@ -1750,7 +1750,7 @@ test("repository folding has its own breakpoint on both surfaces", async () => {
     for (const width of [560, 660, 360]) {
      for (const o of observers.slice(start)) o.fn([{ contentRect: { width } }]);
      const rows = tables(host), repos = rows[0], services = rows[1];
-     assert.deepEqual(repos[0], width < 604 ? ["Repository", "Next"] : ["Repository", "Branch", "Changes", "Pull request", "Next"]);
+     assert.deepEqual(repos[0], width < 480 ? ["Repository", "Next"] : ["Repository", "Branch", "Changes", "Pull request", "Next"]);
      assert.equal(services[0].includes("Repo"), width >= 520, `${kind}/${width}: service layout follows its own breakpoint`);
     }
    } finally { view.dispose(); }
@@ -2205,12 +2205,12 @@ test("temporary controls extend above the composer base and below sidebar servic
   personal = null;
 });
 
-test("bulk action slots remain present and disabled when no repository is eligible", async () => {
+test("bulk changes control stays disabled and unused push/catch-up columns are absent", async () => {
   for(const kind of ["composer", "panel"]) {
     const {host, view}=await mount(kind, collection([repo("api")]));
     try {
       const bulk=[...host.all()].find(n=>n.className === "wtc-bulk-actions");assert.ok(bulk);
-      const controls=[...bulk.all()].filter(n=>n.tagName === "BUTTON");assert.equal(controls.length,2);assert.ok(controls.every(n=>n.disabled));
+      const controls=[...bulk.all()].filter(n=>n.tagName === "BUTTON");assert.equal(controls.length,1);assert.ok(controls.every(n=>n.disabled));
     } finally {view.dispose();}
   }
 });
@@ -2343,7 +2343,7 @@ test("compact rows omit empty facts and do not reserve a PR lane for catch-up on
   globalThis.ResizeObserver=class { constructor(fn){this.fn=fn;observers.push(this);} observe(){} disconnect(){} };
   const {host,view}=await mount("panel",collection([repo("api"),repo("web",{behind:3})]));
   try {
-    observers.forEach(o=>o.fn([{contentRect:{width:360}}]));
+    observers.forEach(o=>o.fn([{contentRect:{width:240}}]));
     const identities=[...host.all()].filter(n=>n.className==="wtc-repo-identity");
     assert.equal(identities.length,2);
     assert.equal([...identities[0].parentNode.all()].some(n=>n.className==="wtc-repo-facts"),false);
@@ -2763,9 +2763,97 @@ for(const kind of ["composer","panel"]) test(`responsive ${kind} actions surface
   const mounted=await mount(kind,collection([repo("api",{next:primary,choices:{actions:[primary,fix,review,blocked]}})]));view=mounted.view;const host=mounted.host;
   const resize=width=>{for(const o of observers)o.fn([{contentRect:{width}}])};
   resize(320);let row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children[0].className,"wtc-action-menu");assert.equal(row.children.at(-1).textContent,"Check PR progress");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,0);
-  resize(760);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,1);assert.equal(row.children.at(-2).textContent,"Fix checks");
+  resize(520);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,1);assert.equal(row.children.at(-2).textContent,"Fix checks");
   resize(1100);row=[...host.all()].find(n=>n.className==="wtc-next-step");assert.equal(row.children.filter(n=>n.className?.includes("wtc-inline-action")).length,2);assert.deepEqual(row.children.slice(1,-1).map(n=>n.textContent),["Address review","Fix checks"]);assert.equal(row.children.at(-1).textContent,"Check PR progress");
   const menu=row.children[0].children.find(n=>n.role==="menu");assert.deepEqual(menu.children.map(n=>n.ariaLabel),["Open pull request"]);assert.ok(menu.children[0].disabled);
   calls.length=0;resize(320);assert.equal(calls.length,0,"resizing never dispatches an action");
  }finally{view?.dispose();delete globalThis.ResizeObserver;}
+});
+
+const localChangeButton = host => [...host.all()].find(n => n.tagName === "BUTTON" && n.className?.includes("wtc-local-change") && !n.className.includes("wtc-column-commit"));
+const commitColumnButton = host => [...host.all()].find(n => n.className?.includes("wtc-column-commit"));
+
+test("changed-files cells share pending feedback, reject duplicates and require observed commits for success", async () => {
+  const r = repo("site", {dirty:1,unpublished:0});
+  const card = await mount("composer", collection([r]));
+  const panel = await mount("panel", collection([r]), undefined, card.context.props.sessionKey);
+  let release;
+  try {
+    controlledSend = new Promise(resolve => {release=resolve;});calls.length=0;
+    const work = localChangeButton(card.host).onclick({preventDefault(){},stopPropagation(){}});
+    await settle();
+    assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+    assert.equal(localChangeButton(panel.host).disabled,true,"other surface sees the same pending cell");
+    await localChangeButton(panel.host).onclick({preventDefault(){},stopPropagation(){}});
+    assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"pending click does not resend");
+    release({runId:"commit-run"});await work;await settle();
+    assert.match(localChangeButton(card.host).title,/awaiting the conversation/);
+    assert.doesNotMatch(localChangeButton(card.host).textContent,/✓/,"handoff receipt is not success");
+    collections.set(card.context.props.sessionKey,collection([repo("site",{dirty:0,unpublished:1,ahead:1})]));
+    await [...card.host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();
+    assert.match(localChangeButton(card.host).textContent,/✓/);
+    assert.match(localChangeButton(panel.host).textContent,/✓/);
+    assert.equal(calls.some(c=>/publish|confirm/.test(c.method??"")),false,"commit does not publish");
+  } finally {release?.({runId:"cleanup"});controlledSend=undefined;card.view.dispose();panel.view.dispose();}
+});
+
+test("a cleared working tree without new local commits does not earn a commit checkmark", async () => {
+ const r=repo("site",{dirty:1,unpublished:0});const {host,view,context}=await mount("panel",collection([r]));
+ try {
+  await localChangeButton(host).onclick();
+  collections.set(context.props.sessionKey,collection([repo("site",{dirty:0,unpublished:0})]));
+  await [...host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();
+  assert.equal(localChangeButton(host),undefined);
+ }finally{view.dispose();}
+});
+
+test("the changes-column control sends one bounded group request and excludes clean repositories", async () => {
+ const {host,view}=await mount("panel",collection([repo("api",{dirty:2}),repo("site",{dirty:1}),repo("clean")]));
+ try {
+  calls.length=0;await commitColumnButton(host).onclick();await settle();
+  const sent=calls.filter(c=>c.method==="sessions.send");assert.equal(sent.length,1);
+  assert.match(sent[0].message,/selected repositories only: api, site/);
+  assert.doesNotMatch(sent[0].message,/clean/);
+  assert.match(sent[0].message,/Publication and follow-up actions are separate/);
+  assert.equal(commitColumnButton(host).disabled,true);
+ }finally{view.dispose();}
+});
+
+test("a blocked commit stays a read-only fact and a failed request offers a retry in the same cell", async () => {
+ const step={step:"commit",by:"agent",key:"blocked-commit",reason:"Save changes",available:false,blocked:"Owner is busy"};
+ const blocked=await mount("panel",collection([repo("blocked",{dirty:1,next:step,choices:{actions:[step]}})]));
+ try {calls.length=0;assert.equal(localChangeButton(blocked.host).disabled,true);await localChangeButton(blocked.host).onclick();assert.equal(calls.length,0);assert.match(localChangeButton(blocked.host).title,/Owner is busy/);}finally{blocked.view.dispose();}
+ const active=await mount("panel",collection([repo("site",{dirty:1})]));
+ try {
+  failing.add("sessions.send");await localChangeButton(active.host).onclick();await settle();
+  assert.match(localChangeButton(active.host).title,/Commit request failed/);assert.equal(localChangeButton(active.host).disabled,false);
+  failing.delete("sessions.send");calls.length=0;await localChangeButton(active.host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+ }finally{failing.delete("sessions.send");active.view.dispose();}
+});
+
+test("partial commits settle the fact feedback while preserving the remaining dirty count", async () => {
+ const {host,view,context}=await mount("panel",collection([repo("site",{dirty:3,unpublished:0})]));
+ try {
+  await localChangeButton(host).onclick();
+  collections.set(context.props.sessionKey,collection([repo("site",{dirty:1,unpublished:1})]));
+  await titled(host,"Refresh").onclick({preventDefault(){},stopPropagation(){}});await settle();
+  assert.match(localChangeButton(host).textContent,/✓/);
+  assert.match(localChangeButton(host).textContent,/1/);
+  assert.equal(localChangeButton(host).attributes["aria-busy"],undefined);
+  assert.match(localChangeButton(host).title,/1 changed file/);
+ }finally{view.dispose();}
+});
+
+test("a pending commit times out to an honest unknown result instead of spinning forever", async () => {
+ const set=globalThis.setTimeout;let expire;
+ globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expire=fn,{unref(){}}):set(fn,delay,...args);
+ const {host,view}=await mount("panel",collection([repo("site",{dirty:1})]));
+ try {
+  await localChangeButton(host).onclick();assert.ok(expire);
+  expire();await settle();
+  assert.match(localChangeButton(host).textContent,/\?/);
+  assert.match(localChangeButton(host).title,/outcome unconfirmed/i);
+  calls.length=0;await localChangeButton(host).onclick();await settle();
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"unknown result opens details rather than blindly resending");
+ }finally{globalThis.setTimeout=set;view.dispose();}
 });

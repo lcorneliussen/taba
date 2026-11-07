@@ -300,7 +300,7 @@ function syncTimeLabels(root, entry, { composer = false } = {}) {
 }
 function collectionStamp(entry, sessionKey) {
   const key = entry?.data?.collection?.sessionKey ?? sessionKey;
-  return JSON.stringify([entry?.data, entry?.error, feedbackStore.get(key), [...(activityStore.get(key)?.values() ?? [])]]);
+  return JSON.stringify([entry?.data, entry?.error, feedbackStore.get(key), [...(activityStore.get(key)?.values() ?? [])], [...commitFeedback].filter(([id]) => id.startsWith(`${key}|`))]);
 }
 
 const ciText = (pr) => ({ success: "CI passed", failure: `CI ${pr.failed} failed`, pending: `CI ${pr.running} running` })[pr.checks] ?? "no checks";
@@ -760,9 +760,7 @@ const sectionHeading = (text, ...extra) => css(el("div", {},
 // header toolbar, which remains available when the card is collapsed.
 // v supplies the view lifecycle, conversation and gateway operations.
 const NARROW_PX = 520;
-// Single-line repository groups need more width; keep their fold separate
-// from PR/service tables so denser repository rows do not change those layouts.
-const REPO_NARROW_PX = 604;
+const REPO_IDENTITY_INSET = 26;
 const pullRequestRows = (repos) => {
   const rows = new Map();
   for (const r of repos) for (const pr of [...(r.pullRequests ?? []), ...(r.pullRequest ? [r.pullRequest] : [])]) {
@@ -774,6 +772,10 @@ const pullRequestRows = (repos) => {
 // It is UI feedback, not an executable plan or a durable completion receipt.
 const activityStore = new Map();
 const recoveryQueues = new Map();
+const commitFeedback = new Map();
+function notifyFactFeedback(collection) {
+  for (const [key, entry] of store) if (key === collection || entry.data?.collection?.sessionKey === collection) for (const notify of entry.listeners) notify(entry);
+}
 const feedbackStore = new Map();
 // Hand off the requested service locally, independently of optional host panel
 // props; log output stays in the panel that fetched it.
@@ -815,11 +817,10 @@ async function trackedRefresh(watch, sessionKey, say, currentSession = () => ses
 }
 
 const REPO_NEXT_WIDTH = 132, REPO_COLUMN_GAP = 10;
-const inlineActionCapacity = (width, narrow = false) => narrow ? 1 : Math.max(1, Math.floor(((width || 0) - 484) / 108));
 const headerActionCapacity = width => Math.max(1, Math.min(4, Math.floor(((width || 0) - 300) / 108)));
-const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH) => narrow
+const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH, facts = { width: 104, pr: true }) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${actionWidth}px`, align: "end" }]
-  : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "116px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${actionWidth}px`, align: "end" }];
+  : [{ head: "Repository", width: "minmax(64px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: `${facts.width}px` }, ...(facts.pr ? [{ head: "Pull request", width: "164px" }] : []), { head: "Next", width: `${actionWidth}px`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
 .wtc-tunnel-trigger:hover,.wtc-tunnel-existing:hover,.wtc-tunnel-option:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
 .wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
@@ -854,6 +855,16 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-count-control,.wtc-repositories .wtc-count-control.wtc-action-control { box-sizing:border-box;width:36px;min-width:0 !important;min-height:24px !important;height:24px;align-self:baseline;padding:0 1px !important;display:inline-grid !important;grid-template-columns:8px minmax(0,1fr);column-gap:1px;align-content:center;align-items:baseline !important; }
 .wtc-count-icon { text-align:center;font-size:12px; }
 .wtc-repo-facts>span { min-height:24px !important; }
+@keyframes wtc-cell-spin { to { transform:rotate(360deg); } }
+.wtc-cell-spinner { display:inline-block;animation:wtc-cell-spin 1s linear infinite; }
+@media (prefers-reduced-motion:reduce) { .wtc-cell-spinner { animation:none; } }
+.wtc-repositories .wtc-count-control { border-color:transparent !important;background:transparent !important; }
+.wtc-repositories { --wtc-control-height:24px; }
+.wtc-repositories .wtc-count-control:is(:hover,:focus-visible):not(:disabled) { border-color:var(--border-strong,rgba(128,128,128,.4)) !important;background:var(--bg-hover,rgba(128,128,128,.12)) !important; }
+.wtc-repositories .wtc-local-change { box-sizing:border-box;width:44px !important;min-width:44px !important;max-width:44px;height:24px !important;min-height:24px !important;padding:0 1px !important;grid-template-columns:12px minmax(0,1fr); }
+.wtc-local-change .wtc-count-value { width:24px;justify-self:start; }
+.wtc-column-commit { justify-self:start;text-align:left; }
+
 .wtc-count-value { min-width:0;text-align:right;font-size:11px;overflow:hidden;text-overflow:ellipsis; }
 @container wtc-panel (max-width:326px) { .wtc-brand-suffix { display:none; } }
 .wtc-collection>header>div:first-child { flex-wrap:nowrap !important; }
@@ -892,7 +903,16 @@ const actionFeedback = () => el("style", { textContent: `
 
 ` });
 function collectionTables(v) {
-  let inlineCapacity = 1, actionColumns = 1;
+  let inlineCapacity = 1, actionColumns = 0;
+  let repoFacts = { ahead: false, behind: false, pr: false };
+  const FACT_GAP = 10;
+  const factTracks = () => [44, ...(repoFacts.ahead ? [36] : []), ...(repoFacts.behind ? [36] : [])];
+  const factWidth = () => factTracks().reduce((n, x) => n + x, 0) + (factTracks().length - 1) * FACT_GAP;
+  // Keep room for readable identity cells, the occupied facts and one primary action.
+  const repoBaseWidth = () => 128 + factWidth() + (repoFacts.pr ? 164 : 0) + (repoFacts.pr ? 4 : 3) * REPO_COLUMN_GAP;
+  const repositoryCompact = width => width > 0 && width < repoBaseWidth() + (actionColumns ? REPO_NEXT_WIDTH : 24);
+  const repoCapacity = width => Math.max(1, Math.floor(((width || 0) - repoBaseWidth() - 24) / 108));
+  const repositoryLayoutKey = width => `${repositoryCompact(width)}:${repositoryCompact(width) ? 1 : repoCapacity(width)}`;
   // Repositories being pushed, and being caught up.
   const busy = new Set();
   const catching = new Set();
@@ -1002,7 +1022,8 @@ function collectionTables(v) {
     try {
       await sendToAuthor(conversationKey, "wtc", `${nameOf(r)}: review and commit the intended uncommitted changes. Recheck its current state and branch policy first, and report the resulting commit. Leave publication for the person's push action.`);
       say(`${nameOf(r)}: asked the conversation to save intended changes as local commits. Pushing and opening a PR are separate.`);
-    } catch (err) { say(`${nameOf(r)}: ${String(err?.message ?? err)}`, true); }
+      return { handedOff: true };
+    } catch (err) { say(`${nameOf(r)}: ${String(err?.message ?? err)}`, true); return { error: String(err?.message ?? err) }; }
     finally { acting.delete(r.sessionKey); if(active(conversationKey))await v.refresh(); }
   }
   async function reviewPRText(r, url, conversationKey, action) {
@@ -1025,12 +1046,12 @@ function collectionTables(v) {
     : s.by === "wtc" && !s.approve && JSON.stringify(s.command) === JSON.stringify(["wtc", "catch-up"]) ? "run" : null;
   const nextPayload = (r, step) => ({ ownerSessionKey: r.sessionKey, key: step.key,
     ...(step.step === "catch-up" && step.by === "wtc" && step.approve === "agent" ? { approveCatchUp: true } : {}) });
-  async function actNext(r) {
+  async function actNext(r, logId = uuid()) {
     if (batchRunning || v.alive?.() === false || dispatched.has(handoffKey(r, r.next))) return;
     if (acting.has(r.sessionKey)) return;
     const sent = dispatched;
     const conversationKey = v.key();
-    const logKey = v.collectionKey?.() ?? conversationKey, logId = uuid();
+    const logKey = v.collectionKey?.() ?? conversationKey;
     const say = (text, failed = false, action = null) => {
       const previous = activityStore.get(logKey)?.get(logId);
       recordActivity(logKey, logId, { repo: nameOf(r), action: r.next.step, status: previous?.status ?? text, ...(failed ? { state: "failed" } : {}), detail: text, followUp: action });
@@ -1190,7 +1211,8 @@ function collectionTables(v) {
   function syncConversation() {
     if (batchKey === v.key()) return;
     batchKey = v.key();
-    actionColumns = 1;
+    actionColumns = 0;
+    repoFacts = { ahead: false, behind: false, pr: false };
     cancelPreparations("Preparation discarded after conversation switch; nothing was pushed.");
     choosing = false; selection = new Map(); batchResults = new Map(); batchLabels = new Map(); batchKeys = new Map(); batchKinds = new Map(); batchPreview = null; dispatched = new Set(); batchCancelled = true;
   }
@@ -1218,8 +1240,8 @@ function collectionTables(v) {
   const recoveryQueued = r => recoveryQueues.get(v.collectionKey?.() ?? v.key())?.targets.has(r.sessionKey) && !recoveryBusy(r);
   function repoActionOptions(r) {
     const options = choicesOf(r).map(step => ({ id: step.key, label: nextLabel(step), detail: dispatched.has(handoffKey(r, step)) ? "Already sent to the conversation; wait for its result" : step.available ? step.reason : step.blocked ?? step.reason,
-      disabled: !!r.error || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || dispatched.has(handoffKey(r, step)) || batchRunning || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => actNext({ ...r, next: step }) }));
-    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({id:"commit",label:"Commit changes",detail:"Review intended changes and save local commits",disabled:reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>askCommit(r)});
+      disabled: !!r.error || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || dispatched.has(handoffKey(r, step)) || batchRunning || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => step.step === "commit" ? commitFromFact({ ...r, next: step }) : actNext({ ...r, next: step }) }));
+    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({id:"commit",label:"Commit changes",detail:"Review intended changes and save local commits",disabled:reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>commitFromFact(r)});
     if (r.error === "checkout unavailable") options.unshift({ id: "restore", label: "Restore", detail: r.recovery?.reason ?? "Restore the saved checkout before running repository actions", disabled: r.recovery?.state !== "restorable" || recoveryQueueBusy(), run: () => restoreCheckouts([r]) });
     if (r.behind > 0 && !options.some(o => o.label === "Catch up")) options.push({ id: "catch-up-blocked", label: "Catch up", detail: r.error ? "Restore the checkout first" : r.dirty ? "Save or stash local changes before catching up" : "Not offered by the current repository plan; refresh its status", disabled: true });
     return options;
@@ -1231,12 +1253,14 @@ function collectionTables(v) {
   }
   const primaryActionId = r => r.error === "checkout unavailable" && r.recovery?.state === "restorable" ? "restore" : selection.get(r.sessionKey)?.step?.key ?? r.next?.key ?? (r.dirty ? "commit" : null);
   const actionSlot = (r, action, picker = null) => {
-    const main = picker ?? action ?? el("span", { className: "wtc-primary-spacer", ariaHidden: "true" });
+    const onFact = !choosing && !picker && (r.next?.step === "commit" || !r.next && r.dirty);
+    const main = onFact ? el("span", { className: "wtc-primary-spacer", ariaHidden: "true" }) : picker ?? action ?? el("span", { className: "wtc-primary-spacer", ariaHidden: "true" });
     main.className = `${main.className ?? ""} wtc-primary-action`;
+    if (onFact || !actionColumns) main.style.cssText = "display:none;width:0;flex:0 0 0;overflow:hidden";
     const primaryId = primaryActionId(r);
     const options = repoActionOptions(r);
     const extras = picker || batchRunning || reserved(r) || recoveryQueueBusy() ? [] : options.filter(o => !o.disabled && o.id !== primaryId).slice(0, inlineCapacity - 1);
-    const overflow = options.filter(o => !extras.includes(o) && (o.id !== primaryId || o.disabled));
+    const overflow = options.filter(o => !extras.includes(o) && !(onFact && o.id === primaryId) && (o.id !== primaryId || o.disabled));
     const menu = overflow.length ? actionMenu(nextButton("⋯", `More actions for ${nameOf(r)}`, () => {}), overflow, `Actions for ${nameOf(r)}`, text => v.say(text, true)) : null;
     return css(el("div", { className: "wtc-next-step" }, menu, ...[...extras].reverse().map(o => {const button=optionButton(o);button.className+=" wtc-inline-action";return button;}), main), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
   };
@@ -1267,7 +1291,7 @@ function collectionTables(v) {
     const last = lastActivity(r);
     const retry = activityFailed(last) && (last.action === step.step || last.action === "push" && nextRoute(step) === "publish");
     const action = nextRoute(step) === "pr" && r.pullRequest?.url ? link(nextLabel(step), r.pullRequest.url)
-      : nextButton(pending ? "Sent to agent" : running ? "Working…" : retry ? "Retry" : nextLabel(step), step.reason, () => !r.next ? askCommit(r) : actNext({ ...r, next: step }));
+      : nextButton(pending ? "Sent to agent" : running ? "Working…" : retry ? "Retry" : nextLabel(step), step.reason, () => step.step === "commit" ? commitFromFact({ ...r, next: r.next ? step : undefined }) : !r.next ? askCommit(r) : actNext({ ...r, next: step }));
     // Opening the PR is a navigation link with the same visible affordance.
     if (action.tagName === "A") {
       action.style.cssText = nextControlStyle + ";text-decoration:none";
@@ -1370,9 +1394,9 @@ function collectionTables(v) {
         primary = css(link(compact ? "Open PR" : nextLabel(step), repo.pullRequest.url), nextControlStyle + ";text-decoration:none");
         primary.className = "wtc-action-control";
       } else if (nextRoute(step) === "publish" && confirming.has(repo.sessionKey)) primary = nextButton("Review push", `Review ${nameOf(repo)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
-      else primary = nextButton(step.step === "push" && repo.pullRequest?.state === "open" ? "Update PR" : label, title, () => actNext({ ...repo, next: step }), reserved(repo) || !nextRoute(step));
+      else primary = nextButton(step.step === "push" && repo.pullRequest?.state === "open" ? "Update PR" : label, title, () => step.step === "commit" ? commitFromFact({ ...repo, next: step }) : actNext({ ...repo, next: step }), reserved(repo) || !nextRoute(step));
     } else if (targets.length || batchRunning) primary = nextButton(label, title, () => {
-      if (batchPreview) { v.reveal?.(); v.showActions?.(); v.rerender(); } else startTargets(targets);
+      if (batchPreview) { v.reveal?.(); v.showActions?.(); v.rerender(); } else if (targets.every(t => t.step.step === "commit")) commitGroup(targets.map(t => t.repo)); else startTargets(targets);
     }, batchRunning);
     else if (dispatched.size && !batchResults.size) primary = nextButton(compact ? "Sent" : "Sent to agent", "Handoff accepted; check the conversation for completion", () => {}, true);
     else if (batchResults.size) {
@@ -1456,7 +1480,7 @@ function collectionTables(v) {
           nextButton("Cancel", `Cancel preparation for ${nameOf(r)}; nothing will be pushed`, () => { if (!active(prepared.conversationKey) || confirming.get(r.sessionKey) !== prepared) return; confirming.delete(r.sessionKey); if (prepared.activityId) recordActivity(prepared.logKey, prepared.activityId, { state: "cancelled", status: `${nameOf(r)}: publication cancelled.` }); v.say(`${nameOf(r)}: publication cancelled.`); v.rerender(); }, reserved(r))), "display:flex;align-items:center;gap:8px;padding-top:4px")), "display:grid;gap:4px;padding:10px 12px;border:1px solid var(--border-strong,rgba(128,128,128,.35));border-radius:8px;background:var(--bg,transparent)");
     })), "display:grid;gap:8px;min-width:0");
   }
-  function bulkActions(repos, narrow, actionWidth = REPO_NEXT_WIDTH) {
+  function bulkActions(repos, narrow, actionWidth, columns) {
     if (!repos.length) return null;
     const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
     const catches = repos.filter(r => toCatchUp(r) && !r.dirty && (!r.next || !dispatched.has(handoffKey(r, r.next))));
@@ -1467,11 +1491,16 @@ function collectionTables(v) {
       button.replaceChildren(el("span", { className: "wtc-count-icon", textContent: glyph }), el("span", { className: "wtc-count-value" }));
       button.style.cssText += ";width:36px;min-width:0;justify-self:start";
     }
+    const commitTargets = repos.filter(r => r.dirty && !r.error && !["running", "pending"].includes(commitFeedback.get(commitKey(r))?.phase) && repoActionOptions(r).some(o => o.label === "Commit changes" && !o.disabled));
+    const commitAll = count("±", `Commit changes in all ${commitTargets.length} eligible repositories; review each first`, TONE.pending, () => commitGroup(commitTargets));
+    commitAll.className += " wtc-count-control wtc-local-change wtc-column-commit";
+    commitAll.replaceChildren(el("span", {className:"wtc-count-icon",textContent:"±"}), el("span", {className:"wtc-count-value"}));
+    commitAll.disabled = !commitTargets.length || batchRunning || authorSending;
     const label = css(el("span", { textContent: narrow ? "All" : "All repos" }), "color:var(--muted,#888);font-size:11px;white-space:nowrap;" + (narrow ? "width:20px;text-align:center" : "padding-left:26px"));
-    const arrows = css(el("span", {}, narrow ? label : el("span"), push, catchAll), "display:grid;grid-template-columns:24px 36px 36px;gap:4px;align-items:baseline");
-    return css(el("div", { className: "wtc-bulk-actions", role: "group", ariaLabel: "All repositories" }, ...(narrow ? [arrows] : [label, el("span"), arrows, el("span"), el("span")])), narrow
-      ? "display:grid;grid-template-columns:104px minmax(0,1fr);column-gap:4px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0"
-      : `display:grid;grid-template-columns:${repositoryColumns(false, actionWidth).map(c => c.width).join(" ")};column-gap:10px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`);
+    const arrows = css(el("span", {}, commitAll, repoFacts.ahead ? push : null, repoFacts.behind ? catchAll : null), `display:grid;grid-template-columns:${factTracks().map(x => `${x}px`).join(" ")};gap:${FACT_GAP}px;align-items:baseline`);
+    return css(el("div", { className: "wtc-bulk-actions", role: "group", ariaLabel: "All repositories" }, ...(narrow ? [arrows] : [label, el("span"), arrows, ...(repoFacts.pr ? [el("span")] : []), el("span")])), narrow
+      ? `display:grid;grid-template-columns:${factWidth()}px minmax(0,1fr);padding-left:${REPO_IDENTITY_INSET}px;box-sizing:border-box;column-gap:4px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`
+      : `display:grid;grid-template-columns:${columns.map(c => c.width).join(" ")};column-gap:10px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`);
   }
   // What a repository's push would send: its commits not on the forge yet,
   // or, before its first pull request, everything ahead of the base.
@@ -1721,12 +1750,13 @@ function collectionTables(v) {
   const count = (text, title, tone, run) => {
     const b = css(el("button", { className: "wtc-action-control", type: "button", textContent: String(text), title, ariaLabel: title, disabled: batchRunning }),
       `border:1px solid var(--wtc-control-border,var(--border, rgba(128,128,128,.4)));background:var(--wtc-control-bg,transparent);color:var(--wtc-control-text,${tone});cursor:pointer;font:inherit;font-size:12px;line-height:16px;min-height:var(--wtc-control-height,20px);min-width:var(--wtc-control-width,20px);padding:0 6px;border-radius:var(--radius-sm,6px);white-space:nowrap;font-variant-numeric:tabular-nums`);
-    const parts = String(text).match(/^([↑↓]) (\d+)$/);
+    const parts = String(text).match(/^([±↑↓]) (\d+)$/);
     if (parts) {
       b.className += " wtc-count-control";
       b.replaceChildren(el("span", { className: "wtc-count-icon", textContent: parts[1] + " " }), el("span", { className: "wtc-count-value", textContent: parts[2] }));
     }
     b.onclick = async (e) => {
+      if (b.disabled) return;
       e?.preventDefault();
       e?.stopPropagation();
       b.disabled = true;
@@ -1734,7 +1764,79 @@ function collectionTables(v) {
     };
     return b;
   };
-  const working = () => muted("…", "Working");
+  const working = () => {
+    const svg = controlIcon("↻", 12); svg.setAttribute("class", "wtc-header-glyph wtc-cell-spinner");
+    svg.style.transformBox = "view-box";
+    return css(el("span", { title:"Working",role:"status",ariaLabel:"Working" }, svg), "display:inline-flex;width:12px;height:12px;align-items:center;justify-content:center");
+  };
+  const commitKey = r => `${v.collectionKey?.() ?? v.key()}|${r.sessionKey}`;
+  function limitCommitFeedback(key, state, collection) {
+    const timer = setTimeout(() => {
+      if (commitFeedback.get(key) !== state || !["running", "pending"].includes(state.phase)) return;
+      state.phase = "unconfirmed";
+      recordActivity(collection,state.id,{state:"unknown",status:"Commit outcome not yet confirmed; inspect the conversation before retrying"});
+      notifyFactFeedback(collection);
+    }, 90000); timer.unref?.();
+  }
+  async function commitGroup(repos) {
+    if (!repos.length || authorSending || batchRunning) return;
+    const conversation = v.key(), collection = v.collectionKey?.() ?? conversation;
+    const targets = repos.filter(r => !["running", "pending"].includes(commitFeedback.get(commitKey(r))?.phase));
+    if (!targets.length) return;
+    const states = targets.map(r => {
+      const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid() };
+      commitFeedback.set(commitKey(r), state); limitCommitFeedback(commitKey(r), state, collection);
+      recordActivity(collection, state.id, {repo:nameOf(r),repoSessionKey:r.sessionKey,action:"commit",state:"running",status:"Requesting local commits"}); return state;
+    });
+    notifyFactFeedback(collection);
+    try {
+      await sendToAuthor(conversation, "wtc", `Review and commit the intended local changes in these selected repositories only: ${targets.map(nameOf).join(", ")}. Recheck each repository's current state and branch policy. Preserve intended work and report each result. Publication and follow-up actions are separate.`);
+      states.forEach(state => { if(state.phase!=="unconfirmed") state.phase = "pending"; recordActivity(collection,state.id,{state:"handed-off",status:"Sent to conversation; completion pending"}); });
+    } catch (err) { states.forEach(state => { state.phase = "failed"; state.error = String(err?.message ?? err);recordActivity(collection,state.id,{state:"failed",status:"Commit request failed: "+state.error}); }); }
+    finally { notifyFactFeedback(collection); if (active(conversation)) await v.refresh(); }
+  }
+  async function commitFromFact(r) {
+    const key = commitKey(r), collection = v.collectionKey?.() ?? v.key();
+    if (["running", "pending"].includes(commitFeedback.get(key)?.phase)) return;
+    const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid() };
+    commitFeedback.set(key, state); limitCommitFeedback(key, state, collection); recordActivity(collection,state.id,{repo:nameOf(r),repoSessionKey:r.sessionKey,action:"commit",state:"running",status:"Requesting local commits"}); notifyFactFeedback(collection);
+    try {
+      const result = r.next?.step === "commit" ? await actNext(r, state.id) : await askCommit(r);
+      const last = activityStore.get(collection)?.get(state.id);
+      if (result?.error || last?.action === "commit" && activityFailed(last)) throw Error(result?.error ?? last.status);
+      if(state.phase!=="unconfirmed") state.phase = "pending";recordActivity(collection,state.id,{state:"handed-off",status:"Sent to conversation; completion pending"});
+    } catch (err) { state.phase = "failed"; state.error = String(err?.message ?? err);recordActivity(collection,state.id,{state:"failed",status:"Commit request failed: "+state.error}); }
+    finally { notifyFactFeedback(collection); }
+  }
+  function localChanges(r) {
+    const collection = v.collectionKey?.() ?? v.key(), key = commitKey(r);
+    if (commitFeedback.get(key) && (commitFeedback.get(key).branch !== r.branch || commitFeedback.get(key).path !== r.path)) commitFeedback.delete(key);
+    const state = commitFeedback.get(key);
+    // New commits can be observed even when intentionally uncommitted files remain.
+    // A lower dirty count alone never earns a commit-success mark.
+    if (["pending", "unconfirmed"].includes(state?.phase) && !r.error && (toPush(r) > state.before || r.dirty < state.dirty)) {
+      state.phase = toPush(r) > state.before ? "completed" : "settled";
+      state.at = Date.now();
+      const outcome = state.phase;
+      queueMicrotask(() => recordActivity(collection,state.id,{state:outcome,status:outcome === "completed" ? "New local commits observed" : "Changes decreased; commit outcome unverified"}));
+      const timer = setTimeout(() => { if (commitFeedback.get(key) === state && state.phase === "completed") state.phase = "settled"; notifyFactFeedback(collection); }, 5100); timer.unref?.();
+    }
+    if (state?.phase === "failed" && !r.dirty) state.phase = "settled";
+    const done = state?.phase === "completed" && Date.now() - state.at < 5000;
+    if (!r.dirty && !done && !["pending", "running", "unconfirmed"].includes(state?.phase)) return null;
+    const option = repoActionOptions(r).find(o => o.label === "Commit changes");
+    const pending = ["pending", "running"].includes(state?.phase);
+    const title = done ? `New local commits observed; ${plural(r.dirty || 0,"changed file")} remain` : state?.phase === "unconfirmed" ? "Commit outcome unconfirmed. Open the Action log and check the conversation before retrying" : state?.phase === "failed" ? `Commit request failed: ${state.error}. Retry` : pending ? "Commit requested; awaiting the conversation and refreshed repository facts" : option?.disabled ? option.detail : `${plural(r.dirty, "file")} changed. Commit changes for ${nameOf(r)}; publication is separate`;
+    const button = count(`± ${r.dirty || 0}`, title, done ? TONE.success : state?.phase === "failed" ? TONE.failure : TONE.pending, () => state?.phase === "unconfirmed" ? openActivity() : commitFromFact(r));
+    button.className += " wtc-local-change";
+    button.disabled = pending || done || !option || option.disabled;
+    const icon = button.children[0];
+    if (icon && (pending || done || state?.phase === "failed" || state?.phase === "unconfirmed")) { if(pending) icon.replaceChildren(working()); else icon.textContent = done ? "✓" : state?.phase === "failed" ? "!" : "?"; }
+    if (button.children[1] && r.dirty > 999) { button.children[1].textContent = new Intl.NumberFormat("en",{notation:"compact",maximumFractionDigits:0}).format(r.dirty);button.children[1].style.fontSize="10px"; }
+    if (done && !r.dirty && button.children[1]) button.children[1].style.visibility = "hidden";
+    if (pending) button.setAttribute("aria-busy", "true");
+    return button;
+  }
   const pendingPushCount = (n) => {
     const button = count(n ? `↑ ${n}` : "↑", "Publication in progress; the captured commit count stays visible", TONE.pending, () => {});
     button.disabled = true;
@@ -1861,7 +1963,7 @@ function collectionTables(v) {
     const caughtUp = !toCatchUp(r) && recent?.action === "catch-up" && (recent.state === "completed" || recent.status === "Completed");
     return [
       repoName(r), branch,
-      r.dirty ? toned(String(r.dirty), TONE.pending, `${plural(r.dirty, "file")} changed, not committed yet`) : null,
+      localChanges(r),
       busy.has(r.sessionKey) || sharedPushBusy(r) ? pendingPushCount(n) : pushCell(r, n),
       catching.has(r.sessionKey) ? working() : toCatchUp(r) ? catchUpCell(r) : caughtUp ? toned("✓", TONE.success, "Caught up; no base changes remain in this snapshot") : null,
       pr ? css(el("span", { title: `${pr.draft && open ? "Draft PR. " : ""}${pr.title ?? ""}` }, link(`#${pr.number}`, pr.url), pr.draft && open && !otherPRs(r).length ? muted("draft") : pr.state !== "open" ? muted(pr.state) : null), "display:inline-flex;gap:4px") : null,
@@ -2058,21 +2160,27 @@ function collectionTables(v) {
     for (const s of sub.filter((s) => !repos.some((r) => r.repo && r.repo === s.r.repo))) rows.push(subRow(s.w, s.r));
     return rows;
   }
-  return { table, checkAccount, notice, nextActions, actionToolbar, activityLog, publicationConfirmations, serviceLogs, clearServiceLogs, loadServiceLogs,
+  return { repositoryCompact, repositoryLayoutKey, table, checkAccount, notice, nextActions, actionToolbar, activityLog, publicationConfirmations, serviceLogs, clearServiceLogs, loadServiceLogs,
     dispose: () => { clearServiceLogs(); cancelPreparations("Preparation discarded when the view closed; nothing was pushed."); },
     repoTable: (repos, narrow, workers) => {
       syncConversation();
+      // Retain observed columns so refresh/progress cannot make facts jump sideways.
+      repoFacts.ahead ||= repos.some(r => r.dirty > 0 || toPush(r) > 0) || (workers ?? []).some(w => w.repos.some(r => r.toMerge > 0 || r.mergeError));
+      repoFacts.behind ||= repos.some(r => toCatchUp(r)) || (workers ?? []).some(w => w.repos.some(r => r.behind > 0));
+      repoFacts.pr ||= repos.some(r => r.pullRequest || otherPRs(r).length);
       // Retain space already exposed during this conversation so progress cannot move facts.
-      actionColumns = Math.max(actionColumns, ...repos.map(r => 1 + repoActionOptions(r).filter(o => !o.disabled && o.id !== primaryActionId(r)).length));
-      inlineCapacity = Math.min(actionColumns, inlineActionCapacity(v.width?.(), narrow));
-      const actionWidth = inlineCapacity * 108 + 24;
-      const columns = repositoryColumns(narrow, actionWidth);
+      actionColumns = Math.max(actionColumns, choosing ? 1 : 0, ...repos.map(r => repoActionOptions(r).filter(o => !o.disabled && o.label !== "Commit changes").length));
+      const availableWidth = v.repoWidth?.() ?? v.width?.() ?? 0;
+      narrow = repositoryCompact(availableWidth);
+      inlineCapacity = Math.min(Math.max(1, actionColumns), narrow ? 1 : repoCapacity(availableWidth));
+      const actionWidth = actionColumns ? inlineCapacity * 108 + 24 : 24;
+      const columns = repositoryColumns(narrow, actionWidth, { width: factWidth(), pr: repoFacts.pr });
       const rows = repoRows(repos, workers).map((row) => {
         if (row[1]?.style) row[1].style.fontFamily = "inherit";
         const changes = css(el("span", { className: "wtc-change-slots" },
-          css(el("span", {}, row[2] ? el("span", {}, muted("± "), row[2]) : null), "min-width:0"),
-          css(el("span", {}, row[3]), "min-width:0"),
-          css(el("span", {}, row[4]), "min-width:0")), "display:grid;grid-template-columns:24px 36px 36px;gap:4px;align-items:baseline;font-size:12px;font-variant-numeric:tabular-nums");
+          css(el("span", {}, row[2]?.className?.includes("wtc-local-change") ? row[2] : row[2] ? el("span", {}, muted("± "), row[2]) : null), "min-width:0"),
+          repoFacts.ahead ? css(el("span", {}, row[3]), "min-width:0") : null,
+          repoFacts.behind ? css(el("span", {}, row[4]), "min-width:0") : null), `display:grid;grid-template-columns:${factTracks().map(x => `${x}px`).join(" ")};gap:${FACT_GAP}px;align-items:baseline;font-size:12px;font-variant-numeric:tabular-nums`);
         const currentPR = css(el("span", {}, row[5],
           row[6] || row[7] || row[8] ? css(el("span", {}, ...[row[6], row[7], row[8]].map((mark) => css(el("span", {}, mark), "display:inline-flex;justify-content:center;width:16px;flex:none"))), "display:inline-flex;align-items:baseline;gap:2px;flex:none") : null), "display:flex;gap:4px;align-items:baseline;min-width:0;overflow:hidden");
         const hint = row[10];
@@ -2083,10 +2191,10 @@ function collectionTables(v) {
         if (narrow && row[1]?.style) row[1].style.cssText += ";flex:1 1 0;min-width:32px;font-size:11px";
         const hasFacts = row.slice(2,9).some(Boolean) || !!row[10];
         const identity = css(el("div", {}, nameAndBranch,
-          narrow && hasFacts ? css(el("div", { className: "wtc-repo-facts" }, factSlot(changes), row[5] || row[6] || row[7] || row[8] || row[10] ? factSlot(pr) : null), `display:grid;grid-template-columns:104px minmax(0,1fr);width:calc(100% + ${actionWidth + REPO_COLUMN_GAP}px);min-width:0;column-gap:4px;align-items:baseline;box-sizing:border-box`) : null), "min-width:0;padding:0;width:100%;flex:1 1 0");
-        return narrow ? [identity, row[9]] : [row[0], row[1], changes, pr, row[9]];
+          narrow && hasFacts ? css(el("div", { className: "wtc-repo-facts" }, factSlot(changes), row[5] || row[6] || row[7] || row[8] || row[10] ? factSlot(pr) : null), `display:grid;grid-template-columns:${factWidth()}px minmax(0,1fr);width:calc(100% + ${actionWidth + REPO_COLUMN_GAP}px);padding-left:${REPO_IDENTITY_INSET}px;min-width:0;column-gap:4px;align-items:baseline;box-sizing:border-box`) : null), "min-width:0;padding:0;width:100%;flex:1 1 0");
+        return narrow ? [identity, row[9]] : [row[0], row[1], changes, ...(repoFacts.pr ? [pr] : []), row[9]];
       });
-      return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow, actionWidth), table(columns, rows, false, true)), `min-width:0;--wtc-action-width:${actionWidth}px`);
+      return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow, actionWidth, columns), table(columns, rows, false, true)), `min-width:0;--wtc-action-width:${actionWidth}px`);
     }, serviceTable, serviceControls, totals, prTable };
 }
 
@@ -2179,8 +2287,8 @@ function mountComposer(container, context) {
   let narrow = false, repoNarrow = false, contentWidth = 0;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
     const now = e.contentRect.width > 0 && e.contentRect.width < NARROW_PX;
-    const compactRepos = e.contentRect.width > 0 && e.contentRect.width < REPO_NARROW_PX;
-    const changed = inlineActionCapacity(contentWidth, repoNarrow) !== inlineActionCapacity(e.contentRect.width, compactRepos) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
+    const compactRepos = tables.repositoryCompact(Math.max(0,e.contentRect.width - 24));
+    const changed = tables.repositoryLayoutKey(Math.max(0,contentWidth - 24)) !== tables.repositoryLayoutKey(Math.max(0,e.contentRect.width - 24)) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
     contentWidth = e.contentRect.width;
     if (now !== narrow || compactRepos !== repoNarrow || changed) { narrow = now; repoNarrow = compactRepos; if (entry) render(entry); }
   });
@@ -2214,7 +2322,7 @@ function mountComposer(container, context) {
       ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) });
       for (const notify of serviceLogListeners) notify();
     },
-    width: () => contentWidth,
+    width: () => contentWidth, repoWidth: () => Math.max(0,contentWidth - 24),
     publicationBesideCollapsedBar: true,
     get host() { return ctx.host; }, alive: () => !disposed && !ctx.signal?.aborted, key: () => key, agent: () => agentOf(ctx), svc, say,
     // What a push needs (the how-to of connecting GitHub) shows open.
@@ -2512,8 +2620,8 @@ function mountCollection(container, context) {
   let narrow = false, repoNarrow = false, contentWidth = 0;
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
     const now = e.contentRect.width > 0 && e.contentRect.width < NARROW_PX;
-    const compactRepos = e.contentRect.width > 0 && e.contentRect.width < REPO_NARROW_PX;
-    const changed = inlineActionCapacity(contentWidth, repoNarrow) !== inlineActionCapacity(e.contentRect.width, compactRepos) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
+    const compactRepos = tables.repositoryCompact(e.contentRect.width);
+    const changed = tables.repositoryLayoutKey(contentWidth) !== tables.repositoryLayoutKey(e.contentRect.width) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
     contentWidth = e.contentRect.width;
     if (now !== narrow || compactRepos !== repoNarrow || changed) { narrow = now; repoNarrow = compactRepos; render(); }
   });
