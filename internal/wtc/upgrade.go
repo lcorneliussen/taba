@@ -203,7 +203,8 @@ func latestCLIRelease() (string, error) {
 }
 
 // publishedReleaseNotes returns the published releases after from, up to and
-// including to, oldest first.
+// including to, oldest first. Prereleases are skipped unless one is the
+// target itself, so `--version <v>-rc.N` finds its own notes.
 func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
 	out, err := exec.Command("gh", "api", "--paginate", "repos/"+cliReleaseRepo+"/releases?per_page=100",
 		"--jq", ".[] | {tag_name, body, draft, prerelease}").Output()
@@ -228,7 +229,7 @@ func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
 			return nil, fmt.Errorf("unexpected gh release output: %w", err)
 		}
 		v, err := releaseVersion(item.Tag)
-		if err != nil || item.Draft || item.Prerelease || !v.GreaterThan(from) || v.GreaterThan(to) {
+		if err != nil || item.Draft || (item.Prerelease && !v.Equal(to)) || !v.GreaterThan(from) || v.GreaterThan(to) {
 			continue
 		}
 		releases = append(releases, release{v, ReleaseNote{Version: v.String(), Content: item.Body}})
