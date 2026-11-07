@@ -819,7 +819,7 @@ const REPO_NEXT_WIDTH = 132, REPO_COLUMN_GAP = 10;
 const headerActionCapacity = width => Math.max(1, Math.min(4, Math.floor(((width || 0) - 300) / 108)));
 const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH, facts = { width: 104, pr: true }) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${actionWidth}px`, align: "end" }]
-  : [{ head: "Repository", width: "minmax(64px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: `${facts.width}px` }, ...(facts.pr ? [{ head: "Pull request", width: "164px" }] : []), { head: "Next", width: `${actionWidth}px`, align: "end" }];
+  : [{ head: "Repository", width: "minmax(64px,160px)" }, { head: "Branch", width: "minmax(64px,200px)" }, { head: "Changes", width: `${facts.width}px` }, ...(facts.pr ? [{ head: "Pull request", width: "164px" }] : []), { head: "Next", width: `minmax(${actionWidth}px,1fr)`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
 .wtc-tunnel-trigger:hover,.wtc-tunnel-existing:hover,.wtc-tunnel-option:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
 .wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
@@ -859,6 +859,8 @@ const actionFeedback = () => el("style", { textContent: `
 @media (prefers-reduced-motion:reduce) { .wtc-cell-spinner { animation:none; } }
 .wtc-repositories .wtc-count-control:disabled { opacity:.5;cursor:default !important; }
 .wtc-repositories .wtc-count-control[data-feedback="completed"] { opacity:1; }
+.wtc-repositories .wtc-count-control[aria-busy="true"] { opacity:.85; }
+.wtc-repo-facts .wtc-repo-pr-slots { grid-template-columns:minmax(0,1fr) !important; }
 .wtc-repositories .wtc-count-control { border-color:transparent !important;background:transparent !important; }
 .wtc-repositories { --wtc-control-height:24px; }
 .wtc-repositories .wtc-count-control:is(:hover,:focus-visible):not(:disabled) { border-color:var(--border-strong,rgba(128,128,128,.4)) !important;background:var(--bg-hover,rgba(128,128,128,.12)) !important; }
@@ -909,7 +911,7 @@ function collectionTables(v) {
   const FACT_GAP = 10;
   const factTracks = () => [44, ...(repoFacts.ahead ? [36] : []), ...(repoFacts.behind ? [36] : [])];
   const factWidth = () => factTracks().reduce((n, x) => n + x, 0) + (factTracks().length - 1) * FACT_GAP;
-  // Keep room for readable identity cells, the occupied facts and one primary action.
+  // Fit uses identity minima and occupied facts; extra room belongs to the action rail.
   const repoBaseWidth = () => 128 + factWidth() + (repoFacts.pr ? 164 : 0) + (repoFacts.pr ? 4 : 3) * REPO_COLUMN_GAP;
   const repositoryCompact = width => width > 0 && width < repoBaseWidth() + (actionColumns ? REPO_NEXT_WIDTH : 24);
   const repoCapacity = width => Math.max(1, Math.floor(((width || 0) - repoBaseWidth() - 24) / 108));
@@ -1360,7 +1362,7 @@ function collectionTables(v) {
     if (feedback?.text && !feedback.activityId && !records.some(item => item.status.includes(plain))) records.unshift({ repo: "Latest action", action: "", status: feedback.text, at: feedback.at, failed: feedback.failed, followUp: feedback.action });
     if (!records.length) return null;
     const shown = showAllActivity ? records : records.slice(0, 3);
-    const statusLabel = item => item.state ? ({ completed: "Done", published: "Done", failed: "Failed", running: "Running", confirmation: "Awaiting confirm", cancelled: "Cancelled", blocked: "Needs attention" }[item.state] ?? "Details") : item.failed || /^(Failed|Handoff failed|Cannot )/.test(item.status) ? "Failed" : item.status === "Completed" ? "Done" : /confirmation/.test(item.status) ? "Awaiting confirm" : /pending|Sent/.test(item.status) ? "Sent to agent" : /Queued/.test(item.status) ? "Queued" : /ing…|Catching up…/.test(item.status) ? "Running" : "Details";
+    const statusLabel = item => item.state ? ({ completed: "Done", published: "Done", failed: "Failed", running: "Running", confirmation: "Awaiting confirm", cancelled: "Cancelled", blocked: "Needs attention", "handed-off":"Sent to agent", unknown:"Unconfirmed", settled:"Observed change" }[item.state] ?? "Details") : item.failed || /^(Failed|Handoff failed|Cannot )/.test(item.status) ? "Failed" : item.status === "Completed" ? "Done" : /confirmation/.test(item.status) ? "Awaiting confirm" : /pending|Sent/.test(item.status) ? "Sent to agent" : /Queued/.test(item.status) ? "Queued" : /ing…|Catching up…/.test(item.status) ? "Running" : "Details";
     return css(el("div", { className: "wtc-activity-log" }, sectionHeading("Action log"), ...shown.map(item => {
       const label = statusLabel(item), failed = label === "Failed";
       const detail = css(el("details", { className: "wtc-activity-item", role: failed ? "alert" : "status", ariaLabel: item.detail ?? item.status },
@@ -1481,7 +1483,7 @@ function collectionTables(v) {
           nextButton("Cancel", `Cancel preparation for ${nameOf(r)}; nothing will be pushed`, () => { if (!active(prepared.conversationKey) || confirming.get(r.sessionKey) !== prepared) return; confirming.delete(r.sessionKey); if (prepared.activityId) recordActivity(prepared.logKey, prepared.activityId, { state: "cancelled", status: `${nameOf(r)}: publication cancelled.` }); v.say(`${nameOf(r)}: publication cancelled.`); v.rerender(); }, reserved(r))), "display:flex;align-items:center;gap:8px;padding-top:4px")), "display:grid;gap:4px;padding:10px 12px;border:1px solid var(--border-strong,rgba(128,128,128,.35));border-radius:8px;background:var(--bg,transparent)");
     })), "display:grid;gap:8px;min-width:0");
   }
-  function bulkActions(repos, narrow, actionWidth, columns) {
+  function bulkActions(repos, narrow, columns) {
     if (!repos.length) return null;
     const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
     const catches = repos.filter(r => toCatchUp(r) && !r.dirty && (!r.next || !dispatched.has(handoffKey(r, r.next))));
@@ -1790,8 +1792,8 @@ function collectionTables(v) {
     });
     notifyFactFeedback(collection);
     try {
-      await sendToAuthor(conversation, "wtc", `Review and commit the intended local changes in these selected repositories only: ${targets.map(nameOf).join(", ")}. Recheck each repository's current state and branch policy. Preserve intended work and report each result. Publication and follow-up actions are separate.`);
-      states.forEach(state => { if(state.phase!=="unconfirmed") state.phase = "pending"; recordActivity(collection,state.id,{state:"handed-off",status:"Sent to conversation; completion pending"}); });
+      await sendToAuthor(conversation, "wtc", `Review and commit the intended local changes in these eligible repositories only: ${targets.map(nameOf).join(", ")}. Recheck each repository's current state and branch policy. Preserve intended work and report each result. Publication and follow-up actions are separate.`);
+      states.forEach(state => { if(state.phase!=="unconfirmed") state.phase = "pending"; recordActivity(collection,state.id,{state:state.phase === "unconfirmed" ? "unknown" : "handed-off",status:state.phase === "unconfirmed" ? "Request accepted; outcome remains unconfirmed" : "Sent to conversation; completion pending"}); });
     } catch (err) { states.forEach(state => { state.phase = "failed"; state.error = String(err?.message ?? err);recordActivity(collection,state.id,{state:"failed",status:"Commit request failed: "+state.error}); }); }
     finally { notifyFactFeedback(collection); if (active(conversation)) await v.refresh(); }
   }
@@ -1804,7 +1806,7 @@ function collectionTables(v) {
       const result = r.next?.step === "commit" ? await actNext(r, state.id) : await askCommit(r);
       const last = activityStore.get(collection)?.get(state.id);
       if (result?.error || last?.action === "commit" && activityFailed(last)) throw Error(result?.error ?? last.status);
-      if(state.phase!=="unconfirmed") state.phase = "pending";recordActivity(collection,state.id,{state:"handed-off",status:"Sent to conversation; completion pending"});
+      if(state.phase!=="unconfirmed") state.phase = "pending";recordActivity(collection,state.id,{state:state.phase === "unconfirmed" ? "unknown" : "handed-off",status:state.phase === "unconfirmed" ? "Request accepted; outcome remains unconfirmed" : "Sent to conversation; completion pending"});
     } catch (err) { state.phase = "failed"; state.error = String(err?.message ?? err);recordActivity(collection,state.id,{state:"failed",status:"Commit request failed: "+state.error}); }
     finally { notifyFactFeedback(collection); }
   }
@@ -1822,11 +1824,11 @@ function collectionTables(v) {
       const timer = setTimeout(() => { if (commitFeedback.get(key) === state && state.phase === "completed") state.phase = "settled"; notifyFactFeedback(collection); }, 5100); timer.unref?.();
     }
     if (state?.phase === "failed" && !r.dirty) state.phase = "settled";
-    const done = state?.phase === "completed" && Date.now() - state.at < 5000;
+    const done = state?.phase === "completed" && !r.dirty && Date.now() - state.at < 5000;
     if (!r.dirty && !done && !["pending", "running", "unconfirmed"].includes(state?.phase)) return null;
     const option = repoActionOptions(r).find(o => o.label === "Commit changes");
     const pending = ["pending", "running"].includes(state?.phase);
-    const title = done ? `New local commits observed; ${plural(r.dirty || 0,"changed file")} remain` : state?.phase === "unconfirmed" ? "Commit outcome unconfirmed. Open the Action log and check the conversation before retrying" : state?.phase === "failed" ? `Commit request failed: ${state.error}. Retry` : pending ? "Commit requested; awaiting the conversation and refreshed repository facts" : option?.disabled ? option.detail : `${plural(r.dirty, "file")} changed. Commit changes for ${nameOf(r)}; publication is separate`;
+    const title = done ? "New local commits observed; working tree clean" : state?.phase === "unconfirmed" ? "Commit outcome unconfirmed. Open the Action log and check the conversation before retrying" : state?.phase === "failed" ? `Commit request failed: ${state.error}. Retry` : pending ? "Commit requested; awaiting the conversation and refreshed repository facts" : option?.disabled ? option.detail : `${plural(r.dirty, "file")} changed. Commit changes for ${nameOf(r)}; publication is separate`;
     const button = count(`± ${r.dirty || 0}`, title, done ? TONE.success : state?.phase === "failed" ? TONE.failure : TONE.pending, () => state?.phase === "unconfirmed" ? openActivity() : commitFromFact(r));
     button.className += " wtc-local-change";
     if(done)button.setAttribute("data-feedback","completed");
@@ -1875,7 +1877,7 @@ function collectionTables(v) {
         }
         // Absolute icon rails keep their full hit area; text cells still clip.
         const overflow = c.overflow || value?.className === "wtc-lead-slot";
-        return css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? "width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;" : ""}min-width:0;overflow:${overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
+        return css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? `width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;${c.align === "end" ? "justify-content:flex-end;" : ""}` : ""}min-width:0;overflow:${overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
       }));
     }
     return grid;
@@ -2185,16 +2187,16 @@ function collectionTables(v) {
           row[6] || row[7] || row[8] ? css(el("span", {}, ...[row[6], row[7], row[8]].map((mark) => css(el("span", {}, mark), "display:inline-flex;justify-content:center;width:16px;flex:none"))), "display:inline-flex;align-items:baseline;gap:2px;flex:none") : null), "display:flex;gap:4px;align-items:baseline;min-width:0;overflow:hidden");
         const hint = row[10];
         if (hint) hint.style.cssText += ";max-width:80px;min-width:0;font-size:11px;padding:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-        const pr = css(el("span", { className: "wtc-repo-pr-slots" }, currentPR, css(el("span", { className: "wtc-repo-pr-history-slot" }, hint), "min-width:0;overflow:hidden")), "display:grid;grid-template-columns:minmax(0,1fr) 80px;gap:4px;align-items:baseline;white-space:nowrap;min-width:0;width:100%;flex:1 1 0");
+        const pr = css(el("span", { className: "wtc-repo-pr-slots" }, currentPR, hint ? css(el("span", { className: "wtc-repo-pr-history-slot" }, hint), "min-width:0;overflow:hidden") : null), `display:grid;grid-template-columns:${hint ? "minmax(0,1fr) 80px" : "minmax(0,1fr)"};gap:4px;align-items:baseline;white-space:nowrap;min-width:0;width:100%;flex:1 1 0`);
         const nameAndBranch = css(el("div", { className: "wtc-repo-identity" }, row[0], narrow ? row[1] : null), "display:flex;align-items:baseline;gap:8px;min-width:0;min-height:20px;white-space:nowrap");
         if (narrow && row[0]?.style) row[0].style.cssText += ";flex:0 1 auto;min-width:0";
         if (narrow && row[1]?.style) row[1].style.cssText += ";flex:1 1 0;min-width:32px;font-size:11px";
         const hasFacts = row.slice(2,9).some(Boolean) || !!row[10];
         const identity = css(el("div", {}, nameAndBranch,
-          narrow && hasFacts ? css(el("div", { className: "wtc-repo-facts" }, factSlot(changes), row[5] || row[6] || row[7] || row[8] || row[10] ? factSlot(pr) : null), `display:grid;grid-template-columns:${factWidth()}px minmax(0,1fr);width:calc(100% + ${actionWidth + REPO_COLUMN_GAP}px);padding-left:${REPO_IDENTITY_INSET}px;min-width:0;column-gap:4px;align-items:baseline;box-sizing:border-box`) : null), "min-width:0;padding:0;width:100%;flex:1 1 0");
+          narrow && hasFacts ? css(el("div", { className: "wtc-repo-facts" }, factSlot(changes), row[5] || row[6] || row[7] || row[8] || row[10] ? factSlot(pr) : null), `display:grid;grid-template-columns:${availableWidth < REPO_IDENTITY_INSET + factWidth() + 84 ? "minmax(0,1fr)" : `${factWidth()}px minmax(0,1fr)`};width:calc(100% + ${actionWidth + REPO_COLUMN_GAP}px);padding-left:${REPO_IDENTITY_INSET}px;min-width:0;column-gap:4px;align-items:baseline;box-sizing:border-box`) : null), "min-width:0;padding:0;width:100%;flex:1 1 0");
         return narrow ? [identity, row[9]] : [row[0], row[1], changes, ...(repoFacts.pr ? [pr] : []), row[9]];
       });
-      return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow, actionWidth, columns), table(columns, rows, false, true)), `min-width:0;--wtc-action-width:${actionWidth}px`);
+      return css(el("div", { className: "wtc-repositories" }, bulkActions(repos, narrow, columns), table(columns, rows, false, true)), `min-width:0;--wtc-action-width:${actionWidth}px`);
     }, serviceTable, serviceControls, totals, prTable };
 }
 

@@ -9,7 +9,7 @@ When folding is necessary, the facts and their column controls share the
 repository text inset.
 
 Click `±N` to ask the conversation to review and commit that repository's
-intended changes. The `±` control above the column asks for the all
+intended changes. The `±` control above the column asks for all
 eligible repositories in one bounded request. Clean, blocked and already
 pending repositories are excluded. The conversation must recheck current
 state and branch policy; this action does not publish anything.

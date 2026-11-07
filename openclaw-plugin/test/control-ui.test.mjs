@@ -2812,7 +2812,7 @@ test("the changes-column control sends one bounded group request and excludes cl
  try {
   calls.length=0;await commitColumnButton(host).onclick();await settle();
   const sent=calls.filter(c=>c.method==="sessions.send");assert.equal(sent.length,1);
-  assert.match(sent[0].message,/selected repositories only: api, site/);
+  assert.match(sent[0].message,/eligible repositories only: api, site/);
   assert.doesNotMatch(sent[0].message,/clean/);
   assert.match(sent[0].message,/Publication and follow-up actions are separate/);
   assert.equal(commitColumnButton(host).disabled,true);
