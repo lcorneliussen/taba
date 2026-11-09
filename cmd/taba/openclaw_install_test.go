@@ -154,6 +154,29 @@ func TestOpenClawInstallFlagsAndErrors(t *testing.T) {
 	}
 }
 
+// go install of a release tag records the module version; that is the
+// version. Checkout builds, pseudo-versions and modified trees are not.
+func TestModuleVersion(t *testing.T) {
+	for in, want := range map[string]string{
+		"v0.2.0":                               "0.2.0",
+		"v0.2.0-rc.1":                          "0.2.0-rc.1",
+		"(devel)":                              "",
+		"":                                     "",
+		"v0.2.1-0.20261109083000-abcdef123456": "",
+		"v0.2.0-rc.1.0.20261109083000-abcdef123456":  "",
+		"v0.2.1-0.20261109083000-abcdef123456+dirty": "",
+		"v0.2.0+dirty": "",
+	} {
+		got := moduleVersion(func() (*debug.BuildInfo, bool) { return &debug.BuildInfo{Main: debug.Module{Version: in}}, true })
+		if got != want {
+			t.Errorf("moduleVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := moduleVersion(func() (*debug.BuildInfo, bool) { return nil, false }); got != "" {
+		t.Errorf("without build info: %q", got)
+	}
+}
+
 // A build without a release version says which release it follows, its
 // commit and when, and whether it had local changes.
 func TestDescribeBuild(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
@@ -34,6 +35,11 @@ func emit(v envelope, asJSON bool) error {
 	return nil
 }
 func main() {
+	if version == "dev" {
+		if v := moduleVersion(debug.ReadBuildInfo); v != "" {
+			version = v
+		}
+	}
 	handOverToDevBuild()
 	printRenameNotice(os.Stderr)
 	if err := run(); err != nil {
