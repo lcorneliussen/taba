@@ -125,6 +125,13 @@ silently is not. Bring the repo in with `wtc add-repo` and write
 down in the selected scope file why it is here. A collection whose scope file
 no longer describes it has stopped being one task.
 
+## Private working hours
+
+Use `wtc hours facts --json` at meaningful task/turn boundaries. When configured,
+follow `.wtc/instructions/working-hours.md` for focus, wrap-up, quiet independent
+work and explicit finite extensions. Offer setup when unset; never guess hours.
+This is portable guidance, not a guarantee of automatic per-turn enforcement.
+
 ## Nothing durable lives in this folder
 
 The selected scope file, `HANDOFF.md`, and `.env.collection.local` are disposable

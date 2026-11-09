@@ -295,6 +295,7 @@ func run() error {
 	addRetireCommand(root, &asJSON)
 	addCatchUpCommand(root, &asJSON)
 	addStatusCommand(root, &asJSON)
+	addWorkingHoursCommand(root, &asJSON, cwd)
 	addOpenCommand(root, &asJSON)
 	addBrowseCommand(root, &asJSON)
 	addRuntimeCommands(root, &asJSON)

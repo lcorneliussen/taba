@@ -78,6 +78,7 @@ type statusTUIModel struct {
 	startedAt      time.Time
 	errorText      string
 	hover          string
+	hoursHint      string
 }
 
 // Row locations come from the renderers, including conditional detail lines.
@@ -446,6 +447,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case statusTickMsg:
+		m.refreshHours(time.Time(msg))
 		if !m.refreshing && !m.nextRunning && !m.nextRefresh.IsZero() && !time.Now().Before(m.nextRefresh) {
 			m.startRefresh()
 			return m, tea.Batch(statusTUITick(), statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge))
@@ -1473,6 +1475,21 @@ func statusTUIProgressLine(step string, elapsed time.Duration, width int) string
 	return "↻ " + statusTUISafe(step)
 }
 
+// Hours share the existing second row and yield entirely when progress needs
+// the space. Measure display cells so styling and wide glyphs do not move it.
+func statusTUISecondaryLine(progress, hours string, width int) string {
+	left := statusTUIStyle(progress, statusToneWarning)
+	hours = statusTUISafe(hours)
+	if hours == "" {
+		return left
+	}
+	gap := width - ansi.StringWidth(progress) - ansi.StringWidth(hours)
+	if gap < 0 || (progress != "" && gap < 2) {
+		return left
+	}
+	return left + strings.Repeat(" ", gap) + statusTUIStyle(hours, statusToneDim)
+}
+
 func (m statusTUIModel) contentLines() []string {
 	return m.contentLayout().lines
 }
@@ -1495,14 +1512,15 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 		}
 		header += statusTUIFitANSI(suffix, remaining)
 	}
-	lines := []string{header, ""}
+	progress := ""
 	if m.refreshing && m.progressStep != "" {
 		elapsed := time.Since(m.startedAt).Truncate(time.Second)
 		if m.startedAt.IsZero() {
 			elapsed = 0
 		}
-		lines[1] = statusTUIStyle(statusTUIProgressLine(m.progressStep, elapsed, width), statusToneWarning)
+		progress = statusTUIProgressLine(m.progressStep, elapsed, width)
 	}
+	lines := []string{header, statusTUISecondaryLine(progress, m.hoursHint, width)}
 	if m.showHelp {
 		keys := "n next actions   r refresh   l log   a archived PRs   ? help   q quit"
 		if m.procs {
@@ -1658,6 +1676,7 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 	}
 	model := statusTUIModel{context: c, all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, fetchAge: fetchAge, interval: interval,
 		background: background, focused: true, refreshing: true}
+	model.refreshHours(time.Now())
 	model.startRefresh()
 	if !all && !procs {
 		model.snapshot.Collection = filepath.Base(c.Collection)
@@ -1685,4 +1704,21 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 		return nil // The watcher lease was cancelled.
 	}
 	return err
+}
+
+// Refresh once per clock tick, rather than doing profile I/O during rendering
+// and mouse hit testing. The hint shares the existing progress/blank row.
+func (m *statusTUIModel) refreshHours(now time.Time) {
+	if m.context == nil || m.procs {
+		m.hoursHint = ""
+		return
+	}
+	f, err := localHoursFacts(m.context, now)
+	m.hoursHint = "Working hours unavailable"
+	if err == nil && f.UnavailableReason == "" {
+		m.hoursHint = "Set working hours…"
+		if f.Configured {
+			m.hoursHint = "Working hours: " + f.Phase
+		}
+	}
 }
