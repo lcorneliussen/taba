@@ -6,10 +6,10 @@ Git worktree collections for working across repositories, with agents or your fa
 
 taba was called wtc until 0.2. The `wtc` command keeps working, and existing collections, harnesses and pins need no changes; see the [rename announcement](https://taba.sh/wtc-is-now-taba/).
 
-[![Latest release](https://img.shields.io/github/v/release/lcorneliussen/wtc-cli?label=release)](https://github.com/lcorneliussen/wtc-cli/releases)
-[![CI](https://github.com/lcorneliussen/wtc-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/lcorneliussen/wtc-cli/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/lcorneliussen/taba?label=release)](https://github.com/lcorneliussen/taba/releases)
+[![CI](https://github.com/lcorneliussen/taba/actions/workflows/ci.yml/badge.svg)](https://github.com/lcorneliussen/taba/actions/workflows/ci.yml)
 
-[Website and handbook](https://taba.sh/) · [Getting started](https://taba.sh/docs/getting-started/) · [Command reference](docs/commands.md) · [Releases](https://github.com/lcorneliussen/wtc-cli/releases)
+[Website and handbook](https://taba.sh/) · [Getting started](https://taba.sh/docs/getting-started/) · [Command reference](docs/commands.md) · [Releases](https://github.com/lcorneliussen/taba/releases)
 
 A **worktree collection** puts the repositories needed for one task in a single
 folder: your API, frontend, shared library, and optionally a project-owned
@@ -22,12 +22,12 @@ editor are optional.
 
 ## Install and try it
 
-You need Git and macOS or Linux. Install with Homebrew, use mise, or download a [published binary](https://github.com/lcorneliussen/wtc-cli/releases):
+You need Git and macOS or Linux. Install with Homebrew, use mise, or download a [published binary](https://github.com/lcorneliussen/taba/releases):
 
 ```sh
 brew install lcorneliussen/taba/taba
 # or
-mise use -g github:lcorneliussen/wtc-cli@0.2.0
+mise use -g github:lcorneliussen/taba@0.2.0
 taba --version
 ```
 
@@ -74,4 +74,4 @@ Real commands against synthetic local repositories:
 | Understand a release or upgrade | [Release notes and upgrades](docs/release-notes.md), `taba release-notes --since <old-pin>` |
 | The rename from wtc | [Environment compatibility](docs/rename-compatibility.md), [configuration inputs](docs/rename-config-inputs.md), [command names](docs/rename-invocation.md), [rename announcement](https://taba.sh/wtc-is-now-taba/) |
 | Build, test, or contribute | [Development and validation](docs/development.md) |
-| Report a bug | [Issues](https://github.com/lcorneliussen/wtc-cli/issues) — include version, host mode, and a redacted reproduction |
+| Report a bug | [Issues](https://github.com/lcorneliussen/taba/issues) — include version, host mode, and a redacted reproduction |
