@@ -28,7 +28,7 @@ prepend_paths = ["tools/bin"]
 ```
 
 The committed `.wtc-cli-version` supplies the exact `wtc` version. Do not add
-`github:lcorneliussen/wtc-cli` to `[mise.tools]`. `wtc env setup --dry-run` previews
+`github:lcorneliussen/taba` to `[mise.tools]`. `wtc env setup --dry-run` previews
 `.env.collection` and `mise.toml`; `wtc env setup` regenerates them. Put local values
 and credentials in `.env.collection.local`, which the generator preserves.
 

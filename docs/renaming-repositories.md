@@ -1,6 +1,6 @@
 # Renaming a repository
 
-A registry entry's `name` is the repository's identity in a workspace: it names the sibling folder, the shared owner `.bare/<name>.git`, the `<NAME>_PORT` variable, service files, PR enlistments and secrets in the control root. Renaming an entry used to make wtc treat it as a new repository. `aliases` lets the name change without breaking collections that already exist ([#295](https://github.com/lcorneliussen/wtc-cli/issues/295)).
+A registry entry's `name` is the repository's identity in a workspace: it names the sibling folder, the shared owner `.bare/<name>.git`, the `<NAME>_PORT` variable, service files, PR enlistments and secrets in the control root. Renaming an entry used to make wtc treat it as a new repository. `aliases` lets the name change without breaking collections that already exist ([#295](https://github.com/lcorneliussen/taba/issues/295)).
 
 ## Registry
 

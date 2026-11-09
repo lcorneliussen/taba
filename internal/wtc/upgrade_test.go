@@ -31,7 +31,8 @@ func TestCompatibilityRangeAndRewrite(t *testing.T) {
 }
 
 // upgradeFixture commits a wtc.toml into the fixture harness and puts a fake
-// gh on PATH that publishes 0.1.9 to 0.1.12 (plus a draft 0.1.13).
+// gh on PATH that publishes 0.1.9 to 0.1.12, a prerelease 0.1.12-rc.1 and a
+// draft 0.1.13.
 func upgradeFixture(t *testing.T) (*Context, string) {
 	t.Helper()
 	c := newWorkspaceFixture(t)
@@ -42,10 +43,11 @@ func upgradeFixture(t *testing.T) (*Context, string) {
 	fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
 case "$*" in
   *releases/latest*) echo v0.1.12 ;;
-  *releases/tags/v0.1.1[0-2]*) echo ok ;;
+  *releases/tags/v0.1.1[0-2]*|*releases/tags/v0.1.12-rc.1*) echo ok ;;
   *releases/tags/*) exit 1 ;;
   *releases\?per_page=100*)
     for v in 9 10 11 12; do printf '{"tag_name":"v0.1.%s","body":"# wtc 0.1.%s\\n","draft":false,"prerelease":false}\n' $v $v; done
+    printf '%s\n' '{"tag_name":"v0.1.12-rc.1","body":"# wtc 0.1.12-rc.1\n","draft":false,"prerelease":true}'
     printf '%s\n' '{"tag_name":"v0.1.13","body":"draft","draft":true,"prerelease":false}' ;;
   *) exit 2 ;;
 esac
@@ -99,6 +101,19 @@ func TestUpgradeBumpsPinAndRangeWithPublishedNotes(t *testing.T) {
 	fixtureGit(t, "-C", c.Harness, "checkout", "--", ".wtc-cli-version", "wtc.toml")
 	if _, err := c.Upgrade(UpgradeOptions{Version: "0.1.9"}); err == nil || !strings.Contains(err.Error(), "not newer") {
 		t.Fatalf("same version accepted: %v", err)
+	}
+}
+
+func TestUpgradeToPrereleaseReadsItsOwnNotes(t *testing.T) {
+	c, _ := upgradeFixture(t)
+	dry, err := c.Upgrade(UpgradeOptions{DryRun: true, Version: "0.1.12-rc.1"})
+	if err != nil || dry.To != "0.1.12-rc.1" || len(dry.Notes) != 3 || dry.Notes[2].Version != "0.1.12-rc.1" || dry.Notes[1].Version != "0.1.11" {
+		t.Fatalf("prerelease target: %+v %v", dry, err)
+	}
+	// A prerelease that is not the target stays out of the notes.
+	dry, err = c.Upgrade(UpgradeOptions{DryRun: true})
+	if err != nil || dry.To != "0.1.12" || len(dry.Notes) != 3 || dry.Notes[2].Version != "0.1.12" {
+		t.Fatalf("stable target: %+v %v", dry, err)
 	}
 }
 

@@ -3,7 +3,7 @@
 Build with Go 1.27 or newer:
 
 ```sh
-go build -o wtc ./cmd/wtc
+go build -o wtc ./cmd/taba
 go test ./...
 go vet ./...
 ```

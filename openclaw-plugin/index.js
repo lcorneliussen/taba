@@ -35,7 +35,7 @@ export const wtcVersionOf = (output) => /^wtc version (\S+)/.exec(String(output 
 // What to say when the wtc on the gateway's PATH is a release other than the
 // one this plugin came from, as after upgrading wtc without reinstalling the
 // plugin. A dev build on either side says nothing: a wtc without a release
-// version stamps the plugin with a -dev version (describeBuild in cmd/wtc),
+// version stamps the plugin with a -dev version (describeBuild in cmd/taba),
 // or 0.0.0-dev.
 export function versionWarning(pluginVersion, wtcVersionOutput) {
   const m = /^wtc version v?(\d+\.\d+\.\d+)$/.exec(String(wtcVersionOutput ?? "").trim());

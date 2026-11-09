@@ -7,10 +7,10 @@ took and why before changing anything.
 
 Read this from the binary you will run, `wtc docs setup.md`, so that it
 matches that version. Without wtc yet, install a
-[release](https://github.com/lcorneliussen/wtc-cli/releases) first: the
+[release](https://github.com/lcorneliussen/taba/releases) first: the
 `taba_<version>_<os>_<arch>.tar.gz` for the machine (`wtc_…` before the
 taba releases; it holds both `taba` and `wtc`), checked against
-`checksums.txt`, or `mise use -g github:lcorneliussen/wtc-cli@<version>`.
+`checksums.txt`, or `mise use -g github:lcorneliussen/taba@<version>`.
 
 ## 1. Where does wtc run?
 
@@ -34,7 +34,7 @@ repository the person's organisation names as its harness.
 | Answer | Terminal or herdr | OpenClaw |
 | --- | --- | --- |
 | **None**: a task across a few repositories | `docs/getting-started.md`, "Ad-hoc collection, no harness" | The default. Collections are ad hoc; repositories are named as `owner/name`, URLs or gateway projects. |
-| **An existing harness** | `wtc docs bootstrap.md`, from step 2 with its remote | Add the harness as a gateway project and configure it under `plugins.entries.wtc.config.harnesses` ([Harnesses](https://github.com/lcorneliussen/wtc-cli/blob/main/docs/openclaw.md#harnesses)). Collections then resolve repositories through it. |
+| **An existing harness** | `wtc docs bootstrap.md`, from step 2 with its remote | Add the harness as a gateway project and configure it under `plugins.entries.wtc.config.harnesses` ([Harnesses](https://github.com/lcorneliussen/taba/blob/main/docs/openclaw.md#harnesses)). Collections then resolve repositories through it. |
 | **A new harness** | `wtc docs bootstrap.md`, from step 1. The person creates the remote. | As for an existing one, once the remote exists. |
 
 With several harnesses, ask which one this environment belongs to. Never
@@ -48,13 +48,13 @@ harness without the person's go.
   make the change there, as code, and let the pipeline apply it. Pin every
   version (wtc, plugins). An upgrade is then a pin bump.
   For OpenClaw, follow "Gateway image and CI/CD" in
-  [`docs/openclaw.md`](https://github.com/lcorneliussen/wtc-cli/blob/main/docs/openclaw.md#gateway-image-and-cicd).
+  [`docs/openclaw.md`](https://github.com/lcorneliussen/taba/blob/main/docs/openclaw.md#gateway-image-and-cicd).
 
 ## Then
 
 - **Terminal or herdr**: `wtc doctor` in the first collection checks it.
 - **OpenClaw**: follow the
-  [install](https://github.com/lcorneliussen/wtc-cli/blob/main/docs/openclaw.md#install).
+  [install](https://github.com/lcorneliussen/taba/blob/main/docs/openclaw.md#install).
   Then run `wtc doctor --openclaw` on the gateway host (from an agent's
   command, plain `wtc doctor` does the same). It checks Git, `gh`, the
   plugin and its version, the Control UI setting, and whether each agent's
