@@ -172,6 +172,12 @@ func TestModuleVersion(t *testing.T) {
 			t.Errorf("moduleVersion(%q) = %q, want %q", in, got, want)
 		}
 	}
+	// A clean checkout at a tag records the tag too, next to vcs.* settings.
+	checkout := &debug.BuildInfo{Main: debug.Module{Version: "v0.2.0"},
+		Settings: []debug.BuildSetting{{Key: "vcs", Value: "git"}, {Key: "vcs.revision", Value: "317ca2a9b1c2"}, {Key: "vcs.modified", Value: "false"}}}
+	if got := moduleVersion(func() (*debug.BuildInfo, bool) { return checkout, true }); got != "" {
+		t.Errorf("clean tagged checkout: %q", got)
+	}
 	if got := moduleVersion(func() (*debug.BuildInfo, bool) { return nil, false }); got != "" {
 		t.Errorf("without build info: %q", got)
 	}

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -89,13 +89,19 @@ func versionLabel() string {
 var pseudoVersion = regexp.MustCompile(`(^|\.)\d{14}-[0-9a-f]{12}$`)
 
 // moduleVersion is the release version Go recorded for `go install
-// taba.sh/taba/cmd/taba@v0.2.0`, which sets no -ldflags version. Checkout
-// builds, pseudo-versions and modified trees return "", so they stay
-// unversioned and describeBuild names them.
+// taba.sh/taba/cmd/taba@v0.2.0`, which sets no -ldflags version. A build in
+// a checkout records vcs.* settings, even a clean one at a tag; it, and
+// pseudo-versions and modified trees, return "", so they stay unversioned
+// and describeBuild names them.
 func moduleVersion(readInfo func() (*debug.BuildInfo, bool)) string {
 	info, ok := readInfo()
 	if !ok || info == nil {
 		return ""
+	}
+	for _, s := range info.Settings {
+		if strings.HasPrefix(s.Key, "vcs.") {
+			return ""
+		}
 	}
 	v, err := semver.NewVersion(info.Main.Version)
 	if err != nil || !strings.HasPrefix(info.Main.Version, "v") || v.Metadata() != "" || pseudoVersion.MatchString(v.Prerelease()) {
