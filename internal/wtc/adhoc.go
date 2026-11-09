@@ -11,10 +11,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
+	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/envcompat"
 )
 
 // AdHocConfigDir holds an ad-hoc collection's registry, wtc.toml, hooks and

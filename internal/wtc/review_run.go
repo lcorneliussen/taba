@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/envcompat"
 )
 
 type ReviewRunOptions struct {

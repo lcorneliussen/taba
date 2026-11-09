@@ -19,7 +19,7 @@ read by the CLI, including the launch/status defaults below, control-root and
 data-root overrides, and the TWG-site setting. Within a source the new prefix
 wins; environment values still override file defaults. Conflicting values warn
 once per setting on stderr without printing either value. Generated names stay
-as `WTC_` in this increment. See the [environment compatibility guide](https://github.com/lcorneliussen/wtc-cli/blob/main/docs/rename-compatibility.md)
+as `WTC_` in this increment. See the [environment compatibility guide](https://github.com/lcorneliussen/taba/blob/main/docs/rename-compatibility.md)
 for the supported settings, empty-value behavior and remaining phase-0 work.
 
 | Variable | Default | Effect |

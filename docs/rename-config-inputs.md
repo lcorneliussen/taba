@@ -1,6 +1,6 @@
 # Configuration inputs for the taba rename
 
-This is a phase-0 increment of [#201](https://github.com/lcorneliussen/wtc-cli/issues/201), preparing existing `wtc 0.1.x` clients for the rename. Use the target release's notes to determine whether it has shipped. There is no migration command or need to rename files yet.
+This is a phase-0 increment of [#201](https://github.com/lcorneliussen/taba/issues/201), preparing existing `wtc 0.1.x` clients for the rename. Use the target release's notes to determine whether it has shipped. There is no migration command or need to rename files yet.
 
 ## Accepted names
 

@@ -3,7 +3,7 @@ package wtc
 import (
 	"strings"
 
-	"github.com/lcorneliussen/wtc-cli/internal/next"
+	"taba.sh/taba/internal/next"
 )
 
 // statusPredictBBMerge supplements Bitbucket's unknown mergeability with a

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/Masterminds/semver/v3"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"gopkg.in/yaml.v3"
 	"io"
 	"maps"
@@ -20,6 +19,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"taba.sh/taba/internal/branding"
 	"time"
 )
 

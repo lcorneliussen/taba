@@ -1,6 +1,6 @@
 # Collection-state compatibility for the taba rename
 
-This increment of [phase 0](https://github.com/lcorneliussen/wtc-cli/issues/201)
+This increment of [phase 0](https://github.com/lcorneliussen/taba/issues/201)
 accepts alternate names for collection-local PR and status state. Check a
 release's notes before assuming it includes these readers. No migration or
 manual rename is required.
