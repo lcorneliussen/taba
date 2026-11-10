@@ -577,10 +577,10 @@ test("composer: the actions are on the facts they change", async () => {
   calls.length = 0;
   await named(/^3 new on main\. Catch up/).onclick();
   assert.deepEqual(calls.map((c) => c.actionId ?? c.method), ["catch-up", "sessions.send"]);
-  assert.equal(calls[1].message, "/skill wtc-catch-up api: catching up with origin/main conflicts in README.md, go.mod.");
+  assert.equal(calls[1].message, "/skill taba-catch-up api: catching up with origin/main conflicts in README.md, go.mod.");
   catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
   await named(/^#7 conflicts with main\. Resolve/).onclick();
-  assert.equal(calls.at(-1).message, "/skill wtc-catch-up api: pull request #7 conflicts with main.");
+  assert.equal(calls.at(-1).message, "/skill taba-catch-up api: pull request #7 conflicts with main.");
   // Without the Bitbucket plugin's publish, Bitbucket is not pushed from
   // here: pushing is never handed to the agent.
   assert.equal(named(/^1 commit to push/), undefined);
@@ -1404,7 +1404,7 @@ test("composer: a sub-session's merge conflict goes to the conversation; an unkn
   calls.length = 0;
   await named(/^1 commit on openclaw\/test--docs not in the collection's site/).onclick();
   assert.deepEqual(calls.map((c) => c.actionId ?? c.method), ["catch-up", "sessions.send"]);
-  assert.equal(calls[1].message, "/skill wtc-catch-up site: merging sub-session docs's openclaw/test--docs (wtc catch-up --from openclaw/test--docs) conflicts in index.md.");
+  assert.equal(calls[1].message, "/skill taba-catch-up site: merging sub-session docs's openclaw/test--docs (wtc catch-up --from openclaw/test--docs) conflicts in index.md.");
   catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
 
   // The task has no checkout of the harness: nothing says what is merged.
@@ -1880,11 +1880,14 @@ test("PR hints distinguish current, other active and completed PRs and open side
 
 
 test("a fetched catch-up conflict hands only the fresh resolution step to its named skill", async () => {
+ // taba-catch-up is what next reports now; wtc-catch-up comes from collections
+ // pinned before the rename. Both go to the skill the plugin installs.
+ for (const skillName of ["taba-catch-up", "wtc-catch-up"])
  for (const kind of ["composer", "panel"]) {
   const key = `agent:main:conflict:${++sessions}`;
   const next = { step: "catch-up", by: "wtc", command: ["wtc", "catch-up"], key: "api:catchup:h1", reason: "Merges cleanly" };
   const r = repo("api", { next, choices: { recommended: next.key, actions: [{ ...next, available: true }] } });
-  const merge = { step: "merge", by: "agent", skill: "wtc-catch-up", key: "api:merge:h2", reason: "Merge conflicts in README.md" };
+  const merge = { step: "merge", by: "agent", skill: skillName, key: "api:merge:h2", reason: "Merge conflicts in README.md" };
   const fresh = repo("api", { next: merge, choices: { recommended: merge.key, actions: [{ ...merge, available: true }] } });
   const snapshot = (repos) => ({ ...collection(repos), collection: { ...collection(repos).collection, sessionKey: key } });
   const { host, view } = await mount(kind, snapshot([r]), undefined, key);
@@ -1899,7 +1902,7 @@ test("a fetched catch-up conflict hands only the fresh resolution step to its na
    };
    await clickText(host, "Run selected (1)");
    const sends = calls.filter(c => c.method === "sessions.send");
-   assert.equal(sends.length, 1); assert.match(sends[0].message, /^\/skill wtc-catch-up api: Merge conflicts/);
+   assert.equal(sends.length, 1); assert.match(sends[0].message, /^\/skill taba-catch-up api: Merge conflicts/);
    assert.doesNotMatch(sends[0].message, /Carry out only these selected single steps|Merges cleanly/);
    assert.equal(calls.filter(c => c.actionId === "next")[0].payload.key, next.key);
    assert.equal(calls.filter(c => c.actionId === "next")[1].payload.key, merge.key);

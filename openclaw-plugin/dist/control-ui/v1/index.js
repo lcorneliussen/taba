@@ -188,11 +188,16 @@ const wtcMessage = (message) => String(message ?? "").trim().replace(/^wtc: /, "
 const noteNode = (text, failed, style) => css(el("span", { textContent: failed ? `⚠ ${text}` : text, title: text }),
   `color:${failed ? TONE.failure : "var(--muted, #888)"};font-size:12px;${style ?? ""}`);
 
+// The plugin installs its skills as taba-<name>. A collection pinned before
+// the rename still names them wtc-<name> in its next steps.
+const CATCH_UP = "taba-catch-up";
+const currentSkill = (skill) => typeof skill === "string" && skill.startsWith("wtc-") ? "taba-" + skill.slice(4) : skill;
+
 // Asks the conversation to run one of the agent's skills on what the card saw.
-const askSkill = (host, sessionKey, skill, input) => askConversation(host, sessionKey, `/skill ${skill} ${input}`);
+const askSkill = (host, sessionKey, skill, input) => askConversation(host, sessionKey, `/skill ${currentSkill(skill)} ${input}`);
 
 // A conflict is the agent's to resolve, in its own checkout, with the
-// wtc-catch-up skill: the card says what it saw and names the skill, so that
+// taba-catch-up skill: the card says what it saw and names the skill, so that
 // asking in the chat and clicking here do the same. The gateway's own merge
 // was aborted and changed nothing.
 async function catchUpRepo(host, agentId, r, say, ask, request) {
@@ -1046,7 +1051,7 @@ function collectionTables(v) {
       if (!active(conversationKey)) return;
       const fresh = out.repo;
       if (out.performed) {
-        await catchUpRepo(v.host, v.agent(), fresh, say, (input) => v.key() === conversationKey ? sendToAuthor(conversationKey, "wtc-catch-up", input) : undefined, async () => out);
+        await catchUpRepo(v.host, v.agent(), fresh, say, (input) => v.key() === conversationKey ? sendToAuthor(conversationKey, CATCH_UP, input) : undefined, async () => out);
         log(out.code ? conflictsOf(out.message).length ? "Sent to conversation; completion pending" : "Failed: " + (out.message ?? out.code) : "Completed");
       } else if (fresh?.next) {
         const step = fresh.next;
@@ -1058,7 +1063,7 @@ function collectionTables(v) {
           }
           case "run": throw Error("The gateway did not execute this deterministic catch-up. Refresh or update its wtc plugin; no agent prompt was sent.");
           case "agent":
-            await sendToAuthor(conversationKey, step.skill ?? "wtc-catch-up", `${nameOf(fresh)}: ${step.reason}. Work on this repository only; recheck its state before acting. Carry out only this selected step; report follow-up actions for separate selection.`);
+            await sendToAuthor(conversationKey, step.skill ?? CATCH_UP, `${nameOf(fresh)}: ${step.reason}. Work on this repository only; recheck its state before acting. Carry out only this selected step; report follow-up actions for separate selection.`);
             sent.add(handoffKey(fresh, step)); log("Sent to conversation; completion pending");
             say(`${nameOf(fresh)}: asked the conversation to ${nextLabel(step).toLowerCase()}.`);
             break;
@@ -1145,7 +1150,7 @@ function collectionTables(v) {
           if (active(conversation) && !batchCancelled) for (const r of conflicted) {
             const fresh = current.repos?.find((candidate) => candidate.sessionKey === r.sessionKey);
             const step = fresh?.next;
-            if (!fresh?.error && step?.by === "agent" && step.skill === "wtc-catch-up" && ["merge", "resolve"].includes(step.step)) agents.push({ repo: fresh, step });
+            if (!fresh?.error && step?.by === "agent" && currentSkill(step.skill) === CATCH_UP && ["merge", "resolve"].includes(step.step)) agents.push({ repo: fresh, step });
             else setResult(r.sessionKey, "Catch-up stopped; its current resolution step changed. Refresh before continuing.");
           } else for (const r of conflicted) setResult(r.sessionKey, "Cancelled before conflict handoff");
         } catch (err) { for (const r of conflicted) setResult(r.sessionKey, "Cannot recheck conflict resolution: " + String(err?.message ?? err)); }
@@ -1164,9 +1169,9 @@ function collectionTables(v) {
       }
       if (ready.length && !batchCancelled && active(conversation)) {
         try {
-          const skills = [...new Set(ready.map(({ step }) => step.skill ?? "wtc-catch-up"))];
+          const skills = [...new Set(ready.map(({ step }) => currentSkill(step.skill ?? CATCH_UP)))];
           const skill = skills.length === 1 ? skills[0] : "wtc";
-          const tasks = ready.map(({ repo, step }) => `${nameOf(repo)}: ${skills.length > 1 ? `use ${step.skill ?? "wtc-catch-up"}. ` : ""}${step.reason}`).join("\n");
+          const tasks = ready.map(({ repo, step }) => `${nameOf(repo)}: ${skills.length > 1 ? `use ${currentSkill(step.skill ?? CATCH_UP)}. ` : ""}${step.reason}`).join("\n");
           await sendToAuthor(conversation, skill, tasks + "\nOnly these selected steps; report follow-ups separately. Publication retains its personal confirmation.");
           for (const { repo, step } of ready) { sent.add(handoffKey(repo, step)); setResult(repo.sessionKey, "Sent to conversation; completion pending"); }
         } catch (err) { for (const { repo } of ready) setResult(repo.sessionKey, "Handoff failed: " + String(err?.message ?? err)); }
@@ -1608,7 +1613,7 @@ function collectionTables(v) {
         };
         recordActivity(logKey, id, { repo: nameOf(r), action: "catch-up", status: "Catching up…" });
         try {
-          const outcome = await catchUpRepo(v.host, v.agent(), r, say, input => sendToAuthor(conversation, "wtc-catch-up", input));
+          const outcome = await catchUpRepo(v.host, v.agent(), r, say, input => sendToAuthor(conversation, CATCH_UP, input));
           recordActivity(logKey, id, { status: outcome?.handedOff ? "Sent to conversation; completion pending" : failed ? "Failed; open repository details" : "Completed" });
         } catch (err) {
           const message = String(err?.message ?? err);
@@ -1644,7 +1649,7 @@ function collectionTables(v) {
       const out = await call(v.host, "catch-up", r.taskSessionKey, v.agent(), { from: r.branch });
       const conflicts = conflictsOf(out.message);
       if (conflicts.length) {
-        await sendToAuthor(v.key(), "wtc-catch-up", `${name}: merging sub-session ${w.name}'s ${r.branch} (wtc catch-up --from ${r.branch}) conflicts in ${conflicts.join(", ")}.`);
+        await sendToAuthor(v.key(), CATCH_UP, `${name}: merging sub-session ${w.name}'s ${r.branch} (wtc catch-up --from ${r.branch}) conflicts in ${conflicts.join(", ")}.`);
         v.say(`${name}: ${conflicts.join(", ")} changed in both; the conversation was asked to merge ${r.branch} and resolve them.`);
       } else {
         v.say(`${name}: ${out.json?.summary ?? (wtcMessage(out.message) || "exit " + out.code)}`, out.code !== 0);
@@ -1666,7 +1671,7 @@ function collectionTables(v) {
       const out = await call(v.host, "catch-up", r.sessionKey, v.agent(), r.taskBranch ? { from: r.taskBranch } : undefined);
       const conflicts = conflictsOf(out.message);
       if (conflicts.length) {
-        await sendToAuthor(v.key(), "wtc-catch-up", `${name}: catching sub-session ${w.name} up with the collection (wtc catch-up in its checkout) conflicts in ${conflicts.join(", ")}.`);
+        await sendToAuthor(v.key(), CATCH_UP, `${name}: catching sub-session ${w.name} up with the collection (wtc catch-up in its checkout) conflicts in ${conflicts.join(", ")}.`);
         v.say(`${name}: ${conflicts.join(", ")} changed in both; the conversation was asked to catch sub-session ${w.name} up and resolve them.`);
       } else {
         v.say(`${name}: ${out.json?.summary ?? (wtcMessage(out.message) || "exit " + out.code)}`, out.code !== 0);
@@ -1839,7 +1844,7 @@ function collectionTables(v) {
       : null;
     const conflict = open && pr.mergeable === "conflicting"
       ? count("✗", `#${pr.number} conflicts with ${baseOf(r)}. Resolve: ask the conversation to merge the base in and resolve the conflicts`, TONE.failure,
-        () => sendToAuthor(v.key(), "wtc-catch-up", `${nameOf(r)}: pull request #${pr.number} conflicts with ${baseOf(r)}.`))
+        () => sendToAuthor(v.key(), CATCH_UP, `${nameOf(r)}: pull request #${pr.number} conflicts with ${baseOf(r)}.`))
       : null;
     const review = open ? { approved: toned("✓", TONE.success, "approved"), changes_requested: toned("✗", TONE.failure, "changes requested"), review_required: muted("○", "review required") }[pr.review] ?? null : null;
     const errorLabel = r.error === "checkout unavailable" ? r.recovery?.state === "restorable" ? "Evicted" : r.recovery?.state === "unavailable" ? "Snapshot unavailable" : "No checkout" : r.error === "status unavailable" ? "No status" : r.error;

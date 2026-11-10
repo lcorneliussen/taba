@@ -120,7 +120,7 @@ pull request with them. One left out keeps what was recorded before.`,
 	publish.Flags().BoolVar(&opt.AllowSensitive, "allow-sensitive", false, "Publish uncommitted files even when their names look like credentials")
 	publish.RunE = func(cmd *cobra.Command, args []string) error {
 		if h := currentHost(); h != openclaw.HostOpenClaw {
-			return fmt.Errorf(branding.Text("{{command}} publish hands a publication to an OpenClaw gateway, and this is a %s session. Push and open the pull request with the wtc-pr or wtc-draft-pr skill"), h)
+			return fmt.Errorf(branding.Text("{{command}} publish hands a publication to an OpenClaw gateway, and this is a %s session. Push and open the pull request with the taba-pr or taba-draft-pr skill"), h)
 		}
 		cwd, err := os.Getwd()
 		if err != nil {

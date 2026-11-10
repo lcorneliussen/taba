@@ -85,9 +85,8 @@ func TabaNative(harness string) bool {
 
 // CommandName is the name to type for the CLI that serves this collection:
 // releases from 0.2.0, including its release candidates, install both taba and
-// wtc; older pins only wtc. An
-// ad-hoc collection, or one whose pin cannot be read, uses the installed CLI,
-// which is this release.
+// wtc; older pins only wtc. An ad-hoc collection, or one whose pin cannot be
+// read, uses the installed CLI, which is this release.
 func (c *Context) CommandName() string {
 	if c.AdHoc || c.Harness == "" {
 		return "taba"
