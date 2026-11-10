@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -81,6 +82,32 @@ func versionLabel() string {
 		return describeBuild(debug.ReadBuildInfo)
 	}
 	return version
+}
+
+// pseudoVersion matches the prerelease part Go gives an untagged commit
+// (v0.2.1-0.20261109083000-abcdef123456).
+var pseudoVersion = regexp.MustCompile(`(^|\.)\d{14}-[0-9a-f]{12}$`)
+
+// moduleVersion is the release version Go recorded for `go install
+// taba.sh/taba/cmd/taba@v0.2.0`, which sets no -ldflags version. A build in
+// a checkout records vcs.* settings, even a clean one at a tag; it, and
+// pseudo-versions and modified trees, return "", so they stay unversioned
+// and describeBuild names them.
+func moduleVersion(readInfo func() (*debug.BuildInfo, bool)) string {
+	info, ok := readInfo()
+	if !ok || info == nil {
+		return ""
+	}
+	for _, s := range info.Settings {
+		if strings.HasPrefix(s.Key, "vcs.") {
+			return ""
+		}
+	}
+	v, err := semver.NewVersion(info.Main.Version)
+	if err != nil || !strings.HasPrefix(info.Main.Version, "v") || v.Metadata() != "" || pseudoVersion.MatchString(v.Prerelease()) {
+		return ""
+	}
+	return v.String()
 }
 
 // describeBuild names a build without a release version (a plain go build),
