@@ -116,9 +116,11 @@ func (c *Context) RenderSkills(opt SkillRenderOptions) (SkillRenderResult, error
 		} else if !os.IsNotExist(err) {
 			return r, err
 		}
+		overlayDir := filepath.Join(patchRoot, name)
 		s, ok := sources[name]
 		if current, renamed := renamedSkill(name); !ok && renamed {
-			// Section patches written for the old name patch the renamed default.
+			// Section patches written for the old name patch the renamed
+			// default; their recorded base stays in the old-name folder.
 			name = current
 			s, ok = sources[name]
 		}
@@ -132,7 +134,7 @@ func (c *Context) RenderSkills(opt SkillRenderOptions) (SkillRenderResult, error
 				return r, err
 			}
 		}
-		digestPath, err := skillBaseInput(filepath.Join(patchRoot, name))
+		digestPath, err := skillBaseInput(overlayDir)
 		if err != nil {
 			return r, err
 		}
@@ -312,8 +314,8 @@ func (c *Context) RenderSkills(opt SkillRenderOptions) (SkillRenderResult, error
 	return r, nil
 }
 
-// renamedSkill maps an old embedded skill name, wtc-<name>, to its current
-// taba-<name>.
+// renamedSkill maps a skill name in the old wtc-<name> form, such as a
+// harness override's folder, to the embedded taba-<name> it now corresponds to.
 func renamedSkill(name string) (string, bool) {
 	rest, ok := strings.CutPrefix(name, "wtc-")
 	if !ok {

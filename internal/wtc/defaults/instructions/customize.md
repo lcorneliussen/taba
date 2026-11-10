@@ -6,9 +6,12 @@ each application repository. Generated collection-root files are disposable.
 
 ## Harness configuration
 
-The harness checks in `.harness-repos.yml`, `.wtc-cli-version`, and `wtc.toml`.
+The harness checks in `.harness-repos.yml`, a version pin and a config file:
+`.taba-version` and `taba.toml` from `taba harness init` 0.2.1, or
+`.wtc-cli-version` and `wtc.toml` in older harnesses. Edit the ones the harness
+has; never add the other name beside them, because the old name wins.
 The registry names repos, remotes, default refs, and optional port offsets.
-`wtc.toml` declares CLI compatibility and extra collection-root mise tools.
+The config file declares CLI compatibility and extra collection-root mise tools.
 For example, the tool entries can be:
 
 ```toml
@@ -19,7 +22,7 @@ bun = "1.2.3"
 
 For collection-local commands outside mise, list existing directories relative
 to the collection root. `taba agent-env` puts these paths before sibling mise
-bins, skips absent directories, and refreshes `.env.toolchain` when `wtc.toml`
+bins, skips absent directories, and refreshes `.env.toolchain` when the config file
 changes:
 
 ```toml
@@ -176,7 +179,7 @@ ignore rule and backs up an existing regular file before replacing it.
 
 Production-capable files stay out of worktrees unless `--include-prod` is
 explicit. Declare their paths relative to each repository in its registry
-entry's `prod_paths`, or use `[secrets] prod_paths` in `wtc.toml` with
+entry's `prod_paths`, or use `[secrets] prod_paths` in the harness config file with
 `repo/path` entries:
 
 ```toml

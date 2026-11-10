@@ -24,7 +24,8 @@ cd agent-harness
 This creates six configuration and guidance files. It refuses to overwrite
 existing files and does not initialize Git, publish, install tools, or run hooks.
 Initialize, commit, and publish this as your own repository using your usual
-Git workflow. Configure project tool pins under `[mise.tools]` in `wtc.toml`.
+Git workflow. Configure project tool pins under `[mise.tools]` in `taba.toml` (`wtc.toml`
+in a harness created before 0.2.1).
 
 ## 2. First bare owner and collection
 

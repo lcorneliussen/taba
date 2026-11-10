@@ -15,7 +15,7 @@ a branch.
   <other-collection>/        a COLLECTION SIBLING: someone else's task
   <this-collection>/         the COLLECTION ROOT — you are here
     AGENTS.md                this file (rendered from the pinned CLI or harness override)
-    WTC-SCOPE.md             task context (or existing SCOPE.md) — read it next
+    SCOPE.md                 task context (WTC-SCOPE.md in older harnesses) — read it next
     harness/                 project configuration and policy
     <repo>/                  REPO SIBLINGS: worktrees in scope for this task
     HANDOFF.md               only on a fresh collection — /taba-start, then gone
@@ -61,7 +61,8 @@ explicitly. Full rule: `.wtc/instructions/collection-context.md`.
 
 ## Launching anything: `taba svc`
 
-When services are enabled (`[runtime] backend = "dekit"` in `harness/wtc.toml`,
+When services are enabled (`[runtime] backend = "dekit"` in `harness/taba.toml`
+or `harness/wtc.toml`,
 or in `.wtc/config/wtc.toml` of an ad-hoc collection), launch, run, serve,
 preview or share an app, server or worker through `/taba-svc` (`taba svc up`,
 `taba svc add`, `taba svc tunnel`) rather than in your own shell: such a server

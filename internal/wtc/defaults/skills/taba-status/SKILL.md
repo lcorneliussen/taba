@@ -83,7 +83,7 @@ in `$WTC_CONFIG_ROOT/wtc.env`.
   landing is established. It detaches the worktree at the tip, prunes the
   branch with a safe delete, and says so in the refresh log. Opt out with
   `WTC_STATUS_RETURN_MERGED=off` or `[status] return_merged = false` in
-  `harness/wtc.toml`. Dirty or unlanded worktrees keep the
+  `harness/taba.toml` (or `wtc.toml`). Dirty or unlanded worktrees keep the
   "MERGED — still on <branch>" PR row.
   An `unknown` state means the forge lookup was unavailable; it does not prove
   the PR is open. Older merged entries can be hidden behind the `a` toggle.

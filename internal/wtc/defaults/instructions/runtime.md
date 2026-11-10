@@ -12,7 +12,7 @@ repository's toolchain and task runner.
 
 ## Enable a downstream harness
 
-Add to its committed `wtc.toml`:
+Add to its committed `taba.toml` (`wtc.toml` in older harnesses):
 
 ```toml
 [runtime]

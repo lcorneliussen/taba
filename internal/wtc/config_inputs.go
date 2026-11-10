@@ -4,8 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/Masterminds/semver/v3"
 )
 
 // Legacy inputs stay authoritative during phase 0: older clients still write
@@ -86,7 +84,8 @@ func TabaNative(harness string) bool {
 }
 
 // CommandName is the name to type for the CLI that serves this collection:
-// releases from 0.2.0 install both taba and wtc, older pins only wtc. An
+// releases from 0.2.0, including its release candidates, install both taba and
+// wtc; older pins only wtc. An
 // ad-hoc collection, or one whose pin cannot be read, uses the installed CLI,
 // which is this release.
 func (c *Context) CommandName() string {
@@ -105,7 +104,9 @@ func (c *Context) CommandName() string {
 	if err != nil {
 		return "taba"
 	}
-	if v.LessThan(semver.MustParse("0.2.0")) {
+	// Compared without the pre-release tag: the 0.2.0 release candidates
+	// already installed taba.
+	if v.Major() == 0 && v.Minor() < 2 {
 		return "wtc"
 	}
 	return "taba"

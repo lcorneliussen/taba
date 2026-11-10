@@ -7,11 +7,11 @@ description: Customize worktree collection behavior through harness config and h
 
 Read `taba customize` for the installed CLI's current hook and config contract.
 Inspect the target harness or repository before editing: its existing hooks,
-`wtc.toml`, registry, and agent instructions determine where the change belongs.
+config file (`taba.toml`, or `wtc.toml` in older harnesses), registry, and agent instructions determine where the change belongs.
 
 - Put shared collection config and CLI lifecycle hooks in the harness. Check in
-  an exact `.wtc-cli-version`; add other generated mise tools under
-  `[mise.tools]` in `wtc.toml`.
+  an exact version pin (`.taba-version`, or `.wtc-cli-version`); add other
+  generated mise tools under `[mise.tools]` in the config file.
 - Put application setup and cleanup in that application's `harness:init` and
   `harness:teardown` mise tasks or `.harness/init.sh` and
   `.harness/teardown.sh`. Keep them safe to rerun.

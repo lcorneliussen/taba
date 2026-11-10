@@ -116,6 +116,13 @@ func TestRenderSkillsAppliesOldNameSectionPatchesToTheRenamedSkill(t *testing.T)
 	if got := readRendered(t, c, ".claude", "wtc-pr"); !strings.Contains(got, "Use taba-pr instead") {
 		t.Fatalf("wtc-pr shim missing:\n%s", got)
 	}
+
+	// The recorded base is read from the old-name folder: a stale one stops
+	// the render instead of applying the patches to a changed default.
+	writeRenameFixture(t, filepath.Join(patchDir, ".taba-base.sha256"), skillDigest([]byte("an older default\n"))+"\n")
+	if _, err := c.RenderSkills(SkillRenderOptions{}); err == nil || !strings.Contains(err.Error(), "drifted") {
+		t.Fatalf("a stale base under overlays/skills/wtc-pr did not stop the render: %v", err)
+	}
 }
 
 func TestSeedScopeUsesTheHarnessNaming(t *testing.T) {
@@ -157,7 +164,7 @@ func TestSeedScopeUsesTheHarnessNaming(t *testing.T) {
 }
 
 func TestCommandNameFollowsThePin(t *testing.T) {
-	for pin, want := range map[string]string{"0.1.64": "wtc", "0.2.0": "taba", "0.2.1": "taba", "": "taba"} {
+	for pin, want := range map[string]string{"0.1.64": "wtc", "0.2.0-rc.1": "taba", "0.2.0": "taba", "0.2.1": "taba", "": "taba"} {
 		c := fixture(t)
 		if pin != "" {
 			writeRenameFixture(t, filepath.Join(c.Harness, ".wtc-cli-version"), pin+"\n")
