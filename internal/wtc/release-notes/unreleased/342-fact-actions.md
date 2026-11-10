@@ -11,3 +11,8 @@
   remains explicit and blocks blind retries. Group Catch up previews its target
   rows on hover/focus. Pending or unconfirmed commit cells open action details,
   with a diagnostic agent-help handoff that does not retry the operation.
+
+- Ship local-edit recovery in the OpenClaw catch-up skill. A verified finish
+  operation archives only its exact active marker and retains backups; matching
+  native completion receipts settle pending recovery feedback without a retry,
+  commit or publication.

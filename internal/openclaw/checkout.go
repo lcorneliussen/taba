@@ -327,11 +327,12 @@ type CatchUp struct {
 	ReturnedToTip bool `json:"returnedToTip,omitempty"`
 	// Worker says the checkout is a worker's: its work reaches the forge
 	// through its task.
-	Worker          bool   `json:"worker,omitempty"`
-	Head            string `json:"head"`
-	Note            string `json:"note,omitempty"`
-	ChangesRestored bool   `json:"changesRestored,omitempty"`
-	RecoveryRef     string `json:"recoveryRef,omitempty"`
+	Worker           bool   `json:"worker,omitempty"`
+	Head             string `json:"head"`
+	Note             string `json:"note,omitempty"`
+	ChangesRestored  bool   `json:"changesRestored,omitempty"`
+	RecoveryRef      string `json:"recoveryRef,omitempty"`
+	RecoveryRequired bool   `json:"recoveryRequired,omitempty"`
 }
 
 // CatchUp fetches the destination branch. A merged GitHub PR returns its

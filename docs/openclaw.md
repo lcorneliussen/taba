@@ -955,8 +955,21 @@ copy (including the original index and untracked files), and records a
 worktree-local Git recovery marker. Status offers Resolve conflicts, even when
 Git has no unmerged index entries. A repeated catch-up refuses to reapply the
 copy blindly. The owning conversation must inspect both copies and restore or
-resolve the intended edits. Only after verifying recovery should it remove the
-`wtc-catch-up-recovery` marker from this worktree's Git directory. The pinned
+resolve the intended edits, including partial staging and untracked content.
+The bundled **wtc-catch-up** skill routes this through
+`wtc docs instructions/openclaw-recovery.md`; no separately learned skill is
+required. After verification, run in the owning gateway checkout:
+
+```sh
+wtc catch-up --finish-recovery <exact-ref> --expected-head <verified-full-HEAD> --json
+```
+
+This checks the exact operation and HEAD, backup, unresolved Git state and
+new tracked conflict markers. It acknowledges the agent's content verification,
+archives the active marker and records a typed completion receipt. It does not
+apply edits, commit, push or delete backups. Only a matching receipt for the
+same repository owner, checkout and recovery operation settles that pending
+card action; dispatch acceptance or a cleared behind count does not. The pinned
 copy remains available. A retained crash lock must likewise be inspected before
 removal; never remove a live operation's lock.
 

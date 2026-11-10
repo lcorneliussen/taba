@@ -721,8 +721,14 @@ func catchUpCheckout(dest, from string, asJSON bool) error {
 	}
 	result.Worker = checkout.IsWorker()
 	if err != nil {
+		if asJSON {
+			if emitErr := emit(envelope{OK: false, Data: result, Summary: err.Error()}, true); emitErr != nil {
+				return emitErr
+			}
+		}
 		return err
 	}
+
 	summary := catchUpSummary(result)
 	if result.ChangesRestored {
 		summary += "; local changes and staging restored; recovery copy retained"

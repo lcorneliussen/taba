@@ -2954,3 +2954,52 @@ for (const message of [
     else {assert.equal(sent.length,1);assert.equal(sent[0].key,context.props.sessionKey);assert.match(sent[0].message,/could not restore|recover/);assert.match(sent[0].message,/Do not reapply/);assert.doesNotMatch(readable(host),/api.*Completed/);}
   }finally{catchUpResult=old;view.dispose();}
 });
+
+for (const route of ["direct", "batch", "resolve"]) test(`${route} recovery settles only from its exact native receipt`, async () => {
+  const original = catchUpResult;
+  const ref = `refs/wtc-catch-up/${"a".repeat(40)}-123`;
+  const step = {step:route === "resolve" ? "resolve" : "catch-up",by:route === "resolve" ? "agent" : "wtc",...(route === "resolve" ? {skill:"wtc-catch-up"} : {command:["wtc","catch-up"]}),key:"api:recovery:1",reason:"Recover local edits"};
+  const r = repo("api",{path:"/state/worktrees/api/test",behind:1,...(route === "direct" ? {} : {next:step,choices:{actions:[{...step,available:true}]}}),...(route === "resolve" ? {catchUpRecovery:ref} : {})});
+  const {host,view,context}=await mount("panel",collection([r]),undefined,undefined,{focus:"activity"});
+  const key=context.props.sessionKey;
+  const refresh=async()=>{await [...host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();};
+  const log=()=>[...host.all()].find(n=>n.className==="wtc-activity-log");
+  const expand=async()=>{const b=[...host.all()].find(n=>n.tagName==="BUTTON"&&/^Earlier activity/.test(n.textContent));if(b){await b.onclick();await settle();}};
+  try {
+    calls.length=0;
+    if(route==="direct") {
+      catchUpResult={ok:true,result:{code:1,message:"restoration stopped",json:{ok:false,data:{recoveryRequired:true,recoveryRef:ref}}}};
+      await [...host.all()].find(n=>n.tagName==="BUTTON"&&n.title?.startsWith("1 new on main. Catch up locally")).onclick();await settle();
+    } else if(route==="batch") {
+      const resolve={...step,step:"resolve",by:"agent",skill:"wtc-catch-up",key:"api:recovery:2"};
+      const fresh={...r,next:resolve,catchUpRecovery:ref,choices:{actions:[{...resolve,available:true}]}};
+      nextResult=({payload})=>{
+        if(payload.key===step.key){collections.set(key,collection([fresh]));return {ok:true,result:{performed:true,repo:r,code:1,message:"restoration stopped",json:{ok:false,data:{recoveryRequired:true,recoveryRef:ref}}}};}
+        return {ok:true,result:{repo:fresh}};
+      };
+      await chooseSteps(host);await clickText(host,"Select suggested");await clickText(host,"Run selected (1)");
+    } else {
+      nextResult={ok:true,result:{repo:r}};
+      await [...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Resolve conflicts").onclick();await settle();
+    }
+    const sends=calls.filter(c=>c.method==="sessions.send");assert.equal(sends.length,1);assert.match(sends[0].message,/openclaw-recovery\.md/);assert.ok(sends[0].message.includes(ref));
+    assert.doesNotMatch(log().textContent,/· (Catch up|Resolve conflicts)Done/);
+    const receipt={kind:"taba.catch-up-recovery-completed/v1",recoveryRef:ref,head:"b".repeat(40),indexTree:"c".repeat(40),completedAt:new Date().toISOString()};
+    for(const changed of [
+      {catchUpRecoveryCompleted:undefined},
+      {catchUpRecoveryCompleted:{...receipt,recoveryRef:ref+"9"}},
+      {path:"/state/worktrees/api/other"},
+      {sessionKey:"agent:main:owner:different"},
+      {catchUpRecovery:ref},
+      {catchUpRecoveryError:"unreadable active marker"},
+    ]) {
+      collections.set(key,collection([{...r,behind:0,catchUpRecovery:undefined,catchUpRecoveryCompleted:receipt,...changed}]));await refresh();await expand();
+      assert.doesNotMatch(log().textContent,/· (Catch up|Resolve conflicts)Done/,"a different operation/copy or absent evidence must remain pending");
+    }
+    collections.set(key,collection([{...r,behind:0,dirty:1,catchUpRecovery:undefined,catchUpRecoveryCompleted:receipt}]));await refresh();await expand();
+    assert.match(log().textContent,/local edits recovered; backup retained/);
+    assert.match(log().textContent,/Changes remain uncommitted/);
+    assert.match(log().textContent,/· (Catch up|Resolve conflicts)Done/);
+    assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"completion neither retries nor dispatches another step");
+  } finally {catchUpResult=original;nextResult=undefined;view.dispose();}
+});

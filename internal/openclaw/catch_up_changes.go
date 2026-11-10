@@ -47,16 +47,11 @@ func (c *Checkout) protectIgnoredPaths(paths string) error {
 // The recovery error phrases below are also read by needsLocalRecovery in
 // openclaw-plugin/dist/control-ui/v1/index.js for the conversation handoff.
 func (c *Checkout) withCatchUpChanges(result CatchUp, update func() (CatchUp, error)) (CatchUp, error) {
-	lock, err := git(c.Dir, "rev-parse", "--path-format=absolute", "--git-path", "wtc-catch-up.lock")
+	unlock, err := c.catchUpLock()
 	if err != nil {
 		return result, err
 	}
-	f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return result, fmt.Errorf("catch-up is already running or needs recovery; inspect %s: %w", lock, err)
-	}
-	f.Close()
-	defer os.Remove(lock)
+	defer unlock()
 	if what := c.inProgress(); what != "" {
 		return result, fmt.Errorf("%s is in progress in %s: finish or abort it first", what, c.Dir)
 	}
@@ -69,10 +64,13 @@ func (c *Checkout) withCatchUpChanges(result CatchUp, update func() (CatchUp, er
 	if err != nil {
 		return result, err
 	}
-	if saved, err := os.ReadFile(marker); err == nil {
-		return result, fmt.Errorf("local changes still need recovery from %s; inspect %s before catching up again", strings.TrimSpace(string(saved)), marker)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return result, err
+	if ref, exists, err := c.recoveryMarker(); err != nil || exists {
+		result.RecoveryRequired = true
+		result.RecoveryRef = ref
+		if err != nil {
+			return result, err
+		}
+		return result, fmt.Errorf("local changes still need recovery from %s; inspect %s before catching up again", ref, marker)
 	}
 	changes, err := c.pending()
 	if err != nil || len(changes) == 0 {
@@ -123,13 +121,16 @@ func (c *Checkout) withCatchUpChanges(result CatchUp, update func() (CatchUp, er
 	result, updateErr := update()
 	result.RecoveryRef = ref
 	if what := c.inProgress(); what != "" {
+		result.RecoveryRequired = true
 		return result, errors.Join(updateErr, fmt.Errorf("%s still in progress; local changes are safe in %s. Ask the owning conversation to recover them", what, ref))
 	}
 	if _, err := git(c.Dir, "stash", "apply", "--index", ref); err != nil {
+		result.RecoveryRequired = true
 		return result, errors.Join(updateErr, fmt.Errorf("local changes need recovery after catch-up; their complete copy, including staging, is in %s. Ask the owning conversation to inspect the worktree and restore or resolve it; do not reapply blindly: %w", ref, err))
 	}
 	result.ChangesRestored = true
 	if err := os.Remove(marker); err != nil {
+		result.RecoveryRequired = true
 		return result, errors.Join(updateErr, fmt.Errorf("local changes restored, but recovery marker cleanup failed (%s): %w", marker, err))
 	}
 	return result, updateErr
