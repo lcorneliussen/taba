@@ -72,7 +72,7 @@ func TestFinishRecoveryCommandOwnGatewayAndFailureJSON(t *testing.T) {
 	if g(dir, "status", "--porcelain") != before || g(dir, "rev-parse", "HEAD") != head || g(dir, "rev-parse", "refs/stash") != stash {
 		t.Fatal("finish changed local work")
 	}
-	// A branch name alone is not gateway ownership.
+	// A detached copy outside the gateway-managed paths is not its owner.
 	other := filepath.Join(state, "other-copy")
 	g(dir, "worktree", "add", "-q", "--detach", other)
 	t.Chdir(other)

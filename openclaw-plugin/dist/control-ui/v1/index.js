@@ -203,8 +203,8 @@ async function catchUpRepo(host, agentId, r, say, ask, request) {
   // HEAD may have moved; the local edits remain in the pinned recovery copy.
   if (out.code && (recoveryResult(out) || needsLocalRecovery(out.message))) {
     const recoveryRef = out.json?.data?.recoveryRef || r.catchUpRecovery;
-    await ask(`${name}: catch-up preserved local edits but could not restore them.${recoveryHandoff({ catchUpRecovery: recoveryRef })} Do not reapply a recovery copy blindly or publish.`);
-    say(`${name}: local changes are preserved; the conversation was asked to recover them.`);
+    await ask(`${name}: catch-up recovery needs inspection.${recoveryHandoff({ catchUpRecovery: recoveryRef })} Do not reapply a recovery copy blindly or publish.`);
+    say(`${name}: the conversation was asked to verify or recover local edits.`);
     return { handedOff: true, recoveryRef };
   }
   // A conflicting base merge was aborted; resolve it in the owning conversation.
@@ -767,8 +767,8 @@ const sectionHeading = (text, ...extra) => css(el("div", {},
   css(el("h3", { textContent: text }), "margin:0;font-size:14px;font-weight:600;color:var(--text-strong,inherit)"), ...extra),
   "display:flex;align-items:baseline;gap:8px;margin-bottom:6px");
 
-// Browser surfaces share the CLI's facts and actions. Rows share occupied
-// columns; narrow views fold facts beneath the repository text.
+// Browser surfaces share the CLI's facts and actions. Rows retain fact tracks
+// observed until the conversation changes; narrow views fold beneath repo text.
 // Actions stay on the relevant fact, in the row's next-step slot, or in the
 // header toolbar, which remains available when the card is collapsed.
 // v supplies the view lifecycle, conversation and gateway operations.
@@ -953,7 +953,7 @@ function collectionTables(v) {
   const FACT_GAP = 10;
   const factTracks = () => [44, ...(repoFacts.ahead ? [36] : []), ...(repoFacts.behind ? [36] : [])];
   const factWidth = () => factTracks().reduce((n, x) => n + x, 0) + (factTracks().length - 1) * FACT_GAP;
-  // Fit uses identity minima and occupied facts; extra room belongs to the action rail.
+  // Fit retains observed fact tracks until the conversation changes; extra room goes to actions.
   const repoBaseWidth = () => 128 + factWidth() + (repoFacts.pr ? 164 : 0) + (repoFacts.pr ? 4 : 3) * REPO_COLUMN_GAP;
   const repositoryCompact = width => width > 0 && width < repoBaseWidth() + (actionColumns ? REPO_NEXT_WIDTH : 24);
   const repoCapacity = width => Math.max(1, Math.floor(((width || 0) - repoBaseWidth() - 24) / 108));

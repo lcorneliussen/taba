@@ -87,6 +87,11 @@ func TestFinishRecoveryRefusesStaleOrUnresolvedOperation(t *testing.T) {
 				_, _ = git(c.Dir, "merge", other)
 				head = g("rev-parse", "HEAD")
 			case "markers":
+				global := filepath.Join(t.TempDir(), "gitconfig")
+				if err := os.WriteFile(global, []byte("[diff]\n\tnoprefix = true\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("GIT_CONFIG_GLOBAL", global)
 				write(t, c, "README.md", "<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n")
 				g("add", "README.md")
 			case "lock":
@@ -107,6 +112,8 @@ func TestFinishRecoveryRefusesStaleOrUnresolvedOperation(t *testing.T) {
 			index := g("ls-files", "--stage")
 			if _, err := c.FinishCatchUpRecovery(ref, head); err == nil {
 				t.Fatal("unsafe finish accepted")
+			} else if mode == "markers" && !strings.Contains(err.Error(), "README.md") {
+				t.Fatalf("custom Git diff prefix hid conflict path: %v", err)
 			}
 			if g("status", "--porcelain") != before || g("ls-files", "--stage") != index {
 				t.Fatal("refusal changed work")

@@ -969,7 +969,10 @@ new tracked conflict markers. It acknowledges the agent's content verification,
 archives the active marker and records a typed completion receipt. It does not
 apply edits, commit, push or delete backups. Only a matching receipt for the
 same repository owner, checkout and recovery operation settles that pending
-card action; dispatch acceptance or a cleared behind count does not. The pinned
+card action; dispatch acceptance or a cleared behind count does not.
+Failed catch-up JSON includes `recoveryRequired` and its `recoveryRef`. Status
+exports the active `catchUpRecovery` or `catchUpRecoveryError`; after a verified
+finish it exports `catchUpRecoveryCompleted` with the typed receipt. The pinned
 copy remains available. A retained crash lock must likewise be inspected before
 removal; never remove a live operation's lock.
 

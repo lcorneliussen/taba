@@ -182,11 +182,11 @@ func (c *Checkout) FinishCatchUpRecovery(ref, expectedHead string) (*RecoveryCom
 }
 
 func (c *Checkout) checkRecoveryMarkers(ref string) error {
-	// A fixture marker present on either side is intentional. Reject new
+	// Conflict-marker text already present on either side is retained. Reject new
 	// marker lines added in both comparisons, in the index or tracked edits.
 	for _, cached := range []bool{false, true} {
 		added := func(base string) (map[string]string, error) {
-			args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "-U0"}
+			args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U0"}
 			if cached {
 				args = append(args, "--cached")
 			}
