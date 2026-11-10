@@ -914,14 +914,16 @@ does not change OpenClaw's idle cleanup or snapshot retention policy.
 
 Repository actions use a shared fixed column: the main button and its `⋯` menu
 keep the same positions for Catch up, Commit changes and Restore. The menu
-shows available alternatives and explains blocked ones. If local changes keep
-catch-up out of the current plan, the menu says to save or stash them first;
-it does not override the plan or bypass the gateway's checks.
+shows available alternatives and explains blocked ones. Commit changes is also
+available on the `±N` fact. Gateway catch-up can preserve local edits, so a dirty
+checkout behind its base offers both Catch up and Commit changes. An older
+gateway that cannot do this explains why Commit changes comes first.
 
 The header `⋯` menu keeps collection-wide Catch up, Restore and push preparation
 available even when a different action occupies the main button. Counts include
-only eligible repositories; catch-up excludes dirty and unavailable checkouts.
-Pushes retain their personal confirmation. **Choose steps…** opens mixed
+only eligible repositories; unavailable checkouts and unfinished operations are
+excluded. Hover or keyboard-focus a group Catch up control to highlight its
+exact target rows without changing their layout. Pushes retain their personal confirmation. **Choose steps…** opens mixed
 selection across repositories. Merely opening or navigating a menu runs nothing.
 
 Action groups are right-aligned, with `⋯` on the left. The recommended action
@@ -931,3 +933,45 @@ in the menu with their reasons. Each repository uses the same action-column
 width, and space already exposed during the conversation is retained while
 work is running so progress does not shift the repository facts. Changing the
 viewport never runs or selects an action.
+
+
+### Gateway catch-up with local changes
+
+A base catch-up in a gateway-managed worktree preserves staged, unstaged and
+untracked edits before merging, then restores them with their staging state.
+It creates no user commit and does not require a personal Git author merely to
+make the recovery copy. It never rebases or pushes. Merging committed branches
+can still require the agent's configured merge author. `--from` retains its
+clean-worktree requirement.
+
+Recovery copies stay in local Git under `refs/wtc-catch-up/` and in the stash
+stack. They are not uploaded or automatically expired. Copies are retained
+rather than dropped by stash position because worktrees share that stack.
+Ignored files are not included; a collision with incoming tracked files stops
+before overwriting ignored local data. Existing unfinished operations also stop.
+
+If restoring the edits fails, catch-up reports a failure, retains the complete
+copy (including the original index and untracked files), and records a
+worktree-local Git recovery marker. Status offers Resolve conflicts, even when
+Git has no unmerged index entries. A repeated catch-up refuses to reapply the
+copy blindly. The owning conversation must inspect both copies and restore or
+resolve the intended edits. Only after verifying recovery should it remove the
+`wtc-catch-up-recovery` marker from this worktree's Git directory. The pinned
+copy remains available. A retained crash lock must likewise be inspected before
+removal; never remove a live operation's lock.
+
+The gateway runs a card's deterministic catch-up against its managed worktree.
+An agent executes in the environment assigned to its conversation, which can
+be a sandbox. An agent's sandbox catch-up already preserves its sandbox edits;
+it is a separate operation, not permission to edit arbitrary gateway folders.
+Diagnostic handoffs must identify which copy owns the blocker. If the sandbox
+cannot reach gateway recovery data, it must report that boundary rather than
+pretend to restore it or run a command in another workspace.
+
+A commit spinner means a request was sent to the owning conversation; it is
+not evidence of a Git commit in progress. After 90 seconds without confirming
+repository facts, `?` means no commit has yet been observed. Clicking either
+indicator opens action details. **Ask agent for help** requests a diagnosis in
+that same conversation without retrying, committing, restoring, or publishing.
+The action log is shared by the card and sidebar in the current browser
+session; it is not a durable gateway audit trail.

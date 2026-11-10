@@ -54,9 +54,10 @@ type CheckoutStatus struct {
 	Proposal *Proposal `json:"proposal,omitempty"`
 	// Next is the repository's next step, read from all of the above; nil
 	// when nothing waits on anyone.
-	Next    *next.Step    `json:"next,omitempty"`
-	Choices *next.Choices `json:"choices,omitempty"`
-	Error   string        `json:"error,omitempty"`
+	Next            *next.Step    `json:"next,omitempty"`
+	Choices         *next.Choices `json:"choices,omitempty"`
+	Error           string        `json:"error,omitempty"`
+	CatchUpRecovery string        `json:"catchUpRecovery,omitempty"`
 }
 
 // PullRequest is the pull request of a checkout's branch.
@@ -250,6 +251,11 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 	if pullRequests && origin.Forge == ForgeGitHub && s.Branch != "" {
 		s.PullRequest = gitHubPullRequest(top, origin, s.Branch)
 	}
+	if marker, err := git(top, "rev-parse", "--path-format=absolute", "--git-path", "wtc-catch-up-recovery"); err == nil {
+		if saved, err := os.ReadFile(marker); err == nil {
+			s.CatchUpRecovery = strings.TrimSpace(string(saved))
+		}
+	}
 	choices := next.ChoicesFor(s.facts(top))
 	s.Choices = &choices
 	s.Next = choices.Primary()
@@ -262,6 +268,9 @@ func (s CheckoutStatus) facts(top string) next.Facts {
 	f := next.Facts{Repo: s.Repo, Host: next.HostOpenClaw, Branch: s.Branch, Base: s.Base,
 		Ahead: s.Ahead, Behind: s.Behind, Dirty: s.Dirty, Conflicted: s.Conflicted,
 		InProgress: (&Checkout{Dir: top}).inProgress()}
+	if s.CatchUpRecovery != "" {
+		f.InProgress = "local changes recovery from " + s.CatchUpRecovery
+	}
 	if f.Repo == "" {
 		f.Repo = filepath.Base(top)
 	}

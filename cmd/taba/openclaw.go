@@ -723,7 +723,11 @@ func catchUpCheckout(dest, from string, asJSON bool) error {
 	if err != nil {
 		return err
 	}
-	return emit(envelope{OK: true, Data: result, Summary: catchUpSummary(result)}, asJSON)
+	summary := catchUpSummary(result)
+	if result.ChangesRestored {
+		summary += "; local changes and staging restored; recovery copy retained"
+	}
+	return emit(envelope{OK: true, Data: result, Summary: summary}, asJSON)
 }
 
 // catchUpSummary says what a catch-up under OpenClaw did. A fast-forward of

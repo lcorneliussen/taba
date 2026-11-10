@@ -57,6 +57,8 @@ class Node {
   }
   scrollIntoView() { this.scrolled = true; }
   setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name]; }
+  querySelectorAll(selector) { return selector === "[data-repo-session]" ? [...this.all()].filter(n => n.attributes["data-repo-session"]) : []; }
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
   removeEventListener(type, fn) { this.listeners[type] = (this.listeners[type] ?? []).filter((f) => f !== fn); }
   // Every element below this one, depth first.
@@ -2783,11 +2785,11 @@ test("changed-files cells share pending feedback, reject duplicates and require 
     const work = localChangeButton(card.host).onclick({preventDefault(){},stopPropagation(){}});
     await settle();
     assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
-    assert.equal(localChangeButton(panel.host).disabled,true,"other surface sees the same pending cell");
+    assert.equal(localChangeButton(panel.host).attributes["aria-busy"],"true","other surface sees the same pending cell");
     await localChangeButton(panel.host).onclick({preventDefault(){},stopPropagation(){}});
     assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"pending click does not resend");
     release({runId:"commit-run"});await work;await settle();
-    assert.match(localChangeButton(card.host).title,/awaiting the conversation/);
+    assert.match(localChangeButton(card.host).title,/Sent to conversation/);
     assert.doesNotMatch(localChangeButton(card.host).textContent,/✓/,"handoff receipt is not success");
     collections.set(card.context.props.sessionKey,collection([repo("site",{dirty:0,unpublished:1,ahead:1})]));
     await [...card.host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();
@@ -2852,7 +2854,7 @@ test("a pending commit times out to an honest unknown result instead of spinning
   await localChangeButton(host).onclick();assert.ok(expire);
   expire();await settle();
   assert.match(localChangeButton(host).textContent,/\?/);
-  assert.match(localChangeButton(host).title,/outcome unconfirmed/i);
+  assert.match(localChangeButton(host).title,/No commit observed yet/i);
   calls.length=0;await localChangeButton(host).onclick();await settle();
   assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"unknown result opens details rather than blindly resending");
  }finally{globalThis.setTimeout=set;view.dispose();}
@@ -2902,4 +2904,35 @@ test("a planner-routed commit can open its unconfirmed result even though redisp
   calls.length=0;await localChangeButton(host).onclick();await settle();
   assert.equal(calls.some(c=>c.method==="sessions.send"||c.actionId==="next"),false);
  }finally{nextResult=undefined;globalThis.setTimeout=set;view.dispose();}
+});
+
+for (const kind of ["composer", "panel"]) test(`${kind} catch-up focus previews only eligible rows without dispatch`, async () => {
+  const step = {step:"catch-up",by:"wtc",approve:"agent",command:["wtc","catch-up"],key:"preview-catch",reason:"Preserve edits",available:true};
+  const data = collection([repo("api",{behind:2,next:step,choices:{actions:[step]}}),repo("site",{behind:5,dirty:1,next:step,choices:{actions:[step,{step:"commit",by:"agent",key:"preview-commit",available:true}]}}),repo("blocked",{behind:3,dirty:1,next:{step:"commit",by:"agent",key:"blocked-commit"},choices:{actions:[{step:"commit",by:"agent",key:"blocked-commit",available:true}]}})]);
+  const {host,view} = await mount(kind,data);
+  try {
+    const button = [...host.all()].find(n=>n.tagName==="BUTTON"&&/^Catch up all 2 eligible/.test(n.title));
+    assert.ok(button);calls.length=0;
+    for(const fn of button.listeners.focus??[])fn();
+    const cells=[...host.all()].filter(n=>n.attributes["data-repo-session"]);
+    assert.ok(cells.length>0);
+    for(const cell of cells)assert.equal(cell.attributes["data-action-preview"],String(cell.attributes["data-repo-session"]!==data.repos[2].sessionKey));
+    assert.equal(calls.length,0,"preview is read-only");
+    for(const fn of button.listeners.blur??[])fn();
+    assert.ok(cells.every(n=>n.attributes["data-action-preview"]==="false"));
+  }finally{view.dispose();}
+});
+
+test("unconfirmed action details offer one diagnostic handoff without retrying", async()=>{
+  const set=globalThis.setTimeout;let expire;
+  globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expire=fn,{unref(){}}):set(fn,delay,...args);
+  const {host,view}=await mount("panel",collection([repo("site",{dirty:1})]));
+  try {
+    await localChangeButton(host).onclick();expire();await settle();calls.length=0;
+    const help=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Ask agent for help");assert.ok(help);
+    await help.onclick();await settle();
+    const sent=calls.filter(c=>c.method==="sessions.send");assert.equal(sent.length,1);assert.match(sent[0].message,/diagnosis, not a retry/);assert.match(sent[0].message,/gateway worktree or the sandbox/);
+    assert.equal(calls.some(c=>c.actionId==="catch-up"||c.actionId==="next"),false);
+    const requested=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Help requested");assert.ok(requested?.disabled);
+  }finally{globalThis.setTimeout=set;view.dispose();}
 });

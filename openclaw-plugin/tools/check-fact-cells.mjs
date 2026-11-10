@@ -11,6 +11,8 @@ const source=new URL('../',import.meta.url),out=pathToFileURL(resolve(outputPath
 const module=await readFile(new URL('dist/control-ui/v1/index.js',source),'utf8');
 const repo=(name,extra={})=>({repo:name,forge:'github',owner:'example-org',sessionKey:`demo:${name}`,branch:'main',base:'origin/main',ahead:0,behind:0,...extra});
 const scenarios={sparse:[repo('agent-harness'),repo('cli'),repo('site',{branch:'openclaw/update-copy',dirty:1,unpublished:0})],dense:[repo('api',{ahead:2,unpublished:2,behind:3,pullRequest:{number:42,state:'open',checks:'success',review:'approved',url:'https://example.invalid/pr/42'}}),repo('site',{dirty:676,behind:6,branch:'openclaw/update-copy'})]};
+const catchStep = name => ({step:'catch-up',by:'wtc',approve:'agent',command:['wtc','catch-up'],key:name+':catch',reason:'Preserve local edits',available:true});
+scenarios.preview=[...['api','site'].map(name=>repo(name,{behind:5,dirty:name==='site'?1:0,next:catchStep(name),choices:{actions:[catchStep(name)]}})),repo('blocked',{dirty:1,behind:2,choices:{actions:[]}})];
 scenarios.history=structuredClone(scenarios.dense);scenarios.history[0].pullRequests=[scenarios.history[0].pullRequest,{number:41,state:'merged',title:'Previous work',url:'https://example.invalid/pr/41'}];
 const template=await readFile(new URL('tools/tunnel-menu-fixture.html',source),'utf8');
 const browser=await chromium.launch({headless:true});const results=[];
@@ -27,6 +29,12 @@ try { for(const [scenario,repos] of Object.entries(scenarios)) for(const view of
  assert(await root.locator('.wtc-repo-pr-slots>span:first-child').evaluateAll(ns=>ns.every(n=>{const clip=n.getBoundingClientRect();return [...n.querySelectorAll('a,span')].filter(x=>x.textContent.trim()).every(x=>{const r=x.getBoundingClientRect();return r.left>=clip.left-.5&&r.right<=clip.right+.5;});})), 'PR identity and status marks must be visible');assert(await root.locator('.wtc-next-step>.wtc-action-menu').evaluateAll(ns=>ns.every(n=>{const r=n.getBoundingClientRect(),p=n.parentElement.parentElement.getBoundingClientRect();return r.left>=p.left-.5&&r.right<=p.right+.5})), 'overflow controls must fit their cells');assert(!before.overflow,`${scenario}/${view}/${width} overflow`);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
  if(scenario==='sparse'&&width>=390)assert.equal(before.folded,false,'Sparse rows should fit without an empty PR lane');
  for(const cell of before.cells) {assert.equal(cell.box.width,44);assert.equal(cell.box.height,24);assert(Math.abs(cell.box.x-before.headerX)<.5,'local changes align with group action');}
+ if(scenario==='preview') {
+  const b=root.locator('button[title^="Catch up all 2 eligible"]').first();const bounds=await root.boundingBox();
+  await b.focus();const keys=await root.locator('[data-action-preview="true"]').evaluateAll(ns=>[...new Set(ns.map(n=>n.getAttribute('data-repo-session')))].sort());assert.deepEqual(keys,['demo:api','demo:site']);assert.deepEqual(await root.boundingBox(),bounds,'target preview cannot resize the table');assert.equal(await page.evaluate(()=>window.sent.length),0,'preview dispatches nothing');
+  await root.screenshot({path:new URL(`${scenario}-${view}-${width}-targets.png`,out).pathname});await b.evaluate(n=>n.blur());
+  assert.equal(await root.locator('[data-action-preview="true"]').count(),0,'blur clears the preview');
+ }
  const box=await local.boundingBox();await local.hover();assert.deepEqual(await local.boundingBox(),box,'hover cannot change geometry');await local.focus();assert.deepEqual(await local.boundingBox(),box,'focus cannot change geometry');
  await page.evaluate(()=>document.activeElement?.blur());await page.mouse.move(1,1);await root.screenshot({path:new URL(`${scenario}-${view}-${width}.png`,out).pathname});
  if(scenario==='sparse') {

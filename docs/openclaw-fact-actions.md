@@ -22,7 +22,9 @@ unpublished-commit count with a clean working tree briefly shows a checkmark.
 Partial commits settle the pending indicator and keep remaining changes visible. A reduced dirty count without new commits settles the pending
 indicator without claiming success. After 90 seconds without observable
 progress, the spinner becomes an unconfirmed-result control that opens the
-Action log. Failures offer retry in the same cell. Results remain in the
+Action log. Pending cells open those details too. **Ask agent for help** sends
+one diagnostic request to the owning conversation, without retrying the action.
+Failures offer retry in the same cell. Results remain in the
 Action log after the brief feedback disappears.
 
 The existing push and catch-up fact controls retain their publication
@@ -44,3 +46,10 @@ cell bounds across hover/focus/availability/pending/completion, feedback expiry
 and viewport/menu clipping. Screenshots and a JSON measurement report go to the
 chosen directory. It contacts no gateway or forge and dispatches only into its
 synthetic host. This optional browser check is separate from the Node tests.
+
+
+Group Catch up controls highlight their eligible rows on hover or keyboard
+focus. This changes paint only. Gateway catch-up can retain and restore local
+edits and staging; an unresolved operation or unavailable checkout stays out of
+the group. See [gateway recovery](openclaw.md#gateway-catch-up-with-local-changes)
+for recovery-copy retention and the gateway/sandbox boundary.

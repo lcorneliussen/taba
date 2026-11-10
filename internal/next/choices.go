@@ -87,6 +87,13 @@ func ChoicesFor(f Facts) Choices {
 	}
 	if f.Dirty > 0 {
 		add(Step{Step: "commit", By: ByAgent, Skill: "wtc", Reason: "Review intended changes and save local commits. Pushing and opening a PR are separate."}, "", true)
+		if f.Host == HostOpenClaw && f.Behind > 0 && !(f.Branch == "" && f.Ahead > 0) {
+			conflicts := len(f.MergeConflicts) > 0 || f.PR != nil && f.PR.Mergeable == "conflicting"
+			add(Step{Step: "catch-up", By: ByWTC, Approve: ApproveAgent, Command: []string{"wtc", "catch-up"}, Reason: "Catch up with the base, preserving local changes and their staging in a recovery copy. Restore them after the merge; conflicts need the owning conversation."}, "", !conflicts)
+			if conflicts {
+				add(Step{Step: "merge", By: ByAgent, Skill: "wtc-catch-up", Reason: "The base merge conflicts. Preserve intended local edits with catch-up's recovery copy, then resolve the base and local changes in the owning environment."}, "", true)
+			}
+		}
 		return c
 	}
 	pr := f.PR

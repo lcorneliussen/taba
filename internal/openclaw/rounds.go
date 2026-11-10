@@ -112,7 +112,10 @@ func (c *Checkout) returnToTip(result CatchUp, pr *PullRequest) (CatchUp, error)
 	if err := c.rememberCompleted(*pr); err != nil {
 		return result, err
 	}
-	if _, err := git(c.Dir, "checkout", "--quiet", "--detach", ref); err != nil {
+	if err := c.protectIgnored(ref); err != nil {
+		return result, err
+	}
+	if _, err := git(c.Dir, "checkout", "--quiet", "--no-overwrite-ignore", "--detach", ref); err != nil {
 		return result, fmt.Errorf("returning to origin/%s's tip: %w", c.Dest, err)
 	}
 	result.Branch, result.ReturnedToTip = "", true
