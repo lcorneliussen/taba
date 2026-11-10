@@ -1,6 +1,6 @@
 # Customize a worktree collection
 
-Run `wtc customize` to read this guide from the installed CLI release. Keep
+Run `taba customize` to read this guide from the installed CLI release. Keep
 collection-specific choices in the harness repository and application setup in
 each application repository. Generated collection-root files are disposable.
 
@@ -18,7 +18,7 @@ bun = "1.2.3"
 ```
 
 For collection-local commands outside mise, list existing directories relative
-to the collection root. `wtc agent-env` puts these paths before sibling mise
+to the collection root. `taba agent-env` puts these paths before sibling mise
 bins, skips absent directories, and refreshes `.env.toolchain` when `wtc.toml`
 changes:
 
@@ -28,8 +28,8 @@ prepend_paths = ["tools/bin"]
 ```
 
 The committed `.wtc-cli-version` supplies the exact `wtc` version. Do not add
-`github:lcorneliussen/taba` to `[mise.tools]`. `wtc env setup --dry-run` previews
-`.env.collection` and `mise.toml`; `wtc env setup` regenerates them. Put local values
+`github:lcorneliussen/taba` to `[mise.tools]`. `taba env setup --dry-run` previews
+`.env.collection` and `mise.toml`; `taba env setup` regenerates them. Put local values
 and credentials in `.env.collection.local`, which the generator preserves.
 
 ## Harness hooks
@@ -43,18 +43,18 @@ CLI sends one JSON object on stdin with `event`, `collection`, `harness`,
 
 | Action | Before | After |
 |---|---|---|
-| `wtc env setup` | `env.pre.sh` | `env.post.sh` |
-| `wtc pr enlist` | `pr.enlist.pre.sh` | `pr.enlist.post.sh` |
-| `wtc pr unlist` | `pr.unlist.pre.sh` | `pr.unlist.post.sh` |
-| `wtc registry refresh` | `registry.refresh.pre.sh` | `registry.refresh.post.sh` |
-| `wtc mcp render` | `mcp.render.pre.sh` | `mcp.render.post.sh` |
-| `wtc secrets link` | `secrets.link.pre.sh` | `secrets.link.post.sh` |
-| `wtc skills render` | `skills.render.pre.sh` | `skills.render.post.sh` |
-| `wtc new` | `new.pre.sh` | `new.post.sh` |
-| `wtc add-repo` | `add-repo.pre.sh` | `add-repo.post.sh` |
-| `wtc retire` | `retire.pre.sh` | `retire.post.sh` |
+| `taba env setup` | `env.pre.sh` | `env.post.sh` |
+| `taba pr enlist` | `pr.enlist.pre.sh` | `pr.enlist.post.sh` |
+| `taba pr unlist` | `pr.unlist.pre.sh` | `pr.unlist.post.sh` |
+| `taba registry refresh` | `registry.refresh.pre.sh` | `registry.refresh.post.sh` |
+| `taba mcp render` | `mcp.render.pre.sh` | `mcp.render.post.sh` |
+| `taba secrets link` | `secrets.link.pre.sh` | `secrets.link.post.sh` |
+| `taba skills render` | `skills.render.pre.sh` | `skills.render.post.sh` |
+| `taba new` | `new.pre.sh` | `new.post.sh` |
+| `taba add-repo` | `add-repo.pre.sh` | `add-repo.post.sh` |
+| `taba retire` | `retire.pre.sh` | `retire.post.sh` |
 
-`wtc new` and `wtc add-repo` also run `env.pre.sh` and `env.post.sh`
+`taba new` and `taba add-repo` also run `env.pre.sh` and `env.post.sh`
 around their environment generation, before secrets linking and repository
 initialization. Environment aliases added by a post-hook are therefore
 available to each repository's init hook.
@@ -67,7 +67,7 @@ to regenerate a local tool configuration after the collection env changes.
 
 ### Status build facts
 
-`wtc status` follows builds for every registered repository out of the box.
+`taba status` follows builds for every registered repository out of the box.
 Each repository has up to two tiers. The **test** tier (`tip`) is the
 `default_ref` branch. The **prod** tier (`prod`) is `production_ref`, or
 `release_ref` if that is what the registry sets. When `production_ref` names
@@ -138,7 +138,7 @@ the provider cannot answer. Clicking a build cell opens its URL unless
 
 ### Browse view
 
-`wtc browse` ships its Neovim collection view inside the CLI release. To
+`taba browse` ships its Neovim collection view inside the CLI release. To
 replace that view for one harness, check in
 `harness/overlays/browse/wtc-browse.lua`. The command loads the overlay in
 place of the bundled view. Keep the file workspace-agnostic: the selected
@@ -162,7 +162,7 @@ run = "./.harness/init.sh"
 run = "./.harness/teardown.sh"
 ```
 
-`wtc add-repo` links the new repository's gitignored control-root files before
+`taba add-repo` links the new repository's gitignored control-root files before
 running init, then refreshes skills and MCP configuration. The hook can use
 those files immediately. Make init safe to repeat: a repo can be added after
 collection creation, and catch-up may repeat setup. Check whether a sibling
@@ -170,7 +170,7 @@ exists before using it.
 Keep teardown limited to resources owned by that worktree. The harness warns
 and continues if a repository hook fails, so the hook should report incomplete
 setup clearly on stderr. To link control-root files, call
-`wtc secrets link --repo <name>` rather
+`taba secrets link --repo <name>` rather
 than making links independently. The command refuses a target without a git
 ignore rule and backs up an existing regular file before replacing it.
 
@@ -186,12 +186,13 @@ prod_paths = ["api/.env.production"]
 
 ## Skills and instructions
 
-The CLI embeds generic `wtc-*` skills and instructions. `wtc skills render`
+The CLI embeds generic `wtc-*` skills and instructions. `taba skills render`
 materializes embedded skills and instruction defaults in the disposable
 collection, links skills into
 `.claude/skills` and `.agents/skills`, and wires `AGENTS.md`, agent hooks,
-`.envrc`, and `.env.toolchain`. `--seed-scope` creates `WTC-SCOPE.md` from the
-harness template only when neither it nor `SCOPE.md` exists. Existing legacy
+`.envrc`, and `.env.toolchain`. `--seed-scope` creates a scope file from the
+harness template only when neither `WTC-SCOPE.md` nor `SCOPE.md` exists: `SCOPE.md`
+for a harness on the new file names (`.taba-version`), else `WTC-SCOPE.md`. Existing legacy
 scope takes precedence; otherwise read and edit `SCOPE.md` without creating
 a second file. `--dry-run` previews changes, and
 `--all` explicitly applies them to every collection in the workspace.
@@ -200,7 +201,7 @@ Effective instruction files live under `.wtc/instructions/`. A matching file
 under `harness/instructions/` is linked there instead of the embedded default.
 Edit that tracked source, not the generated copy. The default collection entry
 point uses these effective paths; authored harness entry points stay unchanged.
-`wtc docs [path]` reads the installed binary's defaults from any directory,
+`taba docs [path]` reads the installed binary's defaults from any directory,
 without applying project overrides.
 
 For a skill with local wording, check in `harness/skills/<name>/SKILL.md`;
@@ -216,11 +217,11 @@ exact `## Heading` and ending with a newline) in
 occur exactly once in the base skill, and the patch cannot introduce another
 H1 or H2. The base is `harness/skills/<name>/SKILL.md` when present, otherwise
 the CLI's embedded skill. A full overlay `SKILL.md` and section patches for
-the same skill are mutually exclusive. `wtc skills render --dry-run` validates
+the same skill are mutually exclusive. `taba skills render --dry-run` validates
 patches without writing them; rendering materializes the assembled skill in
 the collection's disposable `.wtc/skills/` directory.
 
-Use `wtc skills diff --changes` to review local skill changes against the
+Use `taba skills diff --changes` to review local skill changes against the
 installed CLI. It prints the current base SHA-256 for untracked or drifted
 overrides. Record that digest in
 `harness/overlays/skills/<name>/.wtc-base.sha256` after reviewing a section
@@ -229,7 +230,7 @@ review the patch against the new base and update the digest. A full skill
 override can use the same sidecar file for drift reporting. Without a sidecar,
 diff reports `untracked`. `--json` provides the same findings for automation.
 
-`wtc eject 'skills/wtc-customize'` or another selected path copies an
+`taba eject 'skills/taba-customize'` or another selected path copies an
 embedded default into the harness for editing; eject refuses to overwrite an
 existing file. Keep repository-specific agent instructions in that
 repository's `AGENTS.md` and hooks in its `.harness/` directory.

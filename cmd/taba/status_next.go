@@ -223,7 +223,7 @@ func statusNextRunInContext(ctx context.Context, c *wtc.Context, selected wtc.St
 		}
 		skill := r.Next.Skill
 		if r.Next.By == next.ByWTC && r.Next.Approve == next.ApproveAgent && r.Next.Step == "catch-up" {
-			skill = "wtc-catch-up"
+			skill = "taba-catch-up"
 		}
 		if skill == "" || r.Next.Approve == next.ApprovePerson || (r.Next.By != next.ByAgent && r.Next.Approve != next.ApproveAgent) {
 			return failed(fmt.Errorf("this step needs its owner's action"))

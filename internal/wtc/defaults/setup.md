@@ -5,7 +5,7 @@ answers below, from what you can see first and from the person only where
 you cannot, then follow the guide each answer points at. Say which path you
 took and why before changing anything.
 
-Read this from the binary you will run, `wtc docs setup.md`, so that it
+Read this from the binary you will run, `taba docs setup.md`, so that it
 matches that version. Without wtc yet, install a
 [release](https://github.com/lcorneliussen/taba/releases) first: the
 `taba_<version>_<os>_<arch>.tar.gz` for the machine (`wtc_…` before the
@@ -16,11 +16,11 @@ taba releases; it holds both `taba` and `wtc`), checked against
 
 | Runtime | How to tell | What a collection is |
 | --- | --- | --- |
-| **Terminal** | `wtc host` prints `terminal` | a folder of worktrees, used from any shell or editor |
-| **herdr** | `wtc host` prints `herdr`, or the person works in herdr panes | the same folder, opened as a herdr workspace with `wtc open` |
-| **OpenClaw** | `wtc host` prints `openclaw`, or the target is an OpenClaw gateway | managed worktrees of the gateway, one conversation per task, with a card and a Collection panel in the Control UI |
+| **Terminal** | `taba host` prints `terminal` | a folder of worktrees, used from any shell or editor |
+| **herdr** | `taba host` prints `herdr`, or the person works in herdr panes | the same folder, opened as a herdr workspace with `taba open` |
+| **OpenClaw** | `taba host` prints `openclaw`, or the target is an OpenClaw gateway | managed worktrees of the gateway, one conversation per task, with a card and a Collection panel in the Control UI |
 
-`wtc host` describes the machine you run on. If you are preparing another
+`taba host` describes the machine you run on. If you are preparing another
 machine, such as a gateway's image in a repository that CI/CD builds, ask
 which runtime that machine is for.
 
@@ -34,8 +34,8 @@ repository the person's organisation names as its harness.
 | Answer | Terminal or herdr | OpenClaw |
 | --- | --- | --- |
 | **None**: a task across a few repositories | `docs/getting-started.md`, "Ad-hoc collection, no harness" | The default. Collections are ad hoc; repositories are named as `owner/name`, URLs or gateway projects. |
-| **An existing harness** | `wtc docs bootstrap.md`, from step 2 with its remote | Add the harness as a gateway project and configure it under `plugins.entries.wtc.config.harnesses` ([Harnesses](https://github.com/lcorneliussen/taba/blob/main/docs/openclaw.md#harnesses)). Collections then resolve repositories through it. |
-| **A new harness** | `wtc docs bootstrap.md`, from step 1. The person creates the remote. | As for an existing one, once the remote exists. |
+| **An existing harness** | `taba docs bootstrap.md`, from step 2 with its remote | Add the harness as a gateway project and configure it under `plugins.entries.wtc.config.harnesses` ([Harnesses](https://github.com/lcorneliussen/taba/blob/main/docs/openclaw.md#harnesses)). Collections then resolve repositories through it. |
+| **A new harness** | `taba docs bootstrap.md`, from step 1. The person creates the remote. | As for an existing one, once the remote exists. |
 
 With several harnesses, ask which one this environment belongs to. Never
 create a harness remote, publish a repository, or change another team's
@@ -52,11 +52,11 @@ harness without the person's go.
 
 ## Then
 
-- **Terminal or herdr**: `wtc doctor` in the first collection checks it.
+- **Terminal or herdr**: `taba doctor` in the first collection checks it.
 - **OpenClaw**: follow the
   [install](https://github.com/lcorneliussen/taba/blob/main/docs/openclaw.md#install).
-  Then run `wtc doctor --openclaw` on the gateway host (from an agent's
-  command, plain `wtc doctor` does the same). It checks Git, `gh`, the
+  Then run `taba doctor --openclaw` on the gateway host (from an agent's
+  command, plain `taba doctor` does the same). It checks Git, `gh`, the
   plugin and its version, the Control UI setting, and whether each agent's
   `AGENTS.md` mentions wtc.
 - Report what you set up, which versions you pinned, and what is left for

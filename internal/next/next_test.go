@@ -20,7 +20,7 @@ func TestFor(t *testing.T) {
 		{"nothing to do", Facts{Repo: "api"}, "", "", nil},
 		{"work in progress", Facts{Repo: "api", Branch: "12-x", Ahead: 1, Dirty: 2}, "", "", nil},
 		{"a merge in progress is the agent's", Facts{Repo: "api", InProgress: "a merge", Conflicted: 2}, "resolve", ByAgent,
-			func(s *Step) bool { return s.Skill == "wtc-catch-up" }},
+			func(s *Step) bool { return s.Skill == "taba-catch-up" }},
 		{"a merged PR not in the checkout: back to the tip", Facts{Repo: "api", Host: HostOpenClaw, Base: "origin/main", Branch: "12-x", PR: &PR{Number: 7, State: "merged", MergedIn: &no}}, "return-to-tip", ByWTC,
 			func(s *Step) bool {
 				return reflect.DeepEqual(s.Command, []string{"wtc", "catch-up"}) && s.Approve == "" && s.Reason == "#7 was merged: back to main's tip; the next change branches anew"
@@ -37,7 +37,7 @@ func TestFor(t *testing.T) {
 		{"a conflicting PR is merged by the agent", Facts{Repo: "api", Base: "origin/main", PR: &PR{Number: 7, State: "open", Mergeable: "conflicting"}}, "merge", ByAgent,
 			func(s *Step) bool { return s.Reason == "#7 conflicts with main" }},
 		{"failed checks", Facts{Repo: "api", PR: &PR{Number: 7, State: "open", Checks: "failure"}}, "fix-checks", ByAgent,
-			func(s *Step) bool { return s.Skill == "wtc-follow" }},
+			func(s *Step) bool { return s.Skill == "taba-follow" }},
 		{"changes requested", Facts{Repo: "api", PR: &PR{Number: 7, State: "open", Checks: "success", Review: "changes_requested"}}, "address-review", ByAgent, nil},
 		{"behind, merging conflicts", Facts{Repo: "api", Base: "origin/main", Behind: 3, Branch: "12-x", Ahead: 1, MergeConflicts: []string{"README.md"}}, "merge", ByAgent,
 			func(s *Step) bool { return s.Reason == "3 new on main; merging conflicts in README.md" }},
@@ -59,7 +59,7 @@ func TestFor(t *testing.T) {
 				return s.Approve == ApprovePerson && s.Gateway == "github_publish" && s.Reason == "2 commits to push, opening a draft pull request"
 			}},
 		{"commits to push locally are the agent's", Facts{Repo: "api", Host: HostLocal, ToPush: 2, PR: &PR{Number: 7, State: "open"}}, "push", ByAgent,
-			func(s *Step) bool { return s.Skill == "wtc-draft-pr" && s.Reason == "2 commits to push" }},
+			func(s *Step) bool { return s.Skill == "taba-draft-pr" && s.Reason == "2 commits to push" }},
 		{"approved and green: people merge", Facts{Repo: "api", PR: &PR{Number: 7, State: "open", Checks: "success", Review: "approved", Mergeable: "mergeable"}}, "merge-pr", ByPerson,
 			func(s *Step) bool { return s.Approve == "" && reflect.DeepEqual(s.Then, []string{"catch-up"}) }},
 		{"approved, but local commits not pushed: push first", Facts{Repo: "api", Host: HostOpenClaw, ToPush: 1, PR: &PR{Number: 7, State: "open", Checks: "success", Review: "approved", Mergeable: "mergeable"}}, "push", ByWTC, nil},

@@ -17,7 +17,7 @@ markdown at a stable path.
 |---|---|
 | `instructions/*.md` | **Canon** — the rule, the geometry, the rationale. One source of truth. |
 | `skills/wtc-*/SKILL.md` | **Procedure** — what to do, in order, with the judgement calls named. Links to canon rather than restating it. |
-| `wtc` CLI | **Mechanism** — collection commands and their stable flags. |
+| `taba` CLI | **Mechanism** — collection commands and their stable flags. |
 
 A skill that only wraps one command invocation is not worth a file; the value
 is the surrounding judgement (which flag, what to check first, what to do with
@@ -33,14 +33,14 @@ and the skill is the bug.
 | Cursor | `.agents/skills/`, `.cursor/skills/`, plus `.claude/skills/` and `.codex/skills/` for back-compat | each skills root recursively, plus nested project subdirs |
 
 So **two directory names cover all three**: `.claude/skills` and
-`.agents/skills`. `wtc skills render` creates both at the collection root,
-one symlink per skill; `wtc skills render` also creates the collection entry point:
+`.agents/skills`. `taba skills render` creates both at the collection root,
+one symlink per skill; `taba skills render` also creates the collection entry point:
 
 ```text
 <collection>/AGENTS.md              -> harness/collection-AGENTS.md
-<collection>/.claude/skills/wtc-pr  -> ../../harness/skills/wtc-pr
-<collection>/.agents/skills/wtc-pr  -> ../../harness/skills/wtc-pr
-<collection>/.agents/skills/wtc-customize -> ../../.wtc/skills/wtc-customize
+<collection>/.claude/skills/taba-pr  -> ../../harness/skills/taba-pr
+<collection>/.agents/skills/taba-pr  -> ../../harness/skills/taba-pr
+<collection>/.agents/skills/taba-customize -> ../../.wtc/skills/taba-customize
 <collection>/.grok/hooks/wtc-agent-env.json -> ../../harness/hooks/agent-env.json
 <collection>/.claude/settings.json  -> ../harness/hooks/agent-env.json
 <collection>/.cursor/hooks.json     -> ../harness/hooks/agent-env.json
@@ -65,14 +65,14 @@ directories are invisible to git and no product repo needs an ignore rule for
 them. Why symlinks and not copies: one authored copy, versioned in this repo;
 collections stay disposable and carry no durable state.
 
-The renderer runs at collection creation (`wtc new`, `wtc add-repo`) and
+The renderer runs at collection creation (`taba new`, `taba add-repo`) and
 again at catch-up, which is how a collection created before a skill existed
 picks it up.
 
 For small local changes, a complete H2 section in
 `harness/overlays/skills/<name>/sections/<short-name>.md` replaces the matching
-section of the embedded or harness skill. Run `wtc skills diff --changes` to
-inspect overrides and upstream drift, then `wtc skills render --dry-run` to
+section of the embedded or harness skill. Run `taba skills diff --changes` to
+inspect overrides and upstream drift, then `taba skills render --dry-run` to
 validate the assembled result. The patch format and base digest are documented
 in [customize.md](customize.md#skills-and-instructions).
 
@@ -89,10 +89,10 @@ Embedded defaults change with the pinned CLI release. Catch the target up,
 then render it; never link a skill from a different collection's harness.
 
 ```sh
-wtc skills render                          # this collection
-wtc skills render --collection ../example
-wtc skills render --all --dry-run          # what every collection would get
-wtc skills render --all                    # roll a landed skill out everywhere
+taba skills render                          # this collection
+taba skills render --collection ../example
+taba skills render --all --dry-run          # what every collection would get
+taba skills render --all                    # roll a landed skill out everywhere
 ```
 
 `--all` is an explicit workspace-wide action. Inspect its dry run before
@@ -127,8 +127,8 @@ product repo, which is exactly the coupling this layout avoids.
 3. **The `description` is the entire discovery surface.** All three match on
    it and nothing else before loading the body. Say what the skill does *and*
    when to reach for it, in the words a user would actually type, and name the
-   sibling skill to use instead when there is a near neighbour (`wtc-pr` vs.
-   `wtc-draft-pr`).
+   sibling skill to use instead when there is a near neighbour (`taba-pr` vs.
+   `taba-draft-pr`).
 4. **No CLI-specific interpolation in the body.** `${CLAUDE_SKILL_DIR}` and
    friends are substituted by one CLI only. Reference paths from the
    collection root (`.wtc/instructions/…`), which is
@@ -148,13 +148,13 @@ product repo, which is exactly the coupling this layout avoids.
 ```bash
 mkdir -p skills/wtc-<name>
 $EDITOR skills/wtc-<name>/SKILL.md     # frontmatter: name + description
-wtc skills render                   # link it into this collection
+taba skills render                   # link it into this collection
 ```
 
 Then add it to the table in `AGENTS.md`. Other collections pick it up at their
 next catch-up, once the change has merged — or in one pass with
-`wtc skills render --all` after those worktrees are current. Removing a
-skill is the reverse: delete the directory, and `wtc skills render` prunes the
+`taba skills render --all` after those worktrees are current. Removing a
+skill is the reverse: delete the directory, and `taba skills render` prunes the
 dangling links on its next run.
 
 Live reload varies by CLI — Claude Code picks up edits within the session, but

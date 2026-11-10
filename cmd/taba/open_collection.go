@@ -328,9 +328,9 @@ func openStartPanes(item *openItem, target *wtc.Context, panes []openPaneInfo, o
 					continue
 				}
 			}
-			command := "wtc status --tui"
+			command := target.CommandName() + " status --tui"
 			if label == "browse" {
-				command = "wtc browse --here"
+				command = target.CommandName() + " browse --here"
 			}
 			if label == "review" {
 				var detail string
@@ -430,12 +430,24 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	return nil
 }
 
+// startSkill is the orientation skill this collection's pinned CLI rendered:
+// taba-start from 0.2.1, wtc-start before.
+func startSkill(collection string) string {
+	for _, root := range []string{".claude", ".agents"} {
+		if _, err := os.Stat(filepath.Join(collection, root, "skills", "taba-start", "SKILL.md")); err == nil {
+			return "taba-start"
+		}
+	}
+	return "wtc-start"
+}
+
 // firstAgentPrompt starts the agent of a new collection on its launch note,
 // and says so up front when the collection only reviews someone else's PR.
 func firstAgentPrompt(collection, kind string) string {
-	prompt := "Run the wtc-start skill (harness/skills/wtc-start/SKILL.md): read HANDOFF.md at the collection root, then start."
+	skill := startSkill(collection)
+	prompt := "Run the " + skill + " skill (.agents/skills/" + skill + "/SKILL.md): read HANDOFF.md at the collection root, then start."
 	if kind == "claude" {
-		prompt = "/wtc-start"
+		prompt = "/" + skill
 	}
 	if _, ok := wtc.ReadReviewMode(collection); ok {
 		prompt += branding.Text(" This collection is review-only: produce and post the review, nothing else. No commits, pushes, thread resolution or `{{command}} review ready`.")

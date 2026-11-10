@@ -167,7 +167,7 @@ func TestOpenCreatesWideWorkspaceWithoutStartingDisabledProcesses(t *testing.T) 
 		t.Fatalf("normal start failed: %+v", first)
 	}
 	before, _ := os.ReadFile(log)
-	if !strings.Contains(string(before), "wtc browse --here") || !strings.Contains(string(before), "wtc status --tui") {
+	if !strings.Contains(string(before), "taba browse --here") || !strings.Contains(string(before), "taba status --tui") {
 		t.Fatalf("browse and status panes did not launch native commands: %s", before)
 	}
 	second := openCollection(c, "sample", enabled, "narrow", true, true)

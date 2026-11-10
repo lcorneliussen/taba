@@ -22,19 +22,19 @@ you are in a collection; the collection root is `..`.
 
 ## Tool scope
 
-`wtc` commands act on **this** collection when no wider scope is given.
+`taba` commands act on **this** collection when no wider scope is given.
 Widening is explicit: use a collection name, `--collection`, or `--all` where
 that command supports it.
 
 | Tool | Bare run | Wider |
 |---|---|---|
-| `wtc status` | this collection | `--all`, `<collection>` |
-| `wtc open` | this collection's workspace | `--all`, `<collection> …` |
-| `wtc browse` | this collection in nvim | `<collection>` |
-| `wtc add-repo` | this collection | `--collection <name>` |
-| `wtc skills render`, `wtc secrets link`, `wtc registry refresh` | this collection | `--collection <name>`; `wtc skills render --all` |
+| `taba status` | this collection | `--all`, `<collection>` |
+| `taba open` | this collection's workspace | `--all`, `<collection> …` |
+| `taba browse` | this collection in nvim | `<collection>` |
+| `taba add-repo` | this collection | `--collection <name>` |
+| `taba skills render`, `taba secrets link`, `taba registry refresh` | this collection | `--collection <name>`; `taba skills render --all` |
 
-`wtc new` creates a collection. `wtc retire <collection>` removes one after
+`taba new` creates a collection. `taba retire <collection>` removes one after
 checking for durable work; self-retirement delegates cleanup to another process.
 
 A default you want changed on this machine belongs in `$WTC_CONFIG_ROOT/wtc.env`
@@ -53,14 +53,15 @@ per-tool rule file. It is linked, so a catch-up updates it everywhere.
 
 Read and edit `WTC-SCOPE.md` when present, otherwise existing `SCOPE.md`.
 The files are not combined; do not create a legacy file beside an alternate.
-If neither exists, `WTC-SCOPE.md` is seeded — by `wtc new`, or by `/wtc-start` on a
-collection that predates it (`wtc skills render --seed-scope`) — and then
+If neither exists, a scope file is seeded (`SCOPE.md` when the harness has
+`.taba-version` and no `.wtc-cli-version`, else `WTC-SCOPE.md`) — by `taba new`, or by `/taba-start` on a
+collection that predates it (`taba skills render --seed-scope`) — and then
 filled from `HANDOFF.md` as that note is consumed. It is never linked and
 never overwritten: it is this collection's own answer, and it dies with the
 folder.
 
 **Widening the scope is a deliberate edit.** Pulling in another repo
-(`wtc add-repo`) or taking on an area the scope file does not mention means
+(`taba add-repo`) or taking on an area the scope file does not mention means
 saying so in the selected scope file first. A collection whose scope file no
 longer describes it has quietly become two tasks, which is how work leaks into a
 collection sibling.

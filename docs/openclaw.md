@@ -649,8 +649,8 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
    ships Git 2.39 and no `gh`, and publication fails there with "workspace
    attributes could not be verified".
 3. **The plugin**, which brings the collection card, the Collection panel and
-   the agent's skills: `wtc`, and the OpenClaw variants of `wtc-catch-up`,
-   `wtc-pr` and `wtc-follow` (each `SKILL.openclaw.md` among wtc's skills):
+   the agent's skills: `wtc`, and the OpenClaw variants of `taba-catch-up`,
+   `taba-pr` and `taba-follow` (each `SKILL.openclaw.md` among wtc's skills):
 
    ```sh
    wtc openclaw install
@@ -810,7 +810,7 @@ person to inspect the current merge requirements.
 Forge approval does not prove a current independent review. Independent review
 execution in the gateway remains unavailable until its shared review adapter is
 installed; the disabled alternative explains this. Local status can hand off the
-existing `wtc-local-review` skill, which checks existing review activity first.
+existing `taba-local-review` skill, which checks existing review activity first.
 Unchanged handoffs stay disabled in that view while completion is pending.
 After checking the conversation, **Allow retry** enables explicit reselection.
 There is no automatic continuation, durable job queue or cross-runner claim in

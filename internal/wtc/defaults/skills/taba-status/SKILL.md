@@ -1,0 +1,111 @@
+---
+name: taba-status
+description: Report where every worktree collection stands — branches, open PRs and their check rollups, working-tree state, and what is running under the herdr session. Use when the user asks what is in flight, which wtcs exist, what is red or blocked, whether a PR is green, or what they should pick up next.
+---
+
+# Where does everything stand
+
+Use the pinned `taba status` command to inspect this collection. Status does not change worktree branches or files, with one exception: a
+collection refresh returns a clean worktree whose PR merged to the tip (see
+below).
+
+```bash
+taba status                         # live TUI in a terminal; one pass when captured
+taba status --no-watch              # one status pass in a terminal
+taba status --json                  # canonical snapshot JSON
+taba status --md                    # agent Markdown
+taba status --cached                # last snapshot; no Git or forge calls
+taba status --no-fetch              # use current local refs
+taba status --silent                # suppress interactive progress messages
+```
+
+Scoped runs write `.wtc-status.json`, `.wtc-status.md`, and the shell-compatible
+`.last-wtc-status.yml` in the collection root. `--cached` reports their age and
+falls back to a plain listing from the YAML cache when the JSON cache is absent.
+Forge failures remain unknown; an empty or cached check is not proof of a
+current passing build.
+An interactive one-shot run logs elapsed-time collector steps on stderr.
+`--silent` suppresses them; JSON, Markdown, and captured output remain clean.
+Active PR details use a 90-second forge cache. Once a merge has a real merge
+time and settled checks, status records those facts in `.wtc-prs`; later
+refreshes do not query that PR again. Merges with unsettled checks or no
+merge time continue refreshing after the live cache expires.
+`WTC_FORGE_CACHE_AGE` overrides the transient forge cache ages.
+
+## Scope and live views
+
+```bash
+taba status other-collection        # one named collection
+taba status --all                   # every collection, no scoped snapshot files
+taba status --procs                 # processes under the herdr session
+taba status --tui                   # interactive repositories and PRs
+taba status --watch 120             # interactive view, 120-second refresh
+```
+
+Bare `taba status` opens the live view when both input and output are terminals.
+Use `--no-watch` for an interactive one-shot table; captured output is already
+one-shot. `--all` is explicit because it reads every collection; it omits the
+enlisted PR section and does not run other collections' build hooks. The CLI's `--repos`
+flag hides the enlisted PR section when a compact table is needed; The interactive
+view shows repositories and PRs by default; `--procs` selects the process view.
+It starts with the last snapshot while a fresh one loads. Refresh progress
+stays on one line so the table does not move; the count remains visible in a
+narrow pane. Click “refreshing” or press `l` to open the refresh log; repeated
+counts update one entry per stage. The log includes failed ref fetches and the
+local-ref fallback. `r` refreshes, `?` shows help, `a` toggles archived PRs,
+and `q` quits. It refreshes less
+often when unfocused. Captured output prints one pass and exits, so use a
+one-shot command to answer a question rather than leaving a watch loop open.
+Colored repository names, branches, PR numbers, and build references are
+terminal hyperlinks without a permanent underline. Use the terminal's
+modifier-click gesture when mouse reporting is active;
+ordinary clicks open those targets unless `--no-click` is set. `NO_COLOR`
+suppresses styling while retaining the links.
+`WTC_STATUS_WATCH`, `WTC_STATUS_WATCH_BG`, and `WTC_STATUS_NO_CLICK` can be set
+in `$WTC_CONFIG_ROOT/wtc.env`.
+
+## Read the table
+
+- `⌂ main` is a worktree detached at its development tip, the normal resting
+  state. A named branch has work in flight or needs catch-up after its PR lands.
+- The repository table shows `±` worktree changes, `↑` ahead, `↓` behind, and
+  separate TEST and PROD build columns, even when no build has been reported.
+  The footer counts stale worktrees.
+- The PR cell combines its number with checks, merge and review facts. `✓`
+  means passing or approved; `✗` means failing; `●` means pending; `↓` means
+  behind the base; `⚠` means conflicts; `⊘` means blocked; `…` means waiting
+  for reviewers; `∅` means no reviewers. Inspect the PR itself before taking
+  a merge or review action.
+- The PR section lists `.wtc-prs` enlistments in a table, with active rows
+  before muted merged rows. `C`, `M`, and `R` mean checks, mergeability, and
+  reviews. A merged PR on its old branch calls for catch-up. A collection
+  refresh does that itself for a clean worktree, not in a Git operation, whose
+  landing is established. It detaches the worktree at the tip, prunes the
+  branch with a safe delete, and says so in the refresh log. Opt out with
+  `WTC_STATUS_RETURN_MERGED=off` or `[status] return_merged = false` in
+  `harness/wtc.toml`. Dirty or unlanded worktrees keep the
+  "MERGED — still on <branch>" PR row.
+  An `unknown` state means the forge lookup was unavailable; it does not prove
+  the PR is open. Older merged entries can be hidden behind the `a` toggle.
+  The refresh log distinguishes recorded merges from live PR checks.
+- TEST and PROD cells show the newest build of `default_ref` and of
+  `production_ref` (or `release_ref`), from GitHub checks or Bitbucket
+  Pipelines by default, or from a harness `hooks/wtc/status.build.sh`. A
+  column appears only when some repository has a build in that tier. `○`
+  means the row's HEAD is not in that build. The cells are terminal links,
+  and also ordinary mouse targets unless `--no-click` is set.
+- A merged PR's state shows the build tier it is still waiting on: `→ test`
+  (no build with the merge yet), `● prod` (running), `✗ test` (failed), `?`
+  (cannot be attributed), then `✓ built`. Until it reads `✓ built`, the merge
+  has not reached every tier. The `taba customize` guide documents providers.
+
+## Answer the actual question
+
+Summarize what is in flight, what is blocked and on whom, and what is green but
+waiting. For outside changes, use `taba-catch-up`. For a PR this session owns,
+use `taba-follow` and verify its current checks, reviews and conversations.
+A status-only request does not authorize PR mutations. Merged or archived rows
+do not prove delivery is finished; follow main builds and required ports.
+
+---
+Canon: `.wtc/instructions/herdr.md`.

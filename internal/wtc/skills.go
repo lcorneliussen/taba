@@ -48,7 +48,7 @@ func (c *Context) RenderSkills(opt SkillRenderOptions) (SkillRenderResult, error
 			return r, err
 		}
 		name := parts[1]
-		if name == "wtc-svc" && c.Config.Runtime.Backend != "dekit" {
+		if name == "taba-svc" && c.Config.Runtime.Backend != "dekit" {
 			// Services exist only where the backend is enabled; elsewhere the
 			// skill would send agents to a command that refuses.
 			continue
@@ -73,6 +73,20 @@ func (c *Context) RenderSkills(opt SkillRenderOptions) (SkillRenderResult, error
 			if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
 				prefix := "../../" + harnessName + "/" + filepath.ToSlash(layer)
 				sources[name] = source{path: path, target: prefix + "/" + name}
+			}
+		}
+	}
+	// A harness override under a skill's old wtc-* name keeps winning: it
+	// stays exposed under that name, and taba-<name> becomes a pointer to it
+	// instead of the default, so agents never see two different procedures
+	// for one action. Renaming the override to taba-* is the migration.
+	for name, s := range sources {
+		if s.data != nil {
+			continue
+		}
+		if current, ok := renamedSkill(name); ok {
+			if d, ok := sources[current]; ok && d.data != nil {
+				sources[current] = source{path: d.path, target: d.target, data: skillPointer(current, name)}
 			}
 		}
 	}
@@ -103,6 +117,11 @@ func (c *Context) RenderSkills(opt SkillRenderOptions) (SkillRenderResult, error
 			return r, err
 		}
 		s, ok := sources[name]
+		if current, renamed := renamedSkill(name); !ok && renamed {
+			// Section patches written for the old name patch the renamed default.
+			name = current
+			s, ok = sources[name]
+		}
 		if !ok {
 			return r, fmt.Errorf("section patches for unknown skill %s", name)
 		}
@@ -144,6 +163,18 @@ func (c *Context) RenderSkills(opt SkillRenderOptions) (SkillRenderResult, error
 			}
 		}
 		sources[name] = source{path: filepath.Join(c.Collection, ".wtc", "skills", name, "SKILL.md"), target: "../../.wtc/skills/" + name, data: base}
+	}
+	// Each renamed skill keeps its old name as a shim until 0.3, so agents and
+	// people who type /wtc-<name> are sent to the taba-<name> procedure.
+	for name := range sources {
+		old, ok := legacySkillName(name)
+		if !ok {
+			continue
+		}
+		if _, taken := sources[old]; taken {
+			continue
+		}
+		sources[old] = source{path: filepath.Join(c.Collection, ".wtc", "skills", old, "SKILL.md"), target: "../../.wtc/skills/" + old, data: skillShim(old, name)}
 	}
 	if err := c.renderInstructions(opt.DryRun, &r); err != nil {
 		return r, err
@@ -279,6 +310,49 @@ func (c *Context) RenderSkills(opt SkillRenderOptions) (SkillRenderResult, error
 		r.Actions = append(r.Actions, "refreshed: .env.toolchain")
 	}
 	return r, nil
+}
+
+// renamedSkill maps an old embedded skill name, wtc-<name>, to its current
+// taba-<name>.
+func renamedSkill(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, "wtc-")
+	if !ok {
+		return "", false
+	}
+	current := "taba-" + rest
+	if _, err := ReadDefault("skills/" + current + "/SKILL.md"); err != nil {
+		return "", false
+	}
+	return current, true
+}
+
+// legacySkillName is the old wtc-<name> of an embedded taba-<name> skill.
+func legacySkillName(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, "taba-")
+	if !ok {
+		return "", false
+	}
+	if _, err := ReadDefault("skills/" + name + "/SKILL.md"); err != nil {
+		return "", false
+	}
+	return "wtc-" + rest, true
+}
+
+func skillShim(old, current string) []byte {
+	return []byte("---\nname: " + old + "\ndescription: Old name of the " + current + " skill, kept until taba 0.3. Use " + current + " instead.\n---\n\n" +
+		"# " + old + " is now " + current + "\n\n" +
+		"wtc is now taba, and this skill was renamed with it. Use the `" + current + "` skill\n" +
+		"(`/" + current + "`) for this procedure. Type `taba` where an older note says\n" +
+		"`wtc`; both commands work in 0.2.\n")
+}
+
+// skillPointer stands in for a default whose harness override still uses the
+// old name, so the taba-<name> that status hints mention leads to it.
+func skillPointer(current, old string) []byte {
+	return []byte("---\nname: " + current + "\ndescription: This harness provides this procedure as the " + old + " skill. Use " + old + ".\n---\n\n" +
+		"# " + current + ": use " + old + "\n\n" +
+		"This harness overrides the procedure under its old name. Use the `" + old + "`\n" +
+		"skill (`/" + old + "`).\n")
 }
 
 func managedSkillTarget(target, harnessName string) bool {
@@ -452,6 +526,13 @@ func (c *Context) seedScope(dryRun bool, r *SkillRenderResult) error {
 	if err != nil {
 		return err
 	}
+	_, statErr := os.Lstat(dest)
+	if os.IsNotExist(statErr) && TabaNative(c.Harness) {
+		// Neither name exists. Only a harness that moved to the new names gets
+		// SCOPE.md; others may have tooling that reads WTC-SCOPE.md.
+		dest = filepath.Join(c.Collection, "SCOPE.md")
+	}
+	name := filepath.Base(dest)
 	if _, err := os.Lstat(dest); err == nil {
 		r.Actions = append(r.Actions, "scope: already present")
 		return nil
@@ -488,13 +569,13 @@ func (c *Context) seedScope(dryRun bool, r *SkillRenderResult) error {
 		}
 	}
 	if dryRun {
-		r.Actions = append(r.Actions, "would seed: WTC-SCOPE.md")
+		r.Actions = append(r.Actions, "would seed: "+name)
 		return nil
 	}
 	if err := os.WriteFile(dest, []byte(rendered.String()), 0644); err != nil {
 		return err
 	}
-	r.Actions = append(r.Actions, "seeded: WTC-SCOPE.md")
+	r.Actions = append(r.Actions, "seeded: "+name)
 	return nil
 }
 

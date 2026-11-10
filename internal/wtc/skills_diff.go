@@ -78,6 +78,10 @@ func (c *Context) DiffSkills() ([]SkillDiff, error) {
 		}
 		item := SkillDiff{Name: name, Source: filepath.ToSlash(strings.TrimPrefix(path, c.Harness+string(filepath.Separator)))}
 		base, exists := defaults[name]
+		if current, renamed := renamedSkill(name); !exists && renamed {
+			// An override under the old name is compared with the renamed default.
+			base, exists = defaults[current]
+		}
 		if !exists {
 			item.Status = "custom"
 			result = append(result, item)
@@ -139,6 +143,9 @@ func (c *Context) DiffSkills() ([]SkillDiff, error) {
 			return nil, fmt.Errorf("skill %s has both a full overlay and section patches", name)
 		}
 		base, ok := defaults[name]
+		if current, renamed := renamedSkill(name); !ok && renamed {
+			base, ok = defaults[current]
+		}
 		path := filepath.Join(c.Harness, "skills", name, "SKILL.md")
 		if local, err := os.ReadFile(path); err == nil {
 			base, ok = local, true
