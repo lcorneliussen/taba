@@ -913,9 +913,9 @@ native service can reconcile its own registry during that listing. Restoration
 does not change OpenClaw's idle cleanup or snapshot retention policy.
 
 Repository actions use a shared fixed column: the main button and its `⋯` menu
-keep the same positions for Catch up, Commit changes and Restore. The menu
-shows available alternatives and explains blocked ones. Commit changes is also
-available on the `±N` fact. Gateway catch-up can preserve local edits, so a dirty
+keep the same positions for Catch up and Restore. The menu shows available
+alternatives and explains blocked ones. Commit changes uses the `±N` fact
+instead of a duplicate menu entry. Gateway catch-up can preserve local edits, so a dirty
 checkout behind its base offers both Catch up and Commit changes. An older
 gateway that cannot do this explains why Commit changes comes first.
 

@@ -191,6 +191,7 @@ const noteNode = (text, failed, style) => css(el("span", { textContent: failed ?
 // Asks the conversation to run one of the agent's skills on what the card saw.
 const askSkill = (host, sessionKey, skill, input) => askConversation(host, sessionKey, `/skill ${skill} ${input}`);
 
+// These phrases are emitted by internal/openclaw/catch_up_changes.go.
 const needsLocalRecovery = message => /local changes (?:need recovery|still need recovery)|local changes are safe in/.test(message ?? "");
 async function catchUpRepo(host, agentId, r, say, ask, request) {
   const name = r.repo ?? r.project;
@@ -871,6 +872,7 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-repo-facts .wtc-repo-pr-slots { grid-template-columns:minmax(0,1fr) !important; }
 .wtc-repositories .wtc-count-control { border-color:transparent !important;background:transparent !important; }
 .wtc-repositories { --wtc-control-height:24px; }
+.wtc-bulk-actions .wtc-count-control:not(.wtc-local-change) { width:24px !important; }
 .wtc-repositories .wtc-action-preview-wash[data-action-preview="true"] { background:color-mix(in srgb,var(--accent,#75c8c1) 8%,transparent); }
 .wtc-repositories .wtc-count-control:is(:hover,:focus-visible):not(:disabled) { border-color:var(--border-strong,rgba(128,128,128,.4)) !important;background:var(--bg-hover,rgba(128,128,128,.12)) !important; }
 .wtc-repositories .wtc-local-change { box-sizing:border-box;width:44px !important;min-width:44px !important;max-width:44px;height:24px !important;min-height:24px !important;padding:0 1px !important;grid-template-columns:12px minmax(0,1fr); }
@@ -1402,7 +1404,7 @@ function collectionTables(v) {
           css(timeLabel(item.at), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
         css(el("div", {}, el("span", { textContent: item.detail ?? item.status }), resultAction(item.followUp, v.say),
           item.id && ["Failed","Unconfirmed","Sent to agent","Needs attention"].includes(label) ? nextButton(item.help === "sent" ? "Help requested" : item.help === "sending" ? "Requesting help…" : "Ask agent for help", "Ask this conversation's agent to diagnose the blocker without retrying the action", () => askForActionHelp(item), ["sending","sent"].includes(item.help)) : null,
-          item.helpError ? el("span",{textContent:`Could not request help: ${item.helpError}`}) : null), "padding:6px 0 8px;white-space:normal;overflow-wrap:anywhere;font-size:12px;color:var(--muted,#888)")), "font-size:12px;min-width:0");
+          item.helpError ? el("span",{textContent:`Could not request help: ${item.helpError}`}) : null), "padding:6px 0 8px;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 8px;white-space:normal;overflow-wrap:anywhere;font-size:12px;color:var(--muted,#888)")), "font-size:12px;min-width:0");
       return keepDisclosure(detail, `activity:${item.id ?? item.at}`);
     }), records.length > 3 ? nextButton(showAllActivity ? "Show latest 3" : `Earlier activity (${records.length - 3})`, "Show or hide earlier activity", () => { showAllActivity = !showAllActivity; v.rerender(); }) : null), "display:grid;gap:4px;min-width:0");
   }
@@ -1535,8 +1537,8 @@ function collectionTables(v) {
     commitAll.disabled = !commitTargets.length || batchRunning || authorSending;
     const label = css(el("span", { textContent: narrow ? "All" : "All repos" }), "color:var(--muted,#888);font-size:11px;white-space:nowrap;" + (narrow ? "width:20px;text-align:center" : "padding-left:26px"));
     const arrows = css(el("span", {}, commitAll, repoFacts.ahead ? push : null, repoFacts.behind ? catchAll : null), `display:grid;grid-template-columns:${factTracks().map(x => `${x}px`).join(" ")};gap:${FACT_GAP}px;align-items:baseline`);
-    return css(el("div", { className: "wtc-bulk-actions", role: "group", ariaLabel: "All repositories" }, ...(narrow ? [arrows] : [label, el("span"), arrows, ...(repoFacts.pr ? [el("span")] : []), el("span")])), narrow
-      ? `display:grid;grid-template-columns:${factWidth()}px minmax(0,1fr);padding-left:${REPO_IDENTITY_INSET}px;box-sizing:border-box;column-gap:4px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`
+    return css(el("div", { className: "wtc-bulk-actions", role: "group", ariaLabel: "All repositories" }, ...(narrow ? [label, arrows] : [label, el("span"), arrows, ...(repoFacts.pr ? [el("span")] : []), el("span")])), narrow
+      ? `display:grid;grid-template-columns:${REPO_IDENTITY_INSET}px ${factWidth()}px minmax(0,1fr);box-sizing:border-box;column-gap:0;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`
       : `display:grid;grid-template-columns:${columns.map(c => c.width).join(" ")};column-gap:10px;align-items:baseline;min-height:var(--wtc-control-height,20px);margin:0 0 2px;min-width:0`);
   }
   // What a repository's push would send: its commits not on the forge yet,
@@ -1807,10 +1809,10 @@ function collectionTables(v) {
     };
     return b;
   };
-  const working = () => {
+  const working = (decorative = false) => {
     const svg = controlIcon("spinner", 12); svg.setAttribute("class", "wtc-header-glyph wtc-cell-spinner");
     svg.style.transformBox = "view-box";
-    return css(el("span", { title:"Working",role:"status",ariaLabel:"Working" }, svg), "display:inline-flex;width:12px;height:12px;align-items:center;justify-content:center;vertical-align:middle");
+    return css(el("span", decorative ? {ariaHidden:"true"} : {title:"Working",role:"status",ariaLabel:"Working"}, svg), "display:inline-flex;width:12px;height:12px;align-items:center;justify-content:center;vertical-align:middle");
   };
   const commitKey = r => `${v.collectionKey?.() ?? v.key()}|${r.sessionKey}`;
   function limitCommitFeedback(key, state, collection) {
@@ -1875,7 +1877,7 @@ function collectionTables(v) {
     if(done)button.setAttribute("data-feedback","completed");
     button.disabled = done || !pending && state?.phase !== "unconfirmed" && (!option || option.disabled);
     const icon = button.children[0];
-    if (icon && (pending || done || state?.phase === "failed" || state?.phase === "unconfirmed")) { if(pending) icon.replaceChildren(working()); else icon.textContent = done ? "✓" : state?.phase === "failed" ? "!" : "?"; }
+    if (icon && (pending || done || state?.phase === "failed" || state?.phase === "unconfirmed")) { if(pending) icon.replaceChildren(working(true)); else icon.textContent = done ? "✓" : state?.phase === "failed" ? "!" : "?"; }
     if (button.children[1] && r.dirty > 999) { button.children[1].textContent = new Intl.NumberFormat("en",{notation:"compact",maximumFractionDigits:0}).format(r.dirty);button.children[1].style.fontSize="10px"; }
     if (done && !r.dirty && button.children[1]) button.children[1].style.visibility = "hidden";
     if (pending) button.setAttribute("aria-busy", "true");

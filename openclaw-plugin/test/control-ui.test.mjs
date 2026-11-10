@@ -2936,3 +2936,21 @@ test("unconfirmed action details offer one diagnostic handoff without retrying",
     const requested=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Help requested");assert.ok(requested?.disabled);
   }finally{globalThis.setTimeout=set;view.dispose();}
 });
+
+for (const message of [
+  "local changes need recovery after catch-up; their complete copy is retained",
+  "local changes still need recovery from a saved copy",
+  "a merge still in progress; local changes are safe in a saved copy",
+  "cannot fetch main from origin",
+]) test(`direct catch-up recovery routing: ${message}`,async()=>{
+  const old=catchUpResult;
+  const {host,view,context}=await mount("panel",collection([repo("api",{behind:1})]));
+  try {
+    catchUpResult={ok:true,result:{code:1,message}};calls.length=0;
+    const button=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.title?.startsWith("1 new on main. Catch up locally"));assert.ok(button);
+    await button.onclick();await settle();
+    const sent=calls.filter(c=>c.method==="sessions.send");
+    if(message.startsWith("cannot fetch"))assert.equal(sent.length,0,"transport failures are not recovery tasks");
+    else {assert.equal(sent.length,1);assert.equal(sent[0].key,context.props.sessionKey);assert.match(sent[0].message,/could not restore|recover/);assert.match(sent[0].message,/Do not reapply/);assert.doesNotMatch(readable(host),/api.*Completed/);}
+  }finally{catchUpResult=old;view.dispose();}
+});

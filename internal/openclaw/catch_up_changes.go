@@ -44,6 +44,8 @@ func (c *Checkout) protectIgnoredPaths(paths string) error {
 // withCatchUpChanges keeps a recoverable Git copy before moving a dirty
 // checkout. Stash objects are local recovery data, never published commits.
 // Do not drop by stash position: other worktrees share the stash stack.
+// The recovery error phrases below are also read by needsLocalRecovery in
+// openclaw-plugin/dist/control-ui/v1/index.js for the conversation handoff.
 func (c *Checkout) withCatchUpChanges(result CatchUp, update func() (CatchUp, error)) (CatchUp, error) {
 	lock, err := git(c.Dir, "rev-parse", "--path-format=absolute", "--git-path", "wtc-catch-up.lock")
 	if err != nil {
