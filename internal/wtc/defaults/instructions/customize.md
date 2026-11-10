@@ -30,7 +30,8 @@ changes:
 prepend_paths = ["tools/bin"]
 ```
 
-The committed `.wtc-cli-version` supplies the exact `wtc` version. Do not add
+The committed version pin (`.taba-version`, or `.wtc-cli-version` in older
+harnesses) supplies the exact CLI version. Do not add
 `github:lcorneliussen/taba` to `[mise.tools]`. `taba env setup --dry-run` previews
 `.env.collection` and `mise.toml`; `taba env setup` regenerates them. Put local values
 and credentials in `.env.collection.local`, which the generator preserves.

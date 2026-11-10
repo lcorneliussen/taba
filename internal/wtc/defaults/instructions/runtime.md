@@ -36,7 +36,8 @@ harness collection, and `taba retire .` stops the runner and removes the
 collection's task files with it.
 
 Use the v0.1.40 or newer target binary explicitly during the trial, before
-changing the harness's `.wtc-cli-version`. Keep the pin and compatibility range
+changing the harness version pin (`.taba-version`, or `.wtc-cli-version` in
+older harnesses). Keep the pin and compatibility range
 in sync when adopting it.
 Enabling the backend alone starts nothing. Neither `taba new`, env generation,
 `taba status` nor repository initialization starts this runtime.
