@@ -228,6 +228,7 @@ func statusNextRunInContext(ctx context.Context, c *wtc.Context, selected wtc.St
 		if skill == "" || r.Next.Approve == next.ApprovePerson || (r.Next.By != next.ByAgent && r.Next.Approve != next.ApproveAgent) {
 			return failed(fmt.Errorf("this step needs its owner's action"))
 		}
+		skill = renderedSkill(owner.Collection, skill)
 		prompt := fmt.Sprintf("/skill %s %s: %s. Work on this repository only; recheck its state before acting. Carry out only this selected step; report follow-up actions for separate selection.", skill, r.Dir, r.Next.Reason)
 		if deferHandoff {
 			return statusNextDoneMsg{handoff: &statusNextHandoff{owner: owner, repo: r, prompt: prompt}}

@@ -10,7 +10,7 @@ import (
 func TestHarnessInitPreflightDryRunAndNoOverwrite(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "project-harness")
-	opt := HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.1.38", DryRun: true}
+	opt := HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.2.0", DryRun: true}
 	result, err := InitHarness(opt)
 	if err != nil || len(result.Files) != 6 {
 		t.Fatal(result, err)
@@ -43,7 +43,7 @@ func TestHarnessInitPreflightDryRunAndNoOverwrite(t *testing.T) {
 func TestMinimalHarnessRendersCompleteAgentGuidance(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "task/harness")
-	result, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.1.38"})
+	result, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.2.0"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,5 +110,18 @@ func TestHarnessInitRefusesAnExistingHarnessUnderTheOldNames(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(dir, ".taba-version")); !os.IsNotExist(err) {
 		t.Fatal("refused init still wrote .taba-version")
+	}
+}
+
+func TestHarnessInitRejectsPinsThatCannotReadTheScaffold(t *testing.T) {
+	for _, pin := range []string{"0.1.59", "0.1.64"} {
+		dir := filepath.Join(t.TempDir(), "harness")
+		_, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: pin})
+		if err == nil || !strings.Contains(err.Error(), "0.2.0 or later") {
+			t.Fatalf("pin %s: %v", pin, err)
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("pin %s: refused init wrote the target", pin)
+		}
 	}
 }

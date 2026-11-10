@@ -186,3 +186,32 @@ func TestCommandNameFollowsThePin(t *testing.T) {
 		t.Error("a harness with .wtc-cli-version is not taba-native")
 	}
 }
+
+func TestSkillsDiffPatchesTheRenamedHarnessOverride(t *testing.T) {
+	c := fixture(t)
+	override := "---\nname: taba-pr\n---\n# PR\n\n## Harness only\n\nlocal text\n"
+	writeRenameFixture(t, filepath.Join(c.Harness, "skills", "taba-pr", "SKILL.md"), override)
+	patchDir := filepath.Join(c.Harness, "overlays", "skills", "wtc-pr")
+	writeRenameFixture(t, filepath.Join(patchDir, "sections", "harness.md"), "## Harness only\n\npatched text\n")
+	writeRenameFixture(t, filepath.Join(patchDir, ".wtc-base.sha256"), skillDigest([]byte(override))+"\n")
+	if _, err := c.RenderSkills(SkillRenderOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readRendered(t, c, ".claude", "taba-pr"); !strings.Contains(got, "patched text") {
+		t.Fatalf("render did not patch the harness override:\n%s", got)
+	}
+	diffs, err := c.DiffSkills()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range diffs {
+		if d.Name != "wtc-pr" {
+			continue
+		}
+		if d.Status != "reviewed" || d.Error != "" || d.DefaultHash != skillDigest([]byte(override)) {
+			t.Fatalf("diff does not patch what render patches: %+v", d)
+		}
+		return
+	}
+	t.Fatalf("no diff entry for the wtc-pr patches: %+v", diffs)
+}

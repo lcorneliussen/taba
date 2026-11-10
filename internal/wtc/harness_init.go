@@ -34,6 +34,11 @@ func InitHarness(opt HarnessInitOptions) (HarnessInitResult, error) {
 	if _, err := semver.StrictNewVersion(opt.CLIVersion); err != nil || !cliVersionPattern.MatchString(opt.CLIVersion) {
 		return result, fmt.Errorf("--cli-version must be an exact published version, without v")
 	}
+	// The scaffold uses the taba file names and command, which releases before
+	// 0.2.0 (including its release candidates) cannot read or install.
+	if v := semver.MustParse(opt.CLIVersion); v.Major() == 0 && v.Minor() < 2 {
+		return result, fmt.Errorf("--cli-version must be 0.2.0 or later: earlier releases cannot read .taba-version and taba.toml")
+	}
 	dir, err := filepath.Abs(opt.Dir)
 	if err != nil {
 		return result, err

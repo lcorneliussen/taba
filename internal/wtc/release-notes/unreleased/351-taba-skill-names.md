@@ -4,5 +4,5 @@
   ([#351](https://github.com/lcorneliussen/taba/issues/351)).
 - **`taba open` starts `taba status --tui` and `taba browse`** in collections pinned at 0.2.0 or later, and keeps `wtc` for older pins. A new collection's agent starts with `/taba-start` once its skills have been rendered
   ([#351](https://github.com/lcorneliussen/taba/issues/351)).
-- **`taba harness init` writes `.taba-version` and `taba.toml`.** A harness that has `.taba-version` and no `.wtc-cli-version` seeds new collections with `SCOPE.md`. Other harnesses keep seeding `WTC-SCOPE.md`, because their own tooling may read that name. Existing scope files are never moved. To move an existing harness: `git mv .wtc-cli-version .taba-version && git mv wtc.toml taba.toml`
+- **`taba harness init` writes `.taba-version` and `taba.toml`**, and so needs `--cli-version` 0.2.0 or later. A harness that has `.taba-version` and no `.wtc-cli-version` seeds new collections with `SCOPE.md`. Other harnesses keep seeding `WTC-SCOPE.md`, because their own tooling may read that name. Existing scope files are never moved. To move an existing harness: `git mv .wtc-cli-version .taba-version && git mv wtc.toml taba.toml`
   ([#351](https://github.com/lcorneliussen/taba/issues/351)).

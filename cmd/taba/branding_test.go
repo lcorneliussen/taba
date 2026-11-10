@@ -74,7 +74,7 @@ func TestInvocationBrandingAtCLIEntryPoint(t *testing.T) {
 				}
 			}
 			target := filepath.Join(root, "literal wtc {{command}}")
-			stdout, stderr, err := run("harness", "init", target, "--remote", "https://example.invalid/wtc/project.git", "--cli-version", "0.1.60", "--dry-run", "--json")
+			stdout, stderr, err := run("harness", "init", target, "--remote", "https://example.invalid/wtc/project.git", "--cli-version", "0.2.0", "--dry-run", "--json")
 			var result struct {
 				OK   bool `json:"ok"`
 				Data struct {

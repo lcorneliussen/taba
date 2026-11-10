@@ -9,7 +9,7 @@ https://github.com/lcorneliussen/taba/blob/main/docs/released-bootstrap.md .
 
 ## 1. Create your harness repo
 
-Install WTC v0.1.39 or newer from a published release. Git is required;
+Install taba 0.2.1 or newer from a published release. Git is required;
 mise is useful for pins and environment. Herdr, Neovim, agents, and forge CLIs
 are optional interfaces. Your own Git remote must be available before the next
 step.
@@ -17,7 +17,7 @@ step.
 ```sh
 taba harness init agent-harness \
   --remote git@github.com:example-org/agent-harness.git \
-  --cli-version 0.1.59
+  --cli-version 0.2.0
 cd agent-harness
 ```
 

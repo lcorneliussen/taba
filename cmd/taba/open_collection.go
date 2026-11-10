@@ -441,6 +441,28 @@ func startSkill(collection string) string {
 	return "wtc-start"
 }
 
+// renderedSkill names a taba-* skill the way the collection has it rendered:
+// a collection last rendered by a release before 0.2.1 has only the wtc-*
+// names, so a handoff to it uses the old name.
+func renderedSkill(collection, name string) string {
+	old, ok := strings.CutPrefix(name, "taba-")
+	if !ok {
+		return name
+	}
+	old = "wtc-" + old
+	for _, root := range []string{".claude", ".agents"} {
+		if _, err := os.Stat(filepath.Join(collection, root, "skills", name, "SKILL.md")); err == nil {
+			return name
+		}
+	}
+	for _, root := range []string{".claude", ".agents"} {
+		if _, err := os.Stat(filepath.Join(collection, root, "skills", old, "SKILL.md")); err == nil {
+			return old
+		}
+	}
+	return name
+}
+
 // firstAgentPrompt starts the agent of a new collection on its launch note,
 // and says so up front when the collection only reviews someone else's PR.
 func firstAgentPrompt(collection, kind string) string {
