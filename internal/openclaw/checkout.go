@@ -515,7 +515,11 @@ func (c *Checkout) merge(result CatchUp, ref, label string) (CatchUp, error) {
 		result.Note = "already contains " + label
 		return result, nil
 	}
-	if err := c.protectIgnored(ref); err != nil {
+	base, err := git(c.Dir, "merge-base", "HEAD", ref)
+	if err != nil {
+		return result, err
+	}
+	if err := c.protectIgnoredBetween(base, ref); err != nil {
 		return result, err
 	}
 	result.FastForward = gitOK(c.Dir, "merge-base", "--is-ancestor", "HEAD", ref)

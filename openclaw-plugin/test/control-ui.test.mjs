@@ -236,7 +236,7 @@ const busy = collection([
 // The card's cells, row by row: a table is a grid of a header and rows of
 // as many cells.
 const tables = (node) => [...node.all()].filter((n) => n.className === "wtc-table").map((t) => {
-  const cells = t.children.filter(n => !n.attributes["data-service-tunnels"]);
+  const cells = t.children.filter(n => !n.attributes["data-service-tunnels"] && n.className !== "wtc-action-preview-wash");
   const width = Number(t.attributes["data-columns"]);
   const rows = [];
   for (let i = 0; i < cells.length; i += width) rows.push(cells.slice(i, i + width).map((c) => {

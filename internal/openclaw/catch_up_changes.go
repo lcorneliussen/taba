@@ -14,15 +14,23 @@ import (
 // are present. They are deliberately outside a recovery stash, so refuse any
 // newly tracked path that would replace one (including directory collisions).
 func (c *Checkout) protectIgnored(ref string) error {
-	added, err := git(c.Dir, "diff", "--name-only", "--diff-filter=A", "-z", "HEAD", ref)
+	return c.protectIgnoredBetween("HEAD", ref)
+}
+
+func (c *Checkout) protectIgnoredBetween(base, ref string) error {
+	added, err := git(c.Dir, "diff", "--name-only", "--diff-filter=AMRT", "-z", base, ref)
 	if err != nil || added == "" {
 		return err
 	}
+	return c.protectIgnoredPaths(added)
+}
+
+func (c *Checkout) protectIgnoredPaths(paths string) error {
 	ignored, err := git(c.Dir, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z")
 	if err != nil {
 		return err
 	}
-	for _, a := range strings.Split(added, "\x00") {
+	for _, a := range strings.Split(paths, "\x00") {
 		for _, b := range strings.Split(ignored, "\x00") {
 			b = strings.TrimSuffix(b, "/")
 			if a != "" && b != "" && (a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")) {
@@ -71,8 +79,15 @@ func (c *Checkout) withCatchUpChanges(result CatchUp, update func() (CatchUp, er
 		}
 		return update()
 	}
-	// A worktree-specific pin survives stash-stack changes and Git pruning.
-	// Name it after the stash object as well as time, not a private folder.
+	// Stashing resets tracked paths to HEAD. A locally replaced directory
+	// can contain ignored files that Git would otherwise remove in that reset.
+	tracked, err := git(c.Dir, "ls-tree", "-r", "--name-only", "-z", "HEAD")
+	if err != nil {
+		return result, err
+	}
+	if err := c.protectIgnoredPaths(tracked); err != nil {
+		return result, err
+	}
 	message := "taba catch-up recovery " + rand.Text()
 	if _, err := git(c.Dir, append(identity(c.Dir), "stash", "push", "--quiet", "--include-untracked", "-m", message, "--", ".", ":(exclude)"+strings.TrimSuffix(sandboxSkills, "/"))...); err != nil {
 		return result, fmt.Errorf("cannot preserve local changes; catch-up did not move HEAD: %w", err)
@@ -87,6 +102,8 @@ func (c *Checkout) withCatchUpChanges(result CatchUp, update func() (CatchUp, er
 	if hash == "" {
 		return result, fmt.Errorf("local changes were set aside but their recovery snapshot could not be identified; inspect the Git stash before retrying")
 	}
+	// The pin is repository-wide; the recovery marker below is per worktree.
+	// Keep the copy reachable independently of shared stash-stack rewrites.
 	ref := fmt.Sprintf("refs/wtc-catch-up/%s-%d", hash, time.Now().UnixNano())
 	if _, err := git(c.Dir, "update-ref", ref, hash); err != nil {
 		_, restoreErr := git(c.Dir, "stash", "apply", "--index", hash)

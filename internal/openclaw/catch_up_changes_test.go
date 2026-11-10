@@ -154,3 +154,119 @@ func TestGatewayCatchUpRefusesConcurrentOperation(t *testing.T) {
 		t.Fatal("busy checkout changed")
 	}
 }
+
+func ignoredLocalFile(t *testing.T, c *Checkout, g func(...string) string) {
+	t.Helper()
+	p := g("rev-parse", "--path-format=absolute", "--git-path", "info/exclude")
+	if err := os.WriteFile(p, []byte("private.txt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write(t, c, "private.txt", "private local\n")
+}
+
+func TestGatewayCatchUpProtectsIgnoredFilesWhenDetachedOrReturningToTip(t *testing.T) {
+	for _, mode := range []string{"detached", "merged"} {
+		t.Run(mode, func(t *testing.T) {
+			c, g := managedWorktree(t, "https://github.com/example-org/docs.git")
+			bare := g("remote", "get-url", "--push", "origin")
+			g("remote", "set-url", "origin", bare)
+			if mode == "detached" {
+				g("checkout", "--detach", "-q")
+				var err error
+				c, err = OpenCatchUpCheckout(c.Dir, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				write(t, c, "feature.txt", "feature\n")
+				g("add", "feature.txt")
+				g("commit", "-qm", "feature")
+				head := g("rev-parse", "HEAD")
+				g("push", "-q", bare, head+":refs/heads/main")
+				mergedPRCommand(t, head, head)
+			}
+			ignoredLocalFile(t, c, g)
+			head := g("rev-parse", "HEAD")
+			advanceOrigin(t, bare, "private.txt", "upstream\n")
+			if _, err := c.CatchUp(); err == nil || !strings.Contains(err.Error(), "ignored local data") {
+				t.Fatalf("collision accepted: %v", err)
+			}
+			if b, _ := os.ReadFile(filepath.Join(c.Dir, "private.txt")); string(b) != "private local\n" || g("rev-parse", "HEAD") != head {
+				t.Fatal("private data or HEAD changed")
+			}
+		})
+	}
+}
+
+func TestGatewayCatchUpKeepsFileUntrackedByBranch(t *testing.T) {
+	c, g, bare := dirtyCatchUpFixture(t)
+	g("rm", "--cached", "README.md")
+	write(t, c, ".gitignore", "README.md\n")
+	g("add", ".gitignore")
+	g("commit", "-qm", "keep configuration local")
+	write(t, c, "README.md", "private configuration\n")
+	advanceOrigin(t, bare, "upstream.txt", "new\n")
+	if _, err := c.CatchUp(); err != nil {
+		t.Fatalf("unchanged incoming path falsely blocks merge: %v", err)
+	}
+	head := g("rev-parse", "HEAD")
+	advanceOrigin(t, bare, "README.md", "incoming modified configuration\n")
+	if _, err := c.CatchUp(); err == nil || !strings.Contains(err.Error(), "ignored local data") {
+		t.Fatalf("modified incoming path was not guarded: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(c.Dir, "README.md")); string(b) != "private configuration\n" || g("rev-parse", "HEAD") != head {
+		t.Fatal("private configuration changed")
+	}
+}
+
+func TestGatewayCatchUpDoesNotDeleteIgnoredDataWhileStashing(t *testing.T) {
+	c, g, _ := dirtyCatchUpFixture(t)
+	write(t, c, "tracked", "tracked file\n")
+	write(t, c, ".gitignore", "*.secret\n")
+	g("add", "tracked", ".gitignore")
+	g("commit", "-qm", "tracked file")
+	if err := os.Remove(filepath.Join(c.Dir, "tracked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(c.Dir, "tracked"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.Dir, "tracked", "private.secret"), []byte("private data\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	head := g("rev-parse", "HEAD")
+	if _, err := c.CatchUp(); err == nil || !strings.Contains(err.Error(), "ignored local data") {
+		t.Fatalf("unsafe stash accepted: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(c.Dir, "tracked", "private.secret")); string(b) != "private data\n" || g("rev-parse", "HEAD") != head {
+		t.Fatal("stash removed ignored data")
+	}
+}
+
+func TestGatewayWorkerCatchUpRestoresDirtyChanges(t *testing.T) {
+	c, g, _ := dirtyCatchUpFixture(t)
+	workerDir := filepath.Join(filepath.Dir(c.Dir), "worker")
+	g("worktree", "add", "-q", "-b", c.Branch()+"--worker", workerDir)
+	worker, err := OpenCatchUpCheckout(workerDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, c, "task.txt", "task change\n")
+	g("add", "task.txt")
+	g("commit", "-qm", "task change")
+	write(t, worker, "README.md", "worker staged\n")
+	if _, err := git(worker.Dir, "add", "README.md"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, worker, "new.txt", "worker untracked\n")
+	r, err := worker.CatchUpWithTask()
+	if err != nil || !r.Merged || !r.ChangesRestored {
+		t.Fatalf("worker catch-up: %+v %v", r, err)
+	}
+	if staged, _ := git(worker.Dir, "show", ":README.md"); staged != "worker staged" {
+		t.Fatal("worker staging lost")
+	}
+	if b, _ := os.ReadFile(filepath.Join(worker.Dir, "new.txt")); string(b) != "worker untracked\n" {
+		t.Fatal("worker untracked file lost")
+	}
+}

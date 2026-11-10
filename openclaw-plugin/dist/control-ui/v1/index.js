@@ -191,20 +191,18 @@ const noteNode = (text, failed, style) => css(el("span", { textContent: failed ?
 // Asks the conversation to run one of the agent's skills on what the card saw.
 const askSkill = (host, sessionKey, skill, input) => askConversation(host, sessionKey, `/skill ${skill} ${input}`);
 
-// A conflict is the agent's to resolve, in its own checkout, with the
-// wtc-catch-up skill: the card says what it saw and names the skill, so that
-// asking in the chat and clicking here do the same. The gateway's own merge
-// was aborted and changed nothing.
 const needsLocalRecovery = message => /local changes (?:need recovery|still need recovery)|local changes are safe in/.test(message ?? "");
 async function catchUpRepo(host, agentId, r, say, ask, request) {
   const name = r.repo ?? r.project;
   say(`Catching up ${name}…`);
   const out = await (request ? request() : call(host, "catch-up", r.sessionKey, agentId));
+  // HEAD may have moved; the local edits remain in the pinned recovery copy.
   if (out.code && needsLocalRecovery(out.message)) {
     await ask(`${name}: catch-up preserved local changes but could not restore them. Inspect this repository's current state and recovery copy before changing anything; restore or resolve the intended edits. Do not reapply a recovery copy blindly, commit unrelated work, or publish.`);
     say(`${name}: local changes are preserved; the conversation was asked to recover them.`);
     return { handedOff: true };
   }
+  // A conflicting base merge was aborted; resolve it in the owning conversation.
   const conflicts = conflictsOf(out.message);
   if (conflicts.length) {
     const base = r.base ?? "its base";
@@ -726,7 +724,7 @@ function actionMenu(trigger, options, label, fail) {
 
 // Geometric control glyphs avoid font-dependent centres and spinning hit targets.
 const controlIcon = (glyph, size = 14) => {
-  const paths = { "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
+  const paths = { "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "spinner": "M21 12a9 9 0 1 1-9-9", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg"), path = document.createElementNS(ns, "path");
   for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: String(size), height: String(size), fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
   svg.setAttribute("class", "wtc-header-glyph"); svg.style.cssText = "display:block;transform-box:fill-box;transform-origin:center";
@@ -873,7 +871,7 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-repo-facts .wtc-repo-pr-slots { grid-template-columns:minmax(0,1fr) !important; }
 .wtc-repositories .wtc-count-control { border-color:transparent !important;background:transparent !important; }
 .wtc-repositories { --wtc-control-height:24px; }
-.wtc-repositories [data-action-preview="true"] { background:color-mix(in srgb,var(--accent,#75c8c1) 8%,transparent); }
+.wtc-repositories .wtc-action-preview-wash[data-action-preview="true"] { background:color-mix(in srgb,var(--accent,#75c8c1) 8%,transparent); }
 .wtc-repositories .wtc-count-control:is(:hover,:focus-visible):not(:disabled) { border-color:var(--border-strong,rgba(128,128,128,.4)) !important;background:var(--bg-hover,rgba(128,128,128,.12)) !important; }
 .wtc-repositories .wtc-local-change { box-sizing:border-box;width:44px !important;min-width:44px !important;max-width:44px;height:24px !important;min-height:24px !important;padding:0 1px !important;grid-template-columns:12px minmax(0,1fr); }
 .wtc-local-change .wtc-count-value { width:24px;justify-self:start; }
@@ -1810,16 +1808,16 @@ function collectionTables(v) {
     return b;
   };
   const working = () => {
-    const svg = controlIcon("↻", 12); svg.setAttribute("class", "wtc-header-glyph wtc-cell-spinner");
+    const svg = controlIcon("spinner", 12); svg.setAttribute("class", "wtc-header-glyph wtc-cell-spinner");
     svg.style.transformBox = "view-box";
-    return css(el("span", { title:"Working",role:"status",ariaLabel:"Working" }, svg), "display:inline-flex;width:12px;height:12px;align-items:center;justify-content:center");
+    return css(el("span", { title:"Working",role:"status",ariaLabel:"Working" }, svg), "display:inline-flex;width:12px;height:12px;align-items:center;justify-content:center;vertical-align:middle");
   };
   const commitKey = r => `${v.collectionKey?.() ?? v.key()}|${r.sessionKey}`;
   function limitCommitFeedback(key, state, collection) {
     const timer = setTimeout(() => {
       if (commitFeedback.get(key) !== state || !["running", "pending"].includes(state.phase)) return;
       state.phase = "unconfirmed";
-      recordActivity(collection,state.id,{state:"unknown",status:"Commit outcome not yet confirmed; inspect the conversation before retrying"});
+      recordActivity(collection,state.id,{state:"unknown",status:"No commit observed yet; open action details to check the request or ask the agent for help"});
       notifyFactFeedback(collection);
     }, 90000); timer.unref?.();
   }
@@ -1908,7 +1906,7 @@ function collectionTables(v) {
     // Repository field names remain accessible without occupying a visible row.
     grid.append(...shown.map((i) => css(el("span", { title: columns[i].title ?? "" }, columns[i].head ?? ""),
       `${blank ? "position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);" : ""}${align(columns[i])}font-size:10.5px;letter-spacing:normal;color:var(--muted, #888);white-space:nowrap`)));
-    for (const row of rows) {
+    for (const [rowIndex,row] of rows.entries()) {
       grid.append(...shown.map((i) => {
         const c = columns[i];
         const below = narrow && columns[i + 1]?.under && !empty(row[i + 1]) ? row[i + 1] : null;
@@ -1920,10 +1918,15 @@ function collectionTables(v) {
         }
         // Absolute icon rails keep their full hit area; text cells still clip.
         const overflow = c.overflow || value?.className === "wtc-lead-slot";
-        const cell = css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? `width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;${c.align === "end" ? "justify-content:flex-end;" : ""}` : ""}min-width:0;overflow:${overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
+        const cell = css(el("span", {}, blank ? baselineStrut() : null, value), `${align(c)}${blank ? `width:100%;box-sizing:border-box;min-height:calc(var(--wtc-control-height,20px) + 2px);display:flex;align-items:baseline;align-self:stretch;z-index:1;grid-row:${rowIndex+1};grid-column:${i+1};${c.align === "end" ? "justify-content:flex-end;" : ""}` : ""}min-width:0;overflow:${overflow ? "visible" : "hidden"};text-overflow:ellipsis;white-space:nowrap`);
         if (row.sessionKey) cell.setAttribute("data-repo-session", row.sessionKey);
         return cell;
       }));
+      if (blank && row.sessionKey) {
+        // A single paint layer covers the row and its column gaps without sizing it.
+        const wash = css(el("span", {className:"wtc-action-preview-wash",ariaHidden:"true"}), `grid-row:${rowIndex+1};grid-column:1/-1;align-self:stretch;margin-block:-.5px;min-height:0;min-width:0;z-index:0;pointer-events:none;border-radius:4px`);
+        wash.setAttribute("data-repo-session",row.sessionKey);grid.append(wash);
+      }
     }
     return grid;
   };
