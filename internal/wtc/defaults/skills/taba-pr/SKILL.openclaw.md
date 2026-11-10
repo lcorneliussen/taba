@@ -40,4 +40,4 @@ the repository's session: on GitHub the `github_publish` tool, with the
 intent's `args` unchanged. On another forge, hand the plan to that forge's
 skill. Never force-push.
 
-After that, pull request news arrives in this conversation: see wtc-follow.
+After that, pull request news arrives in this conversation: see taba-follow.

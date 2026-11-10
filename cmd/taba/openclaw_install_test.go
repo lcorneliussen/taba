@@ -20,7 +20,7 @@ func TestWriteOpenClawPluginStampsTheVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"index.js", "package.json", "openclaw.plugin.json", "dist/control-ui/v1/index.js", "skills/wtc/SKILL.md",
-		// The wtc skills' OpenClaw variants, under their own names.
+		// The taba skills' OpenClaw variants, under their own names.
 		"skills/taba-catch-up/SKILL.md", "skills/taba-pr/SKILL.md", "skills/taba-follow/SKILL.md"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("%s was not written: %v", f, err)

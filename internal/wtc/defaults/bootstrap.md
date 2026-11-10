@@ -45,7 +45,7 @@ taba skills render --seed-scope
 ```
 
 With mise, run `mise install` in `main`. The generated tool entry comes from the
-harness's `.wtc-cli-version`; edits to the generated `mise.toml` are replaced at
+harness version pin (`.taba-version`, or `.wtc-cli-version`); edits to the generated `mise.toml` are replaced at
 the next refresh. `AGENTS.md` and `.wtc/instructions/` now provide the pinned
 CLI's collection guidance, with project overrides where present.
 

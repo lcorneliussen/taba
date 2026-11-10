@@ -10,7 +10,7 @@
 ## Task
 
 (One paragraph: what this collection exists to do, and what "done" looks like.
- Seeded from HANDOFF.md by /wtc-start.)
+ Seeded from HANDOFF.md by /taba-start.)
 
 ## Tracking
 

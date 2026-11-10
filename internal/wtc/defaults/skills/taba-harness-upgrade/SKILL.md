@@ -17,7 +17,7 @@ Use the full release range to list changed commands, skills, instructions, regis
 
 ## 2. Prepare the branch
 
-Create a branch at the first commit, following the harness policy. For a CLI release, run `taba upgrade` (with the same `--version`): it bumps the committed `.wtc-cli-version` pin and the harness compatibility range together, regenerates the collection-root `mise.toml`, runs `mise install`, and prints the target binary's own notes, which can correct earlier ones. Without the command, make those changes by hand. Update the recorded upstream version/ref. Re-render shipped skills and instructions, then reconcile only the affected local overlays. When a CLI release is not yet available, port the shell implementation and record the upstream commit or merge range.
+Create a branch at the first commit, following the harness policy. For a CLI release, run `taba upgrade` (with the same `--version`): it bumps the committed version pin (`.taba-version`, or `.wtc-cli-version` in older harnesses; never add the other name) and the harness compatibility range together, regenerates the collection-root `mise.toml`, runs `mise install`, and prints the target binary's own notes, which can correct earlier ones. Without the command, make those changes by hand. Update the recorded upstream version/ref. Re-render shipped skills and instructions, then reconcile only the affected local overlays. When a CLI release is not yet available, port the shell implementation and record the upstream commit or merge range.
 
 Keep local content in config, hooks, providers, and overlays. If the upgrade needs a new extension point, open a generic upstream change first, then take its released version. Do not silently edit a generated file to carry a permanent customization.
 

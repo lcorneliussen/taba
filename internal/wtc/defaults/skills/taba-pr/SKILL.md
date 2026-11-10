@@ -1,6 +1,6 @@
 ---
 name: taba-pr
-description: Open or advance a review-ready pull request for work in a worktree collection — catch up against the remote, branch correctly if needed, push, open or un-draft the PR, request review, then follow its checks, wait for the review bots to actually report, and address what they find with fixes, replies, and resolved threads. Use when the user asks to open a PR, mark one ready, ship or land a change, chase a red build, or answer review feedback. For ongoing ownership through main builds and delivery, use wtc-follow. For work in progress that should not summon reviewers yet, use taba-draft-pr instead.
+description: Open or advance a review-ready pull request for work in a worktree collection — catch up against the remote, branch correctly if needed, push, open or un-draft the PR, request review, then follow its checks, wait for the review bots to actually report, and address what they find with fixes, replies, and resolved threads. Use when the user asks to open a PR, mark one ready, ship or land a change, chase a red build, or answer review feedback. For ongoing ownership through main builds and delivery, use taba-follow. For work in progress that should not summon reviewers yet, use taba-draft-pr instead.
 ---
 
 

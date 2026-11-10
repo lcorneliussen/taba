@@ -1,4 +1,4 @@
-# Skills — `wtc-*` procedures across agent CLIs
+# Skills — `taba-*` procedures across agent CLIs
 
 The recurring collection actions are packaged as **skills**: `SKILL.md`
 procedure files the agent CLIs discover on their own and load only when a task
@@ -16,7 +16,7 @@ markdown at a stable path.
 | Lives in | Holds |
 |---|---|
 | `instructions/*.md` | **Canon** — the rule, the geometry, the rationale. One source of truth. |
-| `skills/wtc-*/SKILL.md` | **Procedure** — what to do, in order, with the judgement calls named. Links to canon rather than restating it. |
+| `skills/taba-*/SKILL.md` | **Procedure** — what to do, in order, with the judgement calls named. Links to canon rather than restating it. |
 | `taba` CLI | **Mechanism** — collection commands and their stable flags. |
 
 A skill that only wraps one command invocation is not worth a file; the value

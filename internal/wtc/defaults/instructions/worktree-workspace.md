@@ -151,7 +151,7 @@ with pushing disabled from the PR worktree and the author's review steps
 refused. `--tip` is accepted and ignored — it is the default now.
 
 Both tools clone missing bare owners on demand, write the collection env
-(ports), link the harness `wtc-*` skills into the collection root so the agent
+(ports), link the harness `taba-*` skills into the collection root so the agent
 CLIs discover them (`skills.md`), and run each repo's init hook — see
 `hooks-and-env.md`.
 

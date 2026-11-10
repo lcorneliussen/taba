@@ -319,7 +319,7 @@ first push is `taba-pr`'s (or `taba-draft-pr`'s), together with opening the PR.
 taba skills render
 ```
 
-Picks up `wtc-*` skills added to the harness since the collection was created
+Picks up `taba-*` skills added to the harness since the collection was created
 and prunes ones removed since. Also installs agent toolchain hooks
 (`.grok/hooks`, `.claude/settings.json`, `.cursor/hooks.json`) and refreshes
 `.env.toolchain` so agent shells keep sibling toolchains on PATH. Idempotent.

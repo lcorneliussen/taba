@@ -69,9 +69,9 @@ func collectionStateInput(collection, legacy, current string) (string, error) {
 }
 
 // TabaNative reports whether a harness was created with, or moved to, the new
-// file names: it has .taba-version and no .wtc-cli-version. Only such a harness
-// gets new-name outputs that its own tooling might otherwise look for under
-// the old name, such as a collection's SCOPE.md.
+// file names: it has .taba-version and no .wtc-cli-version. It decides only
+// which scope file a new collection is seeded with (SCOPE.md here, else
+// WTC-SCOPE.md), because older harness tooling may read the old name.
 func TabaNative(harness string) bool {
 	if harness == "" {
 		return false

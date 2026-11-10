@@ -190,7 +190,7 @@ prod_paths = ["api/.env.production"]
 
 ## Skills and instructions
 
-The CLI embeds generic `wtc-*` skills and instructions. `taba skills render`
+The CLI embeds generic `taba-*` skills and instructions. `taba skills render`
 materializes embedded skills and instruction defaults in the disposable
 collection, links skills into
 `.claude/skills` and `.agents/skills`, and wires `AGENTS.md`, agent hooks,
