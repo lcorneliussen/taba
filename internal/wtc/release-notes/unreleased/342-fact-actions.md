@@ -16,3 +16,7 @@
   operation archives only its exact active marker and retains backups; matching
   native completion receipts settle pending recovery feedback without a retry,
   commit or publication.
+
+- Catch-up now refuses incoming tracked paths that would replace ignored local
+  data, on clean checkouts as well as dirty ones. Unfinished operations remain
+  refused.

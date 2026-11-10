@@ -44,9 +44,9 @@ func (c *Checkout) protectIgnoredPaths(paths string) error {
 // withCatchUpChanges keeps a recoverable Git copy before moving a dirty
 // checkout. Stash objects are local recovery data, never published commits.
 // Do not drop by stash position: other worktrees share the stash stack.
-// Older plugin clients hand off the "need recovery", "still need recovery"
-// and "safe in" phrases through needsLocalRecovery in the Control UI. Other
-// errors, including preparatory "set aside" failures, remain plain failures.
+// The Control UI matches "need recovery", "still need recovery" and "safe in"
+// through needsLocalRecovery; keep those wordings in sync. Other errors,
+// including preparatory "set aside" failures, remain plain failures.
 func (c *Checkout) withCatchUpChanges(result CatchUp, update func() (CatchUp, error)) (CatchUp, error) {
 	unlock, err := c.catchUpLock()
 	if err != nil {
