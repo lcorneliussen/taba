@@ -2,14 +2,12 @@ package wtc
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -71,18 +69,33 @@ case "$1 $2" in
    fi
    if [ -n "$GH_TOKEN" ]; then printf '%s\n' "$GH_TOKEN"; else cat "$RENAME_FIXTURE/token"; fi
    exit 0 ;;
+ 'api graphql')
+   printf '%s\n' "$*" >> "$RENAME_FIXTURE/provider-calls"
+   number=42
+   for arg in "$@"; do case "$arg" in number=*) number=${arg#number=} ;; esac; done
+   printf 'repair %s\n' "$number" >> "$RENAME_FIXTURE/dispatches"
+   [ ! -f "$RENAME_FIXTURE/fail-old" ] && [ ! -f "$RENAME_FIXTURE/fail-new" ] && [ ! -f "$RENAME_FIXTURE/fail-base" ] || exit 1
+   file=graphql-$number ;;
  'api repos/example/old-name') file=old ;;
  'api repos/example/new-name') file=new ;;
  'api repos/example/new-name/pulls/42') file=base ;;
  'api repos/example/new-name/pulls/43') file=base-43 ;;
  'api repos/example/new-name/pulls/44') file=base-44 ;;
- 'pr list') printf '[]\n'; exit 0 ;;
- 'pr view') cat "$RENAME_FIXTURE/detail"; exit 0 ;;
+ 'pr list')
+   printf 'list\n' >> "$RENAME_FIXTURE/dispatches"
+   printf '%s\n' "$*" >> "$RENAME_FIXTURE/provider-calls"
+   if [ -f "$RENAME_FIXTURE/list" ]; then cat "$RENAME_FIXTURE/list"; else printf '[]\n'; fi; exit 0 ;;
+ 'pr view')
+   printf 'detail %s\n' "$3" >> "$RENAME_FIXTURE/dispatches"
+   printf '%s\n' "$*" >> "$RENAME_FIXTURE/provider-calls"
+   [ ! -f "$RENAME_FIXTURE/fail-view-$3" ] || exit 1
+   if [ -f "$RENAME_FIXTURE/detail-$3" ]; then cat "$RENAME_FIXTURE/detail-$3"; else cat "$RENAME_FIXTURE/detail"; fi
+   exit 0 ;;
  *) exit 2 ;;
 esac
 if [ -f "$RENAME_FIXTURE/fail" ] || [ -f "$RENAME_FIXTURE/fail-$file" ]; then printf 'offline/auth/HTTP 404 synthetic-secret\n' >&2; exit 1; fi
 if [ -f "$RENAME_FIXTURE/expect-api-token" ] && [ "$GH_TOKEN" != "$(cat "$RENAME_FIXTURE/expect-api-token")" ]; then exit 61; fi
-if [ "$file" = base ] && [ -f "$RENAME_FIXTURE/block" ]; then
+if [ "$file" = graphql-42 ] && [ -f "$RENAME_FIXTURE/block" ]; then
  touch "$RENAME_FIXTURE/entered"
  while [ ! -f "$RENAME_FIXTURE/continue" ]; do sleep 0.01; done
 fi
@@ -134,10 +147,47 @@ cat "$RENAME_FIXTURE/$file"
 func (f renameProviderFixture) put(t *testing.T, name, body string) {
 	t.Helper()
 	fixtureFile(t, filepath.Join(f.dir, name), body, 0600)
+	if strings.HasPrefix(name, "graphql-") {
+		return
+	}
+	var old, current map[string]any
+	raw, _ := os.ReadFile(filepath.Join(f.dir, "old"))
+	_ = json.Unmarshal(raw, &old)
+	raw, _ = os.ReadFile(filepath.Join(f.dir, "new"))
+	_ = json.Unmarshal(raw, &current)
+	convert := func(r map[string]any) map[string]any {
+		id := ""
+		if r["id"] != nil {
+			id = "R_fixture_" + fmt.Sprint(r["id"])
+		}
+		return map[string]any{"id": id, "nameWithOwner": r["full_name"]}
+	}
+	files, _ := filepath.Glob(filepath.Join(f.dir, "base*"))
+	for _, path := range files {
+		if strings.Contains(filepath.Base(path), "fail") {
+			continue
+		}
+		n := "42"
+		if strings.HasPrefix(filepath.Base(path), "base-") {
+			n = strings.TrimPrefix(filepath.Base(path), "base-")
+		}
+		raw, _ = os.ReadFile(path)
+		var pr struct {
+			Number int `json:"number"`
+			Base   struct {
+				Repo map[string]any `json:"repo"`
+			} `json:"base"`
+		}
+		_ = json.Unmarshal(raw, &pr)
+		repository := convert(old)
+		repository["pullRequest"] = map[string]any{"number": pr.Number, "url": fmt.Sprintf("https://github.com/%v/pull/%d", current["full_name"], pr.Number), "baseRepository": convert(pr.Base.Repo)}
+		response, _ := json.Marshal(map[string]any{"data": map[string]any{"old": repository, "current": convert(current)}})
+		fixtureFile(t, filepath.Join(f.dir, "graphql-"+n), string(response), 0600)
+	}
 }
 
 func TestPRRenameProofRequiresSameImmutableBaseRepository(t *testing.T) {
-	for _, forge := range []string{"github.com", "bitbucket.org"} {
+	for _, forge := range []string{"github.com"} {
 		for _, mode := range []string{"rename", "reused-old-name", "different-base", "wrong-number", "missing-base", "missing-id", "different-canonical-name", "lookup-unavailable", "cooldown", "spent-budget"} {
 			t.Run(forge+"/"+mode, func(t *testing.T) {
 				f := newRenameProviderFixture(t, forge)
@@ -164,8 +214,7 @@ func TestPRRenameProofRequiresSameImmutableBaseRepository(t *testing.T) {
 						t.Fatal("could not spend initial token")
 					}
 				}
-				p := prIdentityProof{}
-				url, err := p.verify(&prIdentityMismatch{old: "example/old-name", current: "example/new-name", forge: forge}, "42")
+				url, err := prIdentityGitHub(&prIdentityMismatch{old: "example/old-name", current: "example/new-name", forge: forge}, "42", nil)
 				if mode == "rename" {
 					if err != nil || url != prURLForStatus(forge, "example/new-name", "42") {
 						t.Fatalf("verified rename: %q %v", url, err)
@@ -179,12 +228,12 @@ func TestPRRenameProofRequiresSameImmutableBaseRepository(t *testing.T) {
 }
 
 func TestStatusRecoversRenamePreservingLocalState(t *testing.T) {
-	for _, forge := range []string{"github.com", "bitbucket.org"} {
+	for _, forge := range []string{"github.com"} {
 		for _, filename := range []string{".wtc-prs", ".taba-prs"} {
 			t.Run(forge+"/"+filename, func(t *testing.T) {
 				c := newWorkspaceFixture(t)
 				f := newRenameProviderFixture(t, forge)
-				c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: "https://" + forge + "/example/new-name.git"})
+				fixtureRenameRegistry(t, c, "https://"+forge+"/example/new-name.git")
 				oldURL := prURLForStatus(forge, "example/old-name", "42")
 				newURL := prURLForStatus(forge, "example/new-name", "42")
 				before := "# User comment\r\nreference\t42  topic\t" + oldURL + "  User title\r\nother 9 - - Unrelated\n# merged-pr reference 42 2026-10-29T12:00:00Z SUCCESS\n"
@@ -223,7 +272,7 @@ func TestStatusRenameOpenAndUnavailableDiagnostics(t *testing.T) {
 		t.Run(fmt.Sprint(unavailable), func(t *testing.T) {
 			c := newWorkspaceFixture(t)
 			f := newRenameProviderFixture(t, "github.com")
-			c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: "https://github.com/example/new-name.git"})
+			fixtureRenameRegistry(t, c, "https://github.com/example/new-name.git")
 			before := "reference 42 topic https://github.com/example/old-name/pull/42 Synthetic rename\n"
 			fixtureFile(t, c.PRFile(), before, 0600)
 			var progress []string
@@ -287,7 +336,7 @@ func TestPRURLRepairPreservesConcurrentEditsAndDoesNotResurrect(t *testing.T) {
 func TestStatusRenameConcurrentWriterDuringProviderLookup(t *testing.T) {
 	c := newWorkspaceFixture(t)
 	f := newRenameProviderFixture(t, "github.com")
-	c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: "https://github.com/example/new-name.git"})
+	fixtureRenameRegistry(t, c, "https://github.com/example/new-name.git")
 	record := PRRecord{Repo: "reference", Number: "42", Branch: "old-topic", URL: "https://github.com/example/old-name/pull/42", Title: "old title"}
 	if _, err := c.EnlistPR(record); err != nil {
 		t.Fatal(err)
@@ -357,10 +406,10 @@ func TestStatusWorkspaceSweepDoesNotRepairSiblingPRMetadata(t *testing.T) {
 	}
 }
 
-func TestStatusRenameFailedRepositoryIsQueriedOncePerRefresh(t *testing.T) {
+func TestStatusRenameFailureIsBoundedToOneRequestPerRefresh(t *testing.T) {
 	c := newWorkspaceFixture(t)
 	f := newRenameProviderFixture(t, "github.com")
-	c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: "https://github.com/example/new-name.git"})
+	fixtureRenameRegistry(t, c, "https://github.com/example/new-name.git")
 	f.put(t, "fail-old", "")
 	before := "reference 42 topic https://github.com/example/old-name/pull/42 One\n" +
 		"reference 43 topic https://github.com/example/old-name/pull/43 Two\n" +
@@ -374,7 +423,7 @@ func TestStatusRenameFailedRepositoryIsQueriedOncePerRefresh(t *testing.T) {
 			t.Fatal(err)
 		}
 		calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-		if got := strings.Count(string(calls), "api repos/example/old-name "); got != refresh {
+		if got := strings.Count(string(calls), "api graphql "); got != refresh {
 			t.Fatalf("failed shared endpoint repeated: %d old-name calls after %d refreshes; want one per refresh", got, refresh)
 		}
 		if raw, _ := os.ReadFile(c.PRFile()); string(raw) != before {
@@ -391,39 +440,6 @@ func refillRenameBudget(t *testing.T, forge string) {
 	// Model a real 60-second refill without sleeping or changing the configured
 	// interval, token cap, or production budget implementation.
 	fixtureFile(t, statusForgeStatePath("budget", forge), fmt.Sprintf("0 %d\n", time.Now().Add(-61*time.Second).UnixNano()), 0600)
-}
-
-func TestStatusRenameProgressesAcrossPositiveBudgetRefills(t *testing.T) {
-	c := newWorkspaceFixture(t)
-	f := newRenameProviderFixture(t, "github.com")
-	t.Setenv("WTC_CONFIG_ROOT", c.ConfigRoot)
-	t.Setenv("WTC_FORGE_MIN_INTERVAL", "60")
-	registry := filepath.Join(c.Harness, ".harness-repos.yml")
-	data, _ := os.ReadFile(registry)
-	fixtureFile(t, registry, string(data)+"  - name: reference\n    remote: https://github.com/example/new-name.git\n    default_ref: origin/main\n", 0644)
-	before := "reference 42 topic https://github.com/example/old-name/pull/42 Synthetic rate-limited rename\n"
-	fixtureFile(t, c.PRFile(), before, 0600)
-	for refresh := 0; refresh < 3; refresh++ {
-		if refresh > 0 {
-			refillRenameBudget(t, "github.com")
-		}
-		fresh, err := OpenCollection(c.Collection)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := fresh.statusForgePreview(false, true); err != nil {
-			t.Fatal(err)
-		}
-		calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-		if strings.Count(string(calls), "api ") != refresh+1 {
-			t.Fatalf("refresh bypassed one-call interval: %s", calls)
-		}
-	}
-	after, _ := os.ReadFile(c.PRFile())
-	if string(after) != strings.Replace(before, "old-name", "new-name", 1) {
-		calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-		t.Fatalf("valid rename never progressed across refills; metadata=%q, provider calls:\n%s", after, calls)
-	}
 }
 
 func stagedRenameFixture(t *testing.T, forge string) (*Context, renameProviderFixture, string) {
@@ -453,288 +469,348 @@ func stagedRenameRefresh(t *testing.T, c *Context) StatusSnapshot {
 	return snapshot
 }
 
-func stagedRenamePath(t *testing.T) string {
+func fixtureRenameRegistry(t *testing.T, c *Context, remote string) {
 	t.Helper()
-	paths, _ := filepath.Glob(filepath.Join(statusForgeCacheDir(), "identity-attempt-v1-*.json"))
-	if len(paths) != 1 {
-		t.Fatalf("want one pending attempt, got %d", len(paths))
+	t.Setenv("WTC_CONFIG_ROOT", c.ConfigRoot)
+	raw, err := os.ReadFile(c.registryPath())
+	if err != nil {
+		t.Fatal(err)
 	}
-	return paths[0]
+	fixtureFile(t, c.registryPath(), string(raw)+"  - name: reference\n    remote: "+remote+"\n    default_ref: origin/main\n", 0644)
+	c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: remote})
 }
 
-func TestStatusRenameStagedProofInvalidation(t *testing.T) {
-	for _, forge := range []string{"github.com", "bitbucket.org"} {
-		for _, mode := range []string{"old-name-reused", "canonical-reused", "base-mismatch", "expired", "future", "malformed", "credential-change", "context-change", "offline", "auth-unavailable", "permissions", "nonregular", "cooldown"} {
-			t.Run(forge+"/"+mode, func(t *testing.T) {
-				c, f, before := stagedRenameFixture(t, forge)
-				stagedRenameRefresh(t, c)
-				refillRenameBudget(t, forge)
-				stagedRenameRefresh(t, c)
-				path := stagedRenamePath(t)
-				raw, _ := os.ReadFile(path)
-				if strings.Contains(string(raw), "synthetic") || strings.Contains(string(raw), "secret") {
-					t.Fatal("pending proof persisted credentials or provider error output")
-				}
-				switch mode {
-				case "old-name-reused":
-					f.put(t, "old", renameRepositoryJSON(forge, "example/old-name", true))
-				case "canonical-reused":
-					f.put(t, "old", renameRepositoryJSON(forge, "example/elsewhere", false))
-					f.put(t, "new", renameRepositoryJSON(forge, "example/new-name", true))
-				case "base-mismatch":
-					// Invalidate the pending base observation, never treat a different
-					// immutable base as another stage of the same proof.
-					var a prIdentityAttempt
-					json.Unmarshal(raw, &a)
-					a.Base.ID = "different"
-					raw, _ = json.Marshal(a)
-					fixtureFile(t, path, string(raw), 0600)
-				case "expired", "future":
-					t.Setenv("WTC_FORGE_CACHE_AGE", "86400")
-					var a prIdentityAttempt
-					json.Unmarshal(raw, &a)
-					a.Started = time.Now().Add(-6 * time.Minute)
-					if mode == "future" {
-						a.Started = time.Now().Add(time.Minute)
-					}
-					a.BaseObserved = a.Started.Add(time.Second)
-					raw, _ = json.Marshal(a)
-					fixtureFile(t, path, string(raw), 0600)
-				case "malformed":
-					fixtureFile(t, path, "not-json", 0600)
-				case "credential-change":
-					if forge == "github.com" {
-						f.put(t, "token", "synthetic-session-b")
-					} else {
-						t.Setenv("BB_API_PASS", "synthetic-session-b")
-					}
-				case "context-change":
-					t.Setenv("WTC_CONFIG_ROOT", t.TempDir())
-				case "offline":
-					f.put(t, "fail-old", "")
-				case "auth-unavailable":
-					if forge == "github.com" {
-						f.put(t, "fail-auth", "")
-					} else {
-						t.Setenv("BB_API_PASS", "")
-					}
-				case "permissions":
-					if err := os.Chmod(path, 0644); err != nil {
-						t.Fatal(err)
-					}
-				case "nonregular":
-					os.Remove(path)
-					if err := os.Mkdir(path, 0700); err != nil {
-						t.Fatal(err)
-					}
-				case "cooldown":
-					statusForgeCool(forge, time.Minute)
-				}
-				refillRenameBudget(t, forge)
-				var progress []string
-				fresh, _ := OpenCollection(c.Collection)
-				fresh.StatusProgress = func(message string) { progress = append(progress, message) }
-				if _, err := fresh.statusForgePreview(false, true); err != nil {
-					t.Fatal(err)
-				}
-				if after, _ := os.ReadFile(c.PRFile()); string(after) != before {
-					t.Fatalf("%s authorized stale/inconsistent repair: %q", mode, after)
-				}
-				if strings.Contains(strings.Join(progress, "\n"), "synthetic-secret") {
-					t.Fatal("provider error leaked")
-				}
-				if mode == "old-name-reused" || mode == "canonical-reused" || mode == "offline" || mode == "auth-unavailable" {
-					if _, err := os.Stat(path); !os.IsNotExist(err) {
-						t.Fatal("failed identity retained pending evidence")
-					}
-				}
-				if mode == "cooldown" {
-					fixtureFile(t, statusForgeStatePath("cool", forge), fmt.Sprint(time.Now().Add(-time.Second).UnixNano()), 0600)
-					stagedRenameRefresh(t, c)
-					after, _ := os.ReadFile(c.PRFile())
-					if string(after) != strings.Replace(before, "old-name", "new-name", 1) {
-						t.Fatal("fresh completing lookup did not resume after cooldown")
-					}
-				}
-			})
-		}
+func TestStatusOmittedCacheHitDoesNotCertifyFullRequest(t *testing.T) {
+	t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
+	f := newRenameProviderFixture(t, "github.com")
+	record := PRRecord{Repo: "reference", Number: "42", URL: "https://github.com/example/new-name/pull/42"}
+	raw, _ := os.ReadFile(filepath.Join(f.dir, "detail"))
+	statusWriteForgeCache("github.com", "example/new-name", "42", raw)
+	listed, _ := statusEncodeOpenPRs(nil, false, time.Now())
+	statusWriteForgeEntry("openprs", "github.com", "example/new-name", "open", listed)
+	statusWriteForgeEntry("omit", "github.com", "example/new-name", "42", []byte("ok"))
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "60")
+	if !statusTakeForgeToken("github.com") {
+		t.Fatal("budget setup")
+	}
+	if detail := statusEnrichRecordMetadata(record, "example/new-name", "github.com"); detail.State != "OPEN" {
+		t.Fatal("cached facts unavailable")
+	}
+	if !statusFullRefreshDue("github.com", "example/new-name", "42") {
+		t.Fatal("cache-only omitted-list result certified a full request that never happened")
+	}
+	calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
+	if strings.Contains(string(calls), "pr view ") {
+		t.Fatal("fixture unexpectedly dispatched detail")
 	}
 }
 
-func TestStatusRenameActiveRowsRecoverBeforeHistoricalBackfill(t *testing.T) {
-	c, f, _ := stagedRenameFixture(t, "github.com")
-	var history strings.Builder
-	for n := 100; n < 120; n++ {
-		fmt.Fprintf(&history, "reference %d old-topic https://github.com/example/old-name/pull/%d Historical\n# merged-pr reference %d 2026-10-29T12:00:00Z SUCCESS\n", n, n, n)
-	}
-	active := "reference 42 topic https://github.com/example/old-name/pull/42 Active\n"
-	before := history.String() + active
-	fixtureFile(t, c.PRFile(), before, 0600)
-	for refresh := 0; refresh < 5; refresh++ {
-		if refresh > 0 {
-			refillRenameBudget(t, "github.com")
-		}
-		snapshot := stagedRenameRefresh(t, c)
-		calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-		if strings.Contains(string(calls), "/pulls/100") {
-			t.Fatal("historical proof consumed active recovery/enrichment allowance")
-		}
-		if refresh >= 2 {
-			want := history.String() + strings.Replace(active, "old-name", "new-name", 1)
-			if after, _ := os.ReadFile(c.PRFile()); string(after) != want {
-				t.Fatalf("active URL did not recover ahead of history: active=%q, settled bytes preserved=%t", strings.TrimPrefix(string(after), history.String()), strings.HasPrefix(string(after), history.String()))
+func TestAtomicRenameRejectsPartialErrorsAndWrongURL(t *testing.T) {
+	for _, mode := range []string{"errors", "old-null", "current-null", "base-null", "wrong-url", "different-current", "fork-base"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newRenameProviderFixture(t, "github.com")
+			raw, _ := os.ReadFile(filepath.Join(f.dir, "graphql-42"))
+			var response map[string]any
+			json.Unmarshal(raw, &response)
+			data := response["data"].(map[string]any)
+			old := data["old"].(map[string]any)
+			pr := old["pullRequest"].(map[string]any)
+			switch mode {
+			case "errors":
+				response["errors"] = []any{map[string]any{"message": "synthetic-secret"}}
+			case "old-null":
+				data["old"] = nil
+			case "current-null":
+				data["current"] = nil
+			case "base-null":
+				pr["baseRepository"] = nil
+			case "wrong-url":
+				pr["url"] = "https://github.com/example/old-name/pull/42"
+			case "different-current":
+				data["current"].(map[string]any)["id"] = "R_different"
+			case "fork-base":
+				pr["baseRepository"].(map[string]any)["nameWithOwner"] = "other/fork"
 			}
-		}
-		if refresh == 4 && snapshot.PRs[len(snapshot.PRs)-1].State != "OPEN" {
-			t.Fatalf("active URL healed but its status still starved: %+v", snapshot.PRs[len(snapshot.PRs)-1])
-		}
-	}
-}
-
-func TestPRIdentityConcurrentAttemptsRespectOneTokenAndComplete(t *testing.T) {
-	for _, forge := range []string{"github.com", "bitbucket.org"} {
-		t.Run(forge, func(t *testing.T) {
-			f := newRenameProviderFixture(t, forge)
-			t.Setenv("WTC_FORGE_MIN_INTERVAL", "60")
-			m := &prIdentityMismatch{old: "example/old-name", current: "example/new-name", forge: forge}
-			for refill := 0; refill < 3; refill++ {
-				if refill > 0 {
-					refillRenameBudget(t, forge)
-				}
-				var wg sync.WaitGroup
-				out := make(chan string, 2)
-				for worker := 0; worker < 2; worker++ {
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						p := prIdentityProof{}
-						url, err := p.verify(m, "42")
-						if err != nil && !errors.Is(err, errForgeBudget) {
-							t.Errorf("unexpected concurrent proof error: %v", err)
-						}
-						out <- url
-					}()
-				}
-				wg.Wait()
-				close(out)
-				completed := 0
-				for url := range out {
-					if url != "" {
-						completed++
-					}
-				}
-				if (refill == 2 && completed != 1) || (refill < 2 && completed != 0) {
-					t.Fatalf("completion count at refill %d: %d", refill, completed)
-				}
-				calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-				if strings.Count(string(calls), "api ") != refill+1 {
-					t.Fatalf("concurrent requests bypassed interval: %s", calls)
-				}
+			raw, _ = json.Marshal(response)
+			f.put(t, "graphql-42", string(raw))
+			canonical, err := prIdentityGitHub(&prIdentityMismatch{old: "example/old-name", current: "example/new-name", forge: "github.com"}, "42", nil)
+			if err == nil || canonical != "" || strings.Contains(err.Error(), "synthetic-secret") {
+				t.Fatalf("unsafe atomic result: %q %v", canonical, err)
 			}
 		})
 	}
 }
 
-func TestStatusRenameSameRefreshRotationStopsLaterRows(t *testing.T) {
-	for _, mode := range []string{"token", "context"} {
+func TestAtomicRenameUsesIndependentAliasesAndOpaqueIDs(t *testing.T) {
+	f := newRenameProviderFixture(t, "github.com")
+	canonical, err := prIdentityGitHub(&prIdentityMismatch{old: "example/old-name", current: "example/new-name", forge: "github.com"}, "42", nil)
+	if err != nil || canonical != "https://github.com/example/new-name/pull/42" {
+		t.Fatalf("atomic proof: %q %v", canonical, err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(f.dir, "provider-calls"))
+	calls := string(raw)
+	for _, want := range []string{"old:repository(owner:$oldOwner,name:$oldName)", "current:repository(owner:$currentOwner,name:$currentName)", "baseRepository{id nameWithOwner}", "-f oldOwner=example -f oldName=old-name -f currentOwner=example -f currentName=new-name -F number=42"} {
+		if !strings.Contains(calls, want) {
+			t.Fatalf("independent query/variables missing %q", want)
+		}
+	}
+	if strings.Count(calls, "api graphql ") != 1 {
+		t.Fatal("atomic proof used multiple operations")
+	}
+}
+
+func TestBitbucketRenameRemainsFailClosed(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	f := newRenameProviderFixture(t, "bitbucket.org")
+	fixtureRenameRegistry(t, c, "https://bitbucket.org/example/new-name.git")
+	before := "reference 42 topic https://bitbucket.org/example/old-name/pull-requests/42 Reference\n# merged-pr reference 42 2026-10-29T12:00:00Z SUCCESS\n"
+	fixtureFile(t, c.PRFile(), before, 0600)
+	if _, err := c.statusForgePreview(false, true); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(c.PRFile()); string(raw) != before {
+		t.Fatal("unsupported forge metadata changed")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(f.dir, "calls")); len(raw) != 0 {
+		t.Fatalf("unsupported rename made proof calls: %s", raw)
+	}
+}
+
+func advanceRenameMinute(t *testing.T) {
+	t.Helper()
+	// Model elapsed minutes in existing cache mtimes, preserving their data and
+	// default TTL90. The real allowance remains one request per60seconds.
+	paths, _ := filepath.Glob(filepath.Join(statusForgeCacheDir(), "*.json"))
+	for _, path := range paths {
+		if strings.HasPrefix(filepath.Base(path), "identity-schedule-") {
+			continue
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		old := info.ModTime().Add(-time.Minute)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refillRenameBudget(t, "github.com")
+}
+
+func fairAtomicFixture(t *testing.T, listMode string) (*Context, renameProviderFixture, string) {
+	t.Helper()
+	t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
+	c, f, _ := stagedRenameFixture(t, "github.com")
+	for _, n := range []int{43, 44, 45, 46} {
+		f.put(t, fmt.Sprintf("base-%d", n), renameBaseJSON("github.com", renameRepositoryJSON("github.com", "example/new-name", false), n))
+		f.put(t, fmt.Sprintf("detail-%d", n), fmt.Sprintf(`{"number":%d,"state":"OPEN","title":"Canonical detail %d"}`, n, n))
+	}
+	f.put(t, "fail-graphql-42", "")
+	f.put(t, "fail-view-44", "")
+	var list []map[string]any
+	if listMode == "listed" {
+		list = append(list, map[string]any{"number": 45, "state": "OPEN", "title": "Listed canonical"})
+	}
+	if listMode == "capped" {
+		for n := 100; n < 200; n++ {
+			list = append(list, map[string]any{"number": n, "state": "OPEN"})
+		}
+	}
+	raw, _ := json.Marshal(list)
+	f.put(t, "list", string(raw))
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
+	if _, _, err := statusOpenPRs("github.com", "example/new-name"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "60")
+	before := "reference 43 old-topic https://github.com/example/old-name/pull/43 Settled\n# merged-pr reference 43 2026-10-29T12:00:00Z SUCCESS\n" +
+		"reference 42 topic https://github.com/example/old-name/pull/42 Unavailable\n" +
+		"reference 44 bad https://github.com/example/new-name/pull/44 Bad ordinary\n" +
+		"reference 45 first https://github.com/example/new-name/pull/45 First healthy\n" +
+		"reference 46 second https://github.com/example/new-name/pull/46 Second healthy\n"
+	fixtureFile(t, c.PRFile(), before, 0600)
+	return c, f, before
+}
+
+func TestStatusAtomicRecoveryFairStableQueue(t *testing.T) {
+	for _, mode := range []string{"listed", "omitted", "capped"} {
 		t.Run(mode, func(t *testing.T) {
-			c := newWorkspaceFixture(t)
-			f := newRenameProviderFixture(t, "github.com")
-			c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: "https://github.com/example/new-name.git"})
-			for _, number := range []int{43, 44} {
-				f.put(t, fmt.Sprintf("base-%d", number), renameBaseJSON("github.com", renameRepositoryJSON("github.com", "example/new-name", false), number))
+			c, f, before := fairAtomicFixture(t, mode)
+			if statusForgeCacheAge() != 90*time.Second {
+				t.Fatal("fixture needs defaultTTL90")
 			}
-			f.put(t, "expect-api-token", "synthetic-session-a")
-			before := "reference 42 topic https://github.com/example/old-name/pull/42 One\n" +
-				"reference 43 topic https://github.com/example/old-name/pull/43 Two\n" +
-				"reference 44 topic https://github.com/example/old-name/pull/44 Three\n"
-			fixtureFile(t, c.PRFile(), before, 0600)
-			if mode == "token" {
-				f.put(t, "rotate-after-first-repair", c.PRFile())
-			} else {
-				f.put(t, "block-43", "")
+			for turn := 0; turn < 8; turn++ {
+				if turn > 0 {
+					advanceRenameMinute(t)
+				}
+				stagedRenameRefresh(t, c)
+			}
+			raw, _ := os.ReadFile(c.PRFile())
+			want := strings.Replace(before, "old-name/pull/43", "new-name/pull/43", 1)
+			if string(raw) != want {
+				t.Fatalf("later valid repair starved or file order/bytes changed: %q", raw)
+			}
+			raw, _ = os.ReadFile(filepath.Join(f.dir, "provider-calls"))
+			calls := string(raw)
+			for _, n := range []string{"45", "46"} {
+				if !strings.Contains(calls, "pr view "+n+" ") {
+					t.Fatalf("healthy canonical PR%s starved: %s", n, calls)
+				}
+			}
+			if !strings.Contains(calls, "pr view 44 ") || !strings.Contains(calls, "number=42") || !strings.Contains(calls, "number=43") {
+				t.Fatal("failed jobs or later repair not attempted")
+			}
+			// One warm-up list plus exactly one dispatched operation per refill.
+			count := strings.Count(calls, "api graphql ") + strings.Count(calls, "pr view ") + strings.Count(calls, "pr list ")
+			if count != 9 {
+				t.Fatalf("one-token allowance changed: got%d operations", count)
+			}
+			receipts, _ := os.ReadFile(filepath.Join(f.dir, "dispatches"))
+			if string(receipts) != "list\ndetail 44\nrepair 42\ndetail 45\nrepair 43\ndetail 46\nrepair 42\ndetail 44\nrepair 42\n" {
+				t.Fatalf("priority cursor did not rotate actual failed/successful requests: %s", receipts)
+			}
+		})
+	}
+}
+
+func TestStatusAtomicNonissuanceKeepsCursor(t *testing.T) {
+	for _, mode := range []string{"denial", "cooling", "preflight"} {
+		t.Run(mode, func(t *testing.T) {
+			c, f, before := stagedRenameFixture(t, "github.com")
+			f.put(t, "fail-graphql-42", "")
+			stagedRenameRefresh(t, c)
+			path := c.prIdentitySchedulePath("github.com")
+			saved, _ := os.ReadFile(path)
+			calls, _ := os.ReadFile(filepath.Join(f.dir, "provider-calls"))
+			if mode == "cooling" {
+				statusForgeCool("github.com", time.Minute)
+				refillRenameBudget(t, "github.com")
+			}
+			if mode == "preflight" {
+				f.put(t, "fail-auth", "")
+				refillRenameBudget(t, "github.com")
+			}
+			for n := 0; n < 3; n++ {
+				stagedRenameRefresh(t, c)
+			}
+			if raw, _ := os.ReadFile(path); string(raw) != string(saved) {
+				t.Fatal("unissued work advanced scheduling cursor")
+			}
+			if raw, _ := os.ReadFile(filepath.Join(f.dir, "provider-calls")); string(raw) != string(calls) {
+				t.Fatal("denied/cooling/preflight made provider calls")
+			}
+			if raw, _ := os.ReadFile(c.PRFile()); string(raw) != before {
+				t.Fatal("failed proof changed registry")
+			}
+		})
+	}
+}
+
+func TestAtomicRenameInputContextChangesRefuseCAS(t *testing.T) {
+	for _, mode := range []string{"registry", "selection", "registry-alias"} {
+		t.Run(mode, func(t *testing.T) {
+			c, f, before := stagedRenameFixture(t, "github.com")
+			f.put(t, "block", "")
+			fresh, err := OpenCollection(c.Collection)
+			if err != nil {
+				t.Fatal(err)
 			}
 			done := make(chan error, 1)
-			go func() { _, err := c.statusForgePreview(false, true); done <- err }()
-			if mode == "context" {
-				deadline := time.Now().Add(5 * time.Second)
-				for {
-					if _, err := os.Stat(filepath.Join(f.dir, "entered-43")); err == nil {
-						break
-					}
-					if time.Now().After(deadline) {
-						f.put(t, "continue-43", "")
-						t.Fatal("second row did not reach the rotation barrier")
-					}
-					time.Sleep(10 * time.Millisecond)
+			go func() { _, err := fresh.statusForgePreview(false, true); done <- err }()
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				if _, err := os.Stat(filepath.Join(f.dir, "entered")); err == nil {
+					break
 				}
-				t.Setenv("GH_CONFIG_DIR", t.TempDir())
-				f.put(t, "continue-43", "")
+				if time.Now().After(deadline) {
+					f.put(t, "continue", "")
+					<-done
+					t.Fatal("query barrier missing")
+				}
+				time.Sleep(10 * time.Millisecond)
 			}
+			registry := c.registryPath()
+			raw, _ := os.ReadFile(registry)
+			switch mode {
+			case "registry":
+				fixtureFile(t, registry, strings.Replace(string(raw), "example/new-name", "example/owner-choice", 1), 0644)
+			case "selection":
+				fixtureFile(t, filepath.Join(c.Collection, ".wtc", "config", "repos.yml"), "repos: []\n", 0600)
+			case "registry-alias":
+				if err := os.Rename(registry, registry+".owner"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Base(registry)+".owner", registry); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.put(t, "continue", "")
 			if err := <-done; err != nil {
 				t.Fatal(err)
 			}
-			if after, _ := os.ReadFile(c.PRFile()); string(after) != strings.Replace(before, "old-name", "new-name", 1) {
-				t.Fatalf("rotation allowed a later-row URL CAS: %q", after)
-			}
-			calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-			if strings.Contains(string(calls), "/pulls/44") {
-				t.Fatal("same refresh continued proof after credential/context rotation")
-			}
-			paths, _ := filepath.Glob(filepath.Join(statusForgeCacheDir(), "identity-attempt-v1-*.json"))
-			if len(paths) != 0 {
-				t.Fatal("rotation persisted mixed-session observations")
+			if raw, _ := os.ReadFile(c.PRFile()); string(raw) != before {
+				t.Fatal("changed selected inputs authorized URL CAS")
 			}
 		})
 	}
 }
 
-func TestStatusRenameStagedProofPreservesWritersAndSweep(t *testing.T) {
-	for _, mode := range []string{"edit", "removed", "sweep"} {
+func TestAtomicScheduleUnsafeFilesFailClosed(t *testing.T) {
+	for _, mode := range []string{"permissions", "symlink", "directory"} {
 		t.Run(mode, func(t *testing.T) {
 			c, f, before := stagedRenameFixture(t, "github.com")
-			stagedRenameRefresh(t, c)
-			refillRenameBudget(t, "github.com")
-			stagedRenameRefresh(t, c)
-			if mode == "edit" {
-				_, err := c.EnlistPR(PRRecord{Repo: "reference", Number: "42", Branch: "owner-topic", Title: "Owner edit", URL: "https://github.com/example/old-name/pull/42"})
-				if err != nil {
+			path := c.prIdentitySchedulePath("github.com")
+			if !statusSecureCacheDir(filepath.Dir(path)) {
+				t.Fatal("cache setup")
+			}
+			switch mode {
+			case "permissions":
+				fixtureFile(t, path, `{"Version":1,"Repair":true}`, 0644)
+			case "symlink":
+				target := filepath.Join(t.TempDir(), "owner")
+				fixtureFile(t, target, "owner bytes", 0600)
+				if err := os.Symlink(target, path); err != nil {
 					t.Fatal(err)
 				}
-				raw, _ := os.ReadFile(c.PRFile())
-				before = string(raw)
-			} else if mode == "removed" {
-				if err := c.UnlistPR("reference", "42"); err != nil {
+			case "directory":
+				if err := os.Mkdir(path, 0700); err != nil {
 					t.Fatal(err)
-				}
-				raw, _ := os.ReadFile(c.PRFile())
-				before = string(raw)
-			} else {
-				path := stagedRenamePath(t)
-				pending, _ := os.ReadFile(path)
-				calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-				if _, _, err := c.StatusLiveSnapshot(true, true); err != nil {
-					t.Fatal(err)
-				}
-				if after, _ := os.ReadFile(path); string(after) != string(pending) {
-					t.Fatal("sweep advanced or invalidated pending proof")
-				}
-				if after, _ := os.ReadFile(filepath.Join(f.dir, "calls")); string(after) != string(calls) {
-					t.Fatal("sweep spent a pending identity request")
-				}
-				if after, _ := os.ReadFile(c.PRFile()); string(after) != before {
-					t.Fatal("sweep wrote owner metadata")
 				}
 			}
-			refillRenameBudget(t, "github.com")
 			stagedRenameRefresh(t, c)
-			want := before
-			if mode != "removed" {
-				want = strings.Replace(before, "old-name", "new-name", 1)
+			if raw, _ := os.ReadFile(c.PRFile()); string(raw) != before {
+				t.Fatal("unsafe scheduling file authorized repair")
 			}
-			if after, _ := os.ReadFile(c.PRFile()); string(after) != want {
-				t.Fatalf("pending proof overwrote or resurrected owner state: %q", after)
+			if raw, _ := os.ReadFile(filepath.Join(f.dir, "provider-calls")); len(raw) != 0 {
+				t.Fatal("unsafe scheduling cache dispatched repair")
 			}
 		})
+	}
+}
+
+func TestRejectedGitHubRepairDoesNotConsumeBitbucketAllowance(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	newRenameProviderFixture(t, "bitbucket.org")
+	gh := newRenameProviderFixture(t, "github.com")
+	fixtureRenameRegistry(t, c, "https://github.com/example/new-name.git")
+	registry, _ := os.ReadFile(c.registryPath())
+	fixtureFile(t, c.registryPath(), string(registry)+"  - name: bb-reference\n    remote: https://bitbucket.org/example/new-name.git\n    default_ref: origin/main\n", 0644)
+	gh.put(t, "fail-graphql-42", "")
+	gh.put(t, "detail", `{"id":43,"number":43,"state":"OPEN","title":"Independent forge"}`)
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "60")
+	before := "reference 42 topic https://github.com/example/old-name/pull/42 Rejected\nbb-reference 43 topic https://bitbucket.org/example/new-name/pull-requests/43 Healthy\nbb-reference 44 old https://bitbucket.org/example/old-name/pull-requests/44 Settled\n# merged-pr bb-reference 44 2026-10-29T12:00:00Z SUCCESS\n"
+	fixtureFile(t, c.PRFile(), before, 0600)
+	for n := 0; n < 2; n++ {
+		if n > 0 {
+			refillRenameBudget(t, "github.com")
+			refillRenameBudget(t, "bitbucket.org")
+		}
+		snapshot := stagedRenameRefresh(t, c)
+		if n == 1 && snapshot.PRs[1].State != "OPEN" {
+			t.Fatalf("GitHub failure blocked independent Bitbucket detail: %+v", snapshot.PRs[1])
+		}
+	}
+	if raw, _ := os.ReadFile(c.PRFile()); string(raw) != before {
+		t.Fatal("unsupported Bitbucket rename or rejected GitHub metadata changed")
 	}
 }

@@ -294,11 +294,14 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		}
 		// Reuse the selected-input chain guard after installer inspection too:
 		// a late edit through a tracked alias must not interrupt the old pane.
-		pinNow, pinErr := upgradeInput(target.Harness, pin)
-		configNow, configErr := upgradeInput(target.Harness, config)
+		pinSelectedNow, pinSelectErr := pinInput(target.Harness)
+		configSelectedNow, configSelectErr := configInput(target.Harness)
+		pinNow, pinErr := upgradeInput(target.Harness, pinSelectedNow)
+		configNow, configErr := upgradeInput(target.Harness, configSelectedNow)
 		pinBytesNow, pinReadErr := os.ReadFile(pinNow)
 		configBytesNow, configReadErr := os.ReadFile(configNow)
-		if pinErr != nil || configErr != nil || pinReadErr != nil || configReadErr != nil || pinNow != pinTarget || configNow != configTarget ||
+		if pinSelectErr != nil || configSelectErr != nil || pinSelectedNow != pin || configSelectedNow != config ||
+			pinErr != nil || configErr != nil || pinReadErr != nil || configReadErr != nil || pinNow != pinTarget || configNow != configTarget ||
 			!bytes.Equal(raw, pinBytesNow) || !bytes.Equal(configBytes, configBytesNow) || catchUpOperation(catchUpTarget{path: target.Harness}) != "" {
 			add("needs-owner", "installed input chain changed; pane left running")
 			return

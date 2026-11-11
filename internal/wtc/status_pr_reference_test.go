@@ -195,7 +195,7 @@ func TestStatusPRReferenceRejectedURLOnlyQueriesIdentityForMismatch(t *testing.T
 			t.Setenv("TMPDIR", t.TempDir())
 			c := newWorkspaceFixture(t)
 			if tc.remote != "" {
-				c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: tc.remote})
+				fixtureRenameRegistry(t, c, tc.remote)
 			}
 			var progress []string
 			c.StatusProgress = func(s string) { progress = append(progress, s) }
@@ -213,7 +213,7 @@ func TestStatusPRReferenceRejectedURLOnlyQueriesIdentityForMismatch(t *testing.T
 				t.Fatalf("invalid reference: %+v %v", snapshot.PRs, err)
 			}
 			if raw, err := os.ReadFile(calls); tc.name == "registry-conflict" {
-				if err != nil || strings.TrimSpace(string(raw)) != "api repos/example/widget --hostname github.com --method GET" {
+				if err != nil || !strings.Contains(string(raw), "api graphql --hostname github.com") {
 					t.Fatalf("mismatch must only attempt repository identity proof: %s %v", raw, err)
 				}
 			} else if !os.IsNotExist(err) {

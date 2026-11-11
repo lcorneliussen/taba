@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Build the real command for the pane fixture: returning argv from a mock alone
@@ -22,7 +23,7 @@ func TestUpgradeRolloutHandsStatusToInstalledCandidate(t *testing.T) {
 		t.Fatalf("build candidate: %v\n%s", err, out)
 	}
 	for _, spelling := range []string{"wtc", "taba"} {
-		for _, mode := range []string{"clean", "dirty", "in-progress", "install-failed", "env-failed", "installed-unavailable", "late-alias-edit", "late-alias-where-edit"} {
+		for _, mode := range []string{"clean", "dirty", "in-progress", "install-failed", "env-failed", "installed-unavailable", "late-alias-edit", "late-alias-where-edit", "late-selection-pin", "late-selection-config"} {
 			t.Run(spelling+"/"+mode, func(t *testing.T) {
 				c := newWorkspaceFixture(t)
 				provider := newRenameProviderFixture(t, "github.com")
@@ -74,6 +75,8 @@ case "$1" in
    [ "$2" = github:lcorneliussen/taba@0.2.2 ] || exit 1
    [ -f "$REHEARSAL_STATE/installed" ] && [ ! -f "$REHEARSAL_STATE/installed-unavailable" ] || exit 1
    if [ -f "$REHEARSAL_STATE/late-alias-where-edit" ]; then printf '# owner late alias edit\n' >> "$REHEARSAL_COLLECTION/harness/taba.toml"; fi
+   if [ -f "$REHEARSAL_STATE/late-selection-pin" ]; then printf '0.2.0\n' > "$REHEARSAL_COLLECTION/harness/.wtc-cli-version"; fi
+   if [ -f "$REHEARSAL_STATE/late-selection-config" ]; then cp "$REHEARSAL_COLLECTION/harness/taba.toml" "$REHEARSAL_COLLECTION/harness/wtc.toml"; printf '# new owner input\n' >> "$REHEARSAL_COLLECTION/harness/wtc.toml"; fi
    dirname "$REHEARSAL_CANDIDATE" ;;
  exec)
    [ "$2" = github:lcorneliussen/taba@0.2.2 ] || exit 1
@@ -171,7 +174,16 @@ esac
 					t.Fatal("pin proposal restarted a status pane before rollout")
 				}
 				// Simulate the reviewed harness pin reaching its local upstream.
-				fixtureGit(t, "-C", c.Harness, "add", "-u")
+				configName := "wtc.toml"
+				if strings.HasPrefix(mode, "late-selection-") {
+					for _, pair := range [][2]string{{"wtc.toml", "taba.toml"}, {".wtc-cli-version", ".taba-version"}} {
+						if err := os.Rename(filepath.Join(c.Harness, pair[0]), filepath.Join(c.Harness, pair[1])); err != nil {
+							t.Fatal(err)
+						}
+					}
+					configName = "taba.toml"
+				}
+				fixtureGit(t, "-C", c.Harness, "add", "-A")
 				fixtureGit(t, "-C", c.Harness, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "upgrade")
 				fixtureGit(t, "-C", source, "fetch", "-q", c.Harness, "HEAD")
 				fixtureGit(t, "-C", source, "merge", "--ff-only", "FETCH_HEAD")
@@ -184,7 +196,7 @@ esac
 					fixtureFile(t, filepath.Join(state, mode), "", 0600)
 				}
 				head := fixtureGit(t, "-C", c.Harness, "rev-parse", "HEAD")
-				config, _ := os.ReadFile(filepath.Join(c.Harness, "wtc.toml"))
+				config, _ := os.ReadFile(filepath.Join(c.Harness, configName))
 				runRollout := func() (CatchUpReport, error) {
 					cmd := exec.Command(candidate, "upgrade", "--rollout", "--json")
 					cmd.Dir = c.Collection
@@ -215,10 +227,26 @@ esac
 					if string(raw) != before || strings.Contains(string(calls), "pane send-keys") || strings.Contains(string(calls), "pane run") {
 						t.Fatalf("unusable/owned target was restarted or repaired: %+v %v", report.Outcomes, runErr)
 					}
-					configAfter, _ := os.ReadFile(filepath.Join(c.Harness, "wtc.toml"))
+					configAfter, _ := os.ReadFile(filepath.Join(c.Harness, configName))
 					wantConfig := string(config)
 					if strings.HasPrefix(mode, "late-alias-") {
 						wantConfig += "# owner late alias edit\n"
+					}
+					if strings.HasPrefix(mode, "late-selection-") {
+						name, want := ".wtc-cli-version", "0.2.0\n"
+						if mode == "late-selection-config" {
+							name, want = "wtc.toml", string(config)+"# new owner input\n"
+						}
+						if data, err := os.ReadFile(filepath.Join(c.Harness, name)); err != nil || string(data) != want {
+							t.Fatal("new selected owner input changed")
+						}
+						needsOwner := false
+						for _, row := range report.Outcomes {
+							needsOwner = needsOwner || (row.Kind == "pane" && row.Outcome == "needs-owner")
+						}
+						if !needsOwner {
+							t.Fatal("changed selection lacks needs-owner outcome")
+						}
 					}
 					if string(configAfter) != wantConfig || fixtureGit(t, "-C", c.Harness, "rev-parse", "HEAD") != head {
 						t.Fatal("user config or in-progress HEAD changed")
@@ -239,6 +267,12 @@ esac
 				calls, _ := os.ReadFile(filepath.Join(state, "pane.log"))
 				if strings.Contains(string(calls), "pane run w1:p1") || !strings.Contains(string(calls), "pane run w1:p3") {
 					t.Fatalf("wrong pane handover: %s", calls)
+				}
+				receipts, _ := os.ReadFile(filepath.Join(provider.dir, "provider-calls"))
+				for _, want := range []string{"old:repository(owner:$oldOwner,name:$oldName)", "current:repository(owner:$currentOwner,name:$currentName)", "baseRepository{id nameWithOwner}", "-f oldOwner=example -f oldName=old-name -f currentOwner=example -f currentName=new-name -F number=42"} {
+					if !strings.Contains(string(receipts), want) {
+						t.Fatalf("native rollout did not use independent authoritative aliases/variables: missing %q", want)
+					}
 				}
 				provider.put(t, "fail", "")
 				if _, err := runRollout(); err != nil {
@@ -330,37 +364,133 @@ func TestAdHocConfigPrecedenceAllowsStatusRepairButRefusesHarnessUpgrade(t *test
 	}
 }
 
-func TestStatusRenameNativeCLIProgressAcrossBudgetRefills(t *testing.T) {
+func TestStatusRenameNativeCLIUsesOneAtomicProof(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds a native CLI for independent status invocations")
 	}
 	candidate := filepath.Join(t.TempDir(), "candidate")
-	build := exec.Command("go", "build", "-ldflags=-X main.version=0.2.2", "-o", candidate, "../../cmd/taba")
-	if out, err := build.CombinedOutput(); err != nil {
+	if out, err := exec.Command("go", "build", "-ldflags=-X main.version=0.2.2", "-o", candidate, "../../cmd/taba").CombinedOutput(); err != nil {
 		t.Fatalf("build candidate: %v\n%s", err, out)
 	}
-	c, f, before := stagedRenameFixture(t, "github.com")
-	t.Setenv("WTC_DEV_BUILD", "off")
-	for invocation := 0; invocation < 3; invocation++ {
-		if invocation > 0 {
-			refillRenameBudget(t, "github.com")
-		}
-		cmd := exec.Command(candidate, "status", "--no-fetch", "--json")
+	run := func(t *testing.T, c *Context) {
+		t.Helper()
+		cmd := exec.Command(candidate, "status", "--no-watch", "--json", "--no-fetch")
 		cmd.Dir = c.Collection
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("native status invocation %d: %v\n%s", invocation, err, out)
-		}
-		var snapshot StatusSnapshot
-		if json.Unmarshal(out, &snapshot) != nil || snapshot.CLIVersion != "0.2.2" {
-			t.Fatalf("native status producer unavailable: %s", out)
-		}
-		calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-		if strings.Count(string(calls), "api ") != invocation+1 {
-			t.Fatalf("native invocation exceeded configured allowance: %s", calls)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("native status: %v\n%s", err, out)
 		}
 	}
-	if after, _ := os.ReadFile(c.PRFile()); string(after) != strings.Replace(before, "old-name", "new-name", 1) {
-		t.Fatal("fresh native processes failed to recover the reference")
+	t.Run("atomic", func(t *testing.T) {
+		c, f, before := stagedRenameFixture(t, "github.com")
+		for invocation := 0; invocation < 2; invocation++ {
+			if invocation > 0 {
+				advanceRenameMinute(t)
+			}
+			run(t, c)
+			if after, _ := os.ReadFile(c.PRFile()); string(after) != strings.Replace(before, "old-name", "new-name", 1) {
+				t.Fatal("atomic proof failed to recover reference")
+			}
+		}
+		calls, _ := os.ReadFile(filepath.Join(f.dir, "provider-calls"))
+		if strings.Count(string(calls), "api graphql ") != 1 {
+			t.Fatalf("proof was repeated: %s", calls)
+		}
+		paths, _ := filepath.Glob(filepath.Join(statusForgeCacheDir(), "identity-attempt-*"))
+		if len(paths) != 0 {
+			t.Fatal("persisted identity observations")
+		}
+	})
+	t.Run("fair-capped-fresh-processes", func(t *testing.T) {
+		c, f, before := fairAtomicFixture(t, "capped")
+		for turn := 0; turn < 8; turn++ {
+			if turn > 0 {
+				advanceRenameMinute(t)
+			}
+			run(t, c)
+		}
+		after, _ := os.ReadFile(c.PRFile())
+		if string(after) != strings.Replace(before, "old-name/pull/43", "new-name/pull/43", 1) {
+			t.Fatal("native fair repair/byte preservation failed")
+		}
+		receipts, _ := os.ReadFile(filepath.Join(f.dir, "dispatches"))
+		want := "list\ndetail 44\nrepair 42\ndetail 45\nrepair 43\ndetail 46\nrepair 42\ndetail 44\nrepair 42\n"
+		if string(receipts) != want {
+			t.Fatalf("native priority dispatch receipts:\n%s", receipts)
+		}
+		t.Logf("Fresh native processes, TTL90/interval60 dispatch receipts:\n%s", receipts)
+	})
+	for _, allowance := range []string{"one", "default"} {
+		t.Run("concurrent-"+allowance, func(t *testing.T) {
+			c, f, _ := stagedRenameFixture(t, "github.com")
+			if allowance == "default" {
+				t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
+			}
+			before := "reference 42 old https://github.com/example/old-name/pull/42 First\n# merged-pr reference 42 2026-10-29T12:00:00Z SUCCESS\nreference 43 old https://github.com/example/old-name/pull/43 Second\n# merged-pr reference 43 2026-10-29T12:00:00Z SUCCESS\n"
+			fixtureFile(t, c.PRFile(), before, 0600)
+			f.put(t, "base-43", renameBaseJSON("github.com", renameRepositoryJSON("github.com", "example/new-name", false), 43))
+			f.put(t, "block", "")
+			first := exec.Command(candidate, "status", "--no-watch", "--json", "--no-fetch")
+			first.Dir = c.Collection
+			second := exec.Command(candidate, "status", "--no-watch", "--json", "--no-fetch")
+			second.Dir = c.Collection
+			var out1, out2 bytes.Buffer
+			first.Stdout = &out1
+			first.Stderr = &out1
+			second.Stdout = &out2
+			second.Stderr = &out2
+			if err := first.Start(); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for {
+				if _, err := os.Stat(filepath.Join(f.dir, "entered")); err == nil {
+					break
+				}
+				if time.Now().After(deadline) {
+					f.put(t, "continue", "")
+					first.Wait()
+					t.Fatalf("first native query barrier missing: %s", &out1)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err := second.Start(); err != nil {
+				f.put(t, "continue", "")
+				first.Wait()
+				t.Fatal(err)
+			}
+			time.Sleep(30 * time.Millisecond)
+			receipts, _ := os.ReadFile(filepath.Join(f.dir, "dispatches"))
+			if string(receipts) != "repair 42\n" {
+				f.put(t, "continue", "")
+				first.Wait()
+				second.Wait()
+				t.Fatalf("concurrent selection escaped lock: %s", receipts)
+			}
+			f.put(t, "continue", "")
+			if err := first.Wait(); err != nil {
+				second.Wait()
+				t.Fatalf("first status: %v %s", err, &out1)
+			}
+			if err := second.Wait(); err != nil {
+				t.Fatalf("second status: %v %s", err, &out2)
+			}
+			receipts, _ = os.ReadFile(filepath.Join(f.dir, "dispatches"))
+			want := "repair 42\n"
+			if allowance == "default" {
+				want += "repair 43\n"
+			}
+			if string(receipts) != want {
+				t.Fatalf("actual concurrent dispatch receipts: %s", receipts)
+			}
+			after, _ := os.ReadFile(c.PRFile())
+			wantBytes := strings.Replace(before, "old-name/pull/42", "new-name/pull/42", 1)
+			if allowance == "default" {
+				wantBytes = strings.Replace(wantBytes, "old-name/pull/43", "new-name/pull/43", 1)
+			}
+			if string(after) != wantBytes {
+				t.Fatal("concurrent status changed bytes outside proven URLs")
+			}
+			t.Logf("Concurrent native %s allowance receipts:\n%s", allowance, receipts)
+		})
 	}
 }

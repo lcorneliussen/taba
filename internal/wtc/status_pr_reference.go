@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// Only a syntactically valid, same-forge mismatch is eligible for provider
-// verification. Keep all other local and URL guards ahead of that lookup.
+// Only a syntactically valid, same-forge mismatch is a recovery candidate.
+// Automatic verification is GitHub-only; retain all other local/URL guards.
 type prIdentityMismatch struct{ old, current, forge string }
 
 func (*prIdentityMismatch) Error() string { return "PR URL does not match repository identity" }
