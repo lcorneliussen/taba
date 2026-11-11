@@ -95,6 +95,11 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 		return result, errors.New(branding.Text("{{command}} upgrade needs a harness collection; an ad-hoc collection uses the installed wtc"))
 	}
 	if operation := catchUpOperation(catchUpTarget{path: c.Harness}); operation != "" {
+		// The shared guard also fails closed when Git cannot inspect a marker.
+		// Preserve that error instead of diagnosing an operation that may not exist.
+		if _, err := gitOutput("-C", c.Harness, "rev-parse", "--git-path", operation); err != nil {
+			return result, err
+		}
 		return result, fmt.Errorf("the harness has an in-progress %s; finish or abort it before upgrading", operation)
 	}
 	pinFile, err := pinInput(c.Harness)

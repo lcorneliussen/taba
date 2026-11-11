@@ -117,7 +117,7 @@ func TestUpgradeCleanAliasesPreserveLinksAndIndependentInputs(t *testing.T) {
 	c, _ := upgradeFixture(t)
 	upgradeAlias(t, c, ".wtc-cli-version", ".taba-version")
 	upgradeAlias(t, c, "wtc.toml", "taba.toml")
-	// Keep an unrelated dirty file outside the selected alias chain.
+	// An unrelated untracked file must not block the upgrade.
 	fixtureGit(t, "-C", c.Harness, "mv", ".wtc-cli-version", "middle")
 	if err := os.Symlink("middle", filepath.Join(c.Harness, ".wtc-cli-version")); err != nil {
 		t.Fatal(err)
@@ -253,6 +253,18 @@ func TestUpgradeNestedAliasUsesLiteralGitPaths(t *testing.T) {
 			if data, _ := os.ReadFile(filepath.Join(c.Harness, target)); string(data) != "0.1.11\n" {
 				t.Fatalf("target not upgraded: %q", data)
 			}
+		})
+	}
+}
+
+func TestUpgradeReportsGitInspectionFailure(t *testing.T) {
+	for _, dry := range []bool{false, true} {
+		t.Run(fmt.Sprint(dry), func(t *testing.T) {
+			c, _ := upgradeFixture(t)
+			if err := os.Rename(filepath.Join(c.Harness, ".git"), filepath.Join(c.Harness, ".git.saved")); err != nil {
+				t.Fatal(err)
+			}
+			assertUpgradeRefusal(t, c, dry, "not a git repository")
 		})
 	}
 }
