@@ -22,7 +22,7 @@ func TestUpgradeRolloutHandsStatusToInstalledCandidate(t *testing.T) {
 		t.Fatalf("build candidate: %v\n%s", err, out)
 	}
 	for _, spelling := range []string{"wtc", "taba"} {
-		for _, mode := range []string{"clean", "dirty", "in-progress", "install-failed", "env-failed"} {
+		for _, mode := range []string{"clean", "dirty", "in-progress", "install-failed", "env-failed", "installed-unavailable"} {
 			t.Run(spelling+"/"+mode, func(t *testing.T) {
 				c := newWorkspaceFixture(t)
 				provider := newRenameProviderFixture(t, "github.com")
@@ -32,6 +32,12 @@ func TestUpgradeRolloutHandsStatusToInstalledCandidate(t *testing.T) {
 				fixtureFile(t, filepath.Join(c.Harness, "wtc.toml"), "[compatibility]\nrequires = \">=0.2.0,<0.3\"\n", 0644)
 				fixtureGit(t, "-C", c.Harness, "add", ".")
 				fixtureGit(t, "-C", c.Harness, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "setup")
+				// The starting pin/config is already published. Keep this history
+				// identical for baseline and candidate, including the dry-run.
+				source := filepath.Join(c.Workspace, "source-agent-harness")
+				fixtureGit(t, "-C", source, "fetch", "-q", c.Harness, "HEAD")
+				fixtureGit(t, "-C", source, "merge", "--ff-only", "FETCH_HEAD")
+				fixtureGit(t, "--git-dir="+filepath.Join(c.Workspace, ".bare", "agent-harness.git"), "fetch", "-q", "origin")
 				reopened, err := OpenCollection(c.Collection)
 				if err != nil {
 					t.Fatal(err)
@@ -53,11 +59,22 @@ printf '%s\n' "$*" >> "$REHEARSAL_STATE/mise.log"
 case "$1" in
  trust) [ ! -f "$REHEARSAL_STATE/env-failed" ] ;;
  install) [ ! -f "$REHEARSAL_STATE/install-failed" ] || exit 1; touch "$REHEARSAL_STATE/installed" ;;
- exec) shift 3; exec "$@" ;;
+ where)
+   [ "$2" = github:lcorneliussen/taba@0.2.2 ] || exit 1
+   [ -f "$REHEARSAL_STATE/installed" ] && [ ! -f "$REHEARSAL_STATE/installed-unavailable" ] || exit 1
+   dirname "$REHEARSAL_CANDIDATE" ;;
+ exec)
+   [ "$2" = github:lcorneliussen/taba@0.2.2 ] || exit 1
+   shift 4
+   if [ "$1" = status ]; then
+     [ "$MISE_AUTO_INSTALL" = 0 ] && [ "$MISE_EXEC_AUTO_INSTALL" = 0 ] || exit 98
+     [ "$TABA_DEV_BUILD" = off ] && [ "$WTC_DEV_BUILD" = off ] || exit 98
+   fi
+   exec "$REHEARSAL_CANDIDATE" "$@" ;;
 esac
 `, 0755)
 				for _, name := range []string{"wtc", "taba"} {
-					fixtureFile(t, filepath.Join(bin, name), "#!/bin/sh\n[ -f \"$REHEARSAL_STATE/installed\" ] || exit 99\nexec \"$REHEARSAL_CANDIDATE\" \"$@\"\n", 0755)
+					fixtureFile(t, filepath.Join(bin, name), "#!/bin/sh\nprintf 'stale PATH selected\\n' >> \"$REHEARSAL_STATE/stale-path\"\nexit 99\n", 0755)
 				}
 				fixtureFile(t, filepath.Join(bin, "herdr"), `#!/bin/sh
 printf '%s\n' "$*" >> "$REHEARSAL_STATE/pane.log"
@@ -68,12 +85,12 @@ case "$1 $2" in
  'pane process-info')
    if [ -f "$REHEARSAL_STATE/restarted" ]; then args='["taba","status","--tui"]'
    elif [ -f "$REHEARSAL_STATE/interrupted" ]; then args='["sh"]'
-   else args='["wtc","status","--tui"]'; fi
+   else args="[\"$REHEARSAL_SPELLING\",\"status\",\"--tui\"]"; fi
    printf '{"result":{"process_info":{"foreground_process_group_id":42,"foreground_processes":[{"pid":42,"argv":%s}]}}}\n' "$args" ;;
  'pane send-keys') rm -f "$REHEARSAL_STATE/restarted"; touch "$REHEARSAL_STATE/interrupted" ;;
  'pane run')
-   cd "$REHEARSAL_COLLECTION" || exit 1
-   "$REHEARSAL_SPELLING" status --no-fetch --json > "$REHEARSAL_STATE/status.json" || exit 1
+   /bin/sh -c "$4" > "$REHEARSAL_STATE/status.stdout" || exit 1
+   cp "$REHEARSAL_COLLECTION/.wtc-status.json" "$REHEARSAL_STATE/status.json" || exit 1
    touch "$REHEARSAL_STATE/restarted" ;;
 esac
 `, 0755)
@@ -87,6 +104,21 @@ case "$*" in
 esac
 `, 0755)
 				t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+				if mode == "clean" {
+					dry := exec.Command(candidate, "upgrade", "--rollout", "--dry-run", "--json")
+					dry.Dir = c.Collection
+					if out, err := dry.CombinedOutput(); err != nil {
+						t.Fatalf("rollout dry-run must not require an already installed target: %v\n%s", err, out)
+					}
+					if _, err := os.Stat(filepath.Join(state, "installed")); !os.IsNotExist(err) {
+						t.Fatal("rollout dry-run installed tools")
+					}
+					calls, _ := os.ReadFile(filepath.Join(state, "pane.log"))
+					if strings.Contains(string(calls), "pane send-keys") || strings.Contains(string(calls), "pane run") {
+						t.Fatal("rollout dry-run changed a pane")
+					}
+					os.Remove(filepath.Join(state, "pane.log"))
+				}
 				// An optional released binary exercises the real bootstrap rather than
 				// assuming the authoring version was already installed.
 				from := os.Getenv("TABA_TEST_UPGRADE_FROM")
@@ -129,7 +161,6 @@ esac
 				// Simulate the reviewed harness pin reaching its local upstream.
 				fixtureGit(t, "-C", c.Harness, "add", ".wtc-cli-version", "wtc.toml")
 				fixtureGit(t, "-C", c.Harness, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "upgrade")
-				source := filepath.Join(c.Workspace, "source-agent-harness")
 				fixtureGit(t, "-C", source, "fetch", "-q", c.Harness, "HEAD")
 				fixtureGit(t, "-C", source, "merge", "--ff-only", "FETCH_HEAD")
 				if mode == "dirty" {
@@ -180,6 +211,9 @@ esac
 				}
 				if runErr != nil || string(raw) != strings.Replace(before, "old-name", "new-name", 1) {
 					t.Fatalf("rollout failed to recover metadata: %+v %v", report.Outcomes, runErr)
+				}
+				if _, err := os.Stat(filepath.Join(state, "stale-path")); !os.IsNotExist(err) {
+					t.Fatal("rollout selected a stale PATH binary instead of the installed pin")
 				}
 				var snapshot StatusSnapshot
 				data, _ := os.ReadFile(filepath.Join(state, "status.json"))
@@ -272,7 +306,7 @@ func TestAdHocConfigPrecedenceAllowsStatusRepairButRefusesHarnessUpgrade(t *test
 			if raw, _ := os.ReadFile(selected.PRFile()); string(raw) != old {
 				t.Fatal("refused ad-hoc upgrade repaired metadata")
 			}
-			snapshot, err := selected.statusForgePreview(false, false)
+			snapshot, err := selected.statusForgePreview(false, true)
 			if err != nil || len(snapshot.PRs) != 1 || snapshot.PRs[0].State != "OPEN" || snapshot.PRs[0].Slug != "example/new-name" {
 				t.Fatalf("status must recover independently of harness upgrade: %+v %v", snapshot.PRs, err)
 			}

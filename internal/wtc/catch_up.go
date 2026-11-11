@@ -38,7 +38,8 @@ type CatchUpOptions struct {
 
 // RolloutOptions is the sweep `wtc upgrade --rollout` runs: every
 // collection's harness, clean worktrees and idle agents only, with the pinned
-// tools installed.
+// tools installed, then reloads verified status panes. Dirty/in-progress targets,
+// busy owners, unrelated processes and failed env/tool stages stay untouched.
 func RolloutOptions(dryRun bool) CatchUpOptions {
 	return CatchUpOptions{All: true, Repos: []string{"harness"}, CleanOnly: true, IdleOnly: true, InstallTools: true, ReloadStatus: true, DryRun: dryRun}
 }

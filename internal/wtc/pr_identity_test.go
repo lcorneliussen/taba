@@ -262,7 +262,7 @@ func TestStatusRenameConcurrentWriterDuringProviderLookup(t *testing.T) {
 	}
 	f.put(t, "block", "")
 	finished := make(chan error, 1)
-	go func() { _, err := c.statusForgePreview(false, false); finished <- err }()
+	go func() { _, err := c.statusForgePreview(false, true); finished <- err }()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if _, err := os.Stat(filepath.Join(f.dir, "entered")); err == nil {
@@ -284,5 +284,43 @@ func TestStatusRenameConcurrentWriterDuringProviderLookup(t *testing.T) {
 	if err != nil || len(records) != 1 || records[0].Branch != "new-topic" || records[0].Title != "New title" || records[0].URL != "https://github.com/example/new-name/pull/42" {
 		encoded, _ := json.Marshal(records)
 		t.Fatalf("concurrent edit lost: %s %v", encoded, err)
+	}
+}
+
+func TestStatusWorkspaceSweepDoesNotRepairSiblingPRMetadata(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	created, err := c.NewCollection(NewOptions{Slug: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRenameProviderFixture(t, "github.com")
+	other, err := OpenCollection(created.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registryPath := filepath.Join(other.Harness, ".harness-repos.yml")
+	registry, _ := os.ReadFile(registryPath)
+	fixtureFile(t, registryPath, string(registry)+"  - name: reference\n    remote: https://github.com/example/new-name.git\n    default_ref: origin/main\n", 0644)
+	before := "# Owner state\nreference 42 topic https://github.com/example/old-name/pull/42 Sibling reference\n"
+	fixtureFile(t, other.PRFile(), before, 0600)
+	if _, _, err := c.StatusLiveSnapshot(true, true); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(other.PRFile()); string(data) != before {
+		t.Fatal("workspace sweep repaired a sibling registry")
+	}
+	if _, err := os.Stat(filepath.Join(other.Collection, ".wtc-prs.lock")); !os.IsNotExist(err) {
+		t.Fatal("workspace sweep acquired sibling registry write authority")
+	}
+	// The sibling's own scoped status refresh has write authority.
+	other, err = OpenCollection(created.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.StatusForgePreview(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(other.PRFile()); string(data) != strings.Replace(before, "old-name", "new-name", 1) {
+		t.Fatal("own scoped refresh did not repair the verified reference")
 	}
 }

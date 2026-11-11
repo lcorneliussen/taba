@@ -236,6 +236,51 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		add("needs-owner", "status pane runs an unrelated process; untouched")
 		return
 	}
+	command := "cd '" + strings.ReplaceAll(target.Collection, "'", "'\"'\"'") + "' && "
+	if opt.InstallTools {
+		// A pane's PATH may still name the previous release. Select the pin
+		// explicitly after installation, without changing its dev-build state.
+		pin, err := pinInput(target.Harness)
+		if err != nil {
+			add("failed", "cannot select installed pin; pane left running")
+			return
+		}
+		raw, err := os.ReadFile(pin)
+		if err != nil {
+			add("failed", "cannot read installed pin; pane left running")
+			return
+		}
+		version, err := releaseVersion(strings.TrimSpace(string(raw)))
+		if err != nil {
+			add("failed", "invalid installed pin; pane left running")
+			return
+		}
+		mise, err := exec.LookPath("mise")
+		if err != nil {
+			add("failed", "mise unavailable; pane left running")
+			return
+		}
+		config, err := configInput(target.Harness)
+		if err != nil {
+			add("failed", "cannot select installed config; pane left running")
+			return
+		}
+		dirty, err := gitOutput("-C", target.Harness, "status", "--porcelain", "--", filepath.Base(pin), filepath.Base(config))
+		if err != nil || dirty != "" || catchUpOperation(catchUpTarget{path: target.Harness}) != "" {
+			add("needs-owner", "pin/config changed or operation in progress; pane left running")
+			return
+		}
+		if !opt.DryRun {
+			installed := exec.Command(mise, "where", cliMiseTool+"@"+version.String())
+			installed.Dir = target.Collection
+			if out, err := installed.Output(); err != nil || strings.TrimSpace(string(out)) == "" {
+				add("failed", "pinned release unavailable after install; pane left running")
+				return
+			}
+		}
+		command += "TABA_DEV_BUILD=off WTC_DEV_BUILD=off MISE_AUTO_INSTALL=0 MISE_EXEC_AUTO_INSTALL=0 '" + strings.ReplaceAll(mise, "'", "'\"'\"'") + "' exec '" + cliMiseTool + "@" + version.String() + "' -- "
+	}
+	command += "wtc status --tui"
 	if opt.DryRun {
 		add("planned", "would reload "+pane)
 		return
@@ -272,7 +317,6 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		add("needs-owner", "agent appeared in status pane "+pane+"; no command sent")
 		return
 	}
-	command := "cd '" + strings.ReplaceAll(target.Collection, "'", "'\"'\"'") + "' && wtc status --tui"
 	if _, err := catchUpHerdr(session, "pane", "run", pane, command); err != nil {
 		add("failed", "restart failed for "+pane)
 		return

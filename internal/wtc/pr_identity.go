@@ -14,8 +14,8 @@ type prProviderRepository struct {
 	Slug string
 }
 
-// Proof is fresh and confined to one refresh. In particular, an expired cache
-// or a redirect must not authorize repair after an old repository name is reused.
+// Compare immutable IDs at both repository names and in the PR base. This memo
+// lasts one refresh and never reads the forge cache; a reused name fails closed.
 type prIdentityProof struct {
 	repositories map[string]prProviderRepository
 }

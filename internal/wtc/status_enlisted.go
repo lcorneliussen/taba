@@ -354,7 +354,9 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 	// Retain the original references for branch-return authority. A recovered
 	// URL repairs status metadata; it must not move a checkout in this refresh.
 	originalRecords := append([]PRRecord(nil), records...)
-	c.repairPRReferences(records)
+	if recordMerges && !c.statusSweep {
+		c.repairPRReferences(records)
+	}
 	details, err := c.statusEnrichRecords(records, snapshot.Repos)
 	if err != nil {
 		return snapshot, err

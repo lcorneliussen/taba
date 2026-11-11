@@ -184,7 +184,7 @@ func TestStatusPRReferencePreservesCanonicalIdentity(t *testing.T) {
 	}
 }
 
-func TestStatusPRReferenceInvalidURLIsNotQueriedOrRendered(t *testing.T) {
+func TestStatusPRReferenceRejectedURLOnlyQueriesIdentityForMismatch(t *testing.T) {
 	for _, tc := range []struct{ name, url, remote string }{
 		{"credentials", "https://fixture:synthetic-secret@github.com/example/widget/pull/7", ""},
 		{"unsupported-host", "https://example.invalid/example/widget/pull/7", ""},
