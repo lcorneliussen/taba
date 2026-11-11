@@ -825,6 +825,19 @@ func (c *Context) catchUpHooks(report *CatchUpReport, t catchUpTarget, opt Catch
 		}
 	}
 	if opt.ReloadStatus {
+		// Keep the old process alive when the target environment/tools did not
+		// become usable. Installing alone does not restart a pane; the guarded
+		// reload below runs only after the requested env/tool stages succeeded.
+		for _, row := range report.Outcomes {
+			if row.Collection != t.collection || row.Kind != "hook" {
+				continue
+			}
+			if (row.Repo == "env" && row.Outcome == "failed") ||
+				(opt.InstallTools && row.Repo == "tools" && row.Outcome != "ok" && row.Outcome != "planned") {
+				report.add("pane", t.collection, "status", "skipped", "environment or tools unavailable; pane left running", "", "", "")
+				return
+			}
+		}
 		c.catchUpReloadStatus(report, t, opt)
 	}
 }

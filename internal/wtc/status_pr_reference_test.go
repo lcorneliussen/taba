@@ -184,7 +184,7 @@ func TestStatusPRReferencePreservesCanonicalIdentity(t *testing.T) {
 	}
 }
 
-func TestStatusPRReferenceInvalidURLIsNotQueriedOrRendered(t *testing.T) {
+func TestStatusPRReferenceRejectedURLOnlyQueriesIdentityForMismatch(t *testing.T) {
 	for _, tc := range []struct{ name, url, remote string }{
 		{"credentials", "https://fixture:synthetic-secret@github.com/example/widget/pull/7", ""},
 		{"unsupported-host", "https://example.invalid/example/widget/pull/7", ""},
@@ -195,14 +195,14 @@ func TestStatusPRReferenceInvalidURLIsNotQueriedOrRendered(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
 			c := newWorkspaceFixture(t)
 			if tc.remote != "" {
-				c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: tc.remote})
+				fixtureRenameRegistry(t, c, tc.remote)
 			}
 			var progress []string
 			c.StatusProgress = func(s string) { progress = append(progress, s) }
 			calls := filepath.Join(t.TempDir(), "calls")
 			t.Setenv("REFERENCE_CALLS", calls)
 			bin := t.TempDir()
-			fixtureFile(t, filepath.Join(bin, "gh"), "#!/bin/sh\nprintf 'called\\n' >> \"$REFERENCE_CALLS\"\nexit 1\n", 0755)
+			fixtureFile(t, filepath.Join(bin, "gh"), "#!/bin/sh\nif [ \"$1 $2\" = 'auth token' ]; then printf 'synthetic-session\\n'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$REFERENCE_CALLS\"\nexit 1\n", 0755)
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			record := PRRecord{Repo: "reference", Number: "7", URL: tc.url}
 			if _, err := c.EnlistPR(record); err != nil {
@@ -212,7 +212,11 @@ func TestStatusPRReferenceInvalidURLIsNotQueriedOrRendered(t *testing.T) {
 			if err != nil || len(snapshot.PRs) != 1 || snapshot.PRs[0].State != "UNKNOWN" || snapshot.PRs[0].URL != nil {
 				t.Fatalf("invalid reference: %+v %v", snapshot.PRs, err)
 			}
-			if _, err := os.Stat(calls); !os.IsNotExist(err) {
+			if raw, err := os.ReadFile(calls); tc.name == "registry-conflict" {
+				if err != nil || !strings.Contains(string(raw), "api graphql --hostname github.com") {
+					t.Fatalf("mismatch must only attempt repository identity proof: %s %v", raw, err)
+				}
+			} else if !os.IsNotExist(err) {
 				t.Fatal("invalid reference contacted forge")
 			}
 			all := strings.Join(progress, "\n")
