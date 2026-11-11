@@ -1,4 +1,4 @@
-module github.com/lcorneliussen/wtc-cli
+module taba.sh/taba
 
 go 1.27.0
 

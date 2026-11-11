@@ -3,11 +3,11 @@ package wtc
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"taba.sh/taba/internal/branding"
 )
 
 type bundleComment struct {

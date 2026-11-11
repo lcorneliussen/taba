@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"golang.org/x/sys/unix"
 	"io"
 	"net/http"
@@ -14,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"taba.sh/taba/internal/branding"
 	"time"
 )
 

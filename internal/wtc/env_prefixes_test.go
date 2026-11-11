@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/envcompat"
 )
 
 func TestRenderEnvEmitsBothPrefixes(t *testing.T) {

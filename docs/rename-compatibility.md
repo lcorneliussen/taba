@@ -1,6 +1,6 @@
 # Environment compatibility for the taba rename
 
-This is the first part of the phase-0 groundwork in [#201](https://github.com/lcorneliussen/wtc-cli/issues/201), before the first taba CLI release. It adds new-prefix reads to an otherwise ordinary `wtc 0.1.x` release. See the [rename announcement and timeline](https://taba.sh/wtc-is-now-taba/) for the wider plan; use the target release's notes to determine whether this increment has shipped.
+This is the first part of the phase-0 groundwork in [#201](https://github.com/lcorneliussen/taba/issues/201), before the first taba CLI release. It adds new-prefix reads to an otherwise ordinary `wtc 0.1.x` release. See the [rename announcement and timeline](https://taba.sh/wtc-is-now-taba/) for the wider plan; use the target release's notes to determine whether this increment has shipped.
 
 ## Settings accepted under both names
 
@@ -32,7 +32,7 @@ New-prefix defaults can be written in the existing `wtc.env` file. A separate [c
 
 ## Generated environments carry both names
 
-From the first taba release ([#202](https://github.com/lcorneliussen/wtc-cli/issues/202)), every generated `WTC_` setting is also written as `TABA_` with the same value:
+From the first taba release ([#202](https://github.com/lcorneliussen/taba/issues/202)), every generated `WTC_` setting is also written as `TABA_` with the same value:
 
 - `.env.collection`: `COLLECTION`, `AGENT_NAME` and `CONFIG_ROOT`, legacy spelling first;
 - `.env.toolchain` and the `wtc agent-env` shell snippet that agent hooks prepend: `TOOLCHAIN_PATH`;

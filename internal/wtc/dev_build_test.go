@@ -86,7 +86,7 @@ func TestReadDevBuildOnlyTrustsPrivateExecutables(t *testing.T) {
 
 func TestDevBuildSourceFindsWtcCheckout(t *testing.T) {
 	collection := t.TempDir()
-	for name, module := range map[string]string{"harness": "", "app": "example.invalid/app", "ext.wtc-cli": wtcModule} {
+	for name, module := range map[string]string{"harness": "", "app": "example.invalid/app", "ext.wtc-cli": cliModules[0]} {
 		dir := filepath.Join(collection, name)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
@@ -169,5 +169,29 @@ func TestFindCollectionRootRecognizesHarnessAndAdHocCollections(t *testing.T) {
 	}
 	if FindCollectionRoot(t.TempDir()) != "" {
 		t.Fatal("a plain directory is not a collection")
+	}
+}
+
+func TestDevBuildAcceptsEitherModulePath(t *testing.T) {
+	for _, module := range cliModules {
+		dir := t.TempDir()
+		fixtureFile(t, filepath.Join(dir, "go.mod"), "module "+module+"\n\ngo 1.27\n", 0644)
+		if !cliModule(filepath.Join(dir, "go.mod")) {
+			t.Errorf("%s not accepted", module)
+		}
+		if got := cliPackage(dir); got != "./cmd/wtc" {
+			t.Errorf("checkout without cmd/taba builds %s", got)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "cmd", "taba"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if got := cliPackage(dir); got != "./cmd/taba" {
+			t.Errorf("checkout with cmd/taba builds %s", got)
+		}
+	}
+	dir := t.TempDir()
+	fixtureFile(t, filepath.Join(dir, "go.mod"), "module example.invalid/other\n", 0644)
+	if cliModule(filepath.Join(dir, "go.mod")) {
+		t.Error("an unrelated module was accepted")
 	}
 }

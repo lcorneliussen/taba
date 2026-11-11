@@ -5,7 +5,7 @@ package nexttest
 import (
 	"fmt"
 
-	"github.com/lcorneliussen/wtc-cli/internal/next"
+	"taba.sh/taba/internal/next"
 )
 
 // Case is fixture input, not a new public status API. Facts deliberately use
