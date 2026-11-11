@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
 	"net/url"
 	"os"
 	"os/exec"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"taba.sh/taba/internal/envcompat"
 	"time"
 )
 

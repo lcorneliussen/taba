@@ -3,13 +3,13 @@ package wtc
 import (
 	"archive/tar"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"taba.sh/taba/internal/branding"
 )
 
 func reviewDownstreamNames(repo Repo) []string {

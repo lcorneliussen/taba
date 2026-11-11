@@ -1,3 +1,0 @@
-## Rename
-
-- **Generated environments carry both `WTC_` and `TABA_` names.** `.env.collection`, `.env.toolchain`, the `wtc agent-env` snippet, harness and status-build hooks and new herdr workspaces now set `TABA_COLLECTION`, `TABA_AGENT_NAME`, `TABA_CONFIG_ROOT` and `TABA_TOOLCHAIN_PATH` next to their `WTC_` names, with the same values. Scripts can switch to the new names now. If `.env.collection.local` overrides one of these, set both spellings: the generated `TABA_` value otherwise wins and the CLI warns that they differ. See [environment compatibility](https://github.com/lcorneliussen/wtc-cli/blob/main/docs/rename-compatibility.md#generated-environments-carry-both-names) ([#202](https://github.com/lcorneliussen/wtc-cli/issues/202)).

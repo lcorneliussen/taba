@@ -1,6 +1,6 @@
 # Rehearsing a harness upgrade
 
-`tools/upgrade-rehearsal/rehearse.sh` shows how one harness behaves when its collections move to another CLI release ([#332](https://github.com/lcorneliussen/wtc-cli/issues/332)). It is meant for the taba rename: run it against each harness on a `v0.2.0-rc.N` pre-release after the repository rename, before the final tag.
+`tools/upgrade-rehearsal/rehearse.sh` shows how one harness behaves when its collections move to another CLI release ([#332](https://github.com/lcorneliussen/taba/issues/332)). It is meant for the taba rename: run it against each harness on a `v0.2.0-rc.N` pre-release after the repository rename, before the final tag.
 
 ```sh
 tools/upgrade-rehearsal/rehearse.sh \

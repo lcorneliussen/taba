@@ -21,13 +21,15 @@ func TestStatusEnrichRecordsKeepsIdentityAcrossOutOfOrderReplies(t *testing.T) {
 	}
 	release := filepath.Join(state, "release")
 	defer os.WriteFile(release, []byte("ok"), 0644)
+	// The lock is a noclobber create (O_EXCL), not mkdir: the uutils mkdir on
+	// Ubuntu 26.04 lets two racing processes both succeed.
 	script := `#!/bin/sh
 if [ "$2" = "list" ]; then
   printf '[]\n'
   exit 0
 fi
 state="$WTC_TEST_STATE"
-while ! mkdir "$state/lock" 2>/dev/null; do sleep 0.01; done
+while ! (set -C; : > "$state/lock") 2>/dev/null; do sleep 0.01; done
 active=$(cat "$state/active")
 active=$((active + 1))
 printf '%s' "$active" > "$state/active.$$.tmp"
@@ -37,13 +39,13 @@ if [ "$active" -gt "$maximum" ]; then
   printf '%s' "$active" > "$state/max.$$.tmp"
   mv "$state/max.$$.tmp" "$state/max"
 fi
-rmdir "$state/lock"
+rm -f "$state/lock"
 while [ ! -f "$state/release" ]; do sleep 0.01; done
-while ! mkdir "$state/lock" 2>/dev/null; do sleep 0.01; done
+while ! (set -C; : > "$state/lock") 2>/dev/null; do sleep 0.01; done
 active=$(cat "$state/active")
 printf '%s' "$((active - 1))" > "$state/active.$$.tmp"
 mv "$state/active.$$.tmp" "$state/active"
-rmdir "$state/lock"
+rm -f "$state/lock"
 printf '{"number":%s,"state":"OPEN","title":"Synthetic %s"}\n' "$3" "$3"
 `
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0755); err != nil {

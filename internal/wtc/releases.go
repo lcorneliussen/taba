@@ -11,10 +11,10 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+	"taba.sh/taba/internal/branding"
 )
 
 // The unreleased directory always holds README.md, so the pattern matches
@@ -308,8 +308,17 @@ func AssembleReleaseNotes(version string, fragments []ReleaseFragment) string {
 }
 
 // SelectReleaseNotes selects one version (latest by default), or all published
-// notes newer than since. Unreleased changes require an explicit selection.
+// notes newer than since through the latest embedded version. A range includes
+// prereleases only at its target. Unreleased changes require an explicit selection.
 func SelectReleaseNotes(version, since string) ([]ReleaseNote, error) {
+	notes, err := EmbeddedReleaseNotes()
+	if err != nil {
+		return nil, err
+	}
+	return selectReleaseNotes(notes, version, since)
+}
+
+func selectReleaseNotes(notes []ReleaseNote, version, since string) ([]ReleaseNote, error) {
 	if version != "" && since != "" {
 		return nil, fmt.Errorf("choose a version or --since, not both")
 	}
@@ -328,9 +337,11 @@ func SelectReleaseNotes(version, since string) ([]ReleaseNote, error) {
 		}
 		version = v.String()
 	}
-	notes, err := EmbeddedReleaseNotes()
-	if err != nil {
-		return nil, err
+	var target *semver.Version
+	for _, note := range notes {
+		if note.Version != "unreleased" {
+			target, _ = releaseVersion(note.Version)
+		}
 	}
 	selected := make([]ReleaseNote, 0)
 	for _, note := range notes {
@@ -345,7 +356,7 @@ func SelectReleaseNotes(version, since string) ([]ReleaseNote, error) {
 		}
 		if baseline != nil {
 			v, _ := releaseVersion(note.Version)
-			if v.GreaterThan(baseline) {
+			if releaseNoteInRange(v, baseline, target, false) {
 				selected = append(selected, note)
 			}
 		} else {
@@ -356,6 +367,13 @@ func SelectReleaseNotes(version, since string) ([]ReleaseNote, error) {
 		return nil, fmt.Errorf(branding.Text("release notes for %q are not embedded in this binary; run {{command}} release-notes --list"), version)
 	}
 	return selected, nil
+}
+
+// releaseNoteInRange selects (from, to], excluding prereleases except the
+// target itself. Forge metadata can mark even a stable-looking tag prerelease.
+func releaseNoteInRange(v, from, to *semver.Version, prerelease bool) bool {
+	return v.GreaterThan(from) && !v.GreaterThan(to) &&
+		(!(prerelease || v.Prerelease() != "") || v.Equal(to))
 }
 
 // CutReleaseNotes writes <version>.md in dir from the unreleased fragments and

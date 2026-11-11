@@ -21,7 +21,7 @@ func TestStatusVersionNotesTargets(t *testing.T) {
 				if got != "" {
 					t.Fatalf("invented release target for %q: %q", tc.version, got)
 				}
-			} else if got != "https://github.com/lcorneliussen/wtc-cli/releases/tag/"+tc.tag {
+			} else if got != "https://github.com/lcorneliussen/taba/releases/tag/"+tc.tag {
 				t.Fatalf("wrong release target: %q", got)
 			}
 		})

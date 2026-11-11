@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "scenarios": [
+    {
+      "name": "wide",
+      "columns": 100,
+      "rows": 24,
+      "frames": [
+        {
+          "at": 0,
+          "phase": "ready",
+          "snapshot": {
+            "schema": 1,
+            "collection": "sample",
+            "repos": [
+              {"dir": "api", "branch_display": "feature/alpha", "tree": "clean", "pr": {"number": "7", "checks": "SUCCESS", "merge": "CLEAN", "review": "APPROVED"}},
+              {"dir": "web", "branch_display": "feature/beta", "tree": "clean", "pr": {"number": "48", "checks": "PENDING", "merge": "UNKNOWN", "review": "REVIEW_REQUIRED"}}
+            ]
+          },
+          "facts": [{"Repo": "api", "Head": "same", "BaseHead": "same"}, {"Repo": "web", "Head": "same", "BaseHead": "same"}],
+          "keys": [],
+          "assert": {"contains": ["api", "web", "feature/alpha", "feature/beta", "#7", "#48"], "same_row": [["api", "feature/alpha", "#7"], ["web", "feature/beta", "#48"]], "aligned": [["feature/alpha", "feature/beta"]]}
+        }
+      ]
+    },
+    {
+      "name": "compact",
+      "columns": 39,
+      "rows": 20,
+      "frames": [
+        {
+          "at": 0,
+          "phase": "ready",
+          "snapshot": {
+            "schema": 1,
+            "collection": "sample",
+            "repos": [
+              {"dir": "api", "branch_display": "feature/alpha", "tree": "clean"},
+              {"dir": "web", "branch_display": "feature/beta", "tree": "clean"}
+            ]
+          },
+          "facts": [{"Repo": "api", "Head": "same", "BaseHead": "same"}, {"Repo": "web", "Head": "same", "BaseHead": "same"}],
+          "keys": [],
+          "assert": {"contains": ["api", "web", "feature/alpha", "feature/beta"], "same_row": [["api", "feature/alpha"], ["web", "feature/beta"]], "aligned": [["feature/alpha", "feature/beta"]]}
+        }
+      ]
+    }
+  ]
+}

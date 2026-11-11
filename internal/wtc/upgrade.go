@@ -14,14 +14,18 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
+	"taba.sh/taba/internal/branding"
 )
 
 // cliReleaseRepo is the GitHub repository that publishes wtc releases, and
 // cliMiseTool the mise tool a harness pin renders to.
 const (
-	cliReleaseRepo = "lcorneliussen/wtc-cli"
+	cliReleaseRepo = "lcorneliussen/taba"
 	cliMiseTool    = "github:" + cliReleaseRepo
+	// legacyCLIMiseTool is the pin key before the repository rename. 0.1.x
+	// binaries still render it; GitHub's rename redirect is expected to keep it
+	// installable, which is checked once a release is published.
+	legacyCLIMiseTool = "github:lcorneliussen/wtc-cli"
 )
 
 // UpgradeOptions selects the release a harness moves its pin to. An empty
@@ -203,7 +207,8 @@ func latestCLIRelease() (string, error) {
 }
 
 // publishedReleaseNotes returns the published releases after from, up to and
-// including to, oldest first.
+// including to, oldest first. Prereleases are skipped unless one is the
+// target itself, so `--version <v>-rc.N` finds its own notes.
 func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
 	out, err := exec.Command("gh", "api", "--paginate", "repos/"+cliReleaseRepo+"/releases?per_page=100",
 		"--jq", ".[] | {tag_name, body, draft, prerelease}").Output()
@@ -228,7 +233,7 @@ func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
 			return nil, fmt.Errorf("unexpected gh release output: %w", err)
 		}
 		v, err := releaseVersion(item.Tag)
-		if err != nil || item.Draft || item.Prerelease || !v.GreaterThan(from) || v.GreaterThan(to) {
+		if err != nil || item.Draft || !releaseNoteInRange(v, from, to, item.Prerelease) {
 			continue
 		}
 		releases = append(releases, release{v, ReleaseNote{Version: v.String(), Content: item.Body}})

@@ -3,7 +3,6 @@ package wtc
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"taba.sh/taba/internal/branding"
 )
 
 type ReviewBundleOptions struct {

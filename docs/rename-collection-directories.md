@@ -1,6 +1,6 @@
 # Collection directory inputs for the taba rename
 
-This [phase-0](https://github.com/lcorneliussen/wtc-cli/issues/201) increment
+This [phase-0](https://github.com/lcorneliussen/taba/issues/201) increment
 accepts `.taba/config` for an existing ad-hoc collection and `.taba/dev` for a
 collection-local dev build. Check the target release's notes for availability.
 There is no automatic migration or need to rename a working collection.

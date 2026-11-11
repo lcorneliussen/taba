@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/envcompat"
 )
 
 func statusForgeCacheAge() time.Duration {
