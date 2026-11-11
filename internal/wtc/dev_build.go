@@ -2,23 +2,26 @@ package wtc
 
 import (
 	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"taba.sh/taba/internal/branding"
 )
 
 // A collection may carry its own build of wtc, made from the CLI checkout
-// beside the harness. Any wtc started inside that collection hands over to it
-// when it is the same version or newer, so panes, agents and hooks all run the
-// code under development without PATH changes, and fall back to the pinned
-// release once that has moved past the build.
+// beside the harness. Startup hands over when policy selects a fresh followed
+// generation or a same/newer one-shot artifact, except for dev/review control
+// commands and review-only collections. Only one-shot artifacts fall back to
+// the pinned release once that has moved past the build.
 
 // cliModules are the CLI's module paths: taba.sh/taba, and the path before
 // the rename for checkouts of older branches.
@@ -44,22 +47,79 @@ func cliPackage(source string) string {
 }
 
 // DevBuildDelegatedEnv is set on the dev build's environment when another wtc
-// handed over to it. It carries the version that stepped aside and prevents a
-// second handover.
+// handed over to it. It carries the version that stepped aside and guards
+// inactive one-shot fallback against another hop. Active following instead
+// checks freshness and guards its hop with the generation and executable path.
 const DevBuildDelegatedEnv = "WTC_DEV_DELEGATED_FROM"
 
-// DevBuildDisableEnv turns the handover off for one invocation.
-const DevBuildDisableEnv = "WTC_DEV_BUILD"
+// DevBuildDisableEnv turns the handover off for one invocation. The legacy
+// spelling remains a fallback, and off in either spelling is always respected.
+const DevBuildDisableEnv = "TABA_DEV_BUILD"
+const LegacyDevBuildDisableEnv = "WTC_DEV_BUILD"
+
+// DevBuildDisabled preserves bypasses from older callers even when a newer
+// parent supplies the canonical variable. Neither spelling enables follow mode.
+func DevBuildDisabled() bool {
+	return devBuildSetting() == "off"
+}
+
+func devBuildSetting() string {
+	canonical, legacy := os.Getenv(DevBuildDisableEnv), os.Getenv(LegacyDevBuildDisableEnv)
+	if canonical == "off" || legacy == "off" {
+		return "off"
+	}
+	if canonical != "" {
+		return canonical
+	}
+	return legacy
+}
+
+// DevBuildEnvWarning describes conflicting nonempty settings without echoing
+// untrusted environment values into terminal output.
+func DevBuildEnvWarning() string {
+	canonical, legacy := os.Getenv(DevBuildDisableEnv), os.Getenv(LegacyDevBuildDisableEnv)
+	if canonical != "" && legacy != "" && canonical != legacy {
+		return "TABA_DEV_BUILD and WTC_DEV_BUILD disagree; off in either variable disables dev handover"
+	}
+	return ""
+}
+
+// DevBuildBypassEnv disables candidate delegation in both current and older
+// children. Append it after inherited settings so the child cannot undo it.
+func DevBuildBypassEnv() []string {
+	return []string{DevBuildDisableEnv + "=off", LegacyDevBuildDisableEnv + "=off"}
+}
+
+// DevBuildHandoverEnv carries the resolved switch through an exec. The caller
+// already reported any conflict; matching spellings prevent a duplicate warning
+// in the replacement process, including a legacy bootstrap followed by a rebuild.
+func DevBuildHandoverEnv(env []string) []string {
+	resolved := make([]string, 0, len(env)+2)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, DevBuildDisableEnv+"=") && !strings.HasPrefix(entry, LegacyDevBuildDisableEnv+"=") {
+			resolved = append(resolved, entry)
+		}
+	}
+	value := devBuildSetting()
+	return append(resolved, DevBuildDisableEnv+"="+value, LegacyDevBuildDisableEnv+"="+value)
+}
 
 type DevBuild struct {
-	Collection string `json:"collection"`
-	Binary     string `json:"binary"`
-	Version    string `json:"version"`
-	Source     string `json:"source,omitempty"`
+	Collection     string `json:"collection"`
+	Binary         string `json:"binary"`
+	Version        string `json:"version"`
+	Source         string `json:"source,omitempty"`
+	Generation     string `json:"generation,omitempty"`
+	FollowProtocol int    `json:"follow_protocol,omitempty"`
 }
 
 func devBuildDir(collection string) string {
 	return filepath.Join(collection, ".wtc", "dev")
+}
+
+func validDevBuildVersion(version string) bool {
+	_, err := semver.NewVersion(version)
+	return err == nil
 }
 
 // FindCollectionRoot walks up from start to the collection root, recognized
@@ -95,6 +155,9 @@ func ReadDevBuild(collection string) *DevBuild {
 	dir, err := collectionDirectoryInput(collection, "dev")
 	if err != nil || safeGeneratedParent(collection, dir) != nil {
 		return nil
+	}
+	if build, present, err := readDevPublishedBuild(collection, dir); present || err != nil {
+		return build
 	}
 	binary := filepath.Join(dir, "wtc")
 	info, err := os.Lstat(binary)
@@ -197,17 +260,162 @@ func goModule(path string) string {
 	return ""
 }
 
-// InstallDevBuild builds source into the collection's dev build slot. The
-// binary is replaced atomically, so a running pane is never left without one.
+// InstallDevBuild stages an immutable one-shot artifact in the selected dev
+// namespace and atomically selects it through current.json. The legacy binary
+// and version files are a best-effort bridge, updated after selection commits.
 func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	if !cliModule(filepath.Join(source, "go.mod")) {
 		return nil, fmt.Errorf("%s is not a wtc-cli checkout", source)
 	}
-	describe, err := gitOutput("-C", source, "describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
+	root, err := devCollectionRoot(collection, nil)
 	if err != nil {
-		return nil, fmt.Errorf("describe %s: %w", source, err)
+		return nil, err
 	}
-	version, err := DevVersion(describe)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	unlock, err := lockDevFile(ctx, filepath.Join(collection, ".wtc-dev-build.lock"))
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	if _, err := devCollectionRoot(collection, root); err != nil {
+		return nil, err
+	}
+	dir, err := collectionDirectoryInput(collection, "dev")
+	if err != nil {
+		return nil, err
+	}
+	if err := safeGeneratedParent(collection, dir); err != nil {
+		return nil, err
+	}
+	store := filepath.Join(filepath.Dir(dir), "dev-generations")
+	if err := safeGeneratedParent(collection, store); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(store, 0700); err != nil {
+		return nil, err
+	}
+	staging, err := os.MkdirTemp(store, ".oneshot-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(staging)
+	build, err := installDevBuild(context.Background(), staging, source, os.Stderr)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := devArtifactHash(build.Binary)
+	if err != nil {
+		return nil, err
+	}
+	// One-shot and follow artifacts share the publication point. Policy still
+	// decides whether this artifact may run; installing never undoes OFF/ON.
+	publishCtx, publishCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer publishCancel()
+	publishUnlock, err := lockDevFile(publishCtx, filepath.Join(collection, ".wtc-dev-mode.lock"))
+	if err != nil {
+		return nil, err
+	}
+	defer publishUnlock()
+	if _, err := devCollectionRoot(collection, root); err != nil {
+		return nil, err
+	}
+	selectedDir, err := collectionDirectoryInput(collection, "dev")
+	if err != nil {
+		return nil, err
+	}
+	if selectedDir != dir {
+		return nil, fmt.Errorf("dev namespace changed during build; nothing published")
+	}
+	artifact := filepath.Join(store, "oneshot-"+identity)
+	if err := retainDevArtifact(collection, artifact, filepath.Dir(build.Binary)); err != nil {
+		return nil, err
+	}
+	build.Collection, build.Binary = collection, filepath.Join(artifact, "wtc")
+	commitBridge, cleanupBridge, err := prepareDevLegacyBridge(collection, dir, build)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanupBridge()
+	if err := publishDevBuild(collection, dir, build); err != nil {
+		return nil, err
+	}
+	// The authoritative commit succeeded. An older bootstrap reader ignores
+	// current.json and locks; a bridge failure cannot roll back its successor.
+	if err := commitBridge(); err != nil {
+		fmt.Fprintf(os.Stderr, "installed immutable dev artifact; legacy bootstrap bridge update failed: %v (run the reported binary directly or retry dev install)\n", err)
+	}
+	return build, nil
+}
+
+func prepareDevLegacyBridge(collection, dir string, build *DevBuild) (func() error, func(), error) {
+	if err := safeGeneratedParent(collection, dir); err != nil {
+		return nil, nil, err
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, nil, err
+	}
+	for _, name := range []string{"wtc", "version"} {
+		info, err := os.Lstat(filepath.Join(dir, name))
+		if err != nil && !os.IsNotExist(err) {
+			return nil, nil, err
+		}
+		if err == nil && (!info.Mode().IsRegular() || !ownedByCurrentUser(info) || info.Mode()&0022 != 0) {
+			return nil, nil, fmt.Errorf("unsafe legacy dev bridge slot: %s", name)
+		}
+	}
+	var temporary []string
+	cleanup := func() {
+		for _, path := range temporary {
+			_ = os.Remove(path)
+		}
+	}
+	stage := func(reader io.Reader, mode os.FileMode) (string, error) {
+		f, err := os.CreateTemp(dir, ".bridge-")
+		if err != nil {
+			return "", err
+		}
+		temporary = append(temporary, f.Name())
+		_, copyErr := io.Copy(f, reader)
+		modeErr := f.Chmod(mode)
+		closeErr := f.Close()
+		for _, err := range []error{copyErr, modeErr, closeErr} {
+			if err != nil {
+				return "", err
+			}
+		}
+		return f.Name(), nil
+	}
+	binary, err := os.Open(build.Binary)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Copy rather than hard-link: an old installer may mutate its classic slot.
+	bridge, err := stage(binary, 0755)
+	binary.Close()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	version, err := stage(strings.NewReader(build.Version+"\n"+build.Source+"\n"), 0644)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	commit := func() error {
+		if err := os.Rename(bridge, filepath.Join(dir, "wtc")); err != nil {
+			return err
+		}
+		return os.Rename(version, filepath.Join(dir, "version"))
+	}
+	return commit, cleanup, nil
+}
+
+// The one-shot entrypoint validates its historical module contract above.
+// Both follow modes probe the structured lifecycle capability in EnsureDevFollow
+// before publication; AUTO also validates its convention through discovery.
+func installDevBuild(ctx context.Context, collection, source string, output io.Writer) (*DevBuild, error) {
+	version, err := devBuildVersion(source)
 	if err != nil {
 		return nil, err
 	}
@@ -218,25 +426,42 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, err
 	}
+	metadata := &DevBuild{Collection: collection, Binary: filepath.Join(dir, "wtc"), Version: version, Source: source}
+	command, tmp := devCompilerCommand(source, dir, version, output)
+	return completeDevBuild(ctx, command, tmp, metadata)
+}
+
+func devBuildVersion(source string) (string, error) {
+	describe, err := gitOutput("-C", source, "describe", "--tags", "--long", "--dirty", "--match", "v[0-9]*")
+	if err != nil {
+		return "", fmt.Errorf("describe %s: %w", source, err)
+	}
+	return DevVersion(describe)
+}
+
+func devCompilerCommand(source, dir, version string, output io.Writer) (*exec.Cmd, string) {
 	tmp := filepath.Join(dir, ".wtc.tmp")
 	build := exec.Command("go", "build", "-ldflags", "-X main.version="+version, "-o", tmp, cliPackage(source))
 	build.Dir = source
-	build.Stdout, build.Stderr = os.Stderr, os.Stderr
-	if err := build.Run(); err != nil {
+	build.Stdout, build.Stderr = output, output
+	return build, tmp
+}
+
+func completeDevBuild(ctx context.Context, build *exec.Cmd, tmp string, metadata *DevBuild) (*DevBuild, error) {
+	if err := runDevCompiler(ctx, build); err != nil {
 		os.Remove(tmp)
 		return nil, fmt.Errorf("go build: %w", err)
 	}
 	if err := os.Chmod(tmp, 0755); err != nil {
 		return nil, err
 	}
-	binary := filepath.Join(dir, "wtc")
-	if err := os.Rename(tmp, binary); err != nil {
+	if err := os.Rename(tmp, metadata.Binary); err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "version"), []byte(version+"\n"+source+"\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(filepath.Dir(metadata.Binary), "version"), []byte(metadata.Version+"\n"+metadata.Source+"\n"), 0644); err != nil {
 		return nil, err
 	}
-	return &DevBuild{Collection: collection, Binary: binary, Version: version, Source: source}, nil
+	return metadata, nil
 }
 
 func UninstallDevBuild(collection string) (bool, error) {
@@ -247,6 +472,12 @@ func UninstallDevBuild(collection string) (bool, error) {
 		if err := safeGeneratedParent(collection, dir); err != nil {
 			return false, err
 		}
+	}
+	// OFF lives outside artifacts. An old-policy follow build cannot activate
+	// after OFF; generations stay for running actions. A concurrent one-shot
+	// install may still create an inert artifact, but cannot undo the policy.
+	if err := SetDevMode(collection, "off", ""); err != nil {
+		return false, err
 	}
 	removed := false
 	for _, dir := range dirs {

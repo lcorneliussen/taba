@@ -60,6 +60,9 @@ type Registry struct {
 	NonDefault    map[string][]Repo `yaml:"non_default" json:"-"`
 }
 type Config struct {
+	Dev struct {
+		AutoSource string `toml:"auto_source"`
+	} `toml:"dev"`
 	Harness struct {
 		Name string `toml:"name"`
 	} `toml:"harness"`
@@ -116,6 +119,35 @@ type Context struct {
 
 var validRepoName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 var errNotInCollection = errors.New("not inside a worktree collection (harness/.harness-repos.yml not found)")
+
+// Read only the dev convention before requiring a populated registry. Older
+// one-shot dev collections can legitimately have no registered repositories.
+func devAutoSource(collection string) (string, error) {
+	harness := filepath.Join(collection, "harness")
+	config, err := collectionDirectoryInput(collection, "config")
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(config); err == nil {
+		harness = config
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	file, err := configInput(harness)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(file); os.IsNotExist(err) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	var cfg Config
+	if _, err := toml.DecodeFile(file, &cfg); err != nil {
+		return "", err
+	}
+	return cfg.Dev.AutoSource, nil
+}
 
 func Discover(start string) (*Context, error) {
 	abs, err := filepath.Abs(start)

@@ -136,9 +136,14 @@ func (c *Context) finishRetiredFolder(target string) (RetireResult, error) {
 	var result RetireResult
 	targetContext := &Context{Collection: target}
 	err := targetContext.withStatusWatcherLock(func() error {
-		var err error
-		result, err = c.finishRetiredFolderLocked(target)
-		return err
+		unlockDev, err := lockDevRetirement(target)
+		if err != nil {
+			return err
+		}
+		defer unlockDev()
+		var finishErr error
+		result, finishErr = c.finishRetiredFolderLocked(target)
+		return finishErr
 	})
 	return result, err
 }
@@ -163,6 +168,13 @@ func (c *Context) finishRetiredFolderLocked(target string) (RetireResult, error)
 	if err := removeRetiredGeneratedFiles(target, false); err != nil {
 		return result, err
 	}
+	return removeRetiredFolder(target)
+}
+
+// Both initial and repeated retirement retain their dev locks until the guard
+// and folder are finalized. Unknown files keep the existing retired guard.
+func removeRetiredFolder(target string) (RetireResult, error) {
+	result := RetireResult{Collection: target, Removed: []string{}}
 	leftovers, err := retireLeftovers(target)
 	if err != nil {
 		return result, err
