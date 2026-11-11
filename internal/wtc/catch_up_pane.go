@@ -238,8 +238,8 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 	}
 	command := "cd '" + strings.ReplaceAll(target.Collection, "'", "'\"'\"'") + "' && "
 	if opt.InstallTools {
-		// A pane's PATH may still name the previous release. Select the pin
-		// explicitly after installation, without changing its dev-build state.
+		// A pane's PATH may still name the previous release. This process uses
+		// the installed pin with automatic installs and dev handover disabled.
 		pin, err := pinInput(target.Harness)
 		if err != nil {
 			add("failed", "cannot select installed pin; pane left running")
