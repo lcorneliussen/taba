@@ -1316,3 +1316,165 @@ func TestDevOutputCommandBoundsDescendantHeldPipes(t *testing.T) {
 		t.Fatalf("descendant-held output exceeded cancellation bound: %v", elapsed)
 	}
 }
+
+func TestDevInstallUsesSelectedNamespace(t *testing.T) {
+	for _, layout := range []string{"legacy-only", "current-only", "both", "neither"} {
+		t.Run(layout, func(t *testing.T) {
+			collection, source := devFollowFixture(t)
+			want := ".wtc"
+			if layout == "legacy-only" || layout == "both" {
+				fixtureFile(t, filepath.Join(collection, ".wtc", "dev", "keep"), "legacy", 0600)
+			}
+			if layout == "current-only" || layout == "both" {
+				fixtureFile(t, filepath.Join(collection, ".taba", "dev", "keep"), "current", 0600)
+			}
+			if layout == "current-only" {
+				want = ".taba"
+				fixtureFile(t, filepath.Join(collection, ".wtc", "skills", "keep"), "unrelated namespace", 0600)
+			}
+			installed, err := InstallDevBuild(collection, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selected := ReadDevBuild(collection)
+			store := filepath.Join(collection, want, "dev-generations")
+			if selected == nil || selected.Binary != installed.Binary || filepath.Dir(filepath.Dir(installed.Binary)) != store {
+				t.Fatalf("install ignored selected namespace %s: installed=%+v selected=%+v", want, installed, selected)
+			}
+			bridge, err := os.ReadFile(filepath.Join(collection, want, "dev", "wtc"))
+			artifact, artifactErr := os.ReadFile(installed.Binary)
+			version, versionErr := os.ReadFile(filepath.Join(collection, want, "dev", "version"))
+			if err != nil || artifactErr != nil || versionErr != nil || !bytes.Equal(bridge, artifact) || string(version) != installed.Version+"\n"+source+"\n" {
+				t.Fatal("selected namespace bridge does not match installed artifact")
+			}
+			if layout == "current-only" {
+				for _, sub := range []string{"dev", "dev-generations"} {
+					if _, err := os.Lstat(filepath.Join(collection, ".wtc", sub)); !os.IsNotExist(err) {
+						t.Fatalf("install created a shadow legacy namespace %s: %v", sub, err)
+					}
+				}
+			}
+			if layout == "both" {
+				raw, err := os.ReadFile(filepath.Join(collection, ".taba", "dev", "keep"))
+				if err != nil || string(raw) != "current" {
+					t.Fatal("nonselected namespace changed")
+				}
+			}
+		})
+	}
+}
+
+func TestDevInstallRevalidatesNamespaceBeforePublication(t *testing.T) {
+	for _, layout := range []string{"current-then-legacy", "neither-then-current", "legacy-then-current"} {
+		t.Run(layout, func(t *testing.T) {
+			collection, source := devFollowFixture(t)
+			if layout == "current-then-legacy" {
+				fixtureFile(t, filepath.Join(collection, ".taba", "dev", "keep"), "current", 0600)
+			}
+			if layout == "legacy-then-current" {
+				fixtureFile(t, filepath.Join(collection, ".wtc", "dev", "keep"), "legacy", 0600)
+			}
+			started, release, _ := devBlockGo(t, "build")
+			done := make(chan error, 1)
+			go func() { _, err := InstallDevBuild(collection, source); done <- err }()
+			waitDevMarker(t, started)
+			added := ".taba"
+			if layout == "current-then-legacy" {
+				added = ".wtc"
+			}
+			fixtureFile(t, filepath.Join(collection, added, "dev", "keep"), "late selected namespace", 0600)
+			fixtureFile(t, release, "", 0600)
+			err := <-done
+			if layout == "legacy-then-current" {
+				if err != nil {
+					t.Fatalf("nonselected namespace changed current precedence: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "namespace changed") {
+				t.Fatalf("changed selected namespace was committed: %v", err)
+			}
+			for _, root := range []string{".wtc", ".taba"} {
+				for _, name := range []string{"current.json", "wtc", "version"} {
+					if _, err := os.Lstat(filepath.Join(collection, root, "dev", name)); !os.IsNotExist(err) {
+						t.Fatalf("namespace change published %s/%s: %v", root, name, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDevMovedGenerationReuseAndInstallFailureContract(t *testing.T) {
+	for _, moved := range []bool{false, true} {
+		name := "legacy"
+		if moved {
+			name = "current"
+		}
+		t.Run(name, func(t *testing.T) {
+			collection, source := devFollowFixture(t)
+			realGo, err := exec.LookPath("go")
+			if err != nil {
+				t.Fatal(err)
+			}
+			control := t.TempDir()
+			calls := filepath.Join(control, "calls")
+			fail := filepath.Join(control, "fail")
+			fixtureFile(t, filepath.Join(control, "go"), "#!/bin/sh\nif [ \"$1\" = build ]; then echo call >> \"$NAMESPACE_TEST_CALLS\"; if [ -e \"$NAMESPACE_TEST_FAIL\" ]; then echo synthetic-compiler-failure >&2; exit 1; fi; fi\nexec \"$NAMESPACE_TEST_GO\" \"$@\"\n", 0755)
+			t.Setenv("NAMESPACE_TEST_GO", realGo)
+			t.Setenv("NAMESPACE_TEST_CALLS", calls)
+			t.Setenv("NAMESPACE_TEST_FAIL", fail)
+			t.Setenv("PATH", control+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if err := SetDevMode(collection, "on", source); err != nil {
+				t.Fatal(err)
+			}
+			followed := ensureDevTest(t, collection).Build
+			if moved {
+				if err := os.Rename(filepath.Join(collection, ".wtc"), filepath.Join(collection, ".taba")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			selected := ReadDevBuild(collection)
+			if selected == nil || selected.Generation != followed.Generation {
+				t.Fatal("valid generation lost after namespace move")
+			}
+			if err := os.Remove(calls); err != nil {
+				t.Fatal(err)
+			}
+			reused := ensureDevTest(t, collection).Build
+			if reused == nil || reused.Generation != followed.Generation || reused.Binary != selected.Binary {
+				t.Fatal("valid generation was not reused")
+			}
+			if _, err := os.Stat(calls); !os.IsNotExist(err) {
+				t.Fatalf("valid selected generation rebuilt: %v", err)
+			}
+			installed, err := InstallDevBuild(collection, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(collection, ".wtc", "dev-generations")
+			if moved {
+				want = filepath.Join(collection, ".taba", "dev-generations")
+			}
+			if filepath.Dir(filepath.Dir(installed.Binary)) != want {
+				t.Fatalf("install changed namespace: %+v", installed)
+			}
+			selectedOneShot := ReadDevBuild(collection)
+			if selectedOneShot == nil || selectedOneShot.Generation != "" || selectedOneShot.Binary != installed.Binary {
+				t.Fatal("one-shot did not intentionally replace the shared selection")
+			}
+			fixtureFile(t, fail, "", 0600)
+			state, err := EnsureDevFollow(context.Background(), collection)
+			if err == nil || !state.Active {
+				t.Fatalf("failed rebuild did not fail closed: %+v %v", state, err)
+			}
+			current := ReadDevBuild(collection)
+			if current == nil || current.Binary != installed.Binary {
+				t.Fatal("failed follow rebuild changed the selected one-shot")
+			}
+			if _, err := os.Stat(reused.Binary); err != nil {
+				t.Fatal("install or failed rebuild removed the retained generation")
+			}
+		})
+	}
+}

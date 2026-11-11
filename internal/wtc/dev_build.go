@@ -260,8 +260,9 @@ func goModule(path string) string {
 	return ""
 }
 
-// InstallDevBuild builds source into the collection's dev build slot. The
-// binary is replaced atomically, so a running pane is never left without one.
+// InstallDevBuild stages an immutable one-shot artifact in the selected dev
+// namespace and atomically selects it through current.json. The legacy binary
+// and version files are a best-effort bridge, updated after selection commits.
 func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	if !cliModule(filepath.Join(source, "go.mod")) {
 		return nil, fmt.Errorf("%s is not a wtc-cli checkout", source)
@@ -280,7 +281,14 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	if _, err := devCollectionRoot(collection, root); err != nil {
 		return nil, err
 	}
-	store := filepath.Join(collection, ".wtc", "dev-generations")
+	dir, err := collectionDirectoryInput(collection, "dev")
+	if err != nil {
+		return nil, err
+	}
+	if err := safeGeneratedParent(collection, dir); err != nil {
+		return nil, err
+	}
+	store := filepath.Join(filepath.Dir(dir), "dev-generations")
 	if err := safeGeneratedParent(collection, store); err != nil {
 		return nil, err
 	}
@@ -312,7 +320,13 @@ func InstallDevBuild(collection, source string) (*DevBuild, error) {
 	if _, err := devCollectionRoot(collection, root); err != nil {
 		return nil, err
 	}
-	dir := devBuildDir(collection)
+	selectedDir, err := collectionDirectoryInput(collection, "dev")
+	if err != nil {
+		return nil, err
+	}
+	if selectedDir != dir {
+		return nil, fmt.Errorf("dev namespace changed during build; nothing published")
+	}
 	artifact := filepath.Join(store, "oneshot-"+identity)
 	if err := retainDevArtifact(collection, artifact, filepath.Dir(build.Binary)); err != nil {
 		return nil, err
