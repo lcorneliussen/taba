@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -86,8 +87,38 @@ case "$*" in
 esac
 `, 0755)
 				t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-				if _, err := c.Upgrade(UpgradeOptions{}); err != nil {
-					t.Fatal(err)
+				// An optional released binary exercises the real bootstrap rather than
+				// assuming the authoring version was already installed.
+				from := os.Getenv("TABA_TEST_UPGRADE_FROM")
+				if from == "" {
+					from = candidate
+				}
+				if mode == "dirty" {
+					configPath := filepath.Join(c.Harness, "wtc.toml")
+					clean, _ := os.ReadFile(configPath)
+					ownerConfig := string(clean) + "# existing owner edits\n"
+					fixtureFile(t, configPath, ownerConfig, 0644)
+					blocked := exec.Command(from, "upgrade", "--json")
+					blocked.Dir = c.Collection
+					if out, err := blocked.CombinedOutput(); err == nil || !strings.Contains(string(out), "uncommitted") {
+						t.Fatalf("dirty released bootstrap should refuse: %v\n%s", err, out)
+					}
+					if data, _ := os.ReadFile(configPath); string(data) != ownerConfig {
+						t.Fatal("dirty released bootstrap overwrote owner config")
+					}
+					if data, _ := os.ReadFile(c.PRFile()); string(data) != before {
+						t.Fatal("refused upgrade repaired metadata")
+					}
+					if _, err := os.Stat(filepath.Join(state, "installed")); !os.IsNotExist(err) {
+						t.Fatal("refused upgrade reached installer")
+					}
+					// Only the disposable fixture is reset to exercise the clean path.
+					fixtureFile(t, configPath, string(clean), 0644)
+				}
+				proposal := exec.Command(from, "upgrade", "--json")
+				proposal.Dir = c.Collection
+				if out, err := proposal.CombinedOutput(); err != nil {
+					t.Fatalf("upgrade proposal: %v\n%s", err, out)
 				}
 				if raw, _ := os.ReadFile(c.PRFile()); string(raw) != before {
 					t.Fatal("release notes acquired unrelated repair side effects")
@@ -111,9 +142,32 @@ esac
 				}
 				head := fixtureGit(t, "-C", c.Harness, "rev-parse", "HEAD")
 				config, _ := os.ReadFile(filepath.Join(c.Harness, "wtc.toml"))
-				report, runErr := c.CatchUp(RolloutOptions(false))
+				runRollout := func() (CatchUpReport, error) {
+					cmd := exec.Command(candidate, "upgrade", "--rollout", "--json")
+					cmd.Dir = c.Collection
+					var stdout, stderr bytes.Buffer
+					cmd.Stdout, cmd.Stderr = &stdout, &stderr
+					err := cmd.Run()
+					var report CatchUpReport
+					if parseErr := json.Unmarshal(stdout.Bytes(), &report); parseErr != nil {
+						t.Fatalf("native rollout report unavailable: %v\n%s\n%s", parseErr, &stdout, &stderr)
+					}
+					return report, err
+				}
+				// Only the installed target invocation can have the new rollout
+				// behavior. The old upgrade process never executes this code.
+				report, runErr := runRollout()
 				raw, _ := os.ReadFile(c.PRFile())
 				if mode != "clean" {
+					if mode == "dirty" || mode == "in-progress" {
+						needsOwner := false
+						for _, row := range report.Outcomes {
+							needsOwner = needsOwner || (row.Kind == "repo" && row.Outcome == "needs-owner")
+						}
+						if !needsOwner {
+							t.Fatalf("owned target lacks truthful needs-owner outcome: %+v", report.Outcomes)
+						}
+					}
 					calls, _ := os.ReadFile(filepath.Join(state, "pane.log"))
 					if string(raw) != before || strings.Contains(string(calls), "pane send-keys") || strings.Contains(string(calls), "pane run") {
 						t.Fatalf("unusable/owned target was restarted or repaired: %+v %v", report.Outcomes, runErr)
@@ -137,7 +191,7 @@ esac
 					t.Fatalf("wrong pane handover: %s", calls)
 				}
 				provider.put(t, "fail", "")
-				if _, err := c.CatchUp(RolloutOptions(false)); err != nil {
+				if _, err := runRollout(); err != nil {
 					t.Fatalf("repeat rollout: %v", err)
 				}
 				if after, _ := os.ReadFile(c.PRFile()); string(after) != string(raw) {
@@ -145,5 +199,83 @@ esac
 				}
 			})
 		}
+	}
+}
+
+func TestUpgradeDirtySelectedInputsPreservesBothShapes(t *testing.T) {
+	for _, shape := range []string{"legacy", "current", "both"} {
+		t.Run(shape, func(t *testing.T) {
+			c, bin := upgradeFixture(t)
+			config, pin := "wtc.toml", ".wtc-cli-version"
+			if shape != "legacy" {
+				fixtureFile(t, filepath.Join(c.Harness, "taba.toml"), "[compatibility]\nrequires = \">=0.1.9,<0.2\"\n", 0644)
+				fixtureFile(t, filepath.Join(c.Harness, ".taba-version"), "0.1.9\n", 0644)
+			}
+			if shape == "current" {
+				if err := os.Remove(filepath.Join(c.Harness, config)); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(filepath.Join(c.Harness, pin)); err != nil {
+					t.Fatal(err)
+				}
+				config, pin = "taba.toml", ".taba-version"
+			}
+			fixtureGit(t, "-C", c.Harness, "add", "-A")
+			fixtureGit(t, "-C", c.Harness, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "selected inputs")
+			// Match an existing tracked configuration with owner changes.
+			selected, _ := os.ReadFile(filepath.Join(c.Harness, config))
+			fixtureFile(t, filepath.Join(c.Harness, config), string(selected)+"# owner edits\n", 0644)
+			fixtureFile(t, filepath.Join(bin, "mise"), "#!/bin/sh\ntouch \"$REHEARSAL_INSTALL_CALLED\"\n", 0755)
+			called := filepath.Join(t.TempDir(), "called")
+			t.Setenv("REHEARSAL_INSTALL_CALLED", called)
+			before := map[string]string{}
+			for _, name := range []string{"wtc.toml", "taba.toml", ".wtc-cli-version", ".taba-version"} {
+				data, err := os.ReadFile(filepath.Join(c.Harness, name))
+				if err == nil {
+					before[name] = string(data)
+				}
+			}
+			for _, dry := range []bool{true, false} {
+				if _, err := c.Upgrade(UpgradeOptions{DryRun: dry}); err == nil || !strings.Contains(err.Error(), "uncommitted") {
+					t.Fatalf("dirty selected inputs must refuse: %v", err)
+				}
+			}
+			for name, want := range before {
+				if got, _ := os.ReadFile(filepath.Join(c.Harness, name)); string(got) != want {
+					t.Fatalf("dirty upgrade changed %s", name)
+				}
+			}
+			if _, err := os.Stat(called); !os.IsNotExist(err) {
+				t.Fatal("dirty upgrade reached installer")
+			}
+		})
+	}
+}
+
+func TestAdHocConfigPrecedenceAllowsStatusRepairButRefusesHarnessUpgrade(t *testing.T) {
+	for _, namespace := range []string{".wtc", ".taba"} {
+		t.Run(namespace, func(t *testing.T) {
+			c := newWorkspaceFixture(t)
+			newRenameProviderFixture(t, "github.com")
+			// A harness sibling alone does not decide whether this is managed.
+			fixtureFile(t, filepath.Join(c.Collection, namespace, "config", "repos.yml"), "repos:\n  - name: reference\n    remote: https://github.com/example/new-name.git\n    default_ref: origin/main\n", 0644)
+			fixtureFile(t, filepath.Join(c.Collection, ".wtc", "skills", "placeholder"), "generated legacy namespace\n", 0644)
+			selected, err := OpenCollection(c.Collection)
+			if err != nil || !selected.AdHoc || selected.Harness != filepath.Join(c.Collection, namespace, "config") {
+				t.Fatalf("wrong config geometry: %+v %v", selected, err)
+			}
+			old := "reference 42 topic https://github.com/example/old-name/pull/42 Ad-hoc\n"
+			fixtureFile(t, filepath.Join(c.Collection, ".taba-prs"), old, 0600)
+			if _, err := selected.Upgrade(UpgradeOptions{}); err == nil || !strings.Contains(err.Error(), "ad-hoc") {
+				t.Fatalf("ad-hoc upgrade bootstrap limitation hidden: %v", err)
+			}
+			if raw, _ := os.ReadFile(selected.PRFile()); string(raw) != old {
+				t.Fatal("refused ad-hoc upgrade repaired metadata")
+			}
+			snapshot, err := selected.statusForgePreview(false, false)
+			if err != nil || len(snapshot.PRs) != 1 || snapshot.PRs[0].State != "OPEN" || snapshot.PRs[0].Slug != "example/new-name" {
+				t.Fatalf("status must recover independently of harness upgrade: %+v %v", snapshot.PRs, err)
+			}
+		})
 	}
 }
