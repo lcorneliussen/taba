@@ -252,11 +252,17 @@ func (c *Context) repairPRReferences(records []PRRecord) {
 		if err != nil {
 			var mismatch *prIdentityMismatch
 			if errors.As(err, &mismatch) {
-				activeCurrent = false
+				burst, _ := statusForgeAllowance(mismatch.forge)
+				if burst < 1<<30 {
+					activeCurrent = false
+				}
 			}
 			continue
 		}
 		if slug == "" || forge == "" {
+			continue
+		}
+		if burst, _ := statusForgeAllowance(forge); burst >= 1<<30 {
 			continue
 		}
 		raw, fresh := statusReadForgeCache(forge, slug, record.Number)

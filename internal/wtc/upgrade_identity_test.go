@@ -22,7 +22,7 @@ func TestUpgradeRolloutHandsStatusToInstalledCandidate(t *testing.T) {
 		t.Fatalf("build candidate: %v\n%s", err, out)
 	}
 	for _, spelling := range []string{"wtc", "taba"} {
-		for _, mode := range []string{"clean", "dirty", "in-progress", "install-failed", "env-failed", "installed-unavailable"} {
+		for _, mode := range []string{"clean", "dirty", "in-progress", "install-failed", "env-failed", "installed-unavailable", "late-alias-edit", "late-alias-where-edit"} {
 			t.Run(spelling+"/"+mode, func(t *testing.T) {
 				c := newWorkspaceFixture(t)
 				provider := newRenameProviderFixture(t, "github.com")
@@ -30,6 +30,14 @@ func TestUpgradeRolloutHandsStatusToInstalledCandidate(t *testing.T) {
 				fixtureFile(t, filepath.Join(c.Harness, ".harness-repos.yml"), string(registry)+"  - name: reference\n    remote: https://github.com/example/new-name.git\n    default_ref: origin/main\n", 0644)
 				fixtureFile(t, filepath.Join(c.Harness, ".wtc-cli-version"), "0.2.0\n", 0644)
 				fixtureFile(t, filepath.Join(c.Harness, "wtc.toml"), "[compatibility]\nrequires = \">=0.2.0,<0.3\"\n", 0644)
+				if strings.HasPrefix(mode, "late-alias-") {
+					if err := os.Rename(filepath.Join(c.Harness, "wtc.toml"), filepath.Join(c.Harness, "taba.toml")); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink("taba.toml", filepath.Join(c.Harness, "wtc.toml")); err != nil {
+						t.Fatal(err)
+					}
+				}
 				fixtureGit(t, "-C", c.Harness, "add", ".")
 				fixtureGit(t, "-C", c.Harness, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "setup")
 				// The starting pin/config is already published. Keep this history
@@ -58,10 +66,14 @@ func TestUpgradeRolloutHandsStatusToInstalledCandidate(t *testing.T) {
 printf '%s\n' "$*" >> "$REHEARSAL_STATE/mise.log"
 case "$1" in
  trust) [ ! -f "$REHEARSAL_STATE/env-failed" ] ;;
- install) [ ! -f "$REHEARSAL_STATE/install-failed" ] || exit 1; touch "$REHEARSAL_STATE/installed" ;;
+ install)
+   [ ! -f "$REHEARSAL_STATE/install-failed" ] || exit 1
+   touch "$REHEARSAL_STATE/installed"
+   if [ -f "$REHEARSAL_STATE/late-alias-edit" ]; then printf '# owner late alias edit\n' >> "$REHEARSAL_COLLECTION/harness/taba.toml"; fi ;;
  where)
    [ "$2" = github:lcorneliussen/taba@0.2.2 ] || exit 1
    [ -f "$REHEARSAL_STATE/installed" ] && [ ! -f "$REHEARSAL_STATE/installed-unavailable" ] || exit 1
+   if [ -f "$REHEARSAL_STATE/late-alias-where-edit" ]; then printf '# owner late alias edit\n' >> "$REHEARSAL_COLLECTION/harness/taba.toml"; fi
    dirname "$REHEARSAL_CANDIDATE" ;;
  exec)
    [ "$2" = github:lcorneliussen/taba@0.2.2 ] || exit 1
@@ -159,7 +171,7 @@ esac
 					t.Fatal("pin proposal restarted a status pane before rollout")
 				}
 				// Simulate the reviewed harness pin reaching its local upstream.
-				fixtureGit(t, "-C", c.Harness, "add", ".wtc-cli-version", "wtc.toml")
+				fixtureGit(t, "-C", c.Harness, "add", "-u")
 				fixtureGit(t, "-C", c.Harness, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "upgrade")
 				fixtureGit(t, "-C", source, "fetch", "-q", c.Harness, "HEAD")
 				fixtureGit(t, "-C", source, "merge", "--ff-only", "FETCH_HEAD")
@@ -204,7 +216,11 @@ esac
 						t.Fatalf("unusable/owned target was restarted or repaired: %+v %v", report.Outcomes, runErr)
 					}
 					configAfter, _ := os.ReadFile(filepath.Join(c.Harness, "wtc.toml"))
-					if string(configAfter) != string(config) || fixtureGit(t, "-C", c.Harness, "rev-parse", "HEAD") != head {
+					wantConfig := string(config)
+					if strings.HasPrefix(mode, "late-alias-") {
+						wantConfig += "# owner late alias edit\n"
+					}
+					if string(configAfter) != wantConfig || fixtureGit(t, "-C", c.Harness, "rev-parse", "HEAD") != head {
 						t.Fatal("user config or in-progress HEAD changed")
 					}
 					return

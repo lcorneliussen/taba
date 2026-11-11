@@ -245,7 +245,12 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 			add("failed", "cannot select installed pin; pane left running")
 			return
 		}
-		raw, err := os.ReadFile(pin)
+		pinTarget, err := upgradeInput(target.Harness, pin)
+		if err != nil {
+			add("needs-owner", "cannot verify installed pin: "+err.Error()+"; pane left running")
+			return
+		}
+		raw, err := os.ReadFile(pinTarget)
 		if err != nil {
 			add("failed", "cannot read installed pin; pane left running")
 			return
@@ -265,8 +270,17 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 			add("failed", "cannot select installed config; pane left running")
 			return
 		}
-		dirty, err := gitOutput("-C", target.Harness, "status", "--porcelain", "--", filepath.Base(pin), filepath.Base(config))
-		if err != nil || dirty != "" || catchUpOperation(catchUpTarget{path: target.Harness}) != "" {
+		configTarget, err := upgradeInput(target.Harness, config)
+		if err != nil {
+			add("needs-owner", "cannot verify installed config: "+err.Error()+"; pane left running")
+			return
+		}
+		configBytes, err := os.ReadFile(configTarget)
+		if err != nil {
+			add("failed", "cannot read installed config; pane left running")
+			return
+		}
+		if catchUpOperation(catchUpTarget{path: target.Harness}) != "" {
 			add("needs-owner", "pin/config changed or operation in progress; pane left running")
 			return
 		}
@@ -277,6 +291,17 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 				add("failed", "pinned release unavailable after install; pane left running")
 				return
 			}
+		}
+		// Reuse the selected-input chain guard after installer inspection too:
+		// a late edit through a tracked alias must not interrupt the old pane.
+		pinNow, pinErr := upgradeInput(target.Harness, pin)
+		configNow, configErr := upgradeInput(target.Harness, config)
+		pinBytesNow, pinReadErr := os.ReadFile(pinNow)
+		configBytesNow, configReadErr := os.ReadFile(configNow)
+		if pinErr != nil || configErr != nil || pinReadErr != nil || configReadErr != nil || pinNow != pinTarget || configNow != configTarget ||
+			!bytes.Equal(raw, pinBytesNow) || !bytes.Equal(configBytes, configBytesNow) || catchUpOperation(catchUpTarget{path: target.Harness}) != "" {
+			add("needs-owner", "installed input chain changed; pane left running")
+			return
 		}
 		command += "TABA_DEV_BUILD=off WTC_DEV_BUILD=off MISE_AUTO_INSTALL=0 MISE_EXEC_AUTO_INSTALL=0 '" + strings.ReplaceAll(mise, "'", "'\"'\"'") + "' exec '" + cliMiseTool + "@" + version.String() + "' -- "
 	}

@@ -582,7 +582,7 @@ func TestStatusRenameActiveRowsRecoverBeforeHistoricalBackfill(t *testing.T) {
 		if refresh >= 2 {
 			want := history.String() + strings.Replace(active, "old-name", "new-name", 1)
 			if after, _ := os.ReadFile(c.PRFile()); string(after) != want {
-				t.Fatal("active repair changed original order or settled bytes")
+				t.Fatalf("active URL did not recover ahead of history: active=%q, settled bytes preserved=%t", strings.TrimPrefix(string(after), history.String()), strings.HasPrefix(string(after), history.String()))
 			}
 		}
 		if refresh == 4 && snapshot.PRs[len(snapshot.PRs)-1].State != "OPEN" {
