@@ -668,7 +668,7 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
 4. **Bitbucket**, if repositories live there:
 
    ```sh
-   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.4 --accept-capabilities
+   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.6 --accept-capabilities
    openclaw config set plugins.entries.bitbucket.config.execLogin false
    ```
 
@@ -676,8 +676,9 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
    commands, so that pushing goes only through the card.
 5. **Each person** connects their own accounts, which the gateway pushes
    with: GitHub under **Settings → Profile → GitHub connections → For me**,
-   Bitbucket on `/plugins/bitbucket/connect` opened in its own tab. The card
-   says so the first time it needs one.
+   Bitbucket under **Bitbucket** in the Control UI sidebar after signing in
+   to OpenClaw. Existing `/plugins/bitbucket/connect` links redirect there.
+   The card says so the first time it needs one.
 6. **Repositories** the gateway clones itself: **Add repository** in the
    Collection panel, or the gateway's own project settings. With a harness,
    add it the same way and configure it (see [wtc projects](#wtc-projects)).
@@ -763,13 +764,18 @@ image instead (above).
    In either case, reload open Control UI tabs to get the new card. Until
    this step, the Collection panel says that the plugin and the gateway's
    `wtc` differ.
-3. **openclaw-bitbucket**, when its release notes call for it: install the new
-   tag over the old one and reload it.
+3. **openclaw-bitbucket**, when its release notes call for it: install the
+   verified 0.3.6 tag over the old one, preserving enablement, allowlists and
+   denylists with `--no-enable`:
 
    ```sh
-   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@<tag> --force --accept-capabilities
-   openclaw plugins reload bitbucket
+   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.6 --force --no-enable --accept-capabilities
    ```
+
+   For an enabled installation, run `openclaw plugins reload bitbucket`, then
+   refresh the Control UI. If intentionally disabled, leave it disabled and
+   skip the reload. Existing personal logins and plugin settings are reused.
+   OpenClaw 2026.10.2 remains the minimum supported host.
 
 `openclaw plugins update` does not upgrade the wtc plugin: it skips plugins
 installed from a path, which is how `wtc openclaw install` installs.

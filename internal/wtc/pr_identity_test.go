@@ -766,6 +766,16 @@ func TestAtomicScheduleUnsafeFilesFailClosed(t *testing.T) {
 			switch mode {
 			case "permissions":
 				fixtureFile(t, path, `{"Version":1,"Repair":true}`, 0644)
+				if err := os.Chmod(path, 0644); err != nil {
+					t.Fatal(err)
+				}
+				info, err := os.Stat(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := info.Mode().Perm(); got != 0644 {
+					t.Fatalf("unsafe scheduling fixture mode = %04o, want 0644", got)
+				}
 			case "symlink":
 				target := filepath.Join(t.TempDir(), "owner")
 				fixtureFile(t, target, "owner bytes", 0600)
