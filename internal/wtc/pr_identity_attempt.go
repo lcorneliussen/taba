@@ -61,7 +61,9 @@ func (p *prIdentityProof) readCredentials(forge string) prIdentityAuth {
 			a.err = fmt.Errorf("repository identity credential context unavailable; verify forge login and refresh status")
 			return a
 		}
-		raw, err := statusJSON(gh, "auth", "token", "--hostname", "github.com")
+		// A credential is small: capture it in memory, never in the regular
+		// temporary output file used for potentially large forge JSON bodies.
+		raw, err := statusRun(30*time.Second, (*exec.Cmd).Output, gh, "auth", "token", "--hostname", "github.com")
 		a.gh, a.token = gh, strings.TrimSpace(string(raw))
 		if err != nil || a.token == "" || strings.ContainsAny(a.token, " \t\r\n") {
 			a.err = fmt.Errorf("repository identity credential context unavailable; verify forge login and refresh status")
