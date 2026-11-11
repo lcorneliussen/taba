@@ -3,7 +3,7 @@
 Status combines independent observations: the Git checkout, its pull request,
 reviews and checks, and builds of shared branches. Read them together. A green
 result in one field does not answer the questions represented by the others.
-Installed versions can differ; use `wtc status --help` and `?` in the live view.
+Installed versions can differ; use `taba status --help` and `?` in the live view.
 
 ## Read from checkout to delivery
 
@@ -70,9 +70,9 @@ state and identity before optional signals. In the PR table,
 conflict takes priority over draft in STATE. A clean working tree can have a
 conflicting proposed PR merge; see [mergeability](status-mergeability.md).
 
-R is the **forge's review summary**, not the separate `wtc review` gate.
-Inspect current-head local review trust with `wtc review status <repo> <pr>
---trusted-local`, and hosted reports/threads with `wtc review activity <repo>
+R is the **forge's review summary**, not the separate `taba review` gate.
+Inspect current-head local review trust with `taba review status <repo> <pr>
+--trusted-local`, and hosted reports/threads with `taba review activity <repo>
 <pr>`. A completed bot check is not itself approval.
 
 ## PR checks versus TEST and PROD
@@ -174,7 +174,7 @@ tunnel marks indicate public/unknown exposure. Marks can be configured.
 Color supplies state; SERVICES names the task, its most urgent member state,
 addresses and providers. Readiness begins with a startup probe; later address
 or login trouble can still show `no answer` or `login`. Provisioned resources
-are distinct from running services. Use `wtc svc` and logs for detail.
+are distinct from running services. Use `taba svc` and logs for detail.
 
 `n` opens explicit next-action choices; the view rechecks status before acting.
 Displaying status does not dispatch an agent prompt. Retirement observations
@@ -188,11 +188,11 @@ facts normally use a 90-second forge cache. `r` requests refresh, but a fresh
 screen can still contain cached provider facts. `l` opens the refresh log.
 
 ```sh
-wtc status                 # interactive live view in a terminal
-wtc status --no-watch      # one pass
-wtc status --json          # raw observations and provenance
-wtc status --cached --json # completed snapshot; no Git or forge calls
-wtc status --local --json  # local preview; no forge calls
+taba status                 # interactive live view in a terminal
+taba status --no-watch      # one pass
+taba status --json          # raw observations and provenance
+taba status --cached --json # completed snapshot; no Git or forge calls
+taba status --local --json  # local preview; no forge calls
 ```
 
 `--forge` previews Git and forge facts without writing a completed snapshot.
