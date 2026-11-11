@@ -202,7 +202,7 @@ func TestStatusPRReferenceRejectedURLOnlyQueriesIdentityForMismatch(t *testing.T
 			calls := filepath.Join(t.TempDir(), "calls")
 			t.Setenv("REFERENCE_CALLS", calls)
 			bin := t.TempDir()
-			fixtureFile(t, filepath.Join(bin, "gh"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$REFERENCE_CALLS\"\nexit 1\n", 0755)
+			fixtureFile(t, filepath.Join(bin, "gh"), "#!/bin/sh\nif [ \"$1 $2\" = 'auth token' ]; then printf 'synthetic-session\\n'; exit 0; fi\nprintf '%s\\n' \"$*\" >> \"$REFERENCE_CALLS\"\nexit 1\n", 0755)
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			record := PRRecord{Repo: "reference", Number: "7", URL: tc.url}
 			if _, err := c.EnlistPR(record); err != nil {
@@ -213,7 +213,7 @@ func TestStatusPRReferenceRejectedURLOnlyQueriesIdentityForMismatch(t *testing.T
 				t.Fatalf("invalid reference: %+v %v", snapshot.PRs, err)
 			}
 			if raw, err := os.ReadFile(calls); tc.name == "registry-conflict" {
-				if err != nil || strings.TrimSpace(string(raw)) != "api repos/other/widget --hostname github.com --method GET" {
+				if err != nil || strings.TrimSpace(string(raw)) != "api repos/example/widget --hostname github.com --method GET" {
 					t.Fatalf("mismatch must only attempt repository identity proof: %s %v", raw, err)
 				}
 			} else if !os.IsNotExist(err) {

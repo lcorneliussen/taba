@@ -313,3 +313,38 @@ func TestAdHocConfigPrecedenceAllowsStatusRepairButRefusesHarnessUpgrade(t *test
 		})
 	}
 }
+
+func TestStatusRenameNativeCLIProgressAcrossBudgetRefills(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a native CLI for independent status invocations")
+	}
+	candidate := filepath.Join(t.TempDir(), "candidate")
+	build := exec.Command("go", "build", "-ldflags=-X main.version=0.2.2", "-o", candidate, "../../cmd/taba")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build candidate: %v\n%s", err, out)
+	}
+	c, f, before := stagedRenameFixture(t, "github.com")
+	t.Setenv("WTC_DEV_BUILD", "off")
+	for invocation := 0; invocation < 3; invocation++ {
+		if invocation > 0 {
+			refillRenameBudget(t, "github.com")
+		}
+		cmd := exec.Command(candidate, "status", "--no-fetch", "--json")
+		cmd.Dir = c.Collection
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("native status invocation %d: %v\n%s", invocation, err, out)
+		}
+		var snapshot StatusSnapshot
+		if json.Unmarshal(out, &snapshot) != nil || snapshot.CLIVersion != "0.2.2" {
+			t.Fatalf("native status producer unavailable: %s", out)
+		}
+		calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
+		if strings.Count(string(calls), "api ") != invocation+1 {
+			t.Fatalf("native invocation exceeded configured allowance: %s", calls)
+		}
+	}
+	if after, _ := os.ReadFile(c.PRFile()); string(after) != strings.Replace(before, "old-name", "new-name", 1) {
+		t.Fatal("fresh native processes failed to recover the reference")
+	}
+}
