@@ -95,8 +95,10 @@ func preflightDevRetirement(collection string) (bool, error) {
 	return used, nil
 }
 
-// DevMode is the only selection input. Generations and versions are build
-// observations, not additional release pins. An absent policy inherits AUTO.
+// DevMode records the persisted policy. AUTO activation also requires the
+// project auto_source convention and the eligibility checks in DevFollowConfiguration.
+// Generations and versions are build observations, not additional release pins.
+// An absent policy inherits AUTO.
 type DevMode struct {
 	Mode     string `json:"mode"`
 	Source   string `json:"source,omitempty"`

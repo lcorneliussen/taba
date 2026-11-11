@@ -838,6 +838,19 @@ func (c *Context) catchUpHooks(report *CatchUpReport, t catchUpTarget, opt Catch
 				return
 			}
 		}
+		if opt.InstallTools {
+			// The installed-target restart bypasses dev handover for its lifetime.
+			// Preserve configured following; the owner can select OFF explicitly.
+			follow, err := DevFollowConfiguration(targetDir)
+			if err != nil {
+				report.add("pane", t.collection, "status", "needs-owner", "dev follow policy unavailable; status reload skipped; check dev status before stable rollout", "", "", "")
+				return
+			}
+			if follow.Active {
+				report.add("pane", t.collection, "status", "needs-owner", "dev following is active; status reload skipped; run dev mode off before stable rollout", "", "", "")
+				return
+			}
+		}
 		c.catchUpReloadStatus(report, t, opt)
 	}
 }

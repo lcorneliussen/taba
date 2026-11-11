@@ -18,10 +18,10 @@ import (
 )
 
 // A collection may carry its own build of wtc, made from the CLI checkout
-// beside the harness. Any wtc started inside that collection hands over to it
-// when policy selects a fresh followed generation or a same/newer one-shot
-// artifact. Only one-shot artifacts fall back to the pinned
-// release once that has moved past the build.
+// beside the harness. Startup hands over when policy selects a fresh followed
+// generation or a same/newer one-shot artifact, except for dev/review control
+// commands and review-only collections. Only one-shot artifacts fall back to
+// the pinned release once that has moved past the build.
 
 // cliModules are the CLI's module paths: taba.sh/taba, and the path before
 // the rename for checkouts of older branches.
