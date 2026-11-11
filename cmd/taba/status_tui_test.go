@@ -54,7 +54,7 @@ func TestStatusTUILinksColorsAndClickTargets(t *testing.T) {
 	if got := model.buildClickTarget(83, 3); got != buildURL {
 		t.Fatalf("build cell click = %q", got)
 	}
-	if got := model.buildClickTarget(5, 7); got != prURL {
+	if got := model.buildClickTarget(1, 7); got != prURL {
 		t.Fatalf("PR list row click = %q", got)
 	}
 	branchOnly := statusTUIModel{width: 80, height: 16, snapshot: wtc.StatusSnapshot{Collection: "fixture",
@@ -158,13 +158,15 @@ func TestStatusTUIHelpKeepsClickTargetsAligned(t *testing.T) {
 		Repos: []wtc.StatusRepo{{Dir: "widget", Slug: "example/widget", Forge: "github.com", Branch: "topic", BranchDisplay: "topic",
 			PR: &wtc.StatusPRFacts{Number: "7", URL: prURL}, Tip: &wtc.StatusBuild{URL: &buildURL}}},
 		PRs: []wtc.StatusPRRow{{Repo: "widget", Number: "7", URL: &prURL, Title: "Synthetic change"}}}
-	model := statusTUIModel{snapshot: snapshot, width: 100, height: 20, showHelp: true}
+	model := statusTUIModel{snapshot: snapshot, width: 100, height: 60, showHelp: true}
 	layout := statusTUIRepoLayout(snapshot, 100)
+	rows := model.contentLayout().rows
+	repoY, prY := rows[0].start, rows[1].start
 	for _, check := range []struct {
 		x, y int
 		url  string
-	}{{1, 7, repoURL}, {layout.name + 1, 7, branchURL}, {layout.prStart(), 7, prURL},
-		{layout.tipStart(), 7, buildURL}, {1, 11, prURL}, {1, 6, ""}} {
+	}{{1, repoY, repoURL}, {layout.name + 1, repoY, branchURL}, {layout.prStart(), repoY, prURL},
+		{layout.tipStart(), repoY, buildURL}, {1, prY, prURL}, {1, repoY - 1, ""}} {
 		if got := model.buildClickTarget(check.x, check.y); got != check.url {
 			t.Fatalf("click (%d,%d) = %q, want %q", check.x, check.y, got, check.url)
 		}
@@ -271,12 +273,454 @@ func TestStatusTUIRepoRowsKeepSignalsWithinWidth(t *testing.T) {
 		PR: &wtc.StatusPRFacts{Number: "7", Checks: "SUCCESS", Merge: "BEHIND", Review: "waiting"},
 	}}}
 	lines := statusTUIRepoLines(snapshot, 60, false)
-	if len(lines) != 2 || !strings.Contains(lines[1], "#7 ✓ ↓ …") ||
+	if len(lines) != 2 || !strings.Contains(lines[1], "#7   ✓ ↓ ●") ||
 		!strings.Contains(lines[0], "±    ↑   ↓") || !strings.Contains(lines[1], "±2   1   3") {
 		t.Fatalf("repo signals missing: %q", lines)
 	}
 	if fitted := statusTUIFit("⌂ development-tip", 8); runewidth.StringWidth(fitted) != 8 || !strings.HasSuffix(fitted, "…") {
 		t.Fatalf("wide branch clipping failed: %q", fitted)
+	}
+}
+
+func TestStatusCompactWithoutPRsPreservesBranchNames(t *testing.T) {
+	snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{
+		{Dir: "api", BranchDisplay: "feature/alpha", Tree: "clean"},
+		{Dir: "web", BranchDisplay: "feature/beta", Tree: "clean"},
+	}}
+	for _, styled := range []bool{false, true} {
+		lines := statusTUIRepoLines(snapshot, 39, styled)
+		for i, branch := range []string{"feature/alpha", "feature/beta"} {
+			if !strings.Contains(ansi.Strip(lines[i+1]), branch) {
+				t.Fatalf("empty PR space clipped a fitting branch: %q", lines[i+1])
+			}
+		}
+		for _, line := range lines {
+			if ansi.StringWidth(line) > 39 {
+				t.Fatalf("compact row overflow: %q", line)
+			}
+		}
+	}
+}
+
+func TestStatusPRNumbersAlignLinksAndSignalsAcrossTheListedCohort(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	snapshot := wtc.StatusSnapshot{Collection: "fixture"}
+	for i, number := range []string{"7", "48", "1234", "\x1b[31m48\x1b[0m"} {
+		target := "https://example.invalid/pull/" + fmt.Sprint(i)
+		if i == 1 {
+			target = ""
+		}
+		snapshot.Repos = append(snapshot.Repos, wtc.StatusRepo{Dir: "widget", BranchDisplay: "topic",
+			PR: &wtc.StatusPRFacts{Number: number, URL: target, Checks: "SUCCESS", Merge: "CLEAN", Review: "commented"}})
+		snapshot.PRs = append(snapshot.PRs, wtc.StatusPRRow{Repo: "widget", Number: number, URL: &target,
+			Checks: statusStringPtr("SUCCESS"), Merge: statusStringPtr("CLEAN"), Review: statusStringPtr("commented")})
+	}
+	snapshot.Repos = append(snapshot.Repos, wtc.StatusRepo{Dir: "no-pr"})
+	for _, noColor := range []string{"", "1"} {
+		t.Setenv("NO_COLOR", noColor)
+		for _, styled := range []bool{false, true} {
+			for _, width := range []int{80, 100} {
+				repos := statusTUIRepoLines(snapshot, width, styled)
+				wantSignal := ansi.StringWidth(strings.Split(ansi.Strip(repos[0]), "C M R")[0])
+				arrowColumn := -1
+				for i, line := range repos[1:5] {
+					plain := ansi.Strip(line)
+					if got := ansi.StringWidth(strings.Split(plain, "✓")[0]); got != wantSignal {
+						t.Fatalf("repo %d signals at %d, want %d: %q", i, got, wantSignal, repos)
+					}
+					if !strings.Contains(plain, "✓ ✓ ✎") || ansi.StringWidth(line) > width || (!styled && strings.Contains(line, "\x1b")) {
+						t.Fatalf("lost ordered signals or overflow: %q", line)
+					}
+					if strings.Contains(plain, "↗") {
+						column := ansi.StringWidth(strings.Split(plain, "↗")[0])
+						if arrowColumn >= 0 && column != arrowColumn {
+							t.Fatalf("link arrows moved: %q", repos)
+						}
+						arrowColumn = column
+					}
+				}
+				prs := statusTUIPRLines(snapshot, width, false, styled)
+				header := ansi.Strip(prs[2])
+				for _, label := range []string{"CHECKS", "MERGE", "REVIEWS"} {
+					if !strings.Contains(header, label) {
+						t.Fatalf("readable heading missing: %q", header)
+					}
+				}
+				for _, line := range prs[3:] {
+					plain := ansi.Strip(line)
+					for _, pair := range [][2]string{{"✓", "CHECKS"}, {"✎", "REVIEWS"}} {
+						if ansi.StringWidth(strings.Split(plain, pair[0])[0]) != ansi.StringWidth(strings.Split(header, pair[1])[0]) {
+							t.Fatalf("table signals do not align with meanings: %q", prs)
+						}
+					}
+					if ansi.StringWidth(line) > width || (!styled && strings.Contains(line, "\x1b")) {
+						t.Fatalf("table overflow: %q", line)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRDraftMarkerFitsAcrossTheNumberCohort(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	snapshot := wtc.StatusSnapshot{}
+	for _, number := range []string{"7", "12345", "123456789"} {
+		snapshot.Repos = append(snapshot.Repos, wtc.StatusRepo{Dir: "widget", PR: &wtc.StatusPRFacts{
+			Number: number, URL: "https://example.invalid/pull/" + number, Draft: true,
+			Checks: "SUCCESS", Merge: "CLEAN", Review: "approved",
+		}})
+	}
+	for _, styled := range []bool{false, true} {
+		lines := statusTUIRepoLines(snapshot, 100, styled)
+		for i, line := range lines[1:] {
+			plain := ansi.Strip(line)
+			if !strings.Contains(plain, "#"+snapshot.Repos[i].PR.Number) || !strings.Contains(plain, "✓ ✓ ✓ ◇") || strings.Contains(plain, "…") || ansi.StringWidth(line) > 100 {
+				t.Fatalf("draft status clipped in a wide table: %q", lines)
+			}
+		}
+	}
+}
+
+func TestStatusPRCompactRowsPreserveDraftAndConflictPriority(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	for _, merge := range []string{"UNKNOWN", "DIRTY"} {
+		for _, styled := range []bool{false, true} {
+			for _, width := range []int{24, 31, 39, 40, 60} {
+				target := "https://example.invalid/pull/7"
+				snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{{
+					Dir: "widget", BranchDisplay: "a-long-synthetic-topic", PR: &wtc.StatusPRFacts{
+						Number: "7", URL: target, Draft: true, Merge: merge,
+					},
+				}}}
+				lines := statusTUIRepoLines(snapshot, width, styled)
+				plain := ansi.Strip(lines[1])
+				if !strings.Contains(plain, "◇") || !strings.Contains(plain, "#7") || (merge == "DIRTY" && !strings.Contains(plain, "✗")) {
+					t.Fatalf("draft/conflict hidden at width %d styled %t: %q", width, styled, lines)
+				}
+				if ansi.StringWidth(lines[1]) > width {
+					t.Fatalf("compact row overflows width %d: %q", width, lines[1])
+				}
+				model := statusTUIModel{snapshot: snapshot, width: width, height: 20}
+				if got := model.buildClickTarget(statusTUIRepoLayout(snapshot, width).prStart(), 3); got != target {
+					t.Fatalf("compact draft click at width %d = %q", width, got)
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRCompactRowsKeepIdentifiersBeforeOptionalSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	for _, number := range []string{"123", "1234", "12345"} {
+		for _, styled := range []bool{false, true} {
+			for _, width := range []int{24, 31, 39} {
+				target := "https://example.invalid/pull/" + number
+				snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{{
+					Dir: "widget", BranchDisplay: "synthetic-topic", PR: &wtc.StatusPRFacts{
+						Number: number, URL: target, Checks: "SUCCESS", Merge: "CLEAN", Review: "approved",
+					},
+				}}, PRs: []wtc.StatusPRRow{{Repo: "widget", Number: number, URL: &target,
+					Checks: statusStringPtr("SUCCESS"), Merge: statusStringPtr("CLEAN"), Review: statusStringPtr("approved")}}}
+				for table, lines := range [][]string{statusTUIRepoLines(snapshot, width, styled), statusTUIPRLines(snapshot, width, false, styled)} {
+					found := false
+					for _, line := range lines {
+						plain := ansi.Strip(line)
+						if strings.Contains(plain, "#"+number) && (table == 0 || strings.HasPrefix(plain, "#"+number)) {
+							found = true
+						}
+						if ansi.StringWidth(line) > width {
+							t.Fatalf("identifier row overflows width %d: %q", width, lines)
+						}
+					}
+					if !found {
+						t.Fatalf("PR #%s clipped before optional signals at width %d styled %t: %q", number, width, styled, lines)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRCompactRowsReserveFullDraftConflictIdentifiers(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	for _, number := range []string{"1234", "12345"} {
+		for _, styled := range []bool{false, true} {
+			for width := 24; width <= 40; width++ {
+				target := "https://example.invalid/pull/" + number
+				snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{{
+					Dir: "widget", BranchDisplay: "synthetic-topic", PR: &wtc.StatusPRFacts{
+						Number: number, URL: target, Draft: true, Merge: "DIRTY",
+					},
+				}}}
+				lines := statusTUIRepoLines(snapshot, width, styled)
+				plain := ansi.Strip(lines[1])
+				if !strings.Contains(plain, "#"+number) || !strings.Contains(plain, "◇") || !strings.Contains(plain, "✗") {
+					t.Errorf("identifier/state lost at width %d styled %t: %q", width, styled, plain)
+				}
+				for _, line := range lines {
+					if ansi.StringWidth(line) > width {
+						t.Fatalf("row overflows width %d: %q", width, line)
+					}
+				}
+				layout := statusTUIRepoLayout(snapshot, width)
+				model := statusTUIModel{snapshot: snapshot, width: width, height: 20}
+				if got := model.buildClickTarget(layout.prStart(), 3); got != target {
+					t.Fatalf("compact PR click = %q, want %q", got, target)
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRCompactMixedRowsKeepFittingSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	snapshot := wtc.StatusSnapshot{}
+	for _, number := range []string{"7", "12345"} {
+		snapshot.Repos = append(snapshot.Repos, wtc.StatusRepo{Dir: "widget", BranchDisplay: "topic",
+			PR: &wtc.StatusPRFacts{Number: number, URL: "https://example.invalid/pull/" + number,
+				Checks: "SUCCESS", Merge: "CLEAN", Review: "approved"}})
+	}
+	for _, styled := range []bool{false, true} {
+		for _, width := range []int{28, 29, 30} {
+			lines := statusTUIRepoLines(snapshot, width, styled)
+			signalColumn := -1
+			for i, line := range lines[1:] {
+				plain := ansi.Strip(line)
+				if !strings.Contains(plain, "#"+snapshot.Repos[i].PR.Number) || !strings.Contains(plain, "✓ ✓ ✓") {
+					t.Errorf("fitting identifier/signals lost at width %d styled %t: %q", width, styled, plain)
+				}
+				column := ansi.StringWidth(strings.Split(plain, "✓")[0])
+				if signalColumn >= 0 && column != signalColumn {
+					t.Errorf("mixed signals misaligned at width %d: %q", width, lines)
+				}
+				signalColumn = column
+				if ansi.StringWidth(line) > width {
+					t.Fatalf("row overflows width %d: %q", width, line)
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRCompactRowsGiveUpLinkSlotBeforeFittingSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	for _, draft := range []bool{false, true} {
+		for _, styled := range []bool{false, true} {
+			for _, width := range []int{24, 25, 26, 28} {
+				if draft && width < 26 {
+					// Eight REPO cells, six BRANCH cells and two gaps leave
+					// ten PR cells at width 26 for "#7 ◇ ✓ ✓ ✓".
+					continue
+				}
+				snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{{Dir: "widget", BranchDisplay: "topic",
+					PR: &wtc.StatusPRFacts{Number: "7", URL: "https://example.invalid/pull/7", Draft: draft,
+						Checks: "SUCCESS", Merge: "CLEAN", Review: "approved"}}}}
+				lines := statusTUIRepoLines(snapshot, width, styled)
+				plain := ansi.Strip(lines[1])
+				if !strings.Contains(plain, "#7") || !strings.Contains(plain, "✓ ✓ ✓") || (draft && !strings.Contains(plain, "◇")) {
+					t.Errorf("link slot displaced fitting facts at width %d draft %t styled %t: %q", width, draft, styled, plain)
+				}
+				if ansi.StringWidth(lines[1]) > width {
+					t.Fatalf("row overflows width %d: %q", width, lines[1])
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRCompactConflictDoesNotHideOtherRowsFittingSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{
+		{Dir: "widget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "7", URL: "https://example.invalid/pull/7", Checks: "SUCCESS", Merge: "DIRTY", Review: "approved"}},
+		{Dir: "gadget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "48", URL: "https://example.invalid/pull/48", Checks: "SUCCESS", Merge: "CLEAN", Review: "commented"}},
+		{Dir: "toolkit", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "12345", URL: "https://example.invalid/pull/12345", Checks: "FAILURE", Merge: "CLEAN", Review: "changes"}},
+	}}
+	for _, styled := range []bool{false, true} {
+		for width := 28; width <= 45; width++ {
+			lines := statusTUIRepoLines(snapshot, width, styled)
+			if plain := ansi.Strip(lines[1]); !strings.Contains(plain, "#7") || !strings.Contains(plain, "✗") {
+				t.Errorf("conflict state lost at width %d styled %t: %q", width, styled, plain)
+			}
+			signalColumn := -1
+			for i, signals := range []string{"✓ ✓ ✎", "✗ ✓ ✗"} {
+				plain := ansi.Strip(lines[i+2])
+				start := strings.Index(plain, signals)
+				if start < 0 || !strings.Contains(plain, "#"+snapshot.Repos[i+1].PR.Number) {
+					t.Errorf("conflict displaced fitting signals at width %d styled %t: %q", width, styled, plain)
+					continue
+				}
+				column := ansi.StringWidth(plain[:start])
+				if signalColumn >= 0 && column != signalColumn {
+					t.Errorf("mixed signals misaligned at width %d styled %t: %q", width, styled, lines)
+				}
+				signalColumn = column
+			}
+			layout := statusTUIRepoLayout(snapshot, width)
+			model := statusTUIModel{snapshot: snapshot, width: width, height: 20}
+			for i, row := range snapshot.Repos {
+				if ansi.StringWidth(lines[i+1]) > width {
+					t.Fatalf("row overflows width %d: %q", width, lines[i+1])
+				}
+				if got := model.buildClickTarget(layout.prStart(), 3+i); got != row.PR.URL {
+					t.Errorf("PR #%s click = %q, want %q", row.PR.Number, got, row.PR.URL)
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRCompactMixedStatesKeepAlignedFittingSignals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	for _, state := range []struct {
+		draft, longDraft                       bool
+		merge, longMerge, signals, longSignals string
+		minWidth                               int
+	}{
+		{draft: true, merge: "CLEAN", longMerge: "CLEAN", signals: "✗ ✓ ✗", longSignals: "✓ ✓ ✓", minWidth: 28},
+		{merge: "DIRTY", longMerge: "CLEAN", signals: "✗ ✗ ✗", longSignals: "✓ ✓ ✓", minWidth: 28},
+		{draft: true, merge: "DIRTY", longMerge: "CLEAN", signals: "✗ ✗ ✗", longSignals: "✓ ✓ ✓", minWidth: 28},
+		// Eight REPO cells, eight BRANCH cells and two gaps leave fourteen PR cells at width 32.
+		{longDraft: true, merge: "DIRTY", longMerge: "DIRTY", signals: "✗ ✗ ✗", longSignals: "✓ ✗ ✓", minWidth: 32},
+	} {
+		snapshot := wtc.StatusSnapshot{Repos: []wtc.StatusRepo{
+			{Dir: "widget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "7", URL: "https://example.invalid/pull/7", Checks: "FAILURE", Merge: state.merge, Review: "changes", Draft: state.draft}},
+			{Dir: "gadget", BranchDisplay: "topic", PR: &wtc.StatusPRFacts{Number: "12345", URL: "https://example.invalid/pull/12345", Checks: "SUCCESS", Merge: state.longMerge, Review: "approved", Draft: state.longDraft}},
+		}}
+		for _, styled := range []bool{false, true} {
+			for width := state.minWidth; width <= 45; width++ {
+				lines := statusTUIRepoLines(snapshot, width, styled)
+				numberColumn, signalColumn := -1, -1
+				for i, signals := range []string{state.signals, state.longSignals} {
+					plain := ansi.Strip(lines[i+1])
+					numberStart, signalStart := strings.Index(plain, "#"+snapshot.Repos[i].PR.Number), strings.Index(plain, signals)
+					if numberStart < 0 || signalStart < 0 || (snapshot.Repos[i].PR.Draft && !strings.Contains(plain, "◇")) {
+						t.Errorf("fitting state/signals lost at width %d draft %t long draft %t merge %s styled %t: %q", width, state.draft, state.longDraft, state.merge, styled, plain)
+						continue
+					}
+					nc, sc := ansi.StringWidth(plain[:numberStart]), ansi.StringWidth(plain[:signalStart])
+					if numberColumn >= 0 && (nc != numberColumn || sc != signalColumn) {
+						t.Errorf("mixed identifiers/signals misaligned at width %d: %q", width, lines)
+					}
+					numberColumn, signalColumn = nc, sc
+					if ansi.StringWidth(lines[i+1]) > width {
+						t.Fatalf("row overflows width %d: %q", width, lines[i+1])
+					}
+					layout := statusTUIRepoLayout(snapshot, width)
+					model := statusTUIModel{snapshot: snapshot, width: width, height: 20}
+					if got := model.buildClickTarget(layout.prStart(), 3+i); got != snapshot.Repos[i].PR.URL {
+						t.Errorf("PR click = %q, want %q", got, snapshot.Repos[i].PR.URL)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRSignalsKeepUnknownPendingAndReviewMeaning(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("NO_COLOR", "")
+	for _, fixture := range []struct {
+		checks, merge, review, want string
+	}{
+		{"SUCCESS", "CLEAN", "commented", "✓ ✓ ✎"},
+		{"PENDING", "BLOCKED", "waiting", "● ⊘ ●"},
+		{"FAILURE", "DIRTY", "changes", "✗ ✗ ✗ conflict"},
+		{"NONE", "UNKNOWN", "none", "· · ·"},
+		{"EXPECTED", "BEHIND", "noreviewers", "● ↓ ∅"},
+	} {
+		pr := &wtc.StatusPRFacts{Number: "7", Checks: fixture.checks, Merge: fixture.merge, Review: fixture.review}
+		for _, styled := range []bool{false, true} {
+			cell := statusTUIRepoPRCell(pr, 40, styled)
+			if !strings.Contains(ansi.Strip(cell), fixture.want) {
+				t.Fatalf("facts %+v rendered as %q", fixture, cell)
+			}
+			if styled && fixture.review == "commented" && (!strings.Contains(cell, "\x1b[32m✓\x1b[0m") || !strings.Contains(cell, "\x1b[2m✎\x1b[0m")) {
+				t.Fatalf("success must not color comments as approval: %q", cell)
+			}
+		}
+	}
+}
+
+func TestStatusPRLongNumbersAndArchivedRowsRespectLayoutBudget(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	target := "https://example.invalid/pull/7"
+	snapshot := wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{
+		{Number: "7", URL: &target}, {Number: "123456789012345678901234567890", URL: &target, Archived: true},
+	}}
+	visible, _ := statusTUIVisiblePRs(snapshot, false)
+	if l := statusTUIPRLayout(100, visible...); l.number != 5 {
+		t.Fatalf("hidden archived number widened the listed cohort: %+v", l)
+	}
+	for _, archived := range []bool{false, true} {
+		for width := 24; width <= 120; width++ {
+			for _, styled := range []bool{false, true} {
+				for _, line := range statusTUIPRLines(snapshot, width, archived, styled) {
+					if ansi.StringWidth(line) > width || (!styled && strings.Contains(line, "\x1b")) {
+						t.Fatalf("width %d styled %t: %q", width, styled, line)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestStatusPRHelpWrapsAndKeyboardScrollKeepsMouseTargets(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	target := "https://example.invalid/pull/7"
+	for _, width := range []int{24, 40, 80} {
+		snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{{Dir: "widget",
+			PR: &wtc.StatusPRFacts{Number: "7", URL: target}}}}
+		for i := 0; i < 12; i++ {
+			snapshot.PRs = append(snapshot.PRs, wtc.StatusPRRow{Repo: "widget", Number: fmt.Sprint(i + 1), URL: &target})
+		}
+		model := statusTUIModel{snapshot: snapshot, width: width, height: 12}
+		updated, _ := model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+		model = updated.(statusTUIModel)
+		content := model.contentLayout()
+		help := strings.Join(strings.Fields(ansi.Strip(strings.Join(content.lines, " "))), " ")
+		for _, meaning := range []string{"C checks", "M mergeability", "R reviews", "absent/unknown", "pending/expected", "changes requested", "commented (not approval)", "no reviewers", "blocked", "behind base", "◇ draft", "Merged PRs off their branch use · signals", "retained branches keep recorded observations", "See STATE for follow-up"} {
+			if !strings.Contains(help, meaning) {
+				t.Fatalf("help lost %q at width %d: %s", meaning, width, help)
+			}
+		}
+		for _, line := range content.lines[2:] {
+			if ansi.StringWidth(line) > width {
+				t.Fatalf("help/table overflow at %d: %q", width, line)
+			}
+		}
+		updated, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
+		model = updated.(statusTUIModel)
+		if model.effectiveScroll() == 0 {
+			t.Fatal("keyboard did not scroll help and rows")
+		}
+		v := model.viewport(model.contentLayout())
+		clicked := false
+		for _, row := range model.contentLayout().rows {
+			y := row.start - v.scroll
+			if row.pr == nil || y < v.header || y >= v.header+v.body {
+				continue
+			}
+			clicked = true
+			if got := model.buildClickTarget(1, y); got != target {
+				t.Fatalf("scrolled PR click at width %d = %q", width, got)
+			}
+			visible, _ := statusTUIVisiblePRs(snapshot, false)
+			if got := model.buildClickTarget(statusTUIPRLayout(width, visible...).number, y); got != "" {
+				t.Fatalf("number link leaked into repo column: %q", got)
+			}
+		}
+		if !clicked {
+			t.Fatal("no PR row visible after keyboard scroll")
+		}
+		updated, _ = model.Update(tea.KeyPressMsg{Code: '?', Text: "?"})
+		model = updated.(statusTUIModel)
+		if model.showHelp || model.effectiveScroll() != 0 {
+			t.Fatal("help toggle failed to restore top navigation")
+		}
 	}
 }
 
@@ -293,7 +737,7 @@ func TestStatusTUIConflictsUseThemeColorsWithoutExtraColumn(t *testing.T) {
 		PR: &wtc.StatusPRFacts{Number: "7", Merge: conflicting},
 	}}, PRs: []wtc.StatusPRRow{{Repo: "widget", Number: "7", Merge: &conflicting}}}
 	lines := statusTUIRepoLines(snapshot, 60, true)
-	if !strings.Contains(ansi.Strip(lines[1]), "#7 ✗ conflict") || !strings.Contains(ansi.Strip(lines[1]), "✗3") ||
+	if !strings.Contains(ansi.Strip(lines[1]), "#7   · ✗ · conflict") || !strings.Contains(ansi.Strip(lines[1]), "✗3") ||
 		strings.Count(lines[1], "\x1b[31m") < 2 || strings.Contains(lines[1], "38;5;") {
 		t.Fatalf("repo conflict missing or color not themeable: %q", lines)
 	}
@@ -318,7 +762,7 @@ func TestStatusPRConflictVisibleWithGreenChecksAndCleanCheckout(t *testing.T) {
 			if !strings.Contains(row, "✗") || !strings.Contains(row, "#7") {
 				t.Fatalf("PR conflict hidden at width %d, styled %t: %q", width, styled, row)
 			}
-			if width >= 60 && (!strings.Contains(row, "✗ conflict ✓") || !strings.Contains(row, "✗1234")) {
+			if width >= 60 && (!strings.Contains(row, "✓ ✗ · conflict") || !strings.Contains(row, "✗1234")) {
 				t.Fatalf("conflict or count hidden: %q", row)
 			}
 			if ansi.StringWidth(lines[1]) > width {
@@ -330,7 +774,7 @@ func TestStatusPRConflictVisibleWithGreenChecksAndCleanCheckout(t *testing.T) {
 		}
 	}
 	prs := strings.Join(statusTUIPRLines(snapshot, 80, false, false), "\n")
-	if !strings.Contains(prs, "✗ conflict") || !strings.Contains(prs, "✓ ✗") {
+	if !strings.Contains(prs, "✗ conflict") || strings.Count(prs, "✓") != 1 || strings.Count(prs, "✗") != 2 {
 		t.Fatalf("passing checks hidden in PR list: %q", prs)
 	}
 	for _, styled := range []bool{false, true} {
@@ -350,13 +794,18 @@ func TestStatusLongConflictingPRFitsAndKeepsClickTarget(t *testing.T) {
 	t.Setenv("NO_COLOR", "")
 	prURL := "https://github.com/example/widget/pull/1234567"
 	pr := &wtc.StatusPRFacts{Number: "1234567", URL: prURL, Merge: "CONFLICTING", Checks: "SUCCESS"}
-	plain := statusTUIPR(pr)
+	plain := "#1234567   ✓ ✗ · conflict"
 	plainWidth := runewidth.StringWidth(plain)
 	if got := statusTUIRepoPRCell(pr, plainWidth, false); got != plain {
 		t.Fatalf("plain conflict cell should fit exactly: %q", got)
 	}
-	if got := ansi.Strip(statusTUIRepoPRCell(pr, plainWidth, true)); !strings.HasPrefix(got, "✗ ") {
-		t.Fatalf("hyperlink arrow should trigger compact conflict cell: %q", got)
+	styledCell := statusTUIRepoPRCell(pr, plainWidth, true)
+	if ansi.StringWidth(styledCell) != plainWidth || ansi.Strip(styledCell) != strings.Replace(plain, "   ", " ↗ ", 1) || !strings.Contains(styledCell, ansi.SetHyperlink(prURL)) {
+		t.Fatalf("reserved link slot should fit the styled conflict cell exactly: %q", styledCell)
+	}
+	compact := statusTUIRepoPRCell(pr, plainWidth-1, true)
+	if strings.TrimSpace(ansi.Strip(compact)) != "#1234567 ↗ ✓ ✗ ·" || ansi.StringWidth(compact) > plainWidth-1 || !strings.Contains(compact, ansi.SetHyperlink(prURL)) {
+		t.Fatalf("compact cell should retain the identifier, merge conflict signal and link: %q", compact)
 	}
 	for _, number := range []string{"1234567", "123456789012345"} {
 		snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{{
@@ -485,7 +934,7 @@ func TestStatusTUIPRTablePlacesActiveRowsFirstAndWarnsOnBranch(t *testing.T) {
 		t.Fatalf("PR table did not prioritize active work: %q", lines)
 	}
 	rowText, headerText := ansi.Strip(lines[3]), ansi.Strip(lines[2])
-	if runewidth.StringWidth(strings.Split(rowText, "✓")[0]) != runewidth.StringWidth(strings.Split(headerText, "C M R")[0]) {
+	if runewidth.StringWidth(strings.Split(rowText, "✓")[0]) != runewidth.StringWidth(strings.Split(headerText, "CHECKS")[0]) {
 		t.Fatalf("PR check glyph does not align with table header: %q", lines)
 	}
 	model := statusTUIModel{snapshot: snapshot, width: 100, height: 20}

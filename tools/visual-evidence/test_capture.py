@@ -249,7 +249,7 @@ class ProcessBoundsTest(unittest.TestCase):
                 if command[:2] == ["go", "env"]:
                     return json.dumps({"GOCACHE": "/tmp/example-go-cache", "GOMODCACHE": "/tmp/example-module-cache"})
                 if command[:2] == ["go", "test"]:
-                    Path(env["WTC_RECORDING_OUTPUT"]).write_text(json.dumps({"frames": [{"content": "api   topic/api\nweb   topic/web\n", "phase": "ready"}]}))
+                    Path(env["WTC_RECORDING_OUTPUT"]).write_text(json.dumps({"frames": [{"content": "api   topic/api\nweb   topic/web\n", "phase": frame["phase"]} for frame in fixture["scenarios"][0]["frames"]]}))
                     return "ok"
                 self.fail(f"unexpected command: {command}")
 
