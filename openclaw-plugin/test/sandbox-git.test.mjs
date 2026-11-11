@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseCgiHead, projectionWorktreeId, startSandboxGit, uploadPackConfig } from "../sandbox-git.js";
@@ -153,12 +153,13 @@ test("project discovery refuses an unknown or ambiguous worktree owner", async (
 function projectService(t, options = {}) {
   const commands = [];
   let agent = "dev";
+  const workspaceDir = options.workspaceDir ?? "/fixture/worktree-projections/w1/workspace";
   const server = startSandboxGit({
     host: "127.0.0.1", port: 0,
     openclaw: ["openclaw"],
     run: async (argv, opts) => {
       commands.push({ argv, opts });
-      if (argv[0] === "openclaw") return { code: 0, stdout: JSON.stringify({ containers: [{ containerName: "sbx", backendId: "docker", running: true, sessionKey: `agent:${agent}:session:x`, workspaceDir: "/fixture/worktree-projections/w1/workspace" }] }), stderr: "" };
+      if (argv[0] === "openclaw") return { code: 0, stdout: JSON.stringify({ containers: [{ containerName: "sbx", backendId: "docker", running: true, sessionKey: `agent:${agent}:session:x`, workspaceDir }] }), stderr: "" };
       if (argv[0] === "docker") return { code: 0, stdout: "/sbx 127.0.0.1\n", stderr: "" };
       if (argv[2] === "sandbox-projects") return options.metadata ?? { code: 0, stdout: JSON.stringify({ projects: [{ name: "platform", harness: "https://github.com/example/harness.git", ref: "main", repos: [{ name: "web", remote: "https://github.com/example/web.git" }] }] }), stderr: "" };
       throw new Error("unexpected command");
@@ -206,6 +207,34 @@ test("discovery uses only authenticated agent policy, stays read-only, and refre
   assert.equal((await fetch(`${base}/wtc/projects`, { method: "POST" })).status, 404);
   fixture.setAgent("unlisted");
   assert.equal((await fetch(`${base}/wtc/projects`)).status, 403, "discovery reused the previous container identity");
+  assert.equal(fixture.commands.filter(({ argv }) => argv[0] === "wtc").length, 1);
+});
+
+// A conversation looks for its project before it has a collection.
+test("discovery works for a sandbox that projects no managed worktree yet", async (t) => {
+  const fixture = projectService(t, {
+    projectsByAgent: { dev: ["platform"] },
+    workspaceDir: "/fixture/sandboxes/workspace-1",
+    listSessionEntries: () => { throw new Error("discovery without a worktree needs no session owner"); },
+  });
+  const base = await fixture.url();
+  const response = await fetch(`${base}/wtc/projects`);
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).projects.map((p) => p.name), ["platform"]);
+  const load = fixture.commands.find(({ argv }) => argv[0] === "wtc");
+  assert.deepEqual(load.argv, ["wtc", "openclaw", "sandbox-projects", "--project", "platform"]);
+  assert.match(path.basename(load.opts.cwd), /^wtc-projects-/);
+  assert.equal(existsSync(load.opts.cwd), false, "the neutral directory outlived the request");
+  for (const route of ["/wtc/session", "/web/info/refs?service=git-upload-pack"]) {
+    const refused = await fetch(`${base}${route}`);
+    assert.equal(refused.status, 403, route);
+    assert.deepEqual(await refused.json(), { error: "this sandbox works on no managed worktree" });
+  }
+  assert.equal((await fetch(`${base}/wtc/deliver?commit=0`, { method: "POST" })).status, 403);
+  fixture.setAgent("unlisted");
+  const denied = await fetch(`${base}/wtc/projects`);
+  assert.equal(denied.status, 403);
+  assert.deepEqual(await denied.json(), { error: "project discovery is not enabled for this agent" });
   assert.equal(fixture.commands.filter(({ argv }) => argv[0] === "wtc").length, 1);
 });
 
