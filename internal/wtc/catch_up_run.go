@@ -826,7 +826,8 @@ func (c *Context) catchUpHooks(report *CatchUpReport, t catchUpTarget, opt Catch
 	}
 	if opt.ReloadStatus {
 		// Keep the old process alive when the target environment/tools did not
-		// become usable. A successful install never updates a running process.
+		// become usable. Installing alone does not restart a pane; the guarded
+		// reload below runs only after the requested env/tool stages succeeded.
 		for _, row := range report.Outcomes {
 			if row.Collection != t.collection || row.Kind != "hook" {
 				continue
