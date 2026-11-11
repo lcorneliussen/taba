@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// Only a syntactically valid, same-forge mismatch is eligible for provider
+// verification. Keep all other local and URL guards ahead of that lookup.
+type prIdentityMismatch struct{ old, current, forge string }
+
+func (*prIdentityMismatch) Error() string { return "PR URL does not match repository identity" }
+
 // statusReadOnlyPRForge validates a supplied PR URL against any local identity,
 // or uses the existing repository forge when no URL is supplied. URL-only reads
 // never add a local identity or grant checkout/branch authority.
@@ -40,6 +46,9 @@ func (c *Context) statusReadOnlyPRForge(repos prRepositories, record PRRecord) (
 		return "", "", err
 	}
 	if identity != forge+"/"+slug {
+		if strings.HasPrefix(identity, forge+"/") {
+			return "", "", &prIdentityMismatch{old: slug, current: strings.TrimPrefix(identity, forge+"/"), forge: forge}
+		}
 		return "", "", fmt.Errorf("PR URL does not match repository identity")
 	}
 	slug, forge = repos.forge(record.Repo)

@@ -351,6 +351,10 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 		}
 	}
 	enlistedBranches := map[string]bool{}
+	// Retain the original references for branch-return authority. A recovered
+	// URL repairs status metadata; it must not move a checkout in this refresh.
+	originalRecords := append([]PRRecord(nil), records...)
+	c.repairPRReferences(records)
 	details, err := c.statusEnrichRecords(records, snapshot.Repos)
 	if err != nil {
 		return snapshot, err
@@ -361,7 +365,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 		} else if count != 0 {
 			c.statusProgress(fmt.Sprintf("Recorded %d final merges", count))
 		}
-		c.statusReturnMerged(&snapshot, records, details)
+		c.statusReturnMerged(&snapshot, originalRecords, details)
 	}
 	repos := c.prRepositories()
 	for i, record := range records {

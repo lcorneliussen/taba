@@ -40,7 +40,7 @@ type CatchUpOptions struct {
 // collection's harness, clean worktrees and idle agents only, with the pinned
 // tools installed.
 func RolloutOptions(dryRun bool) CatchUpOptions {
-	return CatchUpOptions{All: true, Repos: []string{"harness"}, CleanOnly: true, IdleOnly: true, InstallTools: true, DryRun: dryRun}
+	return CatchUpOptions{All: true, Repos: []string{"harness"}, CleanOnly: true, IdleOnly: true, InstallTools: true, ReloadStatus: true, DryRun: dryRun}
 }
 
 type CatchUpRow struct {

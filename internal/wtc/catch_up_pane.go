@@ -192,7 +192,7 @@ func catchUpStatusProcess(argv []string) bool {
 		return false
 	}
 	switch filepath.Base(argv[0]) {
-	case "wtc":
+	case "wtc", "taba":
 		return len(argv) > 1 && argv[1] == "status"
 	case "wtc-status-tui.sh", "wtc-status.sh", "wtc-status-legacy-tui.sh", "wtc-status-legacy.sh":
 		return true
