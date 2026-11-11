@@ -60,7 +60,18 @@ const LegacyDevBuildDisableEnv = "WTC_DEV_BUILD"
 // DevBuildDisabled preserves bypasses from older callers even when a newer
 // parent supplies the canonical variable. Neither spelling enables follow mode.
 func DevBuildDisabled() bool {
-	return os.Getenv(DevBuildDisableEnv) == "off" || os.Getenv(LegacyDevBuildDisableEnv) == "off"
+	return devBuildSetting() == "off"
+}
+
+func devBuildSetting() string {
+	canonical, legacy := os.Getenv(DevBuildDisableEnv), os.Getenv(LegacyDevBuildDisableEnv)
+	if canonical == "off" || legacy == "off" {
+		return "off"
+	}
+	if canonical != "" {
+		return canonical
+	}
+	return legacy
 }
 
 // DevBuildEnvWarning describes conflicting nonempty settings without echoing
@@ -77,6 +88,20 @@ func DevBuildEnvWarning() string {
 // children. Append it after inherited settings so the child cannot undo it.
 func DevBuildBypassEnv() []string {
 	return []string{DevBuildDisableEnv + "=off", LegacyDevBuildDisableEnv + "=off"}
+}
+
+// DevBuildHandoverEnv carries the resolved switch through an exec. The caller
+// already reported any conflict; matching spellings prevent a duplicate warning
+// in the replacement process, including a legacy bootstrap followed by a rebuild.
+func DevBuildHandoverEnv(env []string) []string {
+	resolved := make([]string, 0, len(env)+2)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, DevBuildDisableEnv+"=") && !strings.HasPrefix(entry, LegacyDevBuildDisableEnv+"=") {
+			resolved = append(resolved, entry)
+		}
+	}
+	value := devBuildSetting()
+	return append(resolved, DevBuildDisableEnv+"="+value, LegacyDevBuildDisableEnv+"="+value)
 }
 
 type DevBuild struct {
@@ -373,8 +398,8 @@ func prepareDevLegacyBridge(collection, dir string, build *DevBuild) (func() err
 }
 
 // The one-shot entrypoint validates its historical module contract above.
-// Follow mode validates AUTO through discovery; an explicit source additionally
-// has to demonstrate the structured lifecycle capability before publication.
+// Both follow modes probe the structured lifecycle capability in EnsureDevFollow
+// before publication; AUTO also validates its convention through discovery.
 func installDevBuild(ctx context.Context, collection, source string, output io.Writer) (*DevBuild, error) {
 	version, err := devBuildVersion(source)
 	if err != nil {

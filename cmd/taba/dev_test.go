@@ -262,6 +262,15 @@ func TestPinnedBinaryHandsOverToDevBuild(t *testing.T) {
 			t.Fatalf("dev handover lost invocation identity: %v %s", err, raw)
 		}
 	}
+	for _, binary := range []string{pinned, taba} {
+		cmd := exec.Command(binary, "--version")
+		cmd.Dir = collection
+		cmd.Env = append(os.Environ(), "WTC_DEV_DELEGATED_FROM=", "TABA_DEV_BUILD=on", "WTC_DEV_BUILD=redacted-fixture")
+		raw, err := cmd.CombinedOutput()
+		if err != nil || !strings.Contains(string(raw), devVersion+" (dev build, in place of 0.1.39)") || strings.Count(string(raw), "disagree") != 1 || strings.Contains(string(raw), "redacted-fixture") {
+			t.Fatalf("handover warning count/redaction: %v %s", err, raw)
+		}
+	}
 	run := func(env ...string) string {
 		cmd := exec.Command(pinned, "--version")
 		cmd.Dir = filepath.Join(collection, "harness")

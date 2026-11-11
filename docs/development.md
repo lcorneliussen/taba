@@ -30,10 +30,12 @@ handover for one command, and `wtc --version` names the version a dev build
 stands in for.
 
 `TABA_DEV_BUILD` is the public bypass spelling for both `taba` and `wtc`.
-An unset or empty value falls back to `WTC_DEV_BUILD`. For safe upgrades,
+Its nonempty value takes precedence; unset or empty falls back to
+`WTC_DEV_BUILD`. The safety exception is that
 exact `off` in either variable always disables delegation, including when
 an older parent sets only the legacy spelling. Different nonempty values
-produce a warning on stderr; neither `on` nor any other value opts into
+produce one redacted warning on stderr; a handover carries the resolved switch
+to avoid repeating it in the replacement process. Neither `on` nor any other value opts into
 following. Persistent mode OFF still wins over either variable. Internal
 handover/generation markers retain their existing names. Use both
 `TABA_DEV_BUILD=off WTC_DEV_BUILD=off` when invoking a verifier or child that
@@ -91,6 +93,9 @@ one-shot artifacts and follow generations until
 collection retirement so running actions can finish from their original binary.
 Final retirement removes this generated state. Ad-hoc directories retain their
 existing reuse rules; retirement does not permanently prevent reinitialization.
+Normal harness retirement guards against late dev publishers before final
+generated cleanup. Failure to secure the guard or dev locks stops cleanup;
+late failures retain a retryable guard when possible and report guard failures.
 Use `mode on` or `mode auto` explicitly to enable following again. The existing
 `TABA_DEV_BUILD=off` escape works even with broken source; mode/status/uninstall
 commands do not require a successful rebuild. Legacy one-shot `dev install`

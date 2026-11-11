@@ -158,6 +158,8 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 		// Publish the existing guard before removing locks and generated roots.
 		// A late dev publisher must reject this folder, including the short
 		// guard-removal window when its collection boundary is already gone.
+		// Leftover folders must stay retired: a stray harness must not revive
+		// them in sweeps or let surviving processes write back into them.
 		if !runtimeTarget.AdHoc {
 			if err := writeRetiredMarker(target, nil); err != nil {
 				return err

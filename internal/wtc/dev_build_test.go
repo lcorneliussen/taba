@@ -32,6 +32,16 @@ func TestDevBuildBypassAliases(t *testing.T) {
 			if got := DevBuildEnvWarning() != ""; got != tc.warning {
 				t.Fatalf("warning = %v, want %v", got, tc.warning)
 			}
+			want := tc.canonical
+			if want == "" {
+				want = tc.legacy
+			}
+			if tc.disabled {
+				want = "off"
+			}
+			if got := devBuildSetting(); got != want {
+				t.Fatalf("resolved value = %q, want %q", got, want)
+			}
 		})
 	}
 	t.Setenv("TABA_DEV_BUILD", "off")

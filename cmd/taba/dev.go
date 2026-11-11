@@ -40,6 +40,7 @@ func restartStatusDev(collection, binary, generation string, presentation status
 	}
 	execute := func(target, currentGeneration string) error {
 		env := append(os.Environ(), devAmbientEnv+"="+devAmbientExecutable, devGenerationEnv+"="+currentGeneration, devStatusStateEnv+"="+string(state))
+		env = wtc.DevBuildHandoverEnv(env)
 		return syscall.Exec(target, os.Args, env)
 	}
 	if generation != "" {
@@ -211,6 +212,7 @@ func execDevBuild(build *wtc.DevBuild) error {
 		}
 	}
 	env := append(os.Environ(), wtc.DevBuildDelegatedEnv+"="+version, devAmbientEnv+"="+ambient, devGenerationEnv+"="+build.Generation)
+	env = wtc.DevBuildHandoverEnv(env)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	ran, err := wtc.WithDevBuild(ctx, build.Collection, build, func(current *wtc.DevBuild) error {
@@ -324,7 +326,8 @@ func addDevCommands(root *cobra.Command, asJSON *bool) {
 			branding.Text("{{command}} dev mode on follows the selected checkout, rebuilding changes before new commands.\n") +
 			"Mode auto requires an explicit project convention; mode off disables local builds persistently.\n" +
 			"Uninstall also selects off. TABA_DEV_BUILD=off bypasses local builds for one invocation.\n" +
-			"WTC_DEV_BUILD is the legacy fallback; off in either variable wins. Conflicting nonempty values warn.", Args: cobra.NoArgs}
+			"WTC_DEV_BUILD is the fallback when TABA_DEV_BUILD is empty or unset; otherwise TABA_DEV_BUILD wins,\n" +
+			"except that off in either variable always wins. Conflicting nonempty values produce one redacted warning.", Args: cobra.NoArgs}
 	collectionRoot := func() (string, error) {
 		dir, err := os.Getwd()
 		if err != nil {
