@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/next"
+	"taba.sh/taba/internal/next"
 )
 
 // StatusSnapshot is the canonical status schema shared by the one-shot view

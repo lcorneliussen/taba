@@ -8,7 +8,7 @@ import (
 	"testing/fstest"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
+	"taba.sh/taba/internal/branding"
 )
 
 func TestEmbeddedReleaseNotes(t *testing.T) {

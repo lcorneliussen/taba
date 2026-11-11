@@ -10,7 +10,7 @@ A fragment holds one or more topic sections, each with at least one entry:
 ## Review
 
 - **`wtc review run` works without harness prompt files.** …
-  ([#46](https://github.com/lcorneliussen/wtc-cli/issues/46)).
+  ([#46](https://github.com/lcorneliussen/taba/issues/46)).
 ```
 
 Use `## <topic>` headings only; `# taba/wtc <version>` is added when the notes are

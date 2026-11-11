@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/envcompat"
 )
 
 // collectReviewStats keeps the launcher-owned usage record when one exists.

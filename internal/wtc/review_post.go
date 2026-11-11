@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"taba.sh/taba/internal/branding"
 	"time"
 )
 

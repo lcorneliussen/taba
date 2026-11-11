@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"gopkg.in/yaml.v3"
+	"taba.sh/taba/internal/branding"
 )
 
 // runtimeShortTarget resolves a target without its repository, such as web

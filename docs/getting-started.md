@@ -11,12 +11,12 @@ between this guide, the harness bootstrap and an OpenClaw gateway.
 
 ## Install taba
 
-Install with Homebrew or mise, or download a [published release](https://github.com/lcorneliussen/wtc-cli/releases):
+Install with Homebrew or mise, or download a [published release](https://github.com/lcorneliussen/taba/releases):
 
 ```sh
 brew install lcorneliussen/taba/taba
 # or
-mise use -g github:lcorneliussen/wtc-cli@0.2.0
+mise use -g github:lcorneliussen/taba@0.2.0
 ```
 
 Each release installs `taba` and `wtc`, the same program under two names. The
@@ -82,7 +82,7 @@ normal workspace bootstrap clones the harness from your forge.
 ## Existing populated harness
 
 Your own adaptation of the optional
-[reference harness](https://github.com/lcorneliussen/wtc-boilerplate) remains
+[reference harness](https://github.com/lcorneliussen/taba-boilerplate) remains
 supported. Follow the [populated-harness bootstrap](released-bootstrap.md)
 for its first bare owner and collection. That path also works with v0.1.38.
 Use the [upgrade notes](release-notes.md) when changing an existing harness pin.

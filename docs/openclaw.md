@@ -214,7 +214,7 @@ OpenClaw binds publication to the owner's managed branch. Returning to the
 tip does not rebind that owner or permit publishing an arbitrary new branch:
 another publication round needs a fresh managed worktree and owner. Support
 for starting that round in the same collection is tracked in
-[#207](https://github.com/lcorneliussen/wtc-cli/issues/207).
+[#207](https://github.com/lcorneliussen/taba/issues/207).
 
 On a live branch, `wtc catch-up` merges and never rebases, and aborts a
 conflicted merge so the worktree is as before.
@@ -312,7 +312,7 @@ folder, one conversation driving several repositories, needs the agent's
 commands on the gateway itself, with the trust that implies. Do not bind the
 managed worktrees or the gateway's clones into a sandbox to get it: that goes
 around the private copy and its reconciliation
-([#105](https://github.com/lcorneliussen/wtc-cli/issues/105)).
+([#105](https://github.com/lcorneliussen/taba/issues/105)).
 
 ## Git the gateway runs
 
@@ -421,13 +421,13 @@ key that name only: OpenClaw's own OpenAI provider reads `OPENAI_API_KEY`,
 and the chat model could then use it. With the key, the person's sent
 message goes to OpenAI. Without either, the suggestion comes from matching
 the message's words against the names and roles
-([#159](https://github.com/lcorneliussen/wtc-cli/issues/159) tracks moving
+([#159](https://github.com/lcorneliussen/taba/issues/159) tracks moving
 to OpenClaw's decision models).
 
 OpenAI's decision model (`openai/gpt-6-luna`, which needs an OpenAI Platform
 API key; a ChatGPT or Codex subscription doesn't authorize it) suits this
 best. In a small comparison
-([#155](https://github.com/lcorneliussen/wtc-cli/pull/155)), on twelve test
+([#155](https://github.com/lcorneliussen/taba/pull/155)), on twelve test
 messages over two projects, it chose right eleven times,
 in about 200 ms and a few hundred tokens each. The local ONNX classifiers
 chose right at most six times, mostly the same repository whatever was
@@ -479,7 +479,7 @@ A collection works in at most one wtc project:
 Not yet: hooks, secret links and mise pins from a harness do not run on a
 gateway, and herdr layouts do not apply. Several projects in one collection,
 stacked rather than merged, are tracked in
-[#100](https://github.com/lcorneliussen/wtc-cli/issues/100).
+[#100](https://github.com/lcorneliussen/taba/issues/100).
 
 ### Repository renames
 
@@ -640,10 +640,10 @@ from an image by CI/CD, see [Gateway image and CI/CD](#gateway-image-and-cicd)
 instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
 
 1. **`wtc`** on the `PATH` of the gateway and of the agents' shells: a
-   [release](https://github.com/lcorneliussen/wtc-cli/releases)'s
+   [release](https://github.com/lcorneliussen/taba/releases)'s
    `taba_<version>_linux_<arch>.tar.gz` (`wtc_…` before the taba releases)
    unpacked into `/usr/local/bin`, or
-   `mise use -g github:lcorneliussen/wtc-cli@<version>`.
+   `mise use -g github:lcorneliussen/taba@<version>`.
 2. **Git 2.42 or newer and the GitHub CLI.** OpenClaw 2026.10.2 checks Git
    attributes with `git var GIT_ATTR_GLOBAL` before it publishes; its image
    ships Git 2.39 and no `gh`, and publication fails there with "workspace
@@ -708,8 +708,8 @@ In the image, with the versions pinned as build arguments:
 ```dockerfile
 ARG WTC_VERSION=<version>
 ARG OPENCLAW_BITBUCKET_TAG=<tag>
-RUN curl -fsSLO "https://github.com/lcorneliussen/wtc-cli/releases/download/v${WTC_VERSION}/taba_${WTC_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
- && curl -fsSL "https://github.com/lcorneliussen/wtc-cli/releases/download/v${WTC_VERSION}/checksums.txt" | grep "linux_$(dpkg --print-architecture)" | sha256sum -c - \
+RUN curl -fsSLO "https://github.com/lcorneliussen/taba/releases/download/v${WTC_VERSION}/taba_${WTC_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
+ && curl -fsSL "https://github.com/lcorneliussen/taba/releases/download/v${WTC_VERSION}/checksums.txt" | grep "linux_$(dpkg --print-architecture)" | sha256sum -c - \
  && tar -xzf taba_*.tar.gz -C /usr/local/bin taba wtc && rm taba_*.tar.gz \
  && wtc openclaw install --dir /opt/wtc-plugin
 # Only with Bitbucket repositories:
@@ -785,7 +785,8 @@ such as **Catch up 2 repos →** or **Do next (2) →** captures those exact ste
 Catch-up and local steps start directly. Publication selections show a preview
 and retain each repository's account/commit confirmation.
 
-**⋯** in the compact top bar (**Choose steps…** in the sidebar) reveals alternatives and mixed selection controls. Choose an
+The header **⋯** menu, in both the card and sidebar, lists **Choose steps…**
+for alternatives and mixed selection controls. Choose an
 action per repository, check its selection, or use **Select suggested**. Existing
 alternative choices are preserved. **Run selected** rechecks the exact targets.
 A changed head, base, worktree state or PR observation makes an old selection
@@ -862,10 +863,10 @@ selection-only `keys`. For example, an empty initialized view is:
 Save this as `/tmp/tui-input.json`, then run from the CLI source:
 
 ```sh
-WTC_RECORDING_INPUT=/tmp/tui-input.json WTC_RECORDING_OUTPUT=/tmp/tui-frames.json go test -tags recording ./cmd/wtc -run '^TestStatusRecordingFrames$' -count=1
+WTC_RECORDING_INPUT=/tmp/tui-input.json WTC_RECORDING_OUTPUT=/tmp/tui-frames.json go test -tags recording ./cmd/taba -run '^TestStatusRecordingFrames$' -count=1
 ```
 
-Without those inputs the test skips; `go test -tags recording ./cmd/wtc -run
+Without those inputs the test skips; `go test -tags recording ./cmd/taba -run
 '^TestStatusRecordingFrames$'` still compiles the adapter. This is an author-run
 recording check, not current CI coverage. It renders native ANSI frames, refuses
 unknown keys and any returned command, and never initializes the collector.
@@ -873,7 +874,7 @@ The site's workflow turns these frames into casts, lossless PNG/video and paired
 replays; the adapter alone does not record a live terminal or gateway.
 
 Preparation for direct table actions is tracked in
-[the shared next-action issue](https://github.com/lcorneliussen/wtc-cli/issues/179).
+[the shared next-action issue](https://github.com/lcorneliussen/taba/issues/179).
 Resolve the selected collection/repository/worktree/action key, re-read through
 `statusNextCurrent`, and reuse ownership, busy and publication checks. Agent
 steps must target the verified owner/pane, never the focused terminal or a typed
@@ -886,3 +887,47 @@ repositories, but the section is not nested under the final repository row.
 Browser table labels use normal capitalization; the terminal keeps its uppercase
 headings. Visual review compares intended section regions with a separately
 recorded pixels-only grouping, rather than inferring hierarchy from the DOM alone.
+
+### Restore an evicted checkout
+
+When OpenClaw evicts an idle managed worktree but retains its snapshot, the
+Collection card and sidebar show **Evicted** and **Restore**. The header offers
+**Restore all** for the recoverable repositories, including while the card is
+collapsed. Restoration needs the person's gateway `operator.admin` permission.
+It runs sequentially through OpenClaw's native restore command, rechecks the
+recorded owner, destination, branch and snapshot, then refreshes status. Each
+repository's success or error appears in the Action log. If the conversation
+changes, queued repositories are left alone.
+
+Restore keeps the existing native record and session binding, including saved
+uncommitted changes. It does not fetch a newer branch, clone a replacement,
+start services or overwrite an occupied destination. A stale record, missing
+snapshot, changed branch or native permission failure is reported for inspection.
+A directory that is merely missing, with no verified recovery record, does not
+get a Restore action. Older hosts without recovery commands still show its
+repository identity and **No checkout**.
+
+Status refreshes never restore or extend activity. Recovery metadata uses a
+coalesced native worktree listing only while checkout rows are unavailable; the
+native service can reconcile its own registry during that listing. Restoration
+does not change OpenClaw's idle cleanup or snapshot retention policy.
+
+Repository actions use a shared fixed column: the main button and its `⋯` menu
+keep the same positions for Catch up, Commit changes and Restore. The menu
+shows available alternatives and explains blocked ones. If local changes keep
+catch-up out of the current plan, the menu says to save or stash them first;
+it does not override the plan or bypass the gateway's checks.
+
+The header `⋯` menu keeps collection-wide Catch up, Restore and push preparation
+available even when a different action occupies the main button. Counts include
+only eligible repositories; catch-up excludes dirty and unavailable checkouts.
+Pushes retain their personal confirmation. **Choose steps…** opens mixed
+selection across repositories. Merely opening or navigating a menu runs nothing.
+
+Action groups are right-aligned, with `⋯` on the left. The recommended action
+stays at the right edge. Wider views show additional available actions inline;
+narrower views move those choices into the menu. Unavailable alternatives stay
+in the menu with their reasons. Each repository uses the same action-column
+width, and space already exposed during the conversation is retained while
+work is running so progress does not shift the repository facts. Changing the
+viewport never runs or selects an action.

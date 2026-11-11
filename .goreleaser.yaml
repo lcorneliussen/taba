@@ -6,7 +6,7 @@ project_name: taba
 builds:
   - &build
     id: taba
-    main: ./cmd/wtc
+    main: ./cmd/taba
     binary: taba
     env:
       - CGO_ENABLED=0
@@ -28,6 +28,10 @@ archives:
     name_template: 'taba_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 checksum:
   name_template: checksums.txt
+# A -rc.N tag publishes a GitHub prerelease, so releases/latest (used by
+# `upgrade` without --version) and mise's latest keep the stable release.
+release:
+  prerelease: auto
 # `brew install lcorneliussen/taba/taba` installs both names. The release
 # workflow pushes the formula to the tap over SSH with a write deploy key.
 brews:
