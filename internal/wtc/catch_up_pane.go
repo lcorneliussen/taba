@@ -313,6 +313,22 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		add("planned", "would reload "+pane)
 		return
 	}
+	// Tool/input inspection can be slow. Herdr reads are snapshots; validate
+	// the pane and current foreground again before each control write.
+	currentPane, occupied, err := catchUpPane(target, session, t.collection)
+	if err != nil || currentPane != pane {
+		add("failed", "status pane identity changed; no interruption attempted")
+		return
+	}
+	if occupied {
+		add("needs-owner", "agent appeared in status pane; untouched")
+		return
+	}
+	argv, err = catchUpForeground(session, pane)
+	if err != nil || (!catchUpShell(argv) && !catchUpStatusProcess(argv)) {
+		add("needs-owner", "foreground changed; no interruption attempted")
+		return
+	}
 	if !catchUpShell(argv) {
 		if _, err := catchUpHerdr(session, "pane", "send-keys", pane, "ctrl+c"); err != nil {
 			add("failed", "could not interrupt "+pane)
@@ -343,6 +359,11 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 	}
 	if agent {
 		add("needs-owner", "agent appeared in status pane "+pane+"; no command sent")
+		return
+	}
+	argv, err = catchUpForeground(session, pane)
+	if err != nil || !catchUpShell(argv) {
+		add("needs-owner", "foreground changed before restart; no command sent")
 		return
 	}
 	if _, err := catchUpHerdr(session, "pane", "run", pane, command); err != nil {

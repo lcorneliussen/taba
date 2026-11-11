@@ -814,3 +814,132 @@ func TestRejectedGitHubRepairDoesNotConsumeBitbucketAllowance(t *testing.T) {
 		t.Fatal("unsupported Bitbucket rename or rejected GitHub metadata changed")
 	}
 }
+
+func TestPRURLRepairPreservesUnicodeWhitespaceAndTitle(t *testing.T) {
+	for _, space := range []string{"\u00a0", "\u2003", "\u202f", "\u0085", "\t"} {
+		for _, mixed := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%x/mixed-%t", []rune(space)[0], mixed), func(t *testing.T) {
+				c := newWorkspaceFixture(t)
+				oldURL := "https://github.com/example/old-name/pull/42"
+				newURL := "https://github.com/example/new-name/pull/42"
+				before := "# header\r\n" + space + "reference" + space + "42" + space + "topic" + space + oldURL + space + "Owner " + oldURL + " title\r\n# tail\n"
+				if mixed {
+					before = "# header\r\nreference" + space + "42 topic " + oldURL + " Owner " + oldURL + " title\r\n# tail\n"
+				}
+				fixtureFile(t, c.PRFile(), before, 0600)
+				record, ok := parsePR(strings.Split(before, "\n")[1])
+				if !ok {
+					t.Fatal("accepted row fixture rejected")
+				}
+				if _, changed, err := c.reconcilePRURL(record, newURL); err != nil || !changed {
+					t.Fatalf("URL repair: %t %v", changed, err)
+				}
+				if raw, _ := os.ReadFile(c.PRFile()); string(raw) != strings.Replace(before, oldURL, newURL, 1) {
+					t.Fatalf("URL-only byte preservation failed: %q", raw)
+				}
+			})
+		}
+	}
+}
+
+func TestAtomicOutOfRangeRowDoesNotBlockValidRepair(t *testing.T) {
+	c, f, valid := stagedRenameFixture(t, "github.com")
+	bad := "reference 2147483648 topic https://github.com/example/old-name/pull/2147483648 Out of range\n"
+	fixtureFile(t, c.PRFile(), bad+valid, 0600)
+	stagedRenameRefresh(t, c)
+	if raw, _ := os.ReadFile(c.PRFile()); string(raw) != bad+strings.Replace(valid, "old-name", "new-name", 1) {
+		t.Fatal("locally unrepairable row blocked a later valid repair")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(f.dir, "dispatches")); string(raw) != "repair 42\n" {
+		t.Fatalf("range preflight consumed network service: %s", raw)
+	}
+}
+
+func TestProtectedDetailRetainsMergedHead(t *testing.T) {
+	_, target, merge := squashFixture(t, true)
+	head := fixtureGit(t, "-C", target.path, "rev-parse", "HEAD")
+	c, f, _ := stagedRenameFixture(t, "github.com")
+	f.put(t, "fail-graphql-42", "")
+	fixtureFile(t, c.PRFile(), "reference 42 old https://github.com/example/old-name/pull/42 Bad repair\nreference 43 topic https://github.com/example/new-name/pull/43 Merged detail\n", 0600)
+	providerGH := filepath.Join(strings.Split(os.Getenv("PATH"), string(os.PathListSeparator))[0], "gh")
+	t.Setenv("HEAD_PROVIDER_GH", providerGH)
+	t.Setenv("MERGED_FIXTURE_HEAD", head)
+	t.Setenv("MERGED_FIXTURE_COMMIT", merge)
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
+if [ "$1 $2" != 'pr view' ]; then exec "$HEAD_PROVIDER_GH" "$@"; fi
+head=''
+case "$*" in *headRefOid*) head=",\"headRefOid\":\"$MERGED_FIXTURE_HEAD\"" ;; esac
+printf '{"number":43,"state":"MERGED","mergedAt":"2026-10-29T12:00:00Z","mergeCommit":{"oid":"%s"},"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]%s}\n' "$MERGED_FIXTURE_COMMIT" "$head"
+`, 0755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	stagedRenameRefresh(t, c)
+	records, err := c.ListPRs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("unexpected records: %+v", records)
+	}
+	if records[1].MergeHead != head {
+		t.Errorf("first protected settled observation lost merged head: %+v", records[1])
+	}
+	fixtureFile(t, filepath.Join(target.path, "followup.txt"), "later owner work\n", 0644)
+	fixtureGit(t, "-C", target.path, "add", "followup.txt")
+	fixtureGit(t, "-C", target.path, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "follow-up")
+	details, err := c.statusEnrichRecords(records, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := statusLocalRepo(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if landing := statusMergedLanding(row, details[1]); landing.State != "follow-up" {
+		t.Fatalf("recorded first observation cannot classify later follow-up: %+v", landing)
+	}
+}
+
+func TestAtomicAmbiguousRepairsAndDuplicateOrdinaryJobsDoNotStarve(t *testing.T) {
+	for _, lane := range []string{"repair", "ordinary"} {
+		t.Run(lane, func(t *testing.T) {
+			c, f, _ := stagedRenameFixture(t, "github.com")
+			f.put(t, "base-43", renameBaseJSON("github.com", renameRepositoryJSON("github.com", "example/new-name", false), 43))
+			f.put(t, "detail-43", `{"number":43,"state":"OPEN","title":"Healthy detail"}`)
+			var before string
+			if lane == "repair" {
+				duplicate := "reference 42 old https://github.com/example/old-name/pull/42 Duplicate\n"
+				before = duplicate + duplicate + "reference 43 old https://github.com/example/old-name/pull/43 Valid\n"
+			} else {
+				duplicate := "reference 42 old https://github.com/example/new-name/pull/42 Duplicate\n"
+				before = duplicate + duplicate + "reference 43 live https://github.com/example/new-name/pull/43 Healthy\nreference 45 old https://github.com/example/old-name/pull/45 Unavailable\n"
+				f.put(t, "fail-view-42", "")
+				f.put(t, "fail-graphql-45", "")
+			}
+			fixtureFile(t, c.PRFile(), before, 0600)
+			for cycle := 0; cycle < 4; cycle++ {
+				if cycle > 0 {
+					advanceRenameMinute(t)
+				}
+				stagedRenameRefresh(t, c)
+			}
+			after, _ := os.ReadFile(c.PRFile())
+			calls, _ := os.ReadFile(filepath.Join(f.dir, "dispatches"))
+			if lane == "repair" {
+				if string(after) != strings.Replace(before, "old-name/pull/43", "new-name/pull/43", 1) {
+					t.Fatalf("ambiguous duplicate repairs starved valid row: %s", calls)
+				}
+				if strings.Contains(string(calls), "repair 42\n") {
+					t.Fatal("CAS-ambiguous repair was issued")
+				}
+			} else {
+				if !strings.Contains(string(calls), "detail 43\n") {
+					t.Fatalf("duplicate ordinary key starved healthy detail: %s", calls)
+				}
+				if string(after) != before {
+					t.Fatal("scheduling deduplicated owner file")
+				}
+			}
+		})
+	}
+}

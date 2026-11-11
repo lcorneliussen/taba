@@ -23,7 +23,7 @@ func TestUpgradeRolloutHandsStatusToInstalledCandidate(t *testing.T) {
 		t.Fatalf("build candidate: %v\n%s", err, out)
 	}
 	for _, spelling := range []string{"wtc", "taba"} {
-		for _, mode := range []string{"clean", "dirty", "in-progress", "install-failed", "env-failed", "installed-unavailable", "late-alias-edit", "late-alias-where-edit", "late-selection-pin", "late-selection-config"} {
+		for _, mode := range []string{"clean", "dirty", "in-progress", "install-failed", "env-failed", "installed-unavailable", "late-alias-edit", "late-alias-where-edit", "late-selection-pin", "late-selection-config", "late-foreground", "late-before-run"} {
 			t.Run(spelling+"/"+mode, func(t *testing.T) {
 				c := newWorkspaceFixture(t)
 				provider := newRenameProviderFixture(t, "github.com")
@@ -77,6 +77,7 @@ case "$1" in
    if [ -f "$REHEARSAL_STATE/late-alias-where-edit" ]; then printf '# owner late alias edit\n' >> "$REHEARSAL_COLLECTION/harness/taba.toml"; fi
    if [ -f "$REHEARSAL_STATE/late-selection-pin" ]; then printf '0.2.0\n' > "$REHEARSAL_COLLECTION/harness/.wtc-cli-version"; fi
    if [ -f "$REHEARSAL_STATE/late-selection-config" ]; then cp "$REHEARSAL_COLLECTION/harness/taba.toml" "$REHEARSAL_COLLECTION/harness/wtc.toml"; printf '# new owner input\n' >> "$REHEARSAL_COLLECTION/harness/wtc.toml"; fi
+   if [ -f "$REHEARSAL_STATE/late-foreground" ]; then touch "$REHEARSAL_STATE/owner-foreground"; fi
    dirname "$REHEARSAL_CANDIDATE" ;;
  exec)
    [ "$2" = github:lcorneliussen/taba@0.2.2 ] || exit 1
@@ -96,9 +97,13 @@ printf '%s\n' "$*" >> "$REHEARSAL_STATE/pane.log"
 shift 2
 case "$1 $2" in
  'workspace list') printf '%s\n' '{"result":{"workspaces":[{"label":"main","workspace_id":"w1"}]}}' ;;
- 'pane list') printf '%s\n' '{"result":{"panes":[{"label":"status","pane_id":"w1:p3"},{"label":"agent","pane_id":"w1:p1","agent":"codex"}]}}' ;;
+ 'pane list')
+   if [ -f "$REHEARSAL_STATE/late-before-run" ] && [ -f "$REHEARSAL_STATE/interrupted" ]; then touch "$REHEARSAL_STATE/owner-before-run"; fi
+   printf '%s\n' '{"result":{"panes":[{"label":"status","pane_id":"w1:p3"},{"label":"agent","pane_id":"w1:p1","agent":"codex"}]}}' ;;
  'pane process-info')
-   if [ -f "$REHEARSAL_STATE/restarted" ]; then args='["taba","status","--tui"]'
+   if [ -f "$REHEARSAL_STATE/owner-before-run" ]; then args='["nvim","owner.txt"]'
+   elif [ -f "$REHEARSAL_STATE/owner-foreground" ] && [ ! -f "$REHEARSAL_STATE/interrupted" ]; then args='["nvim","owner.txt"]'
+   elif [ -f "$REHEARSAL_STATE/restarted" ]; then args='["taba","status","--tui"]'
    elif [ -f "$REHEARSAL_STATE/interrupted" ]; then args='["sh"]'
    else args="[\"$REHEARSAL_SPELLING\",\"status\",\"--tui\"]"; fi
    printf '{"result":{"process_info":{"foreground_process_group_id":42,"foreground_processes":[{"pid":42,"argv":%s}]}}}\n' "$args" ;;
@@ -224,7 +229,7 @@ esac
 						}
 					}
 					calls, _ := os.ReadFile(filepath.Join(state, "pane.log"))
-					if string(raw) != before || strings.Contains(string(calls), "pane send-keys") || strings.Contains(string(calls), "pane run") {
+					if string(raw) != before || (mode != "late-before-run" && strings.Contains(string(calls), "pane send-keys")) || strings.Contains(string(calls), "pane run") {
 						t.Fatalf("unusable/owned target was restarted or repaired: %+v %v", report.Outcomes, runErr)
 					}
 					configAfter, _ := os.ReadFile(filepath.Join(c.Harness, configName))

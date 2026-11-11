@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // All three observations come from one live provider response. No identity
@@ -22,7 +22,7 @@ func prIdentityGitHub(m *prIdentityMismatch, number string, onRequest func()) (s
 		return "", fmt.Errorf("automatic repository rename recovery is unavailable for this forge; verify the enlisted URL with its owner")
 	}
 	old, current := strings.Split(m.old, "/"), strings.Split(m.current, "/")
-	n, err := strconv.ParseInt(number, 10, 32)
+	n, err := prIdentityGitHubNumber(number)
 	if err != nil || n < 1 || len(old) != 2 || len(current) != 2 {
 		return "", prIdentityIncomplete()
 	}
@@ -81,7 +81,35 @@ func prIdentityUnavailable(err error) error {
 	return fmt.Errorf("repository or PR identity lookup unavailable; verify forge login, network and repository/PR access, then refresh status")
 }
 
-var prURLField = regexp.MustCompile(`^(\s*\S+\s+\S+\s+\S+\s+)(\S+)`)
+func prIdentityGitHubNumber(number string) (int64, error) {
+	n, err := strconv.ParseInt(number, 10, 32)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("PR number is outside GitHub GraphQL Int range; verify the enlisted reference")
+	}
+	return n, nil
+}
+
+// Match strings.Fields' unicode.IsSpace definition while retaining byte spans.
+func prURLSpan(line string) (int, int, bool) {
+	field, start := 0, -1
+	for offset, r := range line {
+		if unicode.IsSpace(r) {
+			if start >= 0 {
+				field++
+				if field == 4 {
+					return start, offset, true
+				}
+				start = -1
+			}
+		} else if start < 0 {
+			start = offset
+		}
+	}
+	if start >= 0 && field == 3 {
+		return start, len(line), true
+	}
+	return 0, 0, false
+}
 
 // Compare only the URL observed before the network lookup, under the shared
 // legacy lock. Branch/title edits, merge comments and unrelated bytes survive.
@@ -131,11 +159,11 @@ func (c *Context) reconcilePRURLChecked(before PRRecord, canonical string, check
 			if !ok || record.Repo != before.Repo || record.Number != before.Number {
 				continue
 			}
-			span := prURLField.FindStringSubmatchIndex(line)
-			if span == nil {
+			start, end, found := prURLSpan(line)
+			if !found || line[start:end] != before.URL {
 				return fmt.Errorf("enlisted PR URL field unavailable")
 			}
-			lines[i] = line[:span[4]] + canonical + line[span[5]:]
+			lines[i] = line[:start] + canonical + line[end:]
 		}
 		if check != nil {
 			if err := check(); err != nil {

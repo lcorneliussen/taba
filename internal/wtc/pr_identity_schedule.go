@@ -194,6 +194,12 @@ func (c *Context) prIdentityRepair(records []PRRecord, indices []int, state *prI
 func (c *Context) repairPRReferences(records []PRRecord) {
 	repos := c.prRepositories()
 	ordinary, repair := []int{}, []int{}
+
+	counts := map[string]int{}
+	for _, record := range records {
+		counts[record.Repo+"\x00"+record.Number]++
+	}
+	ordinaryKeys := map[string]bool{}
 	for _, settled := range []bool{false, true} {
 		for i, record := range records {
 			if (record.MergedOn != "") != settled || ValidatePRIdentity(record.Repo, record.Number) != nil {
@@ -203,12 +209,23 @@ func (c *Context) repairPRReferences(records []PRRecord) {
 			var mismatch *prIdentityMismatch
 			if errors.As(err, &mismatch) {
 				if mismatch.forge == "github.com" {
+					if counts[record.Repo+"\x00"+record.Number] != 1 {
+						continue
+					}
+					if _, err := prIdentityGitHubNumber(record.Number); err != nil {
+						c.statusProgress("Cannot recover enlisted PR: number is outside GitHub GraphQL Int range; verify with its owner")
+						continue
+					}
 					repair = append(repair, i)
 				} else {
 					c.statusProgress(fmt.Sprintf("Cannot recover enlisted PR %s#%s: automatic recovery is unavailable for this forge; verify with its owner", record.Repo, record.Number))
 				}
 			} else if err == nil && forge == "github.com" && !settled {
-				ordinary = append(ordinary, i)
+				key := prIdentityKey(record)
+				if !ordinaryKeys[key] {
+					ordinaryKeys[key] = true
+					ordinary = append(ordinary, i)
+				}
 			}
 		}
 	}

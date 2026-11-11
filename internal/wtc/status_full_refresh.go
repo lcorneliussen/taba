@@ -138,7 +138,7 @@ func statusFetchPRRawWithRequest(record PRRecord, slug, forge string, onRequest 
 		if onRequest != nil {
 			onRequest()
 		}
-		raw, err = statusJSON("gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit")
+		raw, err = statusJSON("gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid")
 	case "bitbucket.org":
 		parts := strings.SplitN(slug, "/", 2)
 		if len(parts) != 2 {
