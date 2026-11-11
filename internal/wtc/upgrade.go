@@ -233,7 +233,7 @@ func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
 			return nil, fmt.Errorf("unexpected gh release output: %w", err)
 		}
 		v, err := releaseVersion(item.Tag)
-		if err != nil || item.Draft || (item.Prerelease && !v.Equal(to)) || !v.GreaterThan(from) || v.GreaterThan(to) {
+		if err != nil || item.Draft || !releaseNoteInRange(v, from, to, item.Prerelease) {
 			continue
 		}
 		releases = append(releases, release{v, ReleaseNote{Version: v.String(), Content: item.Body}})
