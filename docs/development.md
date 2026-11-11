@@ -25,9 +25,19 @@ build is the same version as that `wtc` or newer. The dev build's version comes
 from `git describe`: a build three commits past `v0.1.40` is `0.1.41-dev.3`,
 above 0.1.40 and below 0.1.41. When the pinned release moves past the build, the
 pinned binary runs itself again and notes this on a terminal. Run
-`wtc dev install` again after each change. `WTC_DEV_BUILD=off` skips the
+`wtc dev install` again after each change. `TABA_DEV_BUILD=off` skips the
 handover for one command, and `wtc --version` names the version a dev build
 stands in for.
+
+`TABA_DEV_BUILD` is the public bypass spelling for both `taba` and `wtc`.
+An unset or empty value falls back to `WTC_DEV_BUILD`. For safe upgrades,
+exact `off` in either variable always disables delegation, including when
+an older parent sets only the legacy spelling. Different nonempty values
+produce a warning on stderr; neither `on` nor any other value opts into
+following. Persistent mode OFF still wins over either variable. Internal
+handover/generation markers retain their existing names. Use both
+`TABA_DEV_BUILD=off WTC_DEV_BUILD=off` when invoking a verifier or child that
+might be an older binary; older releases understand only the WTC spelling.
 
 `wtc retire` removes the dev build with the collection.
 
@@ -70,7 +80,8 @@ Use `wtc dev mode auto` to inherit this convention. A checkout present only as
 reference material does nothing without that explicit convention. Ambiguous or
 unsafe candidates are refused. Review-only collections and `review` commands
 never automatically delegate to candidate code. Immutable review verification
-must additionally use its explicit trusted executable with `WTC_DEV_BUILD=off`.
+must additionally use its explicit trusted executable with
+`TABA_DEV_BUILD=off WTC_DEV_BUILD=off`.
 An unversioned `go build` binary retains its existing no-delegation behavior.
 
 `off` overrides the project convention before source discovery or compilation.
@@ -81,7 +92,7 @@ collection retirement so running actions can finish from their original binary.
 Final retirement removes this generated state. Ad-hoc directories retain their
 existing reuse rules; retirement does not permanently prevent reinitialization.
 Use `mode on` or `mode auto` explicitly to enable following again. The existing
-`WTC_DEV_BUILD=off` escape works even with broken source; mode/status/uninstall
+`TABA_DEV_BUILD=off` escape works even with broken source; mode/status/uninstall
 commands do not require a successful rebuild. Legacy one-shot `dev install`
 does not undo persistent off.
 
@@ -101,7 +112,7 @@ back to the original selected executable. A TUI started from a local artifact
 without a recorded ambient executable needs an explicit restart to exit it.
 Older bootstrap shims cannot supply that path or understand the new mode policy:
 use `dev uninstall` to remove their one-shot slot, then restart status explicitly
-with `WTC_DEV_BUILD=off`.
+with `TABA_DEV_BUILD=off WTC_DEV_BUILD=off`.
 Existing older TUIs need one initial restart before they can use this lifecycle.
 Following belongs to the invocation's collection. Displaying another collection
 with `status <name>` does not opt into or execute that collection's local source.

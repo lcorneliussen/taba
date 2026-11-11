@@ -52,8 +52,32 @@ func cliPackage(source string) string {
 // checks freshness and guards its hop with the generation and executable path.
 const DevBuildDelegatedEnv = "WTC_DEV_DELEGATED_FROM"
 
-// DevBuildDisableEnv turns the handover off for one invocation.
-const DevBuildDisableEnv = "WTC_DEV_BUILD"
+// DevBuildDisableEnv turns the handover off for one invocation. The legacy
+// spelling remains a fallback, and off in either spelling is always respected.
+const DevBuildDisableEnv = "TABA_DEV_BUILD"
+const LegacyDevBuildDisableEnv = "WTC_DEV_BUILD"
+
+// DevBuildDisabled preserves bypasses from older callers even when a newer
+// parent supplies the canonical variable. Neither spelling enables follow mode.
+func DevBuildDisabled() bool {
+	return os.Getenv(DevBuildDisableEnv) == "off" || os.Getenv(LegacyDevBuildDisableEnv) == "off"
+}
+
+// DevBuildEnvWarning describes conflicting nonempty settings without echoing
+// untrusted environment values into terminal output.
+func DevBuildEnvWarning() string {
+	canonical, legacy := os.Getenv(DevBuildDisableEnv), os.Getenv(LegacyDevBuildDisableEnv)
+	if canonical != "" && legacy != "" && canonical != legacy {
+		return "TABA_DEV_BUILD and WTC_DEV_BUILD disagree; off in either variable disables dev handover"
+	}
+	return ""
+}
+
+// DevBuildBypassEnv disables candidate delegation in both current and older
+// children. Append it after inherited settings so the child cannot undo it.
+func DevBuildBypassEnv() []string {
+	return []string{DevBuildDisableEnv + "=off", LegacyDevBuildDisableEnv + "=off"}
+}
 
 type DevBuild struct {
 	Collection     string `json:"collection"`

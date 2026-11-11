@@ -163,7 +163,7 @@ func statusNextDefaultRunner() statusNextRunner {
 				return "", err
 			}
 			cmd := exec.Command(binary, argv...)
-			cmd.Env = append(os.Environ(), wtc.DevBuildDisableEnv+"=off")
+			cmd.Env = append(os.Environ(), wtc.DevBuildBypassEnv()...)
 			cmd.Dir = owner.Collection
 			out, err := cmd.CombinedOutput()
 			return strings.TrimSpace(string(out)), err

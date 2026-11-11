@@ -7,6 +7,42 @@ import (
 	"testing"
 )
 
+func TestDevBuildBypassAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name, canonical, legacy string
+		disabled, warning       bool
+	}{
+		{"empty", "", "", false, false},
+		{"new-only", "off", "", true, false},
+		{"legacy-only", "", "off", true, false},
+		{"both-off", "off", "off", true, false},
+		{"both-on", "on", "on", false, false},
+		{"canonical-off", "off", "on", true, true},
+		{"legacy-off", "on", "off", true, true},
+		{"empty-canonical", "", "on", false, false},
+		{"empty-legacy", "on", "", false, false},
+		{"other-conflict", "arbitrary", "on", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TABA_DEV_BUILD", tc.canonical)
+			t.Setenv("WTC_DEV_BUILD", tc.legacy)
+			if got := DevBuildDisabled(); got != tc.disabled {
+				t.Fatalf("disabled = %v, want %v", got, tc.disabled)
+			}
+			if got := DevBuildEnvWarning() != ""; got != tc.warning {
+				t.Fatalf("warning = %v, want %v", got, tc.warning)
+			}
+		})
+	}
+	t.Setenv("TABA_DEV_BUILD", "off")
+	t.Setenv("WTC_DEV_BUILD", "off")
+	os.Unsetenv("TABA_DEV_BUILD")
+	os.Unsetenv("WTC_DEV_BUILD")
+	if DevBuildDisabled() || DevBuildEnvWarning() != "" {
+		t.Fatal("unset variables must preserve normal selection")
+	}
+}
+
 func TestDevVersionSortsBetweenReleases(t *testing.T) {
 	for describe, want := range map[string]string{
 		"v0.1.39-0-g69e3a79":       "0.1.39+dev.g69e3a79",

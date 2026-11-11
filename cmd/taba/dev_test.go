@@ -7,7 +7,29 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"taba.sh/taba/internal/wtc"
 )
+
+// TestMain scrubs canonical collection settings. Capture the child setting
+// before that scrub and use a legacy marker that survives it.
+var testDevChildCanonical = os.Getenv("TABA_DEV_BUILD")
+
+func TestStatusNextChildBypassesDevBuild(t *testing.T) {
+	if os.Getenv("WTC_TEST_DEV_CHILD") == "1" {
+		if testDevChildCanonical != "off" || os.Getenv("WTC_DEV_BUILD") != "off" {
+			os.Exit(9)
+		}
+		os.Exit(0)
+	}
+	t.Setenv("WTC_TEST_DEV_CHILD", "1")
+	t.Setenv("TABA_DEV_BUILD", "on")
+	t.Setenv("WTC_DEV_BUILD", "on")
+	runner := statusNextDefaultRunner()
+	if out, err := runner.command(&wtc.Context{Collection: t.TempDir()}, []string{"-test.run=^TestStatusNextChildBypassesDevBuild$"}); err != nil {
+		t.Fatalf("child bypass: %v %s", err, out)
+	}
+}
 
 func TestDevControlInvocationUsesCommandFlags(t *testing.T) {
 	for _, args := range [][]string{
@@ -76,7 +98,7 @@ func main(){if len(os.Args)==4&&os.Args[1]=="--json"&&os.Args[2]=="dev"&&os.Args
 	run := func(binary string, extraEnv []string, args ...string) (string, int) {
 		cmd := exec.Command(binary, args...)
 		cmd.Dir = collection
-		cmd.Env = append(os.Environ(), "GOROOT=", "NO_COLOR=", "GOWORK=off", "WTC_DEV_BUILD=", "WTC_DEV_DELEGATED_FROM=", "WTC_DEV_AMBIENT_EXE=", "WTC_DEV_GENERATION=")
+		cmd.Env = append(os.Environ(), "GOROOT=", "NO_COLOR=", "GOWORK=off", "TABA_DEV_BUILD=", "WTC_DEV_BUILD=", "WTC_DEV_DELEGATED_FROM=", "WTC_DEV_AMBIENT_EXE=", "WTC_DEV_GENERATION=")
 		cmd.Env = append(cmd.Env, extraEnv...)
 		raw, err := cmd.CombinedOutput()
 		if err == nil {
@@ -108,6 +130,27 @@ func main(){if len(os.Args)==4&&os.Args[1]=="--json"&&os.Args[2]=="dev"&&os.Args
 	if out, code := run(pinned, []string{"WTC_DEV_BUILD=off"}, "--version"); code != 0 || !strings.Contains(out, "9.0.0") {
 		t.Fatalf("trusted bypass redirected: %d %s", code, out)
 	}
+	for _, binary := range []string{pinned, taba} {
+		for _, tc := range []struct {
+			canonical, legacy string
+			bypass, warning   bool
+		}{
+			{"", "", false, false}, {"off", "", true, false}, {"", "off", true, false},
+			{"off", "off", true, false}, {"on", "on", false, false},
+			{"off", "on", true, true}, {"on", "off", true, true},
+		} {
+			out, code := run(binary, []string{"TABA_DEV_BUILD=" + tc.canonical, "WTC_DEV_BUILD=" + tc.legacy}, "--version")
+			if code != 0 || strings.Contains(out, "9.0.0") != tc.bypass || strings.Contains(out, "disagree") != tc.warning {
+				t.Fatalf("%s canonical=%q legacy=%q: %d %s", filepath.Base(binary), tc.canonical, tc.legacy, code, out)
+			}
+		}
+		if out, code := run(binary, nil, "dev", "--help"); code != 0 || !strings.Contains(out, "TABA_DEV_BUILD=off") || !strings.Contains(out, "WTC_DEV_BUILD") {
+			t.Fatalf("alias help: %d %s", code, out)
+		}
+		if out, code := run(binary, []string{"TABA_DEV_BUILD=off"}, "dev", "status"); code != 0 || !strings.Contains(out, "handover bypassed for this invocation") || strings.Contains(out, "in effect:") {
+			t.Fatalf("bypassed status misreported takeover: %d %s", code, out)
+		}
+	}
 	if out, code := run(pinned, nil, "review", "--help"); code != 0 || strings.Contains(out, "second:") {
 		t.Fatalf("review command redirected: %d %s", code, out)
 	}
@@ -129,7 +172,22 @@ func main(){if len(os.Args)==4&&os.Args[1]=="--json"&&os.Args[2]=="dev"&&os.Args
 	if out, code := run(pinned, nil, "dev", "install", "--source", source); code != 0 || !strings.Contains(out, "mode on follows") {
 		t.Fatalf("install summary ignored active source policy: %d %s", code, out)
 	}
+	// Reconciliation must retain the released module and command-directory
+	// selection in both fingerprinting and compilation, including a dirty move.
+	write(filepath.Join(source, "go.mod"), "module taba.sh/taba\n\ngo 1.27.0\n")
+	if err := os.Rename(filepath.Dir(main), filepath.Join(source, "cmd", "taba")); err != nil {
+		t.Fatal(err)
+	}
+	main = filepath.Join(source, "cmd", "taba", "main.go")
+	if out, code := run(pinned, nil, "hello"); code != 0 || !strings.Contains(out, "second:hello:wtc") {
+		t.Fatalf("renamed CLI source not followed: %d %s", code, out)
+	}
 	write(main, "broken source")
+	for _, binary := range []string{pinned, taba} {
+		if out, code := run(binary, []string{"TABA_DEV_BUILD=off", "WTC_DEV_BUILD=on"}, "--version"); code != 0 || !strings.Contains(out, "9.0.0") {
+			t.Fatalf("canonical bypass required broken source: %d %s", code, out)
+		}
+	}
 	if out, code := run(pinned, nil, "hello"); code == 0 || strings.Contains(out, "second:") {
 		t.Fatalf("stale code executed: %d %s", code, out)
 	}

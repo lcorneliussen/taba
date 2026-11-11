@@ -118,7 +118,10 @@ func devArtifactExecutable(path string) bool {
 // this executable to continue; an error aborts startup without running stale code.
 func handOverToDevBuild() error {
 	takeDelegatedFrom()
-	if os.Getenv(wtc.DevBuildDisableEnv) == "off" || devControlInvocation(os.Args[1:]) || devValidatedHandover {
+	if warning := wtc.DevBuildEnvWarning(); warning != "" {
+		fmt.Fprintln(os.Stderr, branding.Text("{{command}}:"), warning)
+	}
+	if wtc.DevBuildDisabled() || devControlInvocation(os.Args[1:]) || devValidatedHandover {
 		return nil
 	}
 	if _, err := semver.NewVersion(version); err != nil {
@@ -135,7 +138,7 @@ func handOverToDevBuild() error {
 	}
 	follow, err := wtc.DevFollowConfiguration(collection)
 	if err != nil {
-		return fmt.Errorf("dev mode: %w (use dev mode off or WTC_DEV_BUILD=off to recover)", err)
+		return fmt.Errorf("dev mode: %w (use dev mode off or TABA_DEV_BUILD=off to recover)", err)
 	}
 	if follow.Mode == "off" || strings.Contains(follow.Reason, "review-only") {
 		return nil
@@ -320,7 +323,8 @@ func addDevCommands(root *cobra.Command, asJSON *bool) {
 		Long: branding.Text("{{command}} dev install builds a one-shot local artifact; a newer release can overtake it.\n") +
 			branding.Text("{{command}} dev mode on follows the selected checkout, rebuilding changes before new commands.\n") +
 			"Mode auto requires an explicit project convention; mode off disables local builds persistently.\n" +
-			"Uninstall also selects off. WTC_DEV_BUILD=off bypasses local builds for one invocation.", Args: cobra.NoArgs}
+			"Uninstall also selects off. TABA_DEV_BUILD=off bypasses local builds for one invocation.\n" +
+			"WTC_DEV_BUILD is the legacy fallback; off in either variable wins. Conflicting nonempty values warn.", Args: cobra.NoArgs}
 	collectionRoot := func() (string, error) {
 		dir, err := os.Getwd()
 		if err != nil {
@@ -365,7 +369,7 @@ func addDevCommands(root *cobra.Command, asJSON *bool) {
 			if err != nil {
 				return err
 			}
-			data := map[string]any{"running": version, "delegated_from": delegatedFrom, "dev_build": build, "follow": follow, "running_generation": devRunningGeneration}
+			data := map[string]any{"running": version, "delegated_from": delegatedFrom, "dev_build": build, "follow": follow, "running_generation": devRunningGeneration, "handover_bypassed": wtc.DevBuildDisabled()}
 			summary := "no dev build in " + root
 			if build != nil {
 				summary = fmt.Sprintf("dev build %s from %s\n%s", build.Version, build.Source, devBuildEffect(build))
@@ -373,6 +377,9 @@ func addDevCommands(root *cobra.Command, asJSON *bool) {
 			summary += fmt.Sprintf("\nmode: %s; %s", follow.Mode, follow.Reason)
 			if follow.Active {
 				summary += "following " + follow.Source
+			}
+			if wtc.DevBuildDisabled() {
+				summary += "\nlocal handover bypassed for this invocation"
 			}
 			return emit(envelope{OK: true, Data: data, Summary: summary}, *asJSON)
 		}}
@@ -420,6 +427,9 @@ func addDevCommands(root *cobra.Command, asJSON *bool) {
 }
 
 func devBuildEffect(build *wtc.DevBuild) string {
+	if wtc.DevBuildDisabled() {
+		return "stored artifact; local handover bypassed for this invocation"
+	}
 	if build.Collection != "" {
 		state, err := wtc.DevFollowConfiguration(build.Collection)
 		if err != nil {

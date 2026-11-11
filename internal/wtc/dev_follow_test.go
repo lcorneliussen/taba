@@ -1064,6 +1064,16 @@ func TestDevCompilerCancellationClosesInheritedPipes(t *testing.T) {
 		t.Fatalf("descendant-held pipes defeated cancellation bound: %v", elapsed)
 	}
 }
+
+func TestDevCapabilityProbeBypassesBothAliases(t *testing.T) {
+	t.Setenv("TABA_DEV_BUILD", "on")
+	t.Setenv("WTC_DEV_BUILD", "on")
+	binary := filepath.Join(t.TempDir(), "candidate")
+	fixtureFile(t, binary, "#!/bin/sh\n[ \"$TABA_DEV_BUILD\" = off ] && [ \"$WTC_DEV_BUILD\" = off ] || exit 9\nprintf '%s' '{\"ok\":true,\"data\":{\"dev_follow\":1,\"status_handover\":1}}'\n", 0700)
+	if err := probeDevFollow(context.Background(), binary); err != nil {
+		t.Fatal(err)
+	}
+}
 func TestDevFingerprintIgnoresUnrelatedBrokenPackage(t *testing.T) {
 	_, source := devFollowFixture(t)
 	t.Setenv("GOPROXY", "off")

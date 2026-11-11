@@ -1947,7 +1947,7 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 		// cache another wtc may have written; live states follow from Init.
 		model.snapshot.Runtime = c.RuntimeEnlisted()
 	}
-	model.devAllowed = os.Getenv(wtc.DevBuildDisableEnv) != "off" && version != "dev"
+	model.devAllowed = !wtc.DevBuildDisabled() && version != "dev"
 	cwd, _ := os.Getwd()
 	model.devCollection = wtc.FindCollectionRoot(cwd)
 	model.devResume = takeStatusDevPresentation()

@@ -690,7 +690,8 @@ func probeDevFollow(ctx context.Context, binary string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, binary, "--json", "dev", "capabilities")
-	command.Env = append(os.Environ(), DevBuildDisableEnv+"=off", DevBuildDelegatedEnv+"=")
+	command.Env = append(os.Environ(), DevBuildBypassEnv()...)
+	command.Env = append(command.Env, DevBuildDelegatedEnv+"=")
 	raw, err := devCommandOutput(command)
 	if err != nil {
 		return fmt.Errorf("local CLI cannot report follow capability; use dev install for one-shot builds: %w", err)
