@@ -783,6 +783,7 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 	l := statusRepoLayout{name: 16, branch: 30, pr: 15, number: 1, tree: 4, ahead: 3, behind: 3, tip: 8, prod: 8,
 		showTree: true, showSync: true}
 	compactPRWidth := 1
+	hasPR := false
 	for _, row := range snapshot.Repos {
 		if marks := len(statusRuntimeSlots(statusRuntimeItems(snapshot, row))); marks > 0 && width >= 60 {
 			l.showRuntime = true
@@ -797,6 +798,7 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 		l.ahead = max(l.ahead, len(fmt.Sprint(row.Ahead)))
 		l.behind = max(l.behind, runewidth.StringWidth(statusTUIBehind(row)))
 		if row.PR != nil && row.PR.Number != "" {
+			hasPR = true
 			identifierWidth := ansi.StringWidth(statusTUIPRNumber(row.PR.Number))
 			l.number = max(l.number, identifierWidth)
 			if row.PR.Draft {
@@ -838,6 +840,9 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 	}
 	if width < 40 {
 		l.name = 8
+		if !hasPR {
+			l.pr = 8
+		}
 		l.showSync, l.showBuilds = false, false
 		l.showTree = width >= 31
 	}

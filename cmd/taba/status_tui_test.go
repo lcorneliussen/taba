@@ -282,6 +282,26 @@ func TestStatusTUIRepoRowsKeepSignalsWithinWidth(t *testing.T) {
 	}
 }
 
+func TestStatusCompactWithoutPRsPreservesBranchNames(t *testing.T) {
+	snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{
+		{Dir: "api", BranchDisplay: "feature/alpha", Tree: "clean"},
+		{Dir: "web", BranchDisplay: "feature/beta", Tree: "clean"},
+	}}
+	for _, styled := range []bool{false, true} {
+		lines := statusTUIRepoLines(snapshot, 39, styled)
+		for i, branch := range []string{"feature/alpha", "feature/beta"} {
+			if !strings.Contains(ansi.Strip(lines[i+1]), branch) {
+				t.Fatalf("empty PR space clipped a fitting branch: %q", lines[i+1])
+			}
+		}
+		for _, line := range lines {
+			if ansi.StringWidth(line) > 39 {
+				t.Fatalf("compact row overflow: %q", line)
+			}
+		}
+	}
+}
+
 func TestStatusPRNumbersAlignLinksAndSignalsAcrossTheListedCohort(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	snapshot := wtc.StatusSnapshot{Collection: "fixture"}
