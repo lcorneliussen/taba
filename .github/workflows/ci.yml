@@ -27,7 +27,7 @@ jobs:
           WTC_TEST_REQUIRE_RUNTIME: "1"
           WTC_TEST_DEKIT: ${{ runner.temp }}/dekit/dekit
           WTC_TEST_DOCKER_IMAGE: postgres@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
-      - run: go build ./cmd/wtc
+      - run: go build ./cmd/taba
       - name: Control UI render tests
         run: node --test openclaw-plugin/test/*.test.mjs
       # Only this step gets the OpenAI secret; without it the test skips.
@@ -45,4 +45,4 @@ jobs:
           go-version-file: go.mod
       # internal/wtc takes 5–8 minutes on macOS runners; the 10m default fails on slow runners.
       - run: go test -timeout 20m ./...
-      - run: go build ./cmd/wtc
+      - run: go build ./cmd/taba

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lcorneliussen/wtc-cli/internal/next"
+	"taba.sh/taba/internal/next"
 )
 
 func TestDetectHost(t *testing.T) {

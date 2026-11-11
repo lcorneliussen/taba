@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/envcompat"
 )
 
 // RunHook invokes an optional harness-level lifecycle hook. Pre-hooks can veto;

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/lcorneliussen/wtc-cli/internal/wtc"
+	"taba.sh/taba/internal/wtc"
 )
 
 const dir = "internal/wtc/release-notes"

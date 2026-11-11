@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/envcompat"
 )
 
 func gitOutput(args ...string) (string, error) {

@@ -3,10 +3,10 @@ package wtc
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"os"
 	"path/filepath"
 	"slices"
+	"taba.sh/taba/internal/branding"
 	"time"
 )
 

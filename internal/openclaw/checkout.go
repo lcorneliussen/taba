@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
 	"os"
 	"os/exec"
 	"path"
@@ -13,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"taba.sh/taba/internal/branding"
 )
 
 // Checkout is a session's gateway-managed worktree, seen through plain git.
