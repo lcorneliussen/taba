@@ -45,7 +45,7 @@ A default you want changed on this machine belongs in `$WTC_CONFIG_ROOT/wtc.env`
 | File | Kind | Says |
 |---|---|---|
 | `AGENTS.md` | symlink to `harness/collection-AGENTS.md`, versioned | What a collection is, stay inside it, where the instructions live, that nothing durable lives in this folder |
-| `WTC-SCOPE.md` (or existing `SCOPE.md`) | local copy of `harness/collection-SCOPE.md`, ephemeral | What **this** collection is for: the task, the repos in it, what is deliberately out |
+| `SCOPE.md` (`WTC-SCOPE.md` in older harnesses) | local copy of `harness/collection-SCOPE.md`, ephemeral | What **this** collection is for: the task, the repos in it, what is deliberately out |
 
 `AGENTS.md` is the only file an agent reads by itself when it opens the
 collection root, which is why the shared guidance lives there rather than in a

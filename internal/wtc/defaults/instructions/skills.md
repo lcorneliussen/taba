@@ -140,15 +140,17 @@ product repo, which is exactly the coupling this layout avoids.
    down are the ones with a decision in them — and the point at which the
    decision stops being the agent's (merging, force-pushing, killing a live
    pane).
-7. **Keep the `wtc-` prefix.** It groups them in `/`-autocomplete and keeps
-   them from colliding with skills a product repo defines for itself.
+7. **Use the `taba-` prefix.** It groups them in `/`-autocomplete and keeps
+   them from colliding with skills a product repo defines for itself. A
+   harness skill named `wtc-<name>` keeps working; rename its folder to
+   `taba-<name>` when convenient.
 
 ## Adding one
 
 ```bash
-mkdir -p skills/wtc-<name>
-$EDITOR skills/wtc-<name>/SKILL.md     # frontmatter: name + description
-taba skills render                   # link it into this collection
+mkdir -p skills/taba-<name>
+$EDITOR skills/taba-<name>/SKILL.md    # frontmatter: name + description
+taba skills render                    # link it into this collection
 ```
 
 Then add it to the table in `AGENTS.md`. Other collections pick it up at their

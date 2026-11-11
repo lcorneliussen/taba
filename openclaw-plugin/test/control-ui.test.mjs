@@ -1882,8 +1882,8 @@ test("PR hints distinguish current, other active and completed PRs and open side
 test("a fetched catch-up conflict hands only the fresh resolution step to its named skill", async () => {
  // taba-catch-up is what next reports now; wtc-catch-up comes from collections
  // pinned before the rename. Both go to the skill the plugin installs.
- for (const skillName of ["taba-catch-up", "wtc-catch-up"])
- for (const kind of ["composer", "panel"]) {
+ const cases = ["taba-catch-up", "wtc-catch-up"].flatMap(skillName => ["composer", "panel"].map(kind => [skillName, kind]));
+ for (const [skillName, kind] of cases) {
   const key = `agent:main:conflict:${++sessions}`;
   const next = { step: "catch-up", by: "wtc", command: ["wtc", "catch-up"], key: "api:catchup:h1", reason: "Merges cleanly" };
   const r = repo("api", { next, choices: { recommended: next.key, actions: [{ ...next, available: true }] } });

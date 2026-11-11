@@ -35,7 +35,7 @@ func InitHarness(opt HarnessInitOptions) (HarnessInitResult, error) {
 		return result, fmt.Errorf("--cli-version must be an exact published version, without v")
 	}
 	// The scaffold uses the taba file names and command, which releases before
-	// 0.2.0 (including its release candidates) cannot read or install.
+	// 0.2.0 cannot read or install. The 0.2.0 release candidates can.
 	if v := semver.MustParse(opt.CLIVersion); v.Major() == 0 && v.Minor() < 2 {
 		return result, fmt.Errorf("--cli-version must be 0.2.0 or later: earlier releases cannot read .taba-version and taba.toml")
 	}
