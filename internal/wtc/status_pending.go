@@ -34,6 +34,9 @@ func statusConfirmationKey(identity string) string {
 // Caller holds the forge budget lock. Never follow a queue symlink or read
 // unbounded/corrupt state into the admission decision.
 func statusReadPendingConfirmations(forge string, now time.Time) []statusPendingConfirmation {
+	if forge != "bitbucket.org" {
+		return nil
+	}
 	path := statusForgeStatePath("pending", forge)
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
@@ -79,6 +82,9 @@ func statusQueueConfirmation(queue []statusPendingConfirmation, key string, now 
 }
 
 func statusSavePendingConfirmations(forge string, queue []statusPendingConfirmation) {
+	if forge != "bitbucket.org" {
+		return
+	}
 	raw, err := json.Marshal(queue)
 	if err == nil {
 		statusWriteForgeEntry("pending", forge, "", "", raw)

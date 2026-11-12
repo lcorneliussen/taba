@@ -16,10 +16,10 @@
   A confirmed merge within the existing retention window cannot be reopened by
   an active replica response, even if its merge timestamp is still unavailable.
   Conflicting views preserve the original observation and remain unconfirmed.
-  Markdown and the live view
-  label stale, deferred, and unavailable observations. Such facts cannot authorize
-  branch returns, settled merge recording, or next actions. A `pr_unconfirmed`
-  branch flag blocks actions for stale, deferred or unavailable enlisted PR state.
+  Markdown and the live view label stale, deferred, and unavailable observations.
+  Such facts cannot authorize branch returns, settled merge recording, or next
+  actions. A `pr_unconfirmed` branch flag blocks actions for stale, deferred or
+  unavailable enlisted PR state.
   Retirement also remains blocked on unconfirmed PR state, including stale or
   unavailable MERGED and CLOSED observations, until that evidence is confirmed.
 - **Keep manual refresh bounded.** Manual refresh, including `r` and `--forge`,

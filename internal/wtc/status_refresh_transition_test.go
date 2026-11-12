@@ -32,8 +32,9 @@ type status319Event struct {
 	Progress []string
 }
 
-// Test-binary children exercise the production collector and CLI transport;
-// they do not implement a second refresh or admission algorithm.
+// Refresh children exercise the production collector and CLI transport without
+// a second collector. The legacy child is an independent released-budget fixture
+// that ignores the new queue and never calls production admission.
 func TestStatus319RefreshProcess(t *testing.T) {
 	mode := os.Getenv("WTC_TEST_319_CHILD")
 	if mode == "" {

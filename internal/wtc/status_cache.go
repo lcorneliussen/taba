@@ -100,6 +100,8 @@ func statusWriteForgeCache(forge, slug, number string, data []byte) {
 
 // statusWriteForgeEntrySince publishes data fetched by a request that started
 // at started, unless the record already holds a response from a later request.
+// Within statusMergedCacheAge, a retained MERGED record rejects active replies;
+// a first confirmed merge can supersede a later active response.
 // Callers hold the record lock when it can be taken; without it two writers can
 // still interleave between the check and the write.
 func statusWriteForgeEntrySince(kind, forge, slug, key string, data []byte, started time.Time) bool {

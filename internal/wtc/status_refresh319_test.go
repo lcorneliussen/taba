@@ -201,6 +201,32 @@ func TestStatus319FIFOAndAbandonedPane(t *testing.T) {
 	}
 }
 
+func TestStatus319GitHubIgnoresBitbucketReservations(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(fmt.Sprint(present), func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+			forge := "github.com"
+			path := statusForgeStatePath("pending", forge)
+			raw, _ := json.Marshal([]statusPendingConfirmation{{Key: statusConfirmationKey("example/widget#7"), Seen: time.Now()}})
+			if present {
+				statusWriteForgeEntry("pending", forge, "", "", raw)
+			}
+			if !statusTakeForgeToken(forge) || statusTakeForgeToken(forge) {
+				t.Fatal("GitHub admission changed or request ceiling exceeded")
+			}
+			got, err := os.ReadFile(path)
+			if present {
+				if err != nil || string(got) != string(raw) {
+					t.Fatalf("unrelated pending state changed: %s %v", got, err)
+				}
+			} else if !os.IsNotExist(err) {
+				t.Fatalf("GitHub token take created a queue file: %s %v", got, err)
+			}
+		})
+	}
+}
+
 func TestStatus319QueueIsBoundedAndDoesNotFollowSymlinks(t *testing.T) {
 	for _, mode := range []string{"corrupt", "oversize", "directory", "symlink", "too-many", "future"} {
 		t.Run(mode, func(t *testing.T) {
