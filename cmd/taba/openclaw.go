@@ -1030,8 +1030,10 @@ func inheritGatewayProjectPorts(c *wtc.Context, task string, linked []wtc.Linked
 }
 
 func gatewayPortOrigin(remote string) (openclaw.Origin, bool) {
-	if strings.HasPrefix(remote, "git@") && !strings.Contains(remote, "://") {
-		remote = "ssh://" + strings.Replace(remote, ":", "/", 1)
+	if !strings.Contains(remote, "://") {
+		if host, path, ok := strings.Cut(remote, ":"); ok && !strings.Contains(host, "/") {
+			remote = "ssh://" + host + "/" + path
+		}
 	}
 	u, err := url.Parse(remote)
 	if err != nil || !slices.Contains([]string{"http", "https", "ssh", "git"}, u.Scheme) || u.RawQuery != "" || u.Fragment != "" || u.EscapedPath() != u.Path {
