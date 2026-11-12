@@ -97,7 +97,7 @@ func statusParseForgeDetail(forge string, raw []byte, record PRRecord) (statusPR
 
 func statusCachedSettledMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
 	// Settled merge detail retains authority within statusMergedCacheAge (24h
-	// by default). A successful registry write also avoids later forge calls.
+	// by default).
 	detail, ok := statusRetainedMerge(record, slug, forge)
 	if !ok || detail.MergedOn == "" || detail.ChecksUnsettled || detail.Checks == "PENDING" {
 		return statusPRDetail{}, false

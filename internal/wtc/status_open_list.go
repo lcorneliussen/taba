@@ -75,8 +75,8 @@ func statusEncodeOpenPRs(prs []statusOpenPR, truncated bool, started time.Time) 
 var statusBeforeOpenPublish func()
 
 func statusDetailFromOpenItem(record PRRecord, slug, forge string, item statusOpenPR) (statusPRDetail, bool, bool) {
-	// A changed list fingerprint cannot reopen a confirmed merge, even while
-	// its merge time or checks are still being collected.
+	// Within statusMergedCacheAge, a changed list fingerprint cannot reopen a
+	// retained merge, even while its merge time or checks are still being collected.
 	if known, ok := statusRetainedMerge(record, slug, forge); ok {
 		return known, true, true
 	}

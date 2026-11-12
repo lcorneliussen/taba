@@ -554,6 +554,32 @@ func TestStatus319RetirementDoesNotClaimUnknownStateIsOpen(t *testing.T) {
 	}
 }
 
+func TestStatus319RetirementRequiresConfirmedTerminalState(t *testing.T) {
+	for _, state := range []string{"MERGED", "CLOSED"} {
+		for _, freshness := range []string{"stale", "deferred", "unavailable", "settled", "recorded"} {
+			for _, represented := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/represented=%v", state, freshness, represented), func(t *testing.T) {
+					snapshot := StatusSnapshot{Collection: "synthetic", Retirement: []RetirementAssessment{{Collection: "synthetic"}},
+						PRs: []StatusPRRow{{Repo: "widget", Number: "7", State: state, Freshness: freshness}}}
+					if represented {
+						// A branch row retains the uncertainty flag without an open-PR field.
+						snapshot.Repos = []StatusRepo{{Collection: "synthetic", Repo: "widget", Dir: "widget", PRUnconfirmed: statusObservationUnavailable(freshness)}}
+					}
+					statusRetirementFacts(&snapshot)
+					reasons := strings.Join(snapshot.Retirement[0].Blockers, "\n")
+					wantBlocked := freshness == "stale" || freshness == "deferred" || freshness == "unavailable"
+					if strings.Contains(reasons, "state is unconfirmed") != wantBlocked || strings.Contains(reasons, "remains open") {
+						t.Fatalf("state=%s freshness=%s blockers=%q", state, freshness, reasons)
+					}
+					if represented && wantBlocked && !strings.Contains(reasons, "widget: pull request state is unconfirmed") {
+						t.Fatalf("branch uncertainty did not block retirement: %s", reasons)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestStatus319ReservationLeavesSpareBurstCapacity(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
