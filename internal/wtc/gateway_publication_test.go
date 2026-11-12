@@ -55,3 +55,32 @@ func TestGatewayPublicationRejectsForeignOrChangedIdentity(t *testing.T) {
 		t.Fatal("rejection wrote registry")
 	}
 }
+
+func TestGatewayPublicationBitbucketAndInvalidBranches(t *testing.T) {
+	c, checkout := enlistedIdentityFixture(t, true)
+	remote := "https://bitbucket.org/example/widget.git"
+	fixtureGit(t, "-C", checkout, "remote", "set-url", "origin", remote)
+	for i := range c.Registry.Repos {
+		if c.Registry.Repos[i].Name == "widget" {
+			c.Registry.Repos[i].Remote = remote
+		}
+	}
+	input := PRRecord{URL: "https://bitbucket.org/example/widget/pull-requests/42", Branch: "feature/published"}
+	if got, err := c.EnlistGatewayPublication(checkout, input); err != nil || got.Repo != "widget" || got.Number != "42" {
+		t.Fatalf("Bitbucket enlist: %+v %v", got, err)
+	}
+	for _, url := range []string{"https://bitbucket.org/example/widget/pull/42", "https://bitbucket.org/Example/widget/pull-requests/42", "https://bitbucket.org/example/Widget/pull-requests/42"} {
+		bad := input
+		bad.URL = url
+		if _, err := c.EnlistGatewayPublication(checkout, bad); err == nil {
+			t.Fatalf("accepted changed Bitbucket identity %s", url)
+		}
+	}
+	for _, branch := range []string{"", "-bad", "has space", "bad..ref", "bad\nref", "@{-1}"} {
+		bad := input
+		bad.Branch = branch
+		if _, err := c.EnlistGatewayPublication(checkout, bad); err == nil {
+			t.Fatalf("accepted invalid branch %q", branch)
+		}
+	}
+}

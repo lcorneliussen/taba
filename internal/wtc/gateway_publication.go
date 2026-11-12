@@ -61,7 +61,8 @@ func (c *Context) EnlistGatewayPublication(worktree string, record PRRecord) (PR
 					return record, fmt.Errorf("publication repository identity changed")
 				}
 				// GitHub repository names are case insensitive; Bitbucket workspace/slug
-				// identity remains exact. All other URL components were checked above.
+				// identity remains exact. The comparison below also verifies owner and
+				// repository; the checks above validate the URL shape and PR number.
 				equal := expected == record.URL
 				if u.Host == "github.com" {
 					equal = strings.EqualFold(expected, record.URL)

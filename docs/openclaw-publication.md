@@ -46,3 +46,29 @@ licensed and served locally; its provenance is in the vendor directory.
 
 Contract references: [authenticated dispatcher](https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/src/plugin-sdk/gateway-method-runtime.ts),
 [session-scoped method admission](https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/src/gateway/methods/descriptor.ts).
+
+The pinned host package exports that dispatcher, whose implementation requires
+an admitted real client (`disableSyntheticClient` and `requireScopedClient`).
+The Bitbucket plugin's 0.3.4 result includes the captured branch and PR URL:
+[host package export](https://github.com/openclaw/openclaw/blob/b8952d477f0c932d8ddc6da5c89cab5a169b6ff1/package.json),
+[Bitbucket publication result](https://github.com/lcorneliussen/openclaw-bitbucket/blob/9d645a8f50cd2164c094f86f871dbdc2972f3f77/lib/publish.js#L244).
+These are source-contract checks; they are not a live-account test.
+
+## Reproduce the preview check
+
+Install Playwright separately; its Chromium browser must already be available.
+The unit tests do not require it. For an isolated QA directory:
+
+```sh
+npm install --prefix /tmp/taba-preview-qa --ignore-scripts playwright@1.64.1
+node openclaw-plugin/tools/check-publication-preview.mjs /tmp/taba-preview-qa/node_modules/playwright/index.mjs /tmp/taba-preview-qa/output
+```
+
+The successful run prints:
+
+```text
+8 publication preview scenarios passed
+```
+
+The output directory contains synthetic screenshots and a JSON geometry report.
+The script contacts no account or gateway and never confirms publication.

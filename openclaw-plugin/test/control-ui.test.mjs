@@ -2808,3 +2808,18 @@ for(const kind of ["composer","panel"]) test(`${kind} formatted publication prev
   const published=calls.find(c=>c.method==="wtc.github.publish");assert.equal(published.body,body,"formatting never rewrites publication text");
  }finally{view.dispose();personal=null;}
 });
+
+for(const kind of ["composer","panel"]) test(`${kind} tracking pending preserves successful publication and exposes its URL and warning`,async()=>{
+ personal={state:"connected",account:{id:1,login:"octo"},generation:"g1"};
+ githubConfirmResult={status:"published",url:"https://github.com/octo/api/pull/7",tracking:{state:"pending",message:"Refresh to retry tracking; do not publish again."}};
+ const {host,view}=await mount(kind,collection([repo("api",{unpublished:1})]));
+ try {
+  calls.length=0;
+  await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^1 commit to push/.test(n.title)).onclick();await settle();
+  await [...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Confirm push").onclick();await settle();
+  const details=[...host.all()].map(n=>n.title??n.ariaLabel??n.textContent).join(" ");
+  assert.match(details,/pushed branch commits/);assert.match(details,/https:\/\/github\.com\/octo\/api\/pull\/7/);assert.match(details,/Tracking pending: Refresh to retry tracking/);
+  assert.equal(calls.filter(c=>c.method==="wtc.github.confirm").length,1);
+  assert.ok(![...host.all()].some(n=>(n.role??n.attributes.role)==="alert"&&/Tracking pending/.test(n.textContent)),"tracking failure is not a failed publication");
+ }finally{githubConfirmResult=undefined;personal=null;view.dispose();}
+});

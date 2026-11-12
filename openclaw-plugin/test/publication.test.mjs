@@ -31,6 +31,8 @@ test("published success survives tracking failure; verified refresh retries only
   assert.equal(out.payload.status,"published");assert.equal(out.payload.tracking.state,"pending");
   f.calls.length=0;f.setCode(0);await f.bridge.flush([{sessionKey:"unrelated",entry:f.entry}]);assert.equal(f.calls.length,0);
   await f.bridge.flush([{sessionKey:"owner:widget",entry:f.entry}]);assert.equal(f.calls.length,1);assert.ok(Array.isArray(f.calls[0]),"no publisher retry");
+  assert.deepEqual(readdirSync(path.join(f.stateDir,"plugins/wtc/publication-receipts")),[]);
+  await f.bridge.flush([{sessionKey:"owner:widget",entry:f.entry}]);assert.equal(f.calls.length,1,"successful retry does not repeat on refresh");
  }finally{f.dispose();}
 });
 test("Bitbucket confirmation remains native and a prepare response never enlists",async()=>{
