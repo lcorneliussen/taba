@@ -1007,3 +1007,11 @@ unconfirmed and reserved. Push preparation and confirmation also wait for this
 reservation. A clean checkout with new local commits confirms success; otherwise
 check the conversation and explicitly acknowledge that its request has finished
 in the Action log before starting another mutation.
+
+The same browser-session reservation covers chosen/default agent steps, native
+catch-up and worker actions that can change a checkout. Worker merges and edit
+takeovers reserve the participating checkouts. A missing dispatch response is
+unconfirmed, not permission to retry. Changing views, branches or checkout
+observations does not cancel an outstanding request. After checking the owning
+conversation or native operation, **I checked: request has finished** releases
+that exact request across views without canceling work or starting another action.

@@ -200,11 +200,13 @@ const recoveryHandoff = r => r.catchUpRecovery
 async function catchUpRepo(host, agentId, r, say, ask, request) {
   const name = r.repo ?? r.project;
   say(`Catching up ${name}…`);
-  const out = await (request ? request() : call(host, "catch-up", r.sessionKey, agentId));
+  const out = await request();
+  if (out?.cancelled) return out;
   // HEAD may have moved; the local edits remain in the pinned recovery copy.
   if (out.code && (recoveryResult(out) || needsLocalRecovery(out.message))) {
     const recoveryRef = out.json?.data?.recoveryRef || r.catchUpRecovery;
-    await ask(`${name}: catch-up recovery needs inspection.${recoveryHandoff({ catchUpRecovery: recoveryRef })} Do not reapply a recovery copy blindly or publish.`);
+    const handoff = await ask(`${name}: catch-up recovery needs inspection.${recoveryHandoff({ catchUpRecovery: recoveryRef })} Do not reapply a recovery copy blindly or publish.`);
+    if (handoff?.cancelled || handoff?.unconfirmed) return {...handoff,recoveryRef};
     say(`${name}: the conversation was asked to verify or recover local edits.`);
     return { handedOff: true, recoveryRef };
   }
@@ -212,7 +214,8 @@ async function catchUpRepo(host, agentId, r, say, ask, request) {
   const conflicts = conflictsOf(out.message);
   if (conflicts.length) {
     const base = r.base ?? "its base";
-    await ask(`${name}: catching up with ${base} conflicts in ${conflicts.join(", ")}. The merge was aborted; any saved local edits were restored. Before git merge, preserve dirty edits and their staging in a separately pinned Git stash and verify a clean checkout. Merge and resolve the base, then reconcile the saved staged, unstaged and untracked edits. Follow the bundled recovery procedure; do not publish or discard the backup.`);
+    const handoff = await ask(`${name}: catching up with ${base} conflicts in ${conflicts.join(", ")}. The merge was aborted; any saved local edits were restored. Before git merge, preserve dirty edits and their staging in a separately pinned Git stash and verify a clean checkout. Merge and resolve the base, then reconcile the saved staged, unstaged and untracked edits. Follow the bundled recovery procedure; do not publish or discard the backup.`);
+    if (handoff?.cancelled || handoff?.unconfirmed) return handoff;
     say(`${name}: ${conflicts.join(", ")} changed on both sides; the conversation was asked to merge and resolve them.`);
     return { handedOff: true };
   }
@@ -311,7 +314,7 @@ function syncTimeLabels(root, entry, { composer = false } = {}) {
 }
 function collectionStamp(entry, sessionKey) {
   const key = entry?.data?.collection?.sessionKey ?? sessionKey;
-  return JSON.stringify([entry?.data, entry?.error, feedbackStore.get(key), [...(activityStore.get(key)?.values() ?? [])], [...commitFeedback].filter(([id]) => id.startsWith(`${key}|`))]);
+  return JSON.stringify([entry?.data, entry?.error, feedbackStore.get(key), [...(activityStore.get(key)?.values() ?? [])], [...requestFeedback].filter(([id]) => id.startsWith(`${key}|`))]);
 }
 
 const ciText = (pr) => ({ success: "CI passed", failure: `CI ${pr.failed} failed`, pending: `CI ${pr.running} running` })[pr.checks] ?? "no checks";
@@ -786,7 +789,7 @@ const pullRequestRows = (repos) => {
 // It is UI feedback, not an executable plan or a durable completion receipt.
 const activityStore = new Map();
 const recoveryQueues = new Map();
-const commitFeedback = new Map();
+const requestFeedback = new Map();
 function notifyFactFeedback(collection) {
   for (const [key, entry] of store) if (key === collection || entry.data?.collection?.sessionKey === collection) for (const notify of entry.listeners) notify(entry);
 }
@@ -797,7 +800,11 @@ const serviceLogIntents = new Map(), serviceLogListeners = new Set();
 function recordActivity(collection, id, item) {
   const records = activityStore.get(collection) ?? new Map();
   records.set(id, { ...records.get(id), ...item, at: Date.now() });
-  while (records.size > 100) records.delete(records.keys().next().value);
+  while (records.size > 100) {
+    const removable = [...records.keys()].find(id => ![...requestFeedback.values()].some(state => state.id === id && ["running","pending","unconfirmed"].includes(state.phase)));
+    if (!removable) break;
+    records.delete(removable);
+  }
   activityStore.set(collection, records);
   for (const [key, entry] of store) if (key === collection || entry.data?.collection?.sessionKey === collection) for (const notify of entry.listeners) notify(entry);
 }
@@ -961,9 +968,7 @@ function collectionTables(v) {
   const repositoryLayoutKey = width => `${repositoryCompact(width)}:${repositoryCompact(width) ? 1 : repoCapacity(width)}`;
   // Repositories being pushed, and being caught up.
   const busy = new Set();
-  const catching = new Set();
   const acting = new Set();
-  let authorSending = false;
   const openDisclosures = new Set();
   const keepDisclosure = (node, key) => {
     key = JSON.stringify([v.collectionKey?.() ?? v.key(), key]);
@@ -1012,13 +1017,19 @@ function collectionTables(v) {
     return current.node;
   }
   // Mirror browser-local publication progress; this is not a gateway lock.
-  const sharedPushBusy = (r) => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "push" && item.repoSessionKey === r.sessionKey && item.inFlight);
-  const commitUnresolved = r => ["running", "pending", "unconfirmed"].includes(commitFeedback.get(`${v.collectionKey?.() ?? v.key()}|${r.sessionKey}`)?.phase);
-  const reserved = (r) => commitUnresolved(r) || acting.has(r.sessionKey) || busy.has(r.sessionKey) || catching.has(r.sessionKey) || sharedPushBusy(r);
+  const sharedPushBusy = (r, collection = v.collectionKey?.() ?? v.key()) => [...(activityStore.get(collection)?.values() ?? [])].some(item => item.action === "push" && item.repoSessionKey === r.sessionKey && item.inFlight);
+  const requestUnresolved = (r, collection = v.collectionKey?.() ?? v.key()) => ["running", "pending", "unconfirmed"].includes(requestFeedback.get(`${collection}|${r.sessionKey}`)?.phase);
+  const reservedInCollection = (r, collection) => requestUnresolved(r, collection) || acting.has(r.sessionKey) || busy.has(r.sessionKey) || sharedPushBusy(r, collection);
+  const reserved = r => reservedInCollection(r, v.collectionKey?.() ?? v.key());
+  const catchUpRunning = r => {
+    const state = requestFeedback.get(`${v.collectionKey?.() ?? v.key()}|${r.sessionKey}`);
+    return state?.phase === "running" && ["catch-up","return-to-tip"].includes(state.kind) && !state.handoffAt;
+  };
   const recoveryQueueBusy = () => recoveryQueues.has(v.collectionKey?.() ?? v.key());
   const recoveryBusy = r => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "restore" && item.repoSessionKey === r.sessionKey && item.inFlight);
   async function restoreCheckouts(repos) {
     const conversation = v.key(), logKey = v.collectionKey?.() ?? conversation;
+    if (repos.some(r => requestUnresolved(r))) { v.say("A repository action is unresolved; inspect its result before restoring the checkout."); return; }
     if (recoveryQueues.has(logKey)) { v.say("A checkout restore is already running; wait for its results."); return; }
     const captured = repos.map(r => structuredClone(r));
     const queue = { targets: new Set(captured.map(r => r.sessionKey)), index: 0, total: captured.length };
@@ -1050,28 +1061,24 @@ function collectionTables(v) {
   }
   async function sendToAuthor(conversation, skill, input) {
     if (!active(conversation)) throw Error("The view closed or changed before handoff");
-    if (authorSending) throw Error("An author handoff is already pending; wait before dispatching another");
-    authorSending = true;
-    try { return await askSkill(v.host, conversation, skill, input); }
-    finally { authorSending = false; if (v.alive?.() !== false) v.rerender(); }
+    return skill ? askSkill(v.host, conversation, skill, input) : askConversation(v.host, conversation, input);
   }
 
   const revealPublication = () => { if (!v.publicationBesideCollapsedBar) v.reveal?.(); };
   const actionable = (r) => !r.error && (r.next || r.choices?.actions?.length || r.dirty > 0);
-  async function askCommit(r) {
-    if (batchRunning || v.alive?.() === false) return;
-    if (acting.has(r.sessionKey)) return;
+  async function askCommit(r, request) {
+    if (batchIsRunning() || v.alive?.() === false) return;
     const conversationKey=v.key();
     const say=(...args)=>{if(active(conversationKey))v.say(...args)};
-    acting.add(r.sessionKey);
     say(`Asking the conversation to create local commits for ${nameOf(r)}…`);
     v.rerender();
     try {
-      await sendToAuthor(conversationKey, "wtc", `${nameOf(r)}: review and commit the intended uncommitted changes. Recheck its current state and branch policy first, and report the resulting commit. Leave publication for the person's push action.`);
+      const result = await dispatchRepoRequests([{repo:r, state:request}], conversationKey, v.collectionKey?.() ?? conversationKey, "wtc", `${nameOf(r)}: review and commit the intended uncommitted changes. Recheck its current state and branch policy first, and report the resulting commit. Leave publication for the person's push action.`);
+      if (!result.handedOff) return result;
       say(`${nameOf(r)}: asked the conversation to save intended changes as local commits. Pushing and opening a PR are separate.`);
       return { handedOff: true };
     } catch (err) { say(`${nameOf(r)}: ${String(err?.message ?? err)}`, true); return { error: String(err?.message ?? err) }; }
-    finally { acting.delete(r.sessionKey); if(active(conversationKey))await v.refresh(); }
+    finally { if(active(conversationKey))await v.refresh(); }
   }
   async function reviewPRText(r, url, conversationKey, action) {
     if (!active(conversationKey)) return;
@@ -1095,31 +1102,36 @@ function collectionTables(v) {
     ...(step.step === "catch-up" && step.by === "wtc" && step.approve === "agent" ? { approveCatchUp: true } : {}) });
   async function actNext(r, logId = uuid()) {
     if (r.next?.step === "commit" && commitBlocked(r)) return;
-    if (batchRunning || v.alive?.() === false || dispatched.has(handoffKey(r, r.next))) return;
-    if (acting.has(r.sessionKey)) return;
-    const sent = dispatched;
+    if (batchIsRunning() || v.alive?.() === false) return;
     const conversationKey = v.key();
     const logKey = v.collectionKey?.() ?? conversationKey;
+    const tracked = ["agent", "run"].includes(nextRoute(r.next));
+    const request = r.next.step === "commit" ? requestFeedback.get(requestKey(r, logKey)) : tracked ? beginRepoRequest(r, logKey, r.next.step, logId) : null;
+    if (tracked && (!ownsRepoRequest(r, request, logKey) || request.id !== logId)) return;
     const say = (text, failed = false, action = null) => {
       const previous = activityStore.get(logKey)?.get(logId);
       recordActivity(logKey, logId, { repo: nameOf(r), action: r.next.step, status: previous?.status ?? text, ...(failed ? { state: "failed" } : {}), detail: text, followUp: action });
       if (active(conversationKey)) v.say(text, failed, action, logId);
     };
     const log = (status) => recordActivity(logKey, logId, { repo: nameOf(r), repoSessionKey:r.sessionKey, repoPath:r.path, recoveryRef:r.catchUpRecovery, action: r.next.step, status });
-    acting.add(r.sessionKey);
     say(`${nameOf(r)}: ${r.next.step === "catch-up" ? "Catching up" : nextLabel(r.next)}…`);
     log("Rechecking…");
     v.rerender();
     try {
+      if (tracked && nextRoute(r.next) === "run") request.dispatchedAt = Date.now();
       const out = await call(v.host, "next", conversationKey, v.agent(), nextPayload(r, r.next));
       if (!active(conversationKey)) return;
+      if (tracked && !ownsRepoRequest(r, request, logKey)) return;
       const fresh = out.repo;
+      if (tracked && nextRoute(r.next) === "run" && !out.performed) delete request.dispatchedAt;
       if (out.performed) {
-        const outcome = await catchUpRepo(v.host, v.agent(), fresh, say, (input) => v.key() === conversationKey ? sendToAuthor(conversationKey, "wtc-catch-up", input) : undefined, async () => out);
-        log(outcome?.handedOff ? "Sent to conversation; completion pending" : out.code ? "Failed: " + (out.message ?? out.code) : "Completed");
+        const outcome = await catchUpRepo(v.host, v.agent(), fresh, say, (input) => dispatchRepoRequests([{repo:r,state:request}], conversationKey, logKey, "wtc-catch-up", input), async () => out);
+        log(outcome?.unconfirmed ? "Action handoff outcome unconfirmed; inspect the conversation" : outcome?.handedOff ? "Sent to conversation; completion pending" : out.code ? "Failed: " + (out.message ?? out.code) : "Completed");
         if (outcome?.recoveryRef) recordActivity(logKey, logId, { recoveryRef:outcome.recoveryRef });
+        if (!outcome?.handedOff && !outcome?.unconfirmed && ownsRepoRequest(r, request, logKey)) request.phase = "settled";
       } else if (fresh?.next) {
         const step = fresh.next;
+        if (step.key !== r.next.key) throw Error("The selected step changed; refresh before acting");
         if (step.step === "commit" && commitBlocked(fresh)) throw Error(commitBlocked(fresh));
         switch (nextRoute(step)) {
           case "publish": {
@@ -1129,26 +1141,37 @@ function collectionTables(v) {
           }
           case "run": throw Error("The gateway did not execute this deterministic catch-up. Refresh or update its wtc plugin; no agent prompt was sent.");
           case "agent":
-            await sendToAuthor(conversationKey, step.skill ?? "wtc-catch-up", `${nameOf(fresh)}: ${step.reason}.${recoveryHandoff(fresh)} Work on this repository only; recheck its state before acting. Carry out only this selected step; report follow-up actions for separate selection.`);
-            sent.add(handoffKey(fresh, step)); log("Sent to conversation; completion pending");
+            const input = `${nameOf(fresh)}: ${step.reason}.${recoveryHandoff(fresh)} Work on this repository only; recheck its state before acting. Carry out only this selected step; report follow-up actions for separate selection.`;
+            if (!tracked) throw Error("The next step changed; refresh before acting");
+            if (fresh.path !== r.path || fresh.branch !== r.branch) throw Error("The checkout changed before handoff; refresh before acting");
+            const result = await dispatchRepoRequests([{repo:fresh,state:request}], conversationKey, logKey, step.skill ?? "wtc", input);
+            if (!result.handedOff || !ownsRepoRequest(r, request, logKey)) return result;
             say(`${nameOf(fresh)}: asked the conversation to ${nextLabel(step).toLowerCase()}.`);
             break;
           default: throw Error("The next step changed; refresh the collection before acting.");
         }
       } else throw Error("The next step changed; refresh the collection before acting.");
-    } catch (err) { log("Failed: " + String(err?.message ?? err)); say(`${nameOf(r)}: ${String(err?.message ?? err)}`, true); }
-    finally { acting.delete(r.sessionKey); if(active(conversationKey))await v.refresh(); }
+    } catch (err) {
+      if (request && ownsRepoRequest(r,request,logKey) && request.dispatchedAt) {
+        request.phase = "unconfirmed";
+        recordActivity(logKey,request.id,{state:"unknown",status:"Action outcome unconfirmed; inspect its state before retrying",detail:String(err?.message ?? err)});
+        if (active(conversationKey)) v.say(`${nameOf(r)}: action outcome unconfirmed — ${String(err?.message ?? err)}. Open the Action log before retrying.`,false,null,request.id);
+      } else { if (request && ownsRepoRequest(r,request,logKey)) request.phase = "failed"; log("Failed: " + String(err?.message ?? err)); say(`${nameOf(r)}: ${String(err?.message ?? err)}`, true); }
+    }
+    finally { if (request) cancelUnsentRequests([{repo:r,state:request}], logKey); notifyFactFeedback(logKey); if(active(conversationKey))await v.refresh(); }
   }
   const expandedBranches = new Set();
   let showAllActivity = false;
   let choosing = false;
-  let selection = new Map(), batchResults = new Map(), batchLabels = new Map(), batchKeys = new Map(), batchKinds = new Map(), batchActivityIds = new Map(), batchPreview = null, dispatched = new Set();
-  let batchKey = null, batchRunning = false, batchCancelled = false;
-  const handoffKey = (r, step) => `${r.sessionKey}:${r.choices ? step.key.split(":").at(-1) : step.key}`;
+  let selection = new Map(), batchResults = new Map(), batchLabels = new Map(), batchKeys = new Map(), batchKinds = new Map(), batchActivityIds = new Map(), batchPreview = null;
+  let batchKey = null, batchExecution = null;
+  const batchIsRunning = () => !!batchExecution && active(batchExecution.conversation) &&
+    (!batchExecution.requests.size || [...batchExecution.requests.values()].some(({state}) => state.phase !== "acknowledged"));
   const rawChoicesOf = r => r.choices?.actions ?? (r.next ? [{ ...r.next, available: true }] : []);
   const commitStep = r => rawChoicesOf(r).find(step => step.step === "commit");
   function commitBlocked(r) {
     if (r.error) return r.error;
+    if (!r.dirty) return "No local changes remain to commit; refresh the repository";
     if (r.catchUpRecovery || r.catchUpRecoveryError) return "Verify and finish local changes recovery before committing";
     if (r.inProgress || r.conflicted) return "Finish the operation or resolve conflicts before committing";
     const step = commitStep(r);
@@ -1169,48 +1192,57 @@ function collectionTables(v) {
     });
   }
   async function runSelected(targets) {
-    if (batchRunning || v.alive?.() === false) return;
+    if (batchIsRunning() || v.alive?.() === false) return;
     const conversation = v.key();
-    const sent = dispatched;
-    const reservations = new Set();
+    const requestsForRun = new Map();
+    const run = {conversation,requests:requestsForRun,cancelled:false};
+    const currentRun = () => batchExecution === run && active(conversation);
     const results = new Map(); batchResults = results;
     batchLabels = new Map(targets.map(({ repo }) => [repo.sessionKey, nameOf(repo)]));
     batchKeys = new Map(targets.map(({ repo, step }) => [repo.sessionKey, step.key]));
     batchKinds = new Map(targets.map(({ repo, step }) => [repo.sessionKey, step.step]));
     const runId = uuid(), logKey = v.collectionKey?.() ?? conversation;
     batchActivityIds = new Map(targets.map(({repo}) => [repo.sessionKey, `${runId}:${repo.sessionKey}`]));
+    const labels = batchLabels, kinds = batchKinds;
     const setResult = (key, status) => {
       results.set(key, status);
-      recordActivity(logKey, `${runId}:${key}`, { repo: batchLabels.get(key), action: batchKinds.get(key), status });
+      recordActivity(logKey, `${runId}:${key}`, { repo: labels.get(key), action: kinds.get(key), status });
     };
-    batchRunning = true; batchCancelled = false; batchPreview = null;
+    batchExecution = run; batchPreview = null;
     v.say("");
     const update = () => { if (active(conversation)) v.rerender(); };
     const agents = [], conflicted = [];
     for (const { repo } of targets) { recordActivity(logKey, `${runId}:${repo.sessionKey}`, {repoSessionKey:repo.sessionKey,repoPath:repo.path,recoveryRef:repo.catchUpRecovery}); setResult(repo.sessionKey, "Queued"); }
     try {
       for (const { repo: r, step } of targets) {
-        if (batchCancelled || !active(conversation)) { setResult(r.sessionKey, "Cancelled before dispatch"); continue; }
+        if (run.cancelled || !currentRun()) { setResult(r.sessionKey, "Cancelled before dispatch"); continue; }
         if (reserved(r)) { setResult(r.sessionKey, "Waiting: an individual action is already in flight"); continue; }
-        acting.add(r.sessionKey); reservations.add(r.sessionKey);
-        if (sent.has(handoffKey(r, step))) { setResult(r.sessionKey, "Already sent to the conversation; completion pending"); continue; }
+        if (["agent", "run"].includes(nextRoute(step))) {
+          const state = beginRepoRequest(r, logKey, step.step, `${runId}:${r.sessionKey}`);
+          if (!state) { setResult(r.sessionKey, "Waiting: repository actions are reserved or unavailable"); continue; }
+          requestsForRun.set(r.sessionKey, {repo:r,state});
+        }
         setResult(r.sessionKey, "Rechecking…"); update();
         try {
+          const request = requestsForRun.get(r.sessionKey)?.state;
+          if (nextRoute(step) === "run") request.dispatchedAt = Date.now();
           const out = await call(v.host, "next", conversation, v.agent(), nextPayload(r, step));
-          if (!active(conversation)) {
+          if (!currentRun()) {
             setResult(r.sessionKey, out.performed ? out.code ? "Failed: " + (out.message ?? out.code) : "Completed" : "Cancelled before handoff");
             break;
           }
           const fresh = out.repo;
+          if (nextRoute(step) === "run" && !out.performed) delete request.dispatchedAt;
+          if (requestsForRun.has(r.sessionKey) && !ownsRepoRequest(r, requestsForRun.get(r.sessionKey)?.state, logKey)) { setResult(r.sessionKey, "Cancelled before handoff"); continue; }
           if (out.performed) {
             const files = out.code ? conflictsOf(out.message) : [];
             if (files.length || out.code && (recoveryResult(out) || needsLocalRecovery(out.message))) {
               recordActivity(logKey, `${runId}:${r.sessionKey}`, {recoveryRef:out.json?.data?.recoveryRef});
               conflicted.push(r); setResult(r.sessionKey, recoveryResult(out) || needsLocalRecovery(out.message) ? "Local edits preserved; checking the recovery step…" : "Local merge aborted on conflicts; checking resolution step…"); }
-            else setResult(r.sessionKey, out.code ? "Failed: " + (out.message ?? out.code) : "Completed");
+            else { setResult(r.sessionKey, out.code ? "Failed: " + (out.message ?? out.code) : "Completed"); if (request && ownsRepoRequest(r,request,logKey)) request.phase = "settled"; }
           }
           else {
-            if (batchCancelled) { setResult(r.sessionKey, "Cancelled before dispatch"); continue; }
+            if (run.cancelled) { setResult(r.sessionKey, "Cancelled before dispatch"); continue; }
             const selected = fresh?.next;
             if (!selected || selected.key !== step.key) throw Error("The selection changed; choose again");
             if (selected.step === "commit" && commitBlocked(fresh)) throw Error(commitBlocked(fresh));
@@ -1220,7 +1252,7 @@ function collectionTables(v) {
                 // A batch never consumes an earlier per-repository confirmation.
                 // Each gateway confirmation still shows its exact commits/account.
                 if (!confirming.has(r.sessionKey)) {
-                  const outcome = await publish(fresh, conversation, () => !batchCancelled, false, `${runId}:${r.sessionKey}`);
+                  const outcome = await publish(fresh, conversation, () => !run.cancelled, false, `${runId}:${r.sessionKey}`);
                   if (outcome?.cancelled) { setResult(r.sessionKey, "Cancelled before publication dispatch"); recordActivity(logKey, `${runId}:${r.sessionKey}`, { state: "cancelled" }); break; }
                   if (outcome?.pending) recordActivity(logKey, `${runId}:${r.sessionKey}`, { state: "blocked", status: outcome.message ?? "Another publication is active; inspect its result." });
                   if (outcome?.reason === "commit") { results.set(r.sessionKey, "Waiting: commit outcome unconfirmed"); break; }
@@ -1231,19 +1263,26 @@ function collectionTables(v) {
               default: throw Error("This action is unavailable on this host");
             }
           }
-        } catch (err) { setResult(r.sessionKey, "Failed or stale: " + String(err?.message ?? err)); }
+        } catch (err) {
+          const state = requestsForRun.get(r.sessionKey)?.state;
+          if (state?.dispatchedAt && ownsRepoRequest(r,state,logKey)) {
+            state.phase = "unconfirmed";
+            setResult(r.sessionKey,"Action outcome unconfirmed; inspect its state before retrying");
+            recordActivity(logKey,state.id,{state:"unknown",detail:String(err?.message ?? err)});
+          } else setResult(r.sessionKey, "Failed or stale: " + String(err?.message ?? err));
+        }
         update();
       }
       // Fetching can reveal conflicts after an initially clean prediction.
       // Re-read just once, and hand off only a current resolution step for the
       // same selected repository; never turn a fetch failure into an agent task.
-      if (conflicted.length && !batchCancelled && active(conversation)) {
+      if (conflicted.length && !run.cancelled && currentRun()) {
         try {
           const current = await call(v.host, "collection", conversation, v.agent());
-          if (active(conversation) && !batchCancelled) for (const r of conflicted) {
+          if (currentRun() && !run.cancelled) for (const r of conflicted) {
             const fresh = current.repos?.find((candidate) => candidate.sessionKey === r.sessionKey);
             const step = fresh?.next;
-            if (!fresh?.error && step?.by === "agent" && step.skill === "wtc-catch-up" && ["merge", "resolve"].includes(step.step)) { agents.push({ repo: fresh, step }); if(fresh.catchUpRecovery) recordActivity(logKey, `${runId}:${r.sessionKey}`, {recoveryRef:fresh.catchUpRecovery}); }
+            if (ownsRepoRequest(r,requestsForRun.get(r.sessionKey)?.state,logKey) && !fresh?.error && step?.by === "agent" && step.skill === "wtc-catch-up" && ["merge", "resolve"].includes(step.step)) { agents.push({ repo: fresh, step }); if(fresh.catchUpRecovery) recordActivity(logKey, `${runId}:${r.sessionKey}`, {recoveryRef:fresh.catchUpRecovery}); }
             else setResult(r.sessionKey, "Catch-up stopped; its current resolution step changed. Refresh before continuing.");
           } else for (const r of conflicted) setResult(r.sessionKey, "Cancelled before conflict handoff");
         } catch (err) { for (const r of conflicted) setResult(r.sessionKey, "Cannot recheck conflict resolution: " + String(err?.message ?? err)); }
@@ -1253,28 +1292,61 @@ function collectionTables(v) {
       const ready = [];
       for (const target of agents) {
         const { repo: r, step } = target;
-        if (batchCancelled || !active(conversation)) { setResult(r.sessionKey, "Cancelled before handoff"); continue; }
+        if (run.cancelled || !currentRun()) { setResult(r.sessionKey, "Cancelled before handoff"); continue; }
+        if (requestsForRun.has(r.sessionKey) && !ownsRepoRequest(r, requestsForRun.get(r.sessionKey)?.state, logKey)) { setResult(r.sessionKey, "Cancelled before handoff"); continue; }
         try {
           const fresh = await call(v.host, "next", conversation, v.agent(), nextPayload(r, step));
           if (!fresh.repo?.next || fresh.repo.next.key !== step.key) throw Error("The selection changed");
-          ready.push(target);
+          if (step.step === "commit" && commitBlocked(fresh.repo)) throw Error(commitBlocked(fresh.repo));
+          if (requestsForRun.has(r.sessionKey) && !ownsRepoRequest(r, requestsForRun.get(r.sessionKey)?.state, logKey)) { setResult(r.sessionKey, "Cancelled before handoff"); continue; }
+          ready.push({repo:fresh.repo,step:fresh.repo.next});
         } catch (err) { setResult(r.sessionKey, "Failed or stale: " + String(err?.message ?? err)); }
       }
-      if (ready.length && !batchCancelled && active(conversation)) {
+      const handoffs = ready.filter(({repo, step}) => {
+        if (!requestsForRun.has(repo.sessionKey) || ownsRepoRequest(repo, requestsForRun.get(repo.sessionKey)?.state, logKey)) return true;
+        setResult(repo.sessionKey, "Cancelled before handoff"); return false;
+      });
+      if (handoffs.length && !run.cancelled && currentRun()) {
         try {
-          const skills = [...new Set(ready.map(({ step }) => step.skill ?? "wtc-catch-up"))];
+          const skills = [...new Set(handoffs.map(({ step }) => step.skill ?? "wtc-catch-up"))];
           const skill = skills.length === 1 ? skills[0] : "wtc";
-          const tasks = ready.map(({ repo, step }) => `${nameOf(repo)}: ${skills.length > 1 ? `use ${step.skill ?? "wtc-catch-up"}. ` : ""}${step.reason}${recoveryHandoff(repo)}`).join("\n");
-          await sendToAuthor(conversation, skill, tasks + "\nOnly these selected steps; report follow-ups separately. Publication retains its personal confirmation.");
-          for (const { repo, step } of ready) { sent.add(handoffKey(repo, step)); setResult(repo.sessionKey, "Sent to conversation; completion pending"); }
-        } catch (err) { for (const { repo } of ready) setResult(repo.sessionKey, "Handoff failed: " + String(err?.message ?? err)); }
-      } else for (const { repo } of ready) setResult(repo.sessionKey, "Cancelled before handoff");
+          const tasks = handoffs.map(({ repo, step }) => `${nameOf(repo)}: ${skills.length > 1 ? `use ${step.skill ?? "wtc-catch-up"}. ` : ""}${step.reason}${recoveryHandoff(repo)}`).join("\n");
+          const input = tasks + "\nOnly these selected steps; report follow-ups separately. Publication retains its personal confirmation.";
+          const commits = handoffs.filter(t => requestsForRun.has(t.repo.sessionKey)).map(t => ({repo:t.repo,state:requestsForRun.get(t.repo.sessionKey).state}));
+          if (commits.length !== handoffs.length) throw Error("The selected handoff has no current repository reservation; refresh before acting");
+          const outcome = await dispatchRepoRequests(commits, conversation, logKey, skill, input);
+          if (!outcome.handedOff) {
+            for (const {repo} of handoffs) results.set(repo.sessionKey, outcome.unconfirmed ? "Action handoff outcome unconfirmed; inspect the conversation" : "Cancelled before handoff");
+          } else
+          for (const { repo, step } of handoffs) {
+            if (requestsForRun.has(repo.sessionKey) && !ownsRepoRequest(repo, requestsForRun.get(repo.sessionKey)?.state, logKey)) { results.set(repo.sessionKey, "Request already acknowledged or completed"); continue; }
+            results.set(repo.sessionKey, "Sent to conversation; completion pending");
+          }
+        } catch (err) { for (const { repo } of handoffs) setResult(repo.sessionKey, "Handoff failed: " + String(err?.message ?? err)); }
+      } else for (const { repo } of handoffs) setResult(repo.sessionKey, "Cancelled before handoff");
     } finally {
-      for (const key of reservations) acting.delete(key);
-      if (!active(conversation)) for (const [key, status] of results) if (["Queued", "Rechecking…", "Waiting for conversation handoff"].includes(status)) setResult(key, "Cancelled before dispatch");
-      batchRunning = false; choosing = false; batchPreview = null;
+      if (!currentRun()) for (const [key, status] of results) if (["Queued", "Rechecking…", "Waiting for conversation handoff"].includes(status)) setResult(key, "Cancelled before dispatch");
+      const ownsBatch = batchExecution === run;
+      if (ownsBatch) { batchExecution = null; choosing = false; batchPreview = null; }
+      for (const [key, {repo, state}] of requestsForRun) {
+        if (!ownsRepoRequest(repo, state, logKey)) continue;
+        if (state.dispatchedAt) {
+          if (state.phase === "running") { state.phase = "unconfirmed"; recordActivity(logKey,state.id,{state:"unknown"}); }
+          continue;
+        }
+        const status = results.get(key) ?? "Cancelled before handoff";
+        if (status === "Sent to conversation; completion pending") {
+          if (state.phase !== "unconfirmed") state.phase = "pending";
+          recordActivity(logKey, state.id, {state:state.phase === "unconfirmed" ? "unknown" : "handed-off",status:state.phase === "unconfirmed" ? "Request accepted; outcome remains unconfirmed" : status});
+        } else {
+          const failed = /^(Failed|Handoff failed|Cannot )/.test(status);
+          state.phase = failed ? "failed" : "settled"; state.error = failed ? status : undefined;
+          recordActivity(logKey,state.id,{state:failed ? "failed" : "cancelled",status});
+        }
+      }
+      notifyFactFeedback(logKey);
       if (v.alive?.() !== false) v.rerender();
-      if (active(conversation)) { selection.clear(); await v.refresh(); update(); }
+      if (ownsBatch && active(conversation)) { selection.clear(); await v.refresh(); update(); }
     }
   }
   function cancelPreparations(status) {
@@ -1291,13 +1363,13 @@ function collectionTables(v) {
     actionColumns = 0;
     repoFacts = { ahead: false, behind: false, pr: false };
     cancelPreparations("Preparation discarded after conversation switch; nothing was pushed.");
-    choosing = false; selection = new Map(); batchResults = new Map(); batchLabels = new Map(); batchKeys = new Map(); batchKinds = new Map(); batchActivityIds = new Map(); batchPreview = null; dispatched = new Set(); batchCancelled = true;
+    choosing = false; selection = new Map(); batchResults = new Map(); batchLabels = new Map(); batchKeys = new Map(); batchKinds = new Map(); batchActivityIds = new Map(); batchPreview = null; batchExecution && (batchExecution.cancelled = true);
   }
   function suggestedTargets(repos) {
-    return repos.filter((r) => actionable(r) && r.next && !reserved(r) && !dispatched.has(handoffKey(r, r.next)) && choicesOf(r).some((a) => a.available && a.key === r.next.key)).map((repo) => ({ repo, step: repo.next }));
+    return repos.filter((r) => actionable(r) && r.next && !reserved(r) && choicesOf(r).some((a) => a.available && a.key === r.next.key)).map((repo) => ({ repo, step: repo.next }));
   }
   function startTargets(targets) {
-    if (batchRunning || !targets.length) return;
+    if (batchIsRunning() || !targets.length) return;
     if (targets.every(({ step }) => step.approve !== "person" && step.step !== "push")) void runSelected(targets);
     else { choosing = true; selection = new Map(targets.map((t) => [t.repo.sessionKey, t])); batchPreview = targets; v.reveal?.(); v.showActions?.(); v.rerender(); }
   }
@@ -1316,9 +1388,9 @@ function collectionTables(v) {
   const recoveryButton = (...args) => { const button = nextButton(...args); button.className += " wtc-restore-control"; return button; };
   const recoveryQueued = r => recoveryQueues.get(v.collectionKey?.() ?? v.key())?.targets.has(r.sessionKey) && !recoveryBusy(r);
   function repoActionOptions(r) {
-    const options = choicesOf(r).map(step => ({ id: step.key, label: nextLabel(step), detail: step.step === "commit" && commitBlocked(r) || (dispatched.has(handoffKey(r, step)) ? "Already sent to the conversation; wait for its result" : step.available ? step.reason : step.blocked ?? step.reason),
-      disabled: !!r.error || step.step === "commit" && !!commitBlocked(r) || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || dispatched.has(handoffKey(r, step)) || batchRunning || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => step.step === "commit" ? commitFromFact({ ...r, next: step }) : actNext({ ...r, next: step }) }));
-    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({id:"commit",label:"Commit changes",detail:commitBlocked(r)||"Review intended changes and save local commits",disabled:!!commitBlocked(r)||reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>commitFromFact(r)});
+    const options = choicesOf(r).map(step => ({ id: step.key, label: nextLabel(step), detail: step.step === "commit" && commitBlocked(r) || (requestUnresolved(r) ? "Already sent or running; open the Action log to inspect its result" : step.available ? step.reason : step.blocked ?? step.reason),
+      disabled: !!r.error || step.step === "commit" && !!commitBlocked(r) || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || batchIsRunning() || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => step.step === "commit" ? commitFromFact({ ...r, next: step }) : actNext({ ...r, next: step }) }));
+    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({id:"commit",label:"Commit changes",detail:commitBlocked(r)||"Review intended changes and save local commits",disabled:!!commitBlocked(r)||reserved(r)||batchIsRunning()||recoveryQueueBusy(),run:()=>commitFromFact(r)});
     if (r.error === "checkout unavailable") options.unshift({ id: "restore", label: "Restore", detail: r.recovery?.reason ?? "Restore the saved checkout before running repository actions", disabled: r.recovery?.state !== "restorable" || recoveryQueueBusy(), run: () => restoreCheckouts([r]) });
     if (r.behind > 0 && !options.some(o => o.label === "Catch up")) options.push({ id: "catch-up-blocked", label: "Catch up", detail: r.error ? "Restore the checkout first" : r.dirty ? "Save or stash local changes before catching up" : "Not offered by the current repository plan; refresh its status", disabled: true });
     return options;
@@ -1337,7 +1409,7 @@ function collectionTables(v) {
     if (onFact || !actionColumns) main.style.cssText = "display:none;width:0;flex:0 0 0;overflow:hidden";
     const primaryId = primaryActionId(r);
     const options = repoActionOptions(r).filter(o => !r.dirty || o.label !== "Commit changes");
-    const extras = picker || batchRunning || reserved(r) || recoveryQueueBusy() ? [] : options.filter(o => !o.disabled && o.id !== primaryId).slice(0, inlineCapacity - 1);
+    const extras = picker || batchIsRunning() || reserved(r) || recoveryQueueBusy() ? [] : options.filter(o => !o.disabled && o.id !== primaryId).slice(0, inlineCapacity - 1);
     const overflow = options.filter(o => !extras.includes(o) && !(onFact && o.id === primaryId) && (o.id !== primaryId || o.disabled));
     const menu = overflow.length ? actionMenu(nextButton("⋯", `More actions for ${nameOf(r)}`, () => {}), overflow, `Actions for ${nameOf(r)}`, text => v.say(text, true)) : null;
     return css(el("div", { className: "wtc-next-step" }, menu, ...[...extras].reverse().map(o => {const button=optionButton(o);button.className+=" wtc-inline-action";return button;}), main), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
@@ -1355,28 +1427,29 @@ function collectionTables(v) {
     }
     if (!r.next && r.choices && !r.dirty) return actionSlot(r, null);
     const step = selection.get(r.sessionKey)?.step ?? r.next ?? { step: "commit", reason: "Review and commit intended changes locally" };
+    if (requestFeedback.get(requestKey(r))?.phase === "unconfirmed") return actionSlot(r,nextButton("Unconfirmed", "Action outcome unconfirmed; open the Action log to check its state or ask the agent for help",openActivity));
     const phase = batchKeys.get(r.sessionKey) === step.key ? batchResults.get(r.sessionKey) : null;
     // Informational results belong in the log; after dispatch they must not
     // hide a PR link or a publication confirmation behind a running label.
-    if (phase && (batchRunning || phase === "Completed" || /^(Failed|Handoff failed|Cannot |Cancel)|pending|Sent/.test(phase))) {
+    if (phase && lastActivity(r)?.state !== "acknowledged" && (batchIsRunning() || phase === "Completed" || /^(Failed|Handoff failed|Cannot |Cancel)|pending|Sent/.test(phase))) {
       const complete = phase === "Completed";
       const failed = /^Failed|^Handoff failed|^Cannot /.test(phase);
       const label = complete ? step.step === "catch-up" ? "✓ Caught up" : "✓ Done" : failed ? "⚠ Failed" : /Cancel/.test(phase) ? "Cancelled" : phase === "Queued" ? "Queued" : /pending|Sent/.test(phase) ? "Sent to agent" : step.step === "catch-up" ? "Catching up…" : "Running…";
       return actionSlot(r, css(el("span", { className: "wtc-step-status", textContent: label, title: phase, ariaLabel: phase, role: "status" }), `font-size:11px;white-space:nowrap;color:${failed ? TONE.failure : complete ? TONE.success : "var(--muted,#888)"}`));
     }
-    const pending = !!step.key && dispatched.has(handoffKey(r, step));
+    const pending = requestUnresolved(r);
     const running = reserved(r);
     const last = lastActivity(r);
     const retry = activityFailed(last) && (last.action === step.step || last.action === "push" && nextRoute(step) === "publish");
     const action = nextRoute(step) === "pr" && r.pullRequest?.url ? link(nextLabel(step), r.pullRequest.url)
-      : nextButton(pending ? "Sent to agent" : running ? "Working…" : retry ? "Retry" : nextLabel(step), step.reason, () => step.step === "commit" ? commitFromFact({ ...r, next: r.next ? step : undefined }) : !r.next ? askCommit(r) : actNext({ ...r, next: step }));
+      : nextButton(pending ? "Sent to agent" : running ? "Working…" : retry ? "Retry" : nextLabel(step), step.reason, () => step.step === "commit" ? commitFromFact({ ...r, next: r.next ? step : undefined }) : actNext({ ...r, next: step }));
     // Opening the PR is a navigation link with the same visible affordance.
     if (action.tagName === "A") {
       action.style.cssText = nextControlStyle + ";text-decoration:none";
       action.className = "wtc-action-control";
     }
     if (action.tagName === "BUTTON") {
-      action.disabled = pending || running || batchRunning || (!!r.next && !nextRoute(step));
+      action.disabled = pending || running || batchIsRunning() || (!!r.next && !nextRoute(step));
       action.ariaLabel = `${retry ? "Retry " : ""}${nextLabel(step)}: ${step.reason}`;
       if (action.disabled) { action.style.color = "var(--muted,#888)"; action.style.cursor = "default"; }
     }
@@ -1384,7 +1457,7 @@ function collectionTables(v) {
     const available = choicesOf(r);
     let picker = null;
     if (choosing && available.length > 1) {
-      picker = el("select", { ariaLabel: `Action for ${nameOf(r)}`, disabled: batchRunning || reserved(r), title: step.reason }, ...available.map(a => el("option", { value: a.key, selected: a.key === step.key, disabled: !a.available, textContent: `${nextLabel(a)}${a.available ? "" : ` — ${a.blocked}`}` })));
+      picker = el("select", { ariaLabel: `Action for ${nameOf(r)}`, disabled: batchIsRunning() || reserved(r), title: step.reason }, ...available.map(a => el("option", { value: a.key, selected: a.key === step.key, disabled: !a.available, textContent: `${nextLabel(a)}${a.available ? "" : ` — ${a.blocked}`}` })));
       picker.style.cssText = "font:inherit;font-size:11px;max-width:104px;min-width:0;padding:2px;border:1px solid var(--border-strong,#666);border-radius:4px;background:var(--bg,#151a22);color:inherit";
       picker.onchange = () => { const chosen = available.find(a => a.available && a.key === picker.value); if (chosen) selection.set(r.sessionKey, { repo: r, step: chosen }); batchPreview = null; v.rerender(); };
     }
@@ -1395,8 +1468,6 @@ function collectionTables(v) {
     syncConversation();
     const logs = activityStore.get(v.collectionKey?.() ?? v.key());
     for (const [key, id] of batchActivityIds) if (logs?.get(id)?.state === "completed" && logs.get(id).completedRecovery) batchResults.set(key, "Completed");
-    const currentKeys = new Set(rows.flatMap((r) => choicesOf(r).map((a) => handoffKey(r, a))));
-    for (const key of dispatched) if (!currentKeys.has(key)) dispatched.delete(key);
     return rows;
   }
   function nextActions(repos) {
@@ -1411,20 +1482,19 @@ function collectionTables(v) {
     if (!choosing) return null;
     const controls = rows.some((r) => r.choices) ? css(el("div", {},
       !batchPreview ? control("Select suggested", "Select current recommendations without replacing chosen alternatives", () => {
-        for (const r of rows) if (!selection.has(r.sessionKey) && r.next && !reserved(r) && !dispatched.has(handoffKey(r, r.next)) && choicesOf(r).some((a) => a.available && a.key === r.next.key)) selection.set(r.sessionKey, { repo: r, step: r.next });
+        for (const r of rows) if (!selection.has(r.sessionKey) && r.next && !reserved(r) && choicesOf(r).some((a) => a.available && a.key === r.next.key)) selection.set(r.sessionKey, { repo: r, step: r.next });
         batchPreview = null; v.rerender();
-      }, { disabled: batchRunning }) : null,
-      control(batchRunning ? "Running…" : batchPreview ? `Confirm ${batchPreview.length} actions` : (selection.size ? `Run selected (${selection.size})` : "Run selected"), "Run selected actions; publication keeps its confirmation", () => {
-        if (batchRunning || !selection.size) return;
+      }, { disabled: batchIsRunning() }) : null,
+      control(batchIsRunning() ? "Running…" : batchPreview ? `Confirm ${batchPreview.length} actions` : (selection.size ? `Run selected (${selection.size})` : "Run selected"), "Run selected actions; publication keeps its confirmation", () => {
+        if (batchIsRunning() || !selection.size) return;
         if (batchPreview) void runSelected(batchPreview);
         else {
           const targets = [...selection.values()];
           if (targets.every(({ step }) => !step.approve || step.approve !== "person") && targets.every(({ step }) => step.step !== "push")) void runSelected(targets);
           else { batchPreview = targets; v.rerender(); }
         }
-      }, { primary: true, disabled: batchRunning || !selection.size }),
-      dispatched.size ? control("Allow retry", "Check the conversation first; allow explicit reselection of unchanged handoffs", () => { if (!batchRunning) { dispatched.clear(); batchKeys.clear(); v.rerender(); } }) : null,
-      batchRunning ? control("Cancel queued", "Stop remaining dispatches; active work is not undone", () => { batchCancelled = true; v.rerender(); }) : null,
+      }, { primary: true, disabled: batchIsRunning() || !selection.size }),
+      batchIsRunning() ? control("Cancel queued", "Stop remaining dispatches; active work is not undone", () => { batchExecution && (batchExecution.cancelled = true); v.rerender(); }) : null,
       batchPreview ? control("Back", "Change the selection", () => { batchPreview = null; v.rerender(); }) : null), "display:flex;flex-wrap:wrap;gap:6px;align-items:center") : null;
     const header = css(el("div", {}, !batchPreview ? control("Exit selection", "Close action selection", () => { choosing = false; batchPreview = null; v.rerender(); }) : null, controls), "display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap");
     return css(el("div", { className: "wtc-next-actions" }, header, batchPreview ? css(el("div", { textContent: "Each publication keeps its account and commit confirmation." }), "font-size:12px;color:var(--muted,#888)") : null), "display:grid;gap:6px;padding:6px 0");
@@ -1441,13 +1511,12 @@ function collectionTables(v) {
       if (active(conversation)) v.say(`${item.repo}: asked this conversation's agent to investigate; the action was not retried.`);
     } catch (err) { recordActivity(collection,item.id,{help:"failed",helpError:String(err?.message ?? err)}); }
   }
-  function releaseCommitRequest(item) {
+  function acknowledgeRequest(item) {
     const collection = v.collectionKey?.() ?? v.key();
-    const state = commitFeedback.get(`${collection}|${item.repoSessionKey}`);
+    const state = requestFeedback.get(`${collection}|${item.repoSessionKey}`);
     if (state?.id !== item.id || state.phase !== "unconfirmed") return;
-    state.phase = "settled";
-    if (state.stepKey) dispatched.delete(state.stepKey);
-    recordActivity(collection,item.id,{state:"acknowledged",status:"Request marked finished by the person; commit outcome remains unverified. Actions are available for explicit selection."});
+    state.phase = "acknowledged";
+    recordActivity(collection,item.id,{state:"acknowledged",status:"Request marked finished by the person; outcome remains unverified. Actions are available for explicit selection."});
     notifyFactFeedback(collection);
   }
   function activityLog() {
@@ -1468,8 +1537,8 @@ function collectionTables(v) {
           css(timeLabel(item.at), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
         css(el("div", {}, el("span", { textContent: item.detail ?? item.status }), resultAction(item.followUp, v.say),
           item.id && ["Failed","Unconfirmed","Sent to agent","Needs attention"].includes(label) ? nextButton(item.help === "sent" ? "Help requested" : item.help === "sending" ? "Requesting help…" : "Ask agent for help", "Ask this conversation's agent to diagnose the blocker without retrying the action", () => askForActionHelp(item), ["sending","sent"].includes(item.help)) : null,
-          item.action === "commit" && commitFeedback.get(`${key}|${item.repoSessionKey}`)?.id === item.id && commitFeedback.get(`${key}|${item.repoSessionKey}`)?.phase === "unconfirmed"
-            ? nextButton("I checked: request has finished", "Only after checking the conversation: release this browser's action reservation. This does not cancel work, retry anything or verify a commit.", () => releaseCommitRequest(item)) : null,
+          requestFeedback.get(`${key}|${item.repoSessionKey}`)?.id === item.id && requestFeedback.get(`${key}|${item.repoSessionKey}`)?.phase === "unconfirmed"
+            ? nextButton("I checked: request has finished", "Only after checking the conversation: release this browser's action reservation. This does not cancel work, retry anything or verify a commit.", () => acknowledgeRequest(item)) : null,
           item.helpError ? el("span",{textContent:`Could not request help: ${item.helpError}`}) : null), "padding:6px 0 8px;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 8px;white-space:normal;overflow-wrap:anywhere;font-size:12px;color:var(--muted,#888)")), "font-size:12px;min-width:0");
       return keepDisclosure(detail, `activity:${item.id ?? item.at}`);
     }), records.length > 3 ? nextButton(showAllActivity ? "Show latest 3" : `Earlier activity (${records.length - 3})`, "Show or hide earlier activity", () => { showAllActivity = !showAllActivity; v.rerender(); }) : null), "display:grid;gap:4px;min-width:0");
@@ -1483,25 +1552,24 @@ function collectionTables(v) {
     const single = !selection.size && targets.length === 1 ? targets[0] : null;
     const same = targets.length && targets.every(({ step }) => step.step === targets[0].step.step);
     const processed = [...batchResults.values()].filter((value) => value === "Completed" || /Failed|failed|Cannot |stopped|Cancelled|pending|confirmation/.test(value)).length;
-    const label = batchRunning ? compact ? `… ${processed}/${batchResults.size}` : `Running ${processed}/${batchResults.size}` : batchPreview ? `Review ${batchPreview.length}` : selection.size ? `Run chosen (${targets.length}) →`
+    const label = batchIsRunning() ? compact ? `… ${processed}/${batchResults.size}` : `Running ${processed}/${batchResults.size}` : batchPreview ? `Review ${batchPreview.length}` : selection.size ? `Run chosen (${targets.length}) →`
       : same ? `${nextLabel(targets[0].step)}${targets.length > 1 ? ` ${targets.length}` : ""}` : `Do next (${targets.length}) →`;
-    const title = (batchRunning ? `Running: ${processed} of ${batchResults.size} selected steps handled.\n` : "") + targets.map(({ repo, step }) => `${nameOf(repo)}: ${nextLabel(step)} — ${step.reason}`).join("\n");
+    const title = (batchIsRunning() ? `Running: ${processed} of ${batchResults.size} selected steps handled.\n` : "") + targets.map(({ repo, step }) => `${nameOf(repo)}: ${nextLabel(step)} — ${step.reason}`).join("\n");
     let primary = null;
     const prepared = repos.find(r => confirming.has(r.sessionKey));
     const recoverable = repos.filter(r => r.error === "checkout unavailable" && r.recovery?.state === "restorable");
-    if (recoverable.length && !batchRunning && !batchPreview && !prepared && !batchResults.size) primary = recoveryButton(recoveryQueueBusy() ? `Restoring ${recoveryQueues.get(v.collectionKey?.() ?? v.key()).index}/${recoveryQueues.get(v.collectionKey?.() ?? v.key()).total}` : recoverable.length > 1 ? "Restore all" : "Restore", `Restore saved checkouts: ${recoverable.map(nameOf).join(", ")}. Each result is recorded in the Action log. Requires gateway admin permission.`, () => restoreCheckouts(recoverable), recoveryQueueBusy());
-    else if (prepared && !batchRunning && !batchPreview) primary = nextButton("Review push", `Review ${nameOf(prepared)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
-    else if (single && !batchRunning && !batchPreview) {
+    if (recoverable.length && !batchIsRunning() && !batchPreview && !prepared && !batchResults.size) primary = recoveryButton(recoveryQueueBusy() ? `Restoring ${recoveryQueues.get(v.collectionKey?.() ?? v.key()).index}/${recoveryQueues.get(v.collectionKey?.() ?? v.key()).total}` : recoverable.length > 1 ? "Restore all" : "Restore", `Restore saved checkouts: ${recoverable.map(nameOf).join(", ")}. Each result is recorded in the Action log. Requires gateway admin permission.`, () => restoreCheckouts(recoverable), recoveryQueueBusy());
+    else if (prepared && !batchIsRunning() && !batchPreview) primary = nextButton("Review push", `Review ${nameOf(prepared)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
+    else if (single && !batchIsRunning() && !batchPreview) {
       const { repo, step } = single;
       if (nextRoute(step) === "pr" && repo.pullRequest?.url) {
         primary = css(link(compact ? "Open PR" : nextLabel(step), repo.pullRequest.url), nextControlStyle + ";text-decoration:none");
         primary.className = "wtc-action-control";
       } else if (nextRoute(step) === "publish" && confirming.has(repo.sessionKey)) primary = nextButton("Review push", `Review ${nameOf(repo)}’s prepared publication`, () => { revealPublication(); v.showActions?.(); v.rerender(); });
       else primary = nextButton(step.step === "push" && repo.pullRequest?.state === "open" ? "Update PR" : label, title, () => step.step === "commit" ? commitFromFact({ ...repo, next: step }) : actNext({ ...repo, next: step }), reserved(repo) || !nextRoute(step));
-    } else if (targets.length || batchRunning) primary = nextButton(label, title, () => {
+    } else if (targets.length || batchIsRunning()) primary = nextButton(label, title, () => {
       if (batchPreview) { v.reveal?.(); v.showActions?.(); v.rerender(); } else if (targets.every(t => t.step.step === "commit")) commitGroup(targets.map(t => t.repo)); else startTargets(targets);
-    }, batchRunning);
-    else if (dispatched.size && !batchResults.size) primary = nextButton(compact ? "Sent" : "Sent to agent", "Handoff accepted; check the conversation for completion", () => {}, true);
+    }, batchIsRunning());
     else if (batchResults.size) {
       const values = [...batchResults.values()];
       const failed = values.filter((status) => /Failed|Handoff failed|Cannot /.test(status)).length;
@@ -1513,6 +1581,7 @@ function collectionTables(v) {
       primary = nextButton(done, [...batchResults].map(([key, status]) => `${batchLabels.get(key) ?? "Repository"}: ${status}`).join("\n") + "\nOpen details in the sidebar action log", openActivity);
       primary.className += " wtc-batch-result";
     }
+    else if (repos.some(r => requestUnresolved(r))) primary = nextButton(repos.some(r => requestFeedback.get(requestKey(r))?.phase === "unconfirmed") ? "Unconfirmed" : "Sent to agent", "A repository action is unresolved; open the Action log for its status and diagnostic help", openActivity);
     else {
       const dirty = rows.find((r) => !r.next && !r.choices && r.dirty > 0);
       if (dirty && !commitBlocked(dirty)) primary = nextButton("Commit changes", `Review and commit intended changes in ${nameOf(dirty)}`, () => commitFromFact(dirty), reserved(dirty));
@@ -1535,24 +1604,24 @@ function collectionTables(v) {
         primary = (last.action === "restore" ? recoveryButton : nextButton)(label, "Open details in the sidebar action log", openActivity, last.state === "running" && last.action === "push");
       }
     }
-    if (!batchRunning && !prepared && (catching.size || busy.size || currentPublications.length)) primary = nextButton(catching.size ? "Catching up…" : publicationProgress, "The current operation is still running or rechecking its result", () => {}, true);
-    if (feedback?.failed && !batchRunning) primary = nextButton("⚠ Failed", `${feedback.text}. Open full action details`, openActivity);
+    if (!batchIsRunning() && !prepared && (repos.some(catchUpRunning) || busy.size || currentPublications.length)) primary = nextButton(repos.some(catchUpRunning) ? "Catching up…" : publicationProgress, "The current operation is still running or rechecking its result", () => {}, true);
+    if (feedback?.failed && !batchIsRunning()) primary = nextButton("⚠ Failed", `${feedback.text}. Open full action details`, openActivity);
     if (primary) { primary.style.width = "104px"; if (targets.length && targets.every(t => t.step.step === "catch-up")) previewButton(primary, targets.map(t => t.repo)); }
-    const slot = css(el("span", { className: `wtc-toolbar-primary${confirming.size || batchRunning || selection.size ? " wtc-toolbar-primary-required" : ""}` }, primary), "display:inline-flex;align-items:baseline;justify-content:flex-end;flex:0 0 104px;width:104px;min-width:104px;min-height:var(--wtc-control-height,20px)");
-    const catches = repos.filter(r => canCatchUp(r) && (!r.next || !dispatched.has(handoffKey(r, r.next))));
+    const slot = css(el("span", { className: `wtc-toolbar-primary${confirming.size || batchIsRunning() || selection.size ? " wtc-toolbar-primary-required" : ""}` }, primary), "display:inline-flex;align-items:baseline;justify-content:flex-end;flex:0 0 104px;width:104px;min-width:104px;min-height:var(--wtc-control-height,20px)");
+    const catches = repos.filter(r => canCatchUp(r));
     const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
     const more = [
-      {id:"catch-up",label: `Catch up (${catches.length})`, detail: catches.length ? `Catch up: ${catches.map(nameOf).join(", ")}. Preserve local edits; conflicts go to the conversation.` : "No eligible checkout needs catching up", previewTargets:catches, preview:on=>preview(catches,on), disabled: !catches.length || batchRunning || catches.some(reserved) || recoveryQueueBusy(), run: () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({repo,step:repo.next}))) : catchUp([...catches])},
-      {id:"restore",label: `Restore (${recoverable.length})`, detail: recoverable.length ? "Recover saved checkouts; gateway admin required" : "No recoverable checkout is currently evicted", disabled: !recoverable.length || batchRunning || recoveryQueueBusy(), run: () => restoreCheckouts(recoverable)},
-      {id:"push",label: `Prepare pushes (${pushes.length})`, detail: pushes.length ? "Review each push before confirming" : "No unpublished commits ready to push", disabled: !pushes.length || batchRunning || pushes.some(reserved) || recoveryQueueBusy(), run: () => pushAll([...pushes])},
+      {id:"catch-up",label: `Catch up (${catches.length})`, detail: catches.length ? `Catch up: ${catches.map(nameOf).join(", ")}. Preserve local edits; conflicts go to the conversation.` : "No eligible checkout needs catching up", previewTargets:catches, preview:on=>preview(catches,on), disabled: !catches.length || batchIsRunning() || catches.some(reserved) || recoveryQueueBusy(), run: () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({repo,step:repo.next}))) : catchUp([...catches])},
+      {id:"restore",label: `Restore (${recoverable.length})`, detail: recoverable.length ? "Recover saved checkouts; gateway admin required" : "No recoverable checkout is currently evicted", disabled: !recoverable.length || batchIsRunning() || recoveryQueueBusy(), run: () => restoreCheckouts(recoverable)},
+      {id:"push",label: `Prepare pushes (${pushes.length})`, detail: pushes.length ? "Review each push before confirming" : "No unpublished commits ready to push", disabled: !pushes.length || batchIsRunning() || pushes.some(reserved) || recoveryQueueBusy(), run: () => pushAll([...pushes])},
       {label: "Refresh status", detail: "Recheck the collection without running an action", run: () => v.refresh()},
-      {label: "Choose steps…", detail: "Select different steps per repository", disabled: !rows.length || batchRunning || recoveryQueueBusy(), run: () => {choosing=true;v.reveal?.();v.showActions?.();v.rerender();}},
+      {label: "Choose steps…", detail: "Select different steps per repository", disabled: !rows.length || batchIsRunning() || recoveryQueueBusy(), run: () => {choosing=true;v.reveal?.();v.showActions?.();v.rerender();}},
     ];
-    const primaryId = feedback?.failed ? null : recoverable.length && !batchRunning && !batchPreview && !prepared && !batchResults.size ? "restore" : prepared ? "push" : single ? single.step.step : same && targets.length ? targets[0].step.step : null;
-    const extras = batchRunning || batchPreview || currentPublications.length || catching.size || busy.size || recoveryQueueBusy() ? [] : more.filter(o => o.id && !o.disabled && o.id !== primaryId).slice(0, headerActionCapacity(v.width?.()) - 1);
+    const primaryId = feedback?.failed ? null : recoverable.length && !batchIsRunning() && !batchPreview && !prepared && !batchResults.size ? "restore" : prepared ? "push" : single ? single.step.step : same && targets.length ? targets[0].step.step : null;
+    const extras = batchIsRunning() || batchPreview || currentPublications.length || repos.some(catchUpRunning) || busy.size || recoveryQueueBusy() ? [] : more.filter(o => o.id && !o.disabled && o.id !== primaryId).slice(0, headerActionCapacity(v.width?.()) - 1);
     const overflow = more.filter(o => !extras.includes(o) && (o.id !== primaryId || o.disabled));
-    const secondary = batchRunning
-      ? nextButton(compact ? "Stop" : "Cancel queued", "Stop queued dispatches; active work continues", () => { batchCancelled = true; v.rerender(); })
+    const secondary = batchIsRunning()
+      ? nextButton(compact ? "Stop" : "Cancel queued", "Stop queued dispatches; active work continues", () => { batchExecution && (batchExecution.cancelled = true); v.rerender(); })
       : actionMenu(nextButton("⋯", "More collection actions", () => {}), overflow, "Collection actions", text => v.say(text, true));
     secondary.style.width = compact ? "36px" : "24px";
     secondary.style.flexShrink = "0";
@@ -1586,9 +1655,9 @@ function collectionTables(v) {
   function bulkActions(repos, narrow, columns) {
     if (!repos.length) return null;
     const pushes = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
-    const catches = repos.filter(r => canCatchUp(r) && (!r.next || !dispatched.has(handoffKey(r, r.next))));
-    const push = nextButton("↑", `Push all ${pushes.length} eligible repositories; prepare each personal confirmation`, () => pushAll([...pushes]), !pushes.length || pushes.some(reserved) || batchRunning || choosing);
-    const catchAll = nextButton("↓", `Catch up all ${catches.length} eligible repositories`, () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({ repo, step: repo.next }))) : catchUp([...catches]), !catches.length || catches.some(reserved) || batchRunning || choosing);
+    const catches = repos.filter(r => canCatchUp(r));
+    const push = nextButton("↑", `Push all ${pushes.length} eligible repositories; prepare each personal confirmation`, () => pushAll([...pushes]), !pushes.length || pushes.some(reserved) || batchIsRunning() || choosing);
+    const catchAll = nextButton("↓", `Catch up all ${catches.length} eligible repositories`, () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({ repo, step: repo.next }))) : catchUp([...catches]), !catches.length || catches.some(reserved) || batchIsRunning() || choosing);
     previewButton(catchAll, catches);
     catchAll.title += catches.length ? `: ${catches.map(nameOf).join(", ")}` : "";
     for (const [button, glyph] of [[push, "↑"], [catchAll, "↓"]]) {
@@ -1596,11 +1665,11 @@ function collectionTables(v) {
       button.replaceChildren(el("span", { className: "wtc-count-icon", textContent: glyph }), el("span", { className: "wtc-count-value" }));
       button.style.cssText += ";width:36px;min-width:0;justify-self:start";
     }
-    const commitTargets = repos.filter(r => r.dirty && !r.error && !["running", "pending"].includes(commitFeedback.get(commitKey(r))?.phase) && repoActionOptions(r).some(o => o.label === "Commit changes" && !o.disabled));
+    const commitTargets = repos.filter(r => r.dirty && !r.error && !["running", "pending"].includes(requestFeedback.get(requestKey(r))?.phase) && repoActionOptions(r).some(o => o.label === "Commit changes" && !o.disabled));
     const commitAll = count("±", `Commit changes in all ${commitTargets.length} eligible repositories; review each first`, TONE.pending, () => commitGroup(commitTargets));
     commitAll.className += " wtc-count-control wtc-local-change wtc-column-commit";
     commitAll.replaceChildren(el("span", {className:"wtc-count-icon",textContent:"±"}), el("span", {className:"wtc-count-value"}));
-    commitAll.disabled = !commitTargets.length || batchRunning || authorSending;
+    commitAll.disabled = !commitTargets.length || batchIsRunning();
     const label = css(el("span", { textContent: narrow ? "All" : "All repos" }), "color:var(--muted,#888);font-size:11px;white-space:nowrap;" + (narrow ? "width:20px;text-align:center" : "padding-left:26px"));
     const arrows = css(el("span", {}, commitAll, repoFacts.ahead ? push : null, repoFacts.behind ? catchAll : null), `display:grid;grid-template-columns:${factTracks().map(x => `${x}px`).join(" ")};gap:${FACT_GAP}px;align-items:baseline`);
     return css(el("div", { className: "wtc-bulk-actions", role: "group", ariaLabel: "All repositories" }, ...(narrow ? [label, arrows] : [label, el("span"), arrows, ...(repoFacts.pr ? [el("span")] : []), el("span")])), narrow
@@ -1680,7 +1749,7 @@ function collectionTables(v) {
   async function publish(r, conversationKey = v.key(), continueAllowed = () => true, confirmed = false, requestedActivityId = null) {
     const mayDispatch = () => active(conversationKey) && continueAllowed();
     if (!mayDispatch()) return { cancelled: true };
-    if (commitUnresolved(r)) return { pending: true, reason: "commit", message: "A local commit request is unresolved; inspect its result before publishing." };
+    if (requestUnresolved(r)) return { pending: true, reason: "commit", message: "A repository action is unresolved; inspect its result before publishing." };
     if (busy.has(r.sessionKey) || sharedPushBusy(r)) return { pending: true };
     if (!PUSHES.has(r.forge) || mine[r.forge] === false) return;
     if (confirming.has(r.sessionKey) && !confirmed) { revealPublication(); v.rerender(); return { pending: true }; }
@@ -1733,39 +1802,61 @@ function collectionTables(v) {
       finally { busy.delete(r.sessionKey); recordActivity(logKey, activityId, { inFlight: false }); if (active(conversationKey)) v.rerender(); }
     }
   }
-  async function catchUp(list) {
-    if (batchRunning) return;
-    const conversation = v.key();
-    const targets = list.filter(r => !reserved(r));
-    targets.forEach(r => catching.add(r.sessionKey));
-    v.rerender();
+  async function withRepoRequests(repos, kind, perform) {
+    const conversation = v.key(), collection = v.collectionKey?.() ?? conversation;
+    const requests = [...new Map(repos.map(repo => [repo.sessionKey,repo])).values()].map(repo => ({repo, state:beginRepoRequest(repo, collection, kind)}));
+    if (!requests.length || requests.some(t => !t.state)) { cancelUnsentRequests(requests.filter(t => t.state), collection); return; }
+    const current = () => active(conversation) && requests.every(t => ownsRepoRequest(t.repo,t.state,collection));
+    const send = input => current() ? dispatchRepoRequests(requests,conversation,collection,"wtc-catch-up",input) : {cancelled:true};
+    const native = async operation => {
+      if (!current()) return {cancelled:true};
+      for (const {state} of requests) state.dispatchedAt = Date.now();
+      try {
+        const out = await operation();
+        for (const {state} of requests) state.nativeFailed = !!out?.code;
+        if (!current()) return {cancelled:true};
+        return out;
+      }
+      catch (err) {
+        for (const {repo,state} of requests) if (ownsRepoRequest(repo,state,collection)) {
+          state.phase = "unconfirmed";
+          recordActivity(collection,state.id,{state:"unknown",status:"Action response unavailable; outcome unconfirmed. Check its state before retrying",detail:String(err?.message ?? err)});
+        }
+        throw err;
+      }
+    };
+    notifyFactFeedback(collection);
     try {
-      for (const r of targets) {
-        if (!active(conversation)) break;
-        const id = uuid(), logKey = v.collectionKey?.() ?? conversation;
-        let failed = false;
-        const say = (text, error = false, action = null) => {
-          failed ||= error;
-          recordActivity(logKey, id, { detail: text, followUp: action });
-          if (active(conversation)) v.say(text, error, action, id);
-        };
-        recordActivity(logKey, id, { repo: nameOf(r), repoSessionKey:r.sessionKey, repoPath:r.path, action: "catch-up", status: "Catching up…" });
-        try {
-          const outcome = await catchUpRepo(v.host, v.agent(), r, say, input => sendToAuthor(conversation, "wtc-catch-up", input));
-          recordActivity(logKey, id, { recoveryRef:outcome?.recoveryRef, status: outcome?.handedOff ? "Sent to conversation; completion pending" : failed ? "Failed; open repository details" : "Completed" });
-        } catch (err) {
-          const message = String(err?.message ?? err);
-          recordActivity(logKey, id, { status: "Failed: " + message });
-          say(`${nameOf(r)}: ${message}`, true);
-        } finally { catching.delete(r.sessionKey); }
+      await perform({conversation,collection,requests,current,send,native});
+      for (const {repo,state} of requests) if (ownsRepoRequest(repo,state,collection) && !state.handoffAt && state.phase !== "unconfirmed") {
+        state.phase = state.nativeFailed ? "failed" : "settled";
+        recordActivity(collection,state.id,{state:state.nativeFailed ? "failed" : state.dispatchedAt ? "completed" : "cancelled",status:state.nativeFailed ? "Failed; open repository details" : state.dispatchedAt ? "Completed" : "Cancelled before dispatch"});
       }
     } finally {
-      targets.forEach(r => catching.delete(r.sessionKey));
+      cancelUnsentRequests(requests,collection); notifyFactFeedback(collection);
       if (active(conversation)) await v.refresh();
     }
   }
+  async function catchUp(list) {
+    if (batchIsRunning()) return;
+    const conversation = v.key();
+    for (const r of list) {
+      if (!active(conversation)) break;
+      await withRepoRequests([r], "catch-up", async ({conversation,collection,requests,current,send,native}) => {
+        const id = requests[0].state.id;
+        const say = (text, failed = false, action = null) => {
+          recordActivity(collection,id,{detail:text,followUp:action});
+          if (active(conversation)) v.say(text,failed,action,id);
+        };
+        try {
+          const outcome = await catchUpRepo(v.host,v.agent(),r,say,send,() => native(() => call(v.host,"catch-up",r.sessionKey,v.agent())));
+          if (outcome?.recoveryRef) recordActivity(collection,id,{recoveryRef:outcome.recoveryRef});
+        } catch (err) { if (current()) say(`${nameOf(r)}: ${String(err?.message ?? err)}`,true); }
+      });
+    }
+  }
   async function pushAll(list) {
-    if (batchRunning) return;
+    if (batchIsRunning()) return;
     const conversationKey = v.key();
     for (const r of list) {
       if (!active(conversationKey)) break;
@@ -1774,84 +1865,58 @@ function collectionTables(v) {
   }
   // A sub-session's commits go into the collection's checkout of the repository, as a
   // catch-up from its branch; a conflict is the agent's, as on ↓.
+  const taskRepo = r => store.get(v.key())?.data?.repos?.find(repo => repo.sessionKey === r.taskSessionKey)
+    ?? { ...r, sessionKey:r.taskSessionKey, path:undefined, branch:r.taskBranch };
   async function mergeSub(w, r) {
-    const name = nameOf(r);
-    if (!r.taskSessionKey) return v.say(`${name}: the collection has no checkout of it to merge sub-session ${w.name} into`);
-    // Both checkouts are busy: the collection's row would offer ↓ in the same
-    // worktree meanwhile.
-    const keys = [r.sessionKey, r.taskSessionKey];
-    keys.forEach((k) => catching.add(k));
-    v.rerender();
-    try {
-      v.say(`Merging ${r.branch} into ${name}…`);
-      const out = await call(v.host, "catch-up", r.taskSessionKey, v.agent(), { from: r.branch });
+    if (!r.taskSessionKey) return v.say(`${nameOf(r)}: the collection has no checkout of it to merge sub-session ${w.name} into`);
+    return withRepoRequests([r,taskRepo(r)],"catch-up",async ({conversation,current,send,native}) => {
+      const out = await native(() => call(v.host,"catch-up",r.taskSessionKey,v.agent(),{from:r.branch}));
+      if (!current()) return;
       const conflicts = conflictsOf(out.message);
       if (conflicts.length) {
-        await sendToAuthor(v.key(), "wtc-catch-up", `${name}: merging sub-session ${w.name}'s ${r.branch} (wtc catch-up --from ${r.branch}) conflicts in ${conflicts.join(", ")}.`);
-        v.say(`${name}: ${conflicts.join(", ")} changed in both; the conversation was asked to merge ${r.branch} and resolve them.`);
-      } else {
-        v.say(`${name}: ${out.json?.summary ?? (wtcMessage(out.message) || "exit " + out.code)}`, out.code !== 0);
-      }
-    } finally {
-      keys.forEach((k) => catching.delete(k));
-      await v.refresh();
-    }
+        const handoff = await send(`${nameOf(r)}: merging sub-session ${w.name}'s ${r.branch} (wtc catch-up --from ${r.branch}) conflicts in ${conflicts.join(", ")}.`);
+        if (handoff?.handedOff && active(conversation)) v.say(`${nameOf(r)}: ${conflicts.join(", ")} changed in both; the conversation was asked to merge ${r.branch} and resolve them.`);
+      } else v.say(`${nameOf(r)}: ${out.json?.summary ?? (wtcMessage(out.message) || "exit " + out.code)}`,out.code !== 0);
+    });
   }
-  // A sub-session catches up with the collection's branch, named in the
-  // catch-up in its own checkout: whatever the sub-session's branch is called,
-  // it merges the collection's, not origin's.
   async function catchUpSub(w, r) {
-    const name = nameOf(r);
-    catching.add(r.sessionKey);
-    v.rerender();
-    try {
-      v.say(`Catching sub-session ${w.name} up with the collection's ${name}…`);
-      const out = await call(v.host, "catch-up", r.sessionKey, v.agent(), r.taskBranch ? { from: r.taskBranch } : undefined);
+    return withRepoRequests(r.taskSessionKey ? [r,taskRepo(r)] : [r],"catch-up",async ({conversation,current,send,native}) => {
+      const out = await native(() => call(v.host,"catch-up",r.sessionKey,v.agent(),r.taskBranch ? {from:r.taskBranch} : undefined));
+      if (!current()) return;
       const conflicts = conflictsOf(out.message);
       if (conflicts.length) {
-        await sendToAuthor(v.key(), "wtc-catch-up", `${name}: catching sub-session ${w.name} up with the collection (wtc catch-up in its checkout) conflicts in ${conflicts.join(", ")}.`);
-        v.say(`${name}: ${conflicts.join(", ")} changed in both; the conversation was asked to catch sub-session ${w.name} up and resolve them.`);
-      } else {
-        v.say(`${name}: ${out.json?.summary ?? (wtcMessage(out.message) || "exit " + out.code)}`, out.code !== 0);
-      }
-    } finally {
-      catching.delete(r.sessionKey);
-      await v.refresh();
-    }
+        const handoff = await send(`${nameOf(r)}: catching sub-session ${w.name} up with the collection (wtc catch-up in its checkout) conflicts in ${conflicts.join(", ")}.`);
+        if (handoff?.handedOff && active(conversation)) v.say(`${nameOf(r)}: ${conflicts.join(", ")} changed in both; the conversation was asked to catch sub-session ${w.name} up and resolve them.`);
+      } else v.say(`${nameOf(r)}: ${out.json?.summary ?? (wtcMessage(out.message) || "exit " + out.code)}`,out.code !== 0);
+    });
   }
-  // What a sub-session left uncommitted is the conversation's to sort out:
-  // it can read the checkout, compare and take over what is still wanted.
+  // Taking over worker edits can change the parent checkout, so both owners
+  // participate in the same lifecycle as a commit or native merge.
   async function reviewSub(w, r) {
-    const differ = (r.uncommitted ?? []).filter((f) => f.state !== "same").map((f) => f.path);
-    await askConversation(v.host, v.key(), `Sub-session ${w.name} left ${plural(r.dirty, "uncommitted file")} in its checkout of ${nameOf(r)} (${r.path}). ${differ.length ? `These differ from yours or only it has them: ${differ.join(", ")}. Compare them with yours and take over what is still wanted, in your checkout.` : "Yours has all of them the same."} Then tell me whether it can be discarded. Don't commit in its checkout, and don't push.`);
-    v.say(`${nameOf(r)}: the conversation was asked to review what sub-session ${w.name} left.`);
+    const repos = r.taskSessionKey ? [r,taskRepo(r)] : [r];
+    return withRepoRequests(repos,"review",async ({conversation,collection,requests}) => {
+      const differ = (r.uncommitted ?? []).filter(f => f.state !== "same").map(f => f.path);
+      const input = `Sub-session ${w.name} left ${plural(r.dirty, "uncommitted file")} in its checkout of ${nameOf(r)} (${r.path}). ${differ.length ? `These differ from yours or only it has them: ${differ.join(", ")}. Compare them with yours and take over what is still wanted, in your checkout.` : "Yours has all of them the same."} Then tell me whether it can be discarded. Don't commit in its checkout, and don't push.`;
+      const handoff = await dispatchRepoRequests(requests,conversation,collection,null,input);
+      if (handoff?.handedOff && active(conversation)) v.say(`${nameOf(r)}: the conversation was asked to review what sub-session ${w.name} left.`);
+    });
   }
-  // Discarding a sub-session deletes its sessions; OpenClaw removes their
-  // worktrees. It asks again first: the second click within a few seconds
-  // discards.
   const armed = new Map();
   async function discardSub(w) {
+    if (w.repos.some(reserved)) return;
     if (!armed.has(w.name)) {
-      armed.set(w.name, setTimeout(() => { armed.delete(w.name); v.rerender(); }, 5000));
-      v.rerender();
-      return;
+      armed.set(w.name,setTimeout(() => {armed.delete(w.name);v.rerender();},5000)); v.rerender(); return;
     }
-    clearTimeout(armed.get(w.name));
-    armed.delete(w.name);
-    w.repos.forEach((r) => catching.add(r.sessionKey));
-    v.rerender();
-    try {
-      v.say(`Discarding sub-session ${w.name}…`);
+    clearTimeout(armed.get(w.name)); armed.delete(w.name);
+    return withRepoRequests(w.repos,"discard",async ({conversation,current,native}) => {
       const kept = [];
       for (const r of w.repos) {
-        const out = await v.host.request("sessions.delete", { key: r.sessionKey, agentId: v.agent() });
+        if (!current()) break;
+        const out = await native(() => v.host.request("sessions.delete",{key:r.sessionKey,agentId:v.agent()}));
         if (out?.worktreePreserved) kept.push(`${nameOf(r)} (${out.worktreePreserved.reason}, at ${out.worktreePreserved.path})`);
       }
-      v.say(kept.length ? `Sub-session ${w.name} discarded; OpenClaw kept the worktree of ${kept.join(", ")}.` : `Sub-session ${w.name} discarded.`);
-    } finally {
-      w.repos.forEach((r) => catching.delete(r.sessionKey));
-      await v.refresh();
-    }
+      if (current()) v.say(kept.length ? `Sub-session ${w.name} discarded; OpenClaw kept the worktree of ${kept.join(", ")}.` : `Sub-session ${w.name} discarded.`);
+    });
   }
 
   // PR and service tables retain their fact columns. Repository groups omit
@@ -1861,7 +1926,7 @@ function collectionTables(v) {
   const toned = (text, tone, title) => css(el("span", { textContent: text, title: title ?? "" }), `color:${tone}`);
   // A fact that is also an action: a count in a pill.
   const count = (text, title, tone, run) => {
-    const b = css(el("button", { className: "wtc-action-control", type: "button", textContent: String(text), title, ariaLabel: title, disabled: batchRunning }),
+    const b = css(el("button", { className: "wtc-action-control", type: "button", textContent: String(text), title, ariaLabel: title, disabled: batchIsRunning() }),
       `border:1px solid var(--wtc-control-border,var(--border, rgba(128,128,128,.4)));background:var(--wtc-control-bg,transparent);color:var(--wtc-control-text,${tone});cursor:pointer;font:inherit;font-size:12px;line-height:16px;min-height:var(--wtc-control-height,20px);min-width:var(--wtc-control-width,20px);padding:0 6px;border-radius:var(--radius-sm,6px);white-space:nowrap;font-variant-numeric:tabular-nums`);
     const parts = String(text).match(/^([±↑↓]) (\d+)$/);
     if (parts) {
@@ -1882,64 +1947,105 @@ function collectionTables(v) {
     svg.style.transformBox = "view-box";
     return css(el("span", decorative ? {ariaHidden:"true"} : {title:"Working",role:"status",ariaLabel:"Working"}, svg), "display:inline-flex;width:12px;height:12px;align-items:center;justify-content:center;vertical-align:middle");
   };
-  const commitKey = r => `${v.collectionKey?.() ?? v.key()}|${r.sessionKey}`;
-  function limitCommitFeedback(key, state, collection) {
+  // Repository mutations share one admission authority across views and routes.
+  // A request retains its original owner and checkout until completion or explicit acknowledgement.
+  const requestKey = (r, collection = v.collectionKey?.() ?? v.key()) => `${collection}|${r.sessionKey}`;
+  const ownsRepoRequest = (r, state, collection) => state && requestFeedback.get(requestKey(r, collection)) === state && ["running", "pending", "unconfirmed"].includes(state.phase);
+  function beginRepoRequest(r, collection, kind, id = uuid()) {
+    if (r.error || reservedInCollection(r, collection) || recoveryQueues.has(collection) || kind === "commit" && commitBlocked(r)) return null;
+    const state = { phase: "running", kind, before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id };
+    const key = requestKey(r, collection);
+    requestFeedback.set(key, state); limitRequestFeedback(key, state, collection);
+    recordActivity(collection,id,{repo:nameOf(r),repoSessionKey:r.sessionKey,repoPath:r.path,action:kind,state:"running",status:kind === "commit" ? "Requesting local commits" : "Rechecking repository action"});
+    return state;
+  }
+  const beginCommitRequest = (r, collection, id) => beginRepoRequest(r, collection, "commit", id);
+  function cancelUnsentRequests(requests, collection, detail) {
+    for (const {repo,state} of requests) {
+      if (!ownsRepoRequest(repo,state,collection) || state.dispatchedAt) continue;
+      state.phase = "settled";
+      recordActivity(collection,state.id,{state:"cancelled",status:"Cancelled before action handoff",detail});
+    }
+  }
+  async function dispatchRepoRequests(requests, conversation, collection, skill, input) {
+    if (!requests.length || !active(conversation) || !requests.every(({repo,state}) => ownsRepoRequest(repo, state, collection))) { cancelUnsentRequests(requests,collection); return {cancelled:true}; }
+    const blocked = requests.map(({repo,state}) => repo.error || (repo.path !== state.path || repo.branch !== state.branch ? "The checkout changed before handoff; refresh before acting" : state.kind === "commit" ? commitBlocked(repo) : "")).find(Boolean);
+    if (blocked) { cancelUnsentRequests(requests,collection,blocked); return {cancelled:true}; }
+    if (requests.some(({state}) => state.handoffAt)) { cancelUnsentRequests(requests,collection); return {pending:true}; }
+    for (const {state} of requests) state.handoffAt = state.dispatchedAt = Date.now();
+    try {
+      await sendToAuthor(conversation, skill, input);
+      for (const {repo,state} of requests) {
+        if (!ownsRepoRequest(repo,state,collection)) continue;
+        if (state.phase !== "unconfirmed") state.phase = "pending";
+        recordActivity(collection,state.id,{state:state.phase === "unconfirmed" ? "unknown" : "handed-off",status:state.phase === "unconfirmed" ? "Request accepted; outcome remains unconfirmed" : "Sent to conversation; completion pending"});
+      }
+      return {handedOff:true};
+    } catch (err) {
+      for (const {repo,state} of requests) {
+        if (!ownsRepoRequest(repo,state,collection)) continue;
+        state.phase = "unconfirmed"; state.error = String(err?.message ?? err);
+        recordActivity(collection,state.id,{state:"unknown",status:"Action handoff outcome unconfirmed; check the conversation before retrying",detail:"Action handoff outcome unconfirmed: "+state.error});
+      }
+      return {unconfirmed:true};
+    } finally { notifyFactFeedback(collection); }
+  }
+  function limitRequestFeedback(key, state, collection) {
     const timer = setTimeout(() => {
-      if (commitFeedback.get(key) !== state || !["running", "pending"].includes(state.phase)) return;
+      if (requestFeedback.get(key) !== state || !["running", "pending"].includes(state.phase)) return;
       state.phase = "unconfirmed";
-      recordActivity(collection,state.id,{state:"unknown",status:"No commit observed yet; open action details to check the request or ask the agent for help"});
+      recordActivity(collection,state.id,{state:"unknown",status:state.kind === "commit" ? "No commit observed yet; open action details to check the request or ask the agent for help" : "Action outcome unconfirmed; open action details to check the request or ask the agent for help"});
       notifyFactFeedback(collection);
     }, 90000); timer.unref?.();
   }
   async function commitGroup(repos) {
-    if (!repos.length || authorSending || batchRunning) return;
+    if (!repos.length || batchIsRunning()) return;
     const conversation = v.key(), collection = v.collectionKey?.() ?? conversation;
-    let targets = repos.filter(r => !reserved(r) && !commitBlocked(r));
+    const admitted = repos.map(repo => ({repo,state:beginCommitRequest(repo,collection)})).filter(t => t.state);
+    let targets = admitted.map(t => t.repo);
     if (!targets.length) return;
-    const states = targets.map(r => {
-      const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid(), stepKey: r.next?.step === "commit" ? handoffKey(r,r.next) : null };
-      commitFeedback.set(commitKey(r), state); limitCommitFeedback(commitKey(r), state, collection);
-      recordActivity(collection, state.id, {repo:nameOf(r),repoSessionKey:r.sessionKey,action:"commit",state:"running",status:"Requesting local commits"}); return state;
-    });
+    const states = admitted.map(t => t.state);
     notifyFactFeedback(collection);
     try {
       targets = await recheckCommitTargets(targets, conversation, collection);
-      await sendToAuthor(conversation, "wtc", `Review and commit the intended local changes in these eligible repositories only: ${targets.map(nameOf).join(", ")}. Recheck each repository's current state and branch policy. Preserve intended work and report each result. Publication and follow-up actions are separate.`);
-      states.forEach(state => { if(state.phase!=="unconfirmed") state.phase = "pending"; recordActivity(collection,state.id,{state:state.phase === "unconfirmed" ? "unknown" : "handed-off",status:state.phase === "unconfirmed" ? "Request accepted; outcome remains unconfirmed" : "Sent to conversation; completion pending"}); });
-    } catch (err) { states.forEach(state => { state.phase = "failed"; state.error = String(err?.message ?? err);recordActivity(collection,state.id,{state:"failed",status:"Commit request failed: "+state.error}); }); }
-    finally { notifyFactFeedback(collection); if (active(conversation)) await v.refresh(); }
+      if (!targets.every((r, i) => ownsRepoRequest(r, states[i], collection))) {
+        states.forEach((state, i) => { if (ownsRepoRequest(targets[i], state, collection)) { state.phase = "settled"; recordActivity(collection,state.id,{state:"cancelled",status:"Cancelled before action handoff"}); } });
+        return;
+      }
+      await dispatchRepoRequests(targets.map((repo,i) => ({repo,state:states[i]})), conversation, collection, "wtc", `Review and commit the intended local changes in these eligible repositories only: ${targets.map(nameOf).join(", ")}. Recheck each repository's current state and branch policy. Preserve intended work and report each result. Publication and follow-up actions are separate.`);
+    } catch (err) { states.forEach((state, i) => { if (!ownsRepoRequest(targets[i], state, collection)) return; state.phase = "failed"; state.error = String(err?.message ?? err);recordActivity(collection,state.id,{state:"failed",status:"Commit request failed: "+state.error}); }); }
+    finally { cancelUnsentRequests(targets.map((repo,i) => ({repo,state:states[i]})),collection); notifyFactFeedback(collection); if (active(conversation)) await v.refresh(); }
   }
   async function commitFromFact(r) {
-    const key = commitKey(r), collection = v.collectionKey?.() ?? v.key();
-    if (reserved(r) || commitBlocked(r)) return;
-    const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid(), stepKey: r.next?.step === "commit" ? handoffKey(r,r.next) : null };
-    commitFeedback.set(key, state); limitCommitFeedback(key, state, collection); recordActivity(collection,state.id,{repo:nameOf(r),repoSessionKey:r.sessionKey,action:"commit",state:"running",status:"Requesting local commits"}); notifyFactFeedback(collection);
+    const collection = v.collectionKey?.() ?? v.key();
+    const state = beginCommitRequest(r, collection); if (!state) return; notifyFactFeedback(collection);
     try {
       [r] = await recheckCommitTargets([r], v.key(), collection);
-      state.stepKey = r.next?.step === "commit" ? handoffKey(r, r.next) : null;
-      const result = r.next?.step === "commit" ? await actNext(r, state.id) : await askCommit(r);
+      if (!ownsRepoRequest(r, state, collection)) return;
+      const result = r.next?.step === "commit" ? await actNext(r, state.id) : await askCommit(r, state);
+      if (result?.unconfirmed || result?.cancelled) return;
       const last = activityStore.get(collection)?.get(state.id);
+      if (!ownsRepoRequest(r, state, collection)) return;
       if (result?.error || last?.action === "commit" && activityFailed(last)) throw Error(result?.error ?? last.status);
-      if(state.phase!=="unconfirmed") state.phase = "pending";recordActivity(collection,state.id,{state:state.phase === "unconfirmed" ? "unknown" : "handed-off",status:state.phase === "unconfirmed" ? "Request accepted; outcome remains unconfirmed" : "Sent to conversation; completion pending"});
     } catch (err) { state.phase = "failed"; state.error = String(err?.message ?? err);recordActivity(collection,state.id,{state:"failed",status:"Commit request failed: "+state.error}); }
-    finally { notifyFactFeedback(collection); }
+    finally { cancelUnsentRequests([{repo:r,state}],collection); notifyFactFeedback(collection); }
   }
   function localChanges(r) {
-    const collection = v.collectionKey?.() ?? v.key(), key = commitKey(r);
-    if (commitFeedback.get(key) && (commitFeedback.get(key).branch !== r.branch || commitFeedback.get(key).path !== r.path)) commitFeedback.delete(key);
-    const state = commitFeedback.get(key);
+    const collection = v.collectionKey?.() ?? v.key(), key = requestKey(r);
+    const request = requestFeedback.get(key);
+    const state = request?.kind === "commit" ? request : null;
     // New commits can be observed even when intentionally uncommitted files remain.
     // Partial progress does not prove the handed-off request has finished.
     // A lower dirty count alone never earns a commit-success mark.
     const progress = `${toPush(r)}|${r.dirty}`;
-    if (["pending", "unconfirmed"].includes(state?.phase) && !r.error && (toPush(r) > state.before || r.dirty < state.dirty) && state.progress !== progress) {
+    if (["pending", "unconfirmed"].includes(state?.phase) && state.path === r.path && state.branch === r.branch && !r.error && (toPush(r) > state.before || r.dirty < state.dirty) && state.progress !== progress) {
       state.progress = progress;
       state.observedCommit = toPush(r) > state.before;
       state.phase = toPush(r) > state.before && !r.dirty ? "completed" : "unconfirmed";
       state.at = Date.now();
       const outcome = state.phase;
       queueMicrotask(() => recordActivity(collection,state.id,{state:outcome === "completed" ? "completed" : "unknown",status:outcome === "completed" ? "New local commits observed; working tree clean" : toPush(r) > state.before ? "Partial commit progress observed; request outcome unconfirmed. Check the conversation before releasing its reservation" : "Changes decreased without a new commit; request outcome unconfirmed. Check the conversation before releasing its reservation"}));
-      const timer = setTimeout(() => { if (commitFeedback.get(key) === state && state.phase === "completed") state.phase = "settled"; notifyFactFeedback(collection); }, 5100); timer.unref?.();
+      const timer = setTimeout(() => { if (requestFeedback.get(key) === state && state.phase === "completed") state.phase = "settled"; notifyFactFeedback(collection); }, 5100); timer.unref?.();
     }
     if (state?.phase === "failed" && !r.dirty) state.phase = "settled";
     const done = state?.phase === "completed" && !r.dirty && Date.now() - state.at < 5000;
@@ -2013,13 +2119,13 @@ function collectionTables(v) {
     const label = css(el(href ? "a" : "span", { className: "wtc-repo-label", textContent: nameOf(r) ?? "?", title: [r.owner ? `${r.owner}/${nameOf(r)}` : nameOf(r), r.path].filter(Boolean).join("\n") }),
       "color:var(--text-strong, inherit);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;min-width:0");
     if (href) Object.assign(label, { href, target: "_blank", rel: "noopener noreferrer" });
-    const check = choosing ? el("input", { type: "checkbox", checked: selection.has(r.sessionKey), disabled: batchRunning || reserved(r) || !r.next || !choicesOf(r).some(a => a.available), title: r.next ? "Select this repository’s action" : "No selectable next step", ariaLabel: `Select ${nameOf(r)}` }) : null;
+    const check = choosing ? el("input", { type: "checkbox", checked: selection.has(r.sessionKey), disabled: batchIsRunning() || reserved(r) || !r.next || !choicesOf(r).some(a => a.available), title: r.next ? "Select this repository’s action" : "No selectable next step", ariaLabel: `Select ${nameOf(r)}` }) : null;
     if (check) {
       check.style.cssText = "align-self:center;width:15px;height:15px;margin:0;accent-color:var(--accent,#75c8c1);flex:none";
       check.onchange = () => { if (selection.has(r.sessionKey)) selection.delete(r.sessionKey); else selection.set(r.sessionKey, { repo: r, step: r.next }); batchPreview = null; v.rerender(); };
     }
     const last = lastActivity(r);
-    const failure = activityFailed(last) ? nextButton("⚠", `${nameOf(r)}: ${last.status}. Open action details`, openActivity) : null;
+    const failure = activityFailed(last) || last?.state === "unknown" ? nextButton(last?.state === "unknown" ? "?" : "⚠", `${nameOf(r)}: ${last.status}. Open action details`, openActivity) : null;
     // Keep wide name tracks steady when action feedback appears.
     const warning = css(el("span", { className: "wtc-repo-warning" }, failure), "display:inline-flex;align-items:baseline;flex:0 0 24px;width:24px");
     return css(el("span", { className: "wtc-repo-name", title: label.title }, leadSlot(check ?? forgeIcon(r.forge, 13)), label, warning), "display:inline-flex;align-items:baseline;gap:6px;min-width:0;max-width:100%");
@@ -2047,7 +2153,7 @@ function collectionTables(v) {
     const button = mine[r.forge] === null
       ? count(label, `${activity}. Pushing needs your own ${account}: click to push, or for how to connect it`, TONE.none, () => publish(r))
       : count(label, `${activity}. ${pushTitle(r.pullRequest, r.forge)}, with your own ${account}, after you confirm.${proposalTitle(r)}${left}`, TONE.pending, () => publish(r));
-    if (commitUnresolved(r)) { button.disabled = true; button.title += " Wait for the current action or inspect its unconfirmed result."; }
+    if (requestUnresolved(r)) { button.disabled = true; button.title += " Wait for the current action or inspect its unconfirmed result."; }
     return button;
   }
   const openPRHistory = () => v.host.ui.openPanel("collection", { sessionKey: v.key(), agentId: v.agent(), focus: "pull-requests" });
@@ -2074,7 +2180,7 @@ function collectionTables(v) {
       : null;
     const conflict = open && pr.mergeable === "conflicting"
       ? count("✗", `#${pr.number} conflicts with ${baseOf(r)}. Resolve: ask the conversation to merge the base in and resolve the conflicts`, TONE.failure,
-        () => sendToAuthor(v.key(), "wtc-catch-up", `${nameOf(r)}: pull request #${pr.number} conflicts with ${baseOf(r)}.`))
+        () => withRepoRequests([r],"resolve",({send}) => send(`${nameOf(r)}: pull request #${pr.number} conflicts with ${baseOf(r)}.`)))
       : null;
     const review = open ? { approved: toned("✓", TONE.success, "approved"), changes_requested: toned("✗", TONE.failure, "changes requested"), review_required: muted("○", "review required") }[pr.review] ?? null : null;
     const errorLabel = r.error === "checkout unavailable" ? r.recovery?.state === "restorable" ? "Evicted" : r.recovery?.state === "unavailable" ? "Snapshot unavailable" : "No checkout" : r.error === "status unavailable" ? "No status" : r.error;
@@ -2098,7 +2204,7 @@ function collectionTables(v) {
       repoName(r), branch,
       localChanges(r),
       busy.has(r.sessionKey) || sharedPushBusy(r) ? pendingPushCount(n) : pushCell(r, n),
-      catching.has(r.sessionKey) ? working() : toCatchUp(r) ? catchUpCell(r) : caughtUp ? toned("✓", TONE.success, "Caught up; no base changes remain in this snapshot") : null,
+      catchUpRunning(r) ? working() : toCatchUp(r) ? catchUpCell(r) : caughtUp ? toned("✓", TONE.success, "Caught up; no base changes remain in this snapshot") : null,
       pr ? css(el("span", { title: `${pr.draft && open ? "Draft PR. " : ""}${pr.title ?? ""}` }, link(`#${pr.number}`, pr.url), pr.draft && open && !otherPRs(r).length ? muted("draft") : pr.state !== "open" ? muted(pr.state) : null), "display:inline-flex;gap:4px") : null,
       ci, conflict, review, nextCell(r), prHints(r),
     ];
@@ -2198,7 +2304,7 @@ function collectionTables(v) {
       slot("±", files ? toned(String(files), TONE.pending) : null, "Changed files not committed yet"),
       slot("↑", ready.some((r) => busy.has(r.sessionKey) || sharedPushBusy(r)) ? working() : ready.length
         ? count(commits ? `↑ ${commits}` : "↑", `Push ${ready.map(nameOf).join(", ")}, each to its pull request or a new draft one`, TONE.pending, () => pushAll(ready)) : null),
-      slot("↓", behind.some((r) => catching.has(r.sessionKey)) ? working() : behind.length
+      slot("↓", behind.some((r) => catchUpRunning(r)) ? working() : behind.length
         ? count(behind.some((r) => r.behind) ? `↓ ${behind.reduce((n, r) => n + (r.behind ?? 0), 0)}` : "↓", `Catch up ${behind.map((r) => `${nameOf(r)} (${r.behind || `#${r.pullRequest.number} merged`})`).join(", ")}: merge locally into live branches and return completed branches to the tip, without rebasing. For an open PR, Push publishes the updated branch afterward`, TONE.pending, () => catchUp(behind)) : null),
       slot("PR", css(el("span", {}, prs.length ? toned(`${prs.length}${worst && prTone(worst) === TONE.failure ? " ✗" : worst && prTone(worst) === TONE.success ? " ✓" : ""}`, prTone(worst),
         prs.map((r) => `${nameOf(r)} #${r.pullRequest.number}: ${[r.pullRequest.title, ...prState(r.pullRequest)].filter(Boolean).join(", ")}`).join("\n")) : archivedCount ? null : DOT(),
@@ -2238,9 +2344,9 @@ function collectionTables(v) {
       by.same.length ? `the same in the collection: ${by.same.join(", ")}` : ""].filter(Boolean).join("\n");
   };
   function subRow(w, r) {
-    const busyHere = catching.has(r.sessionKey);
+    const busyHere = reserved(r) || r.taskSessionKey && reserved(taskRepo(r));
     // ✕ ends the whole sub-session: not while any of its checkouts is busy.
-    const discard = w.repos.some((x) => catching.has(x.sessionKey)) ? null
+    const discard = w.repos.some(reserved) ? null
       : armed.has(w.name)
         ? count("discard?", `Click again to discard sub-session ${w.name}. ${subFacts(w)}`, TONE.failure, () => discardSub(w))
         : smallButton("✕", `Discard sub-session ${w.name}${w.repos.length > 1 ? `, in all its ${w.repos.length} repositories` : ""}: deletes its sessions, and OpenClaw removes its worktrees. ${subFacts(w)}`, () => discardSub(w));
@@ -2257,7 +2363,7 @@ function collectionTables(v) {
       : r.dirty ? toned(`↓ ${r.behind}`, TONE.pending, `${plural(r.behind, "commit")} of the collection's ${nameOf(r)} not on ${r.branch}. It has uncommitted files: review them first (±)`)
       : r.taskBranch ? count(`↓ ${r.behind}`, `${plural(r.behind, "commit")} of the collection's ${nameOf(r)} not on ${r.branch}. Catch the sub-session up with the collection; never rebases`, TONE.pending, () => catchUpSub(w, r))
       : toned(`↓ ${r.behind}`, TONE.pending, `${plural(r.behind, "commit")} of the collection's ${nameOf(r)} not on ${r.branch}`);
-    const files = !r.dirty ? null
+    const files = !r.dirty || busyHere ? null
       : count(String(r.dirty), `${filesTitle(r)}\n\nAsk the conversation to compare them with its own and take over what is still wanted`, TONE.pending, () => reviewSub(w, r));
     return [name, css(el("code", { textContent: r.branch ?? "", title: r.branch ?? "" }), "font-size:12px;color:var(--muted, #888)"),
       files, up, down, null, null, null, null];

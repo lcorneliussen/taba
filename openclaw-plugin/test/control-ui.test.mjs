@@ -119,7 +119,7 @@ let restoreResult;
 let githubPublishResult = { status: "needs_confirmation", requestId: "req-1" };
 let githubConfirmResult;
 let githubStatusResult;
-let controlledSend;
+let controlledSend, controlledDelete;
 let portals = [];
 // The person's own GitHub connection, when a test gives them one.
 let personal = null;
@@ -167,6 +167,7 @@ const hostRequest = async (method, params) => {
   if (method === "plugins.sessionAction" && params.actionId === "catch-up") return catchUpResult;
   if (method === "plugins.sessionAction" && params.actionId === "next") return typeof nextResult === "function" ? nextResult(params) : nextResult;
   if (method === "plugins.sessionAction" && params.actionId === "restore-checkout") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
+  if (method === "sessions.delete" && controlledDelete) return controlledDelete;
   if (method === "sessions.delete") return { ok: true, key: params.key, deleted: true, archived: [], ...(preserved[params.key] ? { worktreePreserved: preserved[params.key] } : {}) };
   if (method === "sessions.github.publish") return typeof githubPublishResult === "function" ? githubPublishResult(params) : githubPublishResult;
   if (method === "sessions.github.confirm") return typeof githubConfirmResult === "function" ? githubConfirmResult(params) : githubConfirmResult ?? { status: "published", url: "https://github.com/octo/api/pull/7" };
@@ -461,31 +462,20 @@ test("composer: no card for a session without repositories", async () => {
 });
 
 test("next actions: run the rechecked step and hand judgment to the conversation", async () => {
-  for (const kind of ["composer", "panel"]) {
+  for (const kind of ["composer", "panel"]) for (const outcome of ["completed","lost","not-performed"]) {
     const step = { step: "return-to-tip", by: "wtc", reason: "The pull request merged", key: "tip:1", command: ["wtc", "catch-up"] };
     const r = repo("api", { next: step });
     const { host, view } = await mount(kind, collection([r]));
-    const action = () => [...host.all()].find((n) => n.tagName === "BUTTON" && n.title === step.reason);
-    assert.ok(action());
-    nextResult = { ok: true, result: { performed: true, repo: r, code: 0, json: { summary: "returned to tip" } } };
-    calls.length = 0;
-    action().onclick({ preventDefault() {}, stopPropagation() {} });
-    await settle();
-    assert.deepEqual(calls.map((c) => c.actionId), ["next"]);
-    assert.deepEqual(calls[0].payload, { ownerSessionKey: r.sessionKey, key: step.key });
-    assert.match(readable(host), /returned to tip/);
-    nextResult = { ok: false, error: "the next step changed" };
-    action().onclick({ preventDefault() {}, stopPropagation() {} });
-    await settle();
-    assert.match(readable(host), /the next step changed/);
-    const approved = { ...step, step: "catch-up", approve: "agent" };
-    nextResult = { ok: true, result: { performed: false, repo: { ...r, next: approved } } };
-    calls.length = 0;
-    action().onclick({ preventDefault() {}, stopPropagation() {} });
-    await settle();
-    assert.deepEqual(calls.map((c) => c.actionId ?? c.method), ["next"]);
-    assert.match(readable(host), /did not execute this deterministic catch-up/);
-    view.dispose();
+    try {
+      const action = [...host.all()].find(n=>n.tagName==="BUTTON"&&n.title===step.reason);assert.ok(action);
+      nextResult = outcome === "completed" ? {ok:true,result:{performed:true,repo:r,code:0,json:{summary:"returned to tip"}}}
+        : outcome === "lost" ? {ok:false,error:"the next step changed"}
+        : {ok:true,result:{performed:false,repo:{...r,next:{...step,step:"catch-up",approve:"agent"}}}};
+      calls.length=0;await action.onclick({preventDefault(){},stopPropagation(){}});await settle();
+      assert.deepEqual(calls.map(c=>c.actionId??c.method),["next"]);
+      assert.deepEqual(calls[0].payload,{ownerSessionKey:r.sessionKey,key:step.key});
+      assert.match(readable(host),outcome === "completed" ? /returned to tip/ : outcome === "lost" ? /unconfirmed/i : /did not execute this deterministic catch-up/);
+    } finally {view.dispose();nextResult=undefined;}
   }
 });
 
@@ -584,8 +574,12 @@ test("composer: the actions are on the facts they change", async () => {
   assert.match(calls[1].message, /Before git merge, preserve dirty edits and their staging/);
   assert.match(calls[1].message, /then reconcile the saved staged, unstaged and untracked edits/);
   catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
-  await named(/^#7 conflicts with main\. Resolve/).onclick();
-  assert.equal(calls.at(-1).message, "/skill wtc-catch-up api: pull request #7 conflicts with main.");
+  calls.length=0;await named(/^#7 conflicts with main\. Resolve/).onclick();
+  assert.equal(calls.length,0,"a conflict handoff reserves the checkout across other commit-producing routes");
+  const independent=await mount("composer",busy);
+  try{await [...independent.host.all()].find(n=>n.tagName==="BUTTON"&&/^#7 conflicts with main\. Resolve/.test(n.title)).onclick();
+    assert.equal(calls.at(-1).message,"/skill wtc-catch-up api: pull request #7 conflicts with main.");
+  }finally{independent.view.dispose();}
   // Without the Bitbucket plugin's publish, Bitbucket is not pushed from
   // here: pushing is never handed to the agent.
   assert.equal(named(/^1 commit to push/), undefined);
@@ -1400,8 +1394,8 @@ test("composer: a sub-session's merge conflict goes to the conversation; an unkn
       repo("harness", { sessionKey: "agent:main:owner:harness-docs", branch: "openclaw/test--docs", toMerge: null, taskSessionKey: null }),
     ] }],
   };
-  const { host, view } = await mount("composer", data);
-  const card = [...host.all()].find((n) => n.className === "wtc-collection-card");
+  let { host, view } = await mount("composer", data);
+  let card = [...host.all()].find((n) => n.className === "wtc-collection-card");
   const named = (re) => [...card.all()].find((n) => n.tagName === "BUTTON" && re.test(n.title));
   const stop = { preventDefault() {}, stopPropagation() {} };
 
@@ -1412,6 +1406,8 @@ test("composer: a sub-session's merge conflict goes to the conversation; an unkn
   assert.equal(calls[1].message, "/skill wtc-catch-up site: merging sub-session docs's openclaw/test--docs (wtc catch-up --from openclaw/test--docs) conflicts in index.md.");
   catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
 
+  assert.equal(named(/^Discard sub-session docs/),undefined,"a worker with an outstanding resolution cannot be discarded");
+  view.dispose();({host,view}=await mount("composer",data));card=[...host.all()].find(n=>n.className==="wtc-collection-card");
   // The task has no checkout of the harness: nothing says what is merged.
   assert.ok(named(/^Discard sub-session docs, in all its 2 repositories: .*Whether its commits in harness are merged is not known\.$/));
   named(/^Discard sub-session docs/).onclick(stop);
@@ -1516,7 +1512,9 @@ const chooseSteps = async (host) => {
 test("selected mixed actions retain alternatives and combine author handoffs", async () => {
   for (const kind of ["composer", "panel"]) {
     const api = withChoices("api"), web = withChoices("web", "address-review");
-    const { host, view } = await mount(kind, collection([api, web]));
+    const clock=requestClock();
+    const { host, view, context } = await mount(kind, collection([api, web]));
+    let sidebar;
     try {
       await chooseSteps(host);
       const select = [...host.all()].find((n) => n.tagName === "SELECT" && n.ariaLabel === "Action for web");
@@ -1537,12 +1535,15 @@ test("selected mixed actions retain alternatives and combine author handoffs", a
       assert.match(readable(host), /Sent to agent|completion pending/);
       await chooseSteps(host); await clickText(host, "Select suggested");
       assert.ok(buttons(host).includes("Run selected"), "unchanged handoffs cannot be immediately resent");
-      await clickText(host, "Allow retry");
+      assert.equal(buttons(host).includes("Allow retry"),false,"unknown work cannot be released by a per-view retry flag");
+      await expireRequests(clock.expirations);
+      sidebar=kind==="panel"?{host}:await mount("panel",collection([api,web]),undefined,context.props.sessionKey,{focus:"activity"});
+      await acknowledgeRequests(sidebar.host);
       const rowActions = [...host.all()].filter(n => n.className === "wtc-next-step");
       assert.ok(rowActions.some(n => [...n.all()].some(b => b.tagName === "SELECT" && !b.disabled)), "retry restores selectable row alternatives");
       await chooseSteps(host); await clickText(host, "Select suggested");
       assert.ok(buttons(host).includes("Run selected (2)"), "explicit retry recovers an unchanged failed handoff");
-    } finally { view.dispose(); nextResult = undefined; }
+    } finally { if(kind!=="panel")sidebar?.view.dispose();view.dispose();nextResult=undefined;clock.restore(); }
   }
 });
 
@@ -1968,7 +1969,11 @@ test("a fetched conflict never hands off a changed or unreadable resolution step
    await clickText(host, "Run selected (1)");
    assert.equal(calls.filter(c => c.method === "sessions.send").length, 0);
    await chooseSteps(host);
-   assert.match(readable(host), failure === "unreadable" ? /Cannot recheck conflict resolution: Collection unavailable/ : /Catch-up stopped; its current resolution step changed/);
+   if(failure === "unreadable") {
+    assert.match(readable(host),/Refresh failed: Collection unavailable/);
+    const details=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
+    try{assert.match(readable(details.host),/Cannot recheck conflict resolution: Collection unavailable/);assert.ok(buttons(details.host).includes("Ask agent for help"));}finally{details.view.dispose();}
+   } else assert.match(readable(host),/Catch-up stopped; its current resolution step changed/);
   } finally { view.dispose(); nextResult = undefined; }
  }
 });
@@ -2474,7 +2479,7 @@ test("a pending individual handoff keeps Sent and does not replace another repos
   await [...host.all()].find(n=>n.tagName==="BUTTON"&&/Updated .*Refresh/.test(n.title)).onclick({preventDefault(){},stopPropagation(){}});
   assert.equal(primary().textContent,"Push","a real target keeps priority over a retry escape hatch");
   assert.equal([...host.all()].some(n=>n.tagName==="BUTTON"&&n.textContent==="Allow retry"),false);
-  await clickText(host,"Choose steps…");assert.ok([...host.all()].some(n=>n.tagName==="BUTTON"&&n.textContent==="Allow retry"));
+  await clickText(host,"Choose steps…");assert.equal([...host.all()].some(n=>n.tagName==="BUTTON"&&n.textContent==="Allow retry"),false,"only the shared checked-finished acknowledgement releases a request");
  }finally{view.dispose();nextResult=undefined;}
 });
 
@@ -2846,10 +2851,10 @@ test("a blocked commit stays a read-only fact and a failed request offers a retr
  try {calls.length=0;assert.equal(localChangeButton(blocked.host).disabled,true);await localChangeButton(blocked.host).onclick();assert.equal(calls.length,0);assert.match(localChangeButton(blocked.host).title,/Owner is busy/);}finally{blocked.view.dispose();}
  const active=await mount("panel",collection([repo("site",{dirty:1})]));
  try {
-  failing.add("sessions.send");await localChangeButton(active.host).onclick();await settle();
+  failing.add("plugins.sessionAction");await localChangeButton(active.host).onclick();await settle();
   assert.match(localChangeButton(active.host).title,/Commit request failed/);assert.equal(localChangeButton(active.host).disabled,false);
-  failing.delete("sessions.send");calls.length=0;await localChangeButton(active.host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
- }finally{failing.delete("sessions.send");active.view.dispose();}
+  failing.delete("plugins.sessionAction");calls.length=0;await localChangeButton(active.host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+ }finally{failing.delete("plugins.sessionAction");active.view.dispose();}
 });
 
 test("partial commit progress keeps the dirty count with unconfirmed feedback", async () => {
@@ -2906,7 +2911,7 @@ test("pending commit choices do not create a second disabled action menu", async
  const step={step:"commit",by:"agent",skill:"wtc",key:"site:commit",reason:"Save changes",available:true};
  const r=repo("site",{dirty:1,next:step,choices:{actions:[step]}});const {host,view}=await mount("panel",collection([r]));
  let release;try {
-  nextResult={ok:true,result:{performed:false,repo:r}};controlledSend=new Promise(resolve=>release=resolve);
+  calls.length=0;nextResult={ok:true,result:{performed:false,repo:r}};controlledSend=new Promise(resolve=>release=resolve);
   const running=localChangeButton(host).onclick();await settle();
   assert.equal([...host.all()].filter(n=>n.className==="wtc-action-menu"&&/Actions for site/.test(n.textContent)).length,0);
   release({runId:"commit"});await running;
@@ -3198,6 +3203,256 @@ test("an awaited publication cannot race a commit started from the other surface
   await localChangeButton(panel.host).onclick();await settle();calls.length=0;
   release({ok:true,result:{performed:false,repo:r}});await running;await settle();
   assert.equal(calls.some(c=>c.method==="sessions.github.publish"||c.method==="sessions.github.confirm"),false);
-  assert.match(readable(panel.host),/local commit request is unresolved/);
+  assert.match(readable(panel.host),/repository action is unresolved/);
  }finally{release?.({ok:false,error:"cleanup"});card.view.dispose();panel.view.dispose();personal=null;nextResult=undefined;}
+});
+
+
+for(const kind of ["composer","panel"]) test(`${kind} chosen commit shares its outstanding reservation`,async()=>{
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"lifecycle:commit",available:true,reason:"Save intended changes"};
+ const r=repo("site",{dirty:1,next:commit,choices:{actions:[commit]}});
+ const first=await mount(kind,collection([r]));const second=await mount(kind==="composer"?"panel":"composer",collection([r]),undefined,first.context.props.sessionKey);
+ try{
+  nextResult={ok:true,result:{performed:false,repo:r}};
+  await chooseSteps(first.host);await clickText(first.host,"Select suggested");await clickText(first.host,"Run selected (1)");await settle();calls.length=0;
+  await localChangeButton(second.host).onclick();await settle();
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"chosen commits must reserve the repository in the other surface");
+ }finally{first.view.dispose();second.view.dispose();nextResult=undefined;}
+});
+test("acknowledgement in sidebar releases the original card too",async()=>{
+ const original=globalThis.setTimeout;let expire;
+ globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expire=fn,{unref(){}}):original(fn,delay,...args);
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"lifecycle:ack",available:true,reason:"Save intended changes"};
+ const r=repo("site",{dirty:1,next:commit,choices:{actions:[commit]}});
+ const card=await mount("composer",collection([r]));const panel=await mount("panel",collection([r]),undefined,card.context.props.sessionKey,{focus:"activity"});
+ try{
+  nextResult={ok:true,result:{performed:false,repo:r}};
+  await localChangeButton(card.host).onclick();expire();await settle();
+  const release=[...panel.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="I checked: request has finished");assert.ok(release);await release.onclick();await settle();
+  assert.equal(localChangeButton(card.host).disabled,false,"acknowledging from the other view cannot leave a local dispatch tombstone");
+  calls.length=0;await localChangeButton(card.host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+ }finally{card.view.dispose();panel.view.dispose();nextResult=undefined;globalThis.setTimeout=original;}
+});
+
+
+for(const route of ["fact","group","selected"]) test(`${route} late validation cannot dispatch after shared acknowledgement`,async()=>{
+ const original=globalThis.setTimeout;let expire,releaseRPC,firstRead=true;
+ globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expire=fn,{unref(){}}):original(fn,delay,...args);
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"late:"+route,available:true,reason:"Save changes"};
+ const r=repo("site",{dirty:1,next:commit,choices:{actions:[commit]}}),data=collection([r]);
+ const card=await mount("composer",data);const panel=await mount("panel",data,undefined,card.context.props.sessionKey,{focus:"activity"});
+ try{
+  if(route==="selected"){
+   nextResult=()=>firstRead?(firstRead=false,new Promise(resolve=>releaseRPC=resolve)):{ok:true,result:{performed:false,repo:r}};
+   await chooseSteps(card.host);await clickText(card.host,"Select suggested");await clickText(card.host,"Run selected (1)");
+  }else{
+   controlledCollection=()=>firstRead?(firstRead=false,new Promise(resolve=>releaseRPC=resolve)):{ok:true,result:data};
+   (route==="group"?commitColumnButton(card.host):localChangeButton(card.host)).onclick();await settle();
+  }
+  assert.ok(releaseRPC,"validation is held before dispatch");assert.equal(localChangeButton(panel.host).attributes["aria-busy"],"true","all routes reserve before awaiting validation");
+  expire();await settle();
+  const release=[...panel.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="I checked: request has finished");assert.ok(release);await release.onclick();await settle();calls.length=0;
+  releaseRPC({ok:true,result:route==="selected"?{performed:false,repo:r}:data});
+  for(let i=0;i<8;i++)await settle();
+  assert.equal(calls.some(c=>c.method==="sessions.send"),false,"late validation cannot revive an acknowledged request");
+  assert.equal(localChangeButton(card.host).disabled,false);
+ }finally{releaseRPC?.({ok:false,error:"cleanup"});for(let i=0;i<3;i++)await settle();controlledCollection=undefined;nextResult=undefined;card.view.dispose();panel.view.dispose();globalThis.setTimeout=original;}
+});
+
+
+test("inventory native catch-up must serialize with a commit from the other surface",async()=>{
+ const prior=catchUpResult;let release;
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"native:commit",available:true,reason:"Save changes"};
+ const down={step:"catch-up",by:"wtc",key:"native:catch",available:true,reason:"Merge base"};
+ const r=repo("site",{dirty:1,behind:3,next:down,choices:{actions:[down,commit]}});
+ const card=await mount("composer",collection([r]));const panel=await mount("panel",collection([r]),undefined,card.context.props.sessionKey);
+ try{
+  catchUpResult=new Promise(resolve=>release=resolve);nextResult={ok:true,result:{performed:false,repo:{...r,next:commit}}};
+  const button=[...card.host.all()].find(n=>n.tagName==="BUTTON"&&/^3 new on/.test(n.title));assert.ok(button);button.onclick();await settle();
+  calls.length=0;await localChangeButton(panel.host).onclick();await settle();
+  assert.equal(calls.some(c=>c.method==="sessions.send"),false,"native Git mutation and explicit commit request cannot race across surfaces");
+ }finally{release?.({ok:true,result:{code:0,json:{summary:"done"}}});for(let i=0;i<6;i++)await settle();card.view.dispose();panel.view.dispose();catchUpResult=prior;nextResult=undefined;}
+});
+
+
+test("a lost commit handoff response is unconfirmed and never an automatic retry",async()=>{
+ const card=await mount("composer",collection([repo("site",{dirty:1})]));const panel=await mount("panel",collection([repo("site",{dirty:1})]),undefined,card.context.props.sessionKey,{focus:"activity"});
+ try{
+  failing.add("sessions.send");await localChangeButton(card.host).onclick();await settle();failing.delete("sessions.send");
+  assert.match(localChangeButton(card.host).textContent,/\?/);assert.match(readable(panel.host),/outcome unconfirmed/);
+  calls.length=0;await localChangeButton(panel.host).onclick();await localChangeButton(card.host).onclick();await settle();
+  assert.equal(calls.some(c=>c.method==="sessions.send"),false);assert.ok([...panel.host.all()].some(n=>n.tagName==="BUTTON"&&n.textContent==="Ask agent for help"));
+ }finally{failing.delete("sessions.send");card.view.dispose();panel.view.dispose();}
+});
+
+
+const chooseRenderedCommitSelection = async host => {
+ await chooseSteps(host);
+ const pickers=[...host.all()].filter(n=>n.tagName==="SELECT"&&n.children.some(o=>o.textContent==="Commit changes"));
+ if(pickers.length){for(const picker of pickers){picker.value=picker.children.find(o=>o.textContent==="Commit changes").value;picker.onchange();await settle();}}
+ else await clickText(host,"Select suggested");
+ const run=[...host.all()].find(n=>n.tagName==="BUTTON"&&/^Run selected \(\d+\)$/.test(n.textContent));assert.ok(run,"selection is built from real offered commit steps");return run;
+};
+const renderedCommitControls = host => [...host.all()].filter(n=>n.tagName==="BUTTON"&&(n.className?.includes("wtc-local-change")||/^Commit changes(?: \d+)?$/.test(n.textContent)||n.ariaLabel==="Commit changes"));
+test("rendered commit builders obey one lifecycle across surfaces and orderings",async t=>{
+ const step={step:"commit",by:"agent",skill:"wtc",key:"matrix:commit",available:true,reason:"Save intended changes"};
+ for(const mode of ["legacy","primary","secondary"])for(const count of [1,2])for(const kind of ["composer","panel"]){
+  const planned=mode!=="legacy";
+  const rows=Array.from({length:count},(_,i)=>{const commit={...step,key:step.key+i};const down={step:"catch-up",by:"wtc",key:"matrix:catch"+i,available:true,reason:"Merge base"};return repo("repo"+i,{dirty:3,unpublished:0,...(planned?{next:mode==="secondary"?down:commit,choices:{actions:mode==="secondary"?[down,commit]:[commit]}}:{})});});
+  const probe=await mount(kind,collection(rows));const discovered=renderedCommitControls(probe.host).map(n=>({text:n.textContent,title:n.title,cls:n.className,aria:n.ariaLabel}));if(planned){const n=await chooseRenderedCommitSelection(probe.host);discovered.push({text:n.textContent,title:n.title,cls:n.className,aria:n.ariaLabel,selected:true});}probe.view.dispose();assert.ok(discovered.length>=3,"production builders expose their row/header/column/selection controls");
+  for(const origin of count===1?(planned?["fact","group","selected"]:["fact","group"]):["group"])for(const descriptor of discovered)for(const phase of ["pending","accepted","partial","clean","unconfirmed","acknowledged","canceled"])for(const other of [false,true])await t.test(`${kind}/${mode}/${count}/${origin}/${descriptor.text}/${phase}/${other?"other":"same"}`,async()=>{
+   const nativeSet=globalThis.setTimeout,expirations=[];globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expirations.push(fn),{unref(){}}):nativeSet(fn,delay,...args);
+   const data=collection(rows),first=await mount(kind,data),second=await mount(kind==="composer"?"panel":"composer",data,undefined,first.context.props.sessionKey,{focus:"activity"});
+   const key=first.context.props.sessionKey,target=other?second:first;
+   let callback=descriptor.selected?await chooseRenderedCommitSelection(target.host):renderedCommitControls(target.host).find(n=>n.textContent===descriptor.text&&n.title===descriptor.title&&n.className===descriptor.cls&&n.ariaLabel===descriptor.aria);assert.ok(callback,"discovered production route exists on target surface");
+   let release,operation;
+   try{
+    nextResult=({payload})=>{const r=collections.get(key).repos.find(r=>r.sessionKey===payload.ownerSessionKey),next=r?.choices?.actions.find(a=>a.available&&a.key===payload.key)??r?.next;return next&&next.key===payload.key?{ok:true,result:{performed:false,repo:{...r,next}}}:{ok:false,error:"Selection changed"};};
+    if(phase==="pending")controlledSend=new Promise(resolve=>release=resolve);
+    if(phase==="canceled"){
+     if(origin==="selected"){const previous=nextResult;let read=true;nextResult=params=>read?(read=false,new Promise(resolve=>release=resolve)):previous(params);}
+     else controlledCollection=()=>new Promise(resolve=>release=resolve);
+    }
+    operation=(origin==="selected"?await chooseRenderedCommitSelection(first.host):origin==="fact"?localChangeButton(first.host):commitColumnButton(first.host)).onclick();for(let i=0;i<4;i++)await settle();
+    if(phase!=="pending"&&phase!=="canceled")await operation;
+    if(phase==="partial"||phase==="clean"){
+     collections.set(key,collection(rows.map(r=>({...r,dirty:phase==="partial"?1:0,unpublished:1,...(phase==="clean"?{next:undefined,choices:{actions:[]}}:{})}))));
+     await [...first.host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();
+    }
+    if(phase==="unconfirmed"||phase==="acknowledged"){for(const expire of expirations)expire();await settle();}
+    if(phase==="acknowledged"){
+     // Every request in the original group is checked, from the other surface.
+     const sidebar=kind==="panel"?first:second;const releases=[...sidebar.host.all()].filter(n=>n.tagName==="BUTTON"&&n.textContent==="I checked: request has finished");assert.equal(releases.length,count,"acknowledgement uses the production sidebar controls");for(const button of releases)await button.onclick();await settle();
+    }
+    if(phase==="canceled"){
+     const resolve=release;controlledCollection=undefined;const away=`agent:main:matrix-away:${++sessions}`;collections.set(away,collection([repo("other")]));first.view.update({...first.context,props:{...first.context.props,sessionKey:away}});await settle();
+     resolve({ok:true,result:origin==="selected"?{performed:false,repo:rows[0]}:data});await operation;for(let i=0;i<4;i++)await settle();first.view.update(first.context);await settle();
+    }
+    if(descriptor.selected&&["acknowledged","canceled"].includes(phase))callback=await chooseRenderedCommitSelection(target.host);
+    calls.length=0;await callback.onclick();for(let i=0;i<6;i++)await settle();
+    const sends=calls.filter(c=>c.method==="sessions.send");
+    assert.equal(sends.length,["acknowledged","canceled"].includes(phase)?1:0,"only a new explicit request after a checked/known-unsent finish may dispatch");
+    if(["pending","accepted","partial","unconfirmed"].includes(phase)){
+     assert.ok(commitColumnButton(target.host).disabled,"all unresolved routes share the same reservation");
+     assert.ok(localChangeButton(target.host).title.match(/conversation|unconfirmed|observed/i),"the fact retains diagnostic affordances");
+    }
+   }finally{controlledCollection=undefined;release?.({runId:"cleanup"});await operation;controlledSend=undefined;nextResult=undefined;first.view.dispose();second.view.dispose();globalThis.setTimeout=nativeSet;}
+  });
+ }
+});
+
+const expireRequests = async expirations => { for(const expire of expirations)expire();await settle(); };
+const acknowledgeRequests = async host => {
+ const buttons=[...host.all()].filter(n=>n.tagName==="BUTTON"&&n.textContent==="I checked: request has finished");
+ assert.ok(buttons.length,"the actual Action log offers explicit acknowledgement");for(const b of buttons)await b.onclick();await settle();
+};
+for(const route of ["fact","group","selected"])for(const kind of ["composer","panel"])test(`${route}/${kind} acknowledgement while transport is pending releases original controls without reviving stale callbacks`,async()=>{
+ const nativeSet=globalThis.setTimeout,expirations=[];globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expirations.push(fn),{unref(){}}):nativeSet(fn,delay,...args);
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"transport:"+route,available:true,reason:"Save changes"},r=repo("site",{dirty:1,next:commit,choices:{actions:[commit]}});
+ const first=await mount(kind,collection([r])),second=await mount(kind==="panel"?"composer":"panel",collection([r]),undefined,first.context.props.sessionKey,{focus:"activity"});
+ let release,running;
+ try{
+  calls.length=0;nextResult={ok:true,result:{performed:false,repo:r}};controlledSend=new Promise(resolve=>release=resolve);
+  if(route==="selected"){const b=await chooseRenderedCommitSelection(first.host);running=b.onclick();}else running=(route==="fact"?localChangeButton(first.host):commitColumnButton(first.host)).onclick();
+  for(let i=0;i<8;i++)await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+  await expireRequests(expirations);await acknowledgeRequests((kind==="panel"?first:second).host);
+  controlledSend=undefined;calls.length=0;
+  assert.equal(localChangeButton(first.host).disabled,false,"no local sending/batch flag can outlive shared acknowledgement");
+  await localChangeButton(first.host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+  release({runId:"old-accepted"});await running;for(let i=0;i<8;i++)await settle();
+  calls.length=0;await localChangeButton(second.host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"old completion cannot release the newer owner's request");
+ }finally{controlledSend=undefined;release?.({});await running;first.view.dispose();second.view.dispose();nextResult=undefined;globalThis.setTimeout=nativeSet;}
+});
+
+test("a branch or checkout observation never silently deletes a dispatched commit reservation",async()=>{
+ const r=repo("site",{dirty:2,path:"/state/task/site",branch:"main"});const data=collection([r]);
+ const card=await mount("composer",data),panel=await mount("panel",data,undefined,card.context.props.sessionKey,{focus:"activity"});
+ try{
+  await localChangeButton(card.host).onclick();
+  for(const change of [{branch:"feature/task"},{path:"/state/replaced/site"}]){
+   collections.set(card.context.props.sessionKey,collection([{...r,...change}]));await refreshButton(card.host).onclick({preventDefault(){},stopPropagation(){}});await settle();calls.length=0;
+   await localChangeButton(panel.host).onclick();await settle();assert.equal(calls.some(c=>c.method==="sessions.send"),false,"new observations do not cancel real agent work");
+  }
+ }finally{card.view.dispose();panel.view.dispose();}
+});
+
+for(const kind of ["composer","panel"])for(const route of ["catch-up","worker-merge","worker-catch-up","worker-takeover","worker-discard"])for(const order of ["native-first","commit-first"])test(`${kind}/${route}/${order} shares admission across views and stale controls`,async()=>{
+ const oldCatch=catchUpResult,nativeSet=globalThis.setTimeout,expirations=[];globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expirations.push(fn),{unref(){}}):nativeSet(fn,delay,...args);
+ const down={step:"catch-up",by:"wtc",key:"ordering:catch",available:true,reason:"Merge base"},commit={step:"commit",by:"agent",skill:"wtc",key:"ordering:commit",available:true,reason:"Save changes"};
+ const parent=repo("site",{dirty:1,behind:3,path:"/state/task/site",next:down,choices:{actions:[down,commit]}}),worker=repo("site",{sessionKey:"agent:main:owner:worker",path:"/state/worker/site",branch:"feature/worker",taskSessionKey:parent.sessionKey,taskBranch:parent.branch,toMerge:1,behind:2,dirty:route==="worker-takeover"?1:0,uncommitted:[{state:"only",path:"worker.md"}]});
+ const data={...collection([parent]),subSessions:[{name:"helper",collection:"task--helper",repos:[worker]}]},first=await mount(kind,data),second=await mount(kind==="panel"?"composer":"panel",data,undefined,first.context.props.sessionKey,{focus:"activity"});
+ let release,running,probe;
+ try{
+  nextResult=({payload})=>({ok:true,result:{performed:false,repo:{...parent,next:commit}}});
+  const matcher=route==="catch-up"?/^3 new on/:route==="worker-merge"?/^1 commit on feature\/worker/:route==="worker-catch-up"?/^2 commits of the collection's/:route==="worker-takeover"?/^1 uncommitted file, compared/:/^Discard sub-session helper/;
+  let button=[...first.host.all()].find(n=>n.tagName==="BUTTON"&&matcher.test(n.title));assert.ok(button,"route is discovered from the production worker/repository builders");
+  if(route==="worker-discard"){
+   await button.onclick();await settle();button=[...first.host.all()].find(n=>n.tagName==="BUTTON"&&/^Click again to discard/.test(n.title));assert.ok(button);
+   // Discard reserves its worker checkout; probe commit on that exact owner.
+   collections.set(first.context.props.sessionKey,{...data,repos:[{...worker,dirty:1}]});await refreshButton(second.host).onclick({preventDefault(){},stopPropagation(){}});await settle();
+  }
+  if(order==="commit-first"){
+   await localChangeButton(second.host).onclick();calls.length=0;await button.onclick();await settle();
+   assert.equal(calls.some(c=>c.actionId==="catch-up"||c.method==="sessions.delete"||c.method==="sessions.send"),false,"captured worker/native controls cannot bypass an outstanding commit");
+  }else{
+   if(route==="worker-takeover")controlledSend=new Promise(resolve=>release=resolve);
+   else if(route==="worker-discard")controlledDelete=new Promise(resolve=>release=resolve);
+   else catchUpResult=new Promise(resolve=>release=resolve);
+   running=button.onclick();for(let i=0;i<4;i++)await settle();calls.length=0;
+   probe=localChangeButton(second.host).onclick();await settle();assert.equal(calls.some(c=>c.method==="sessions.send"),false,"a native/worker mutation reserves the same checkout in the other view");
+  }
+ }finally{controlledSend=undefined;controlledDelete=undefined;nextResult=undefined;release?.({ok:true,result:{code:0,json:{summary:"done"}}});await running;await probe;for(let i=0;i<4;i++)await settle();first.view.dispose();second.view.dispose();catchUpResult=oldCatch;globalThis.setTimeout=nativeSet;}
+});
+
+const refreshButton = host => [...host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title)));
+
+const requestClock = () => {
+ const native=globalThis.setTimeout,expirations=[];
+ globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expirations.push(fn),{unref(){}}):native(fn,delay,...args);
+ return {expirations,restore:()=>{globalThis.setTimeout=native;}};
+};
+
+for(const kind of ["composer","panel"])for(const route of ["catch-up","selected","worker-merge"])test(`${kind}/${route} late native conflict cannot hand off after acknowledgement or release a new request`,async()=>{
+ const clock=requestClock(),oldCatch=catchUpResult;
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"late-native:commit",available:true,reason:"Save changes"},down={step:"catch-up",by:"wtc",command:["wtc","catch-up"],key:"late-native:catch",available:true,reason:"Merge base"};
+ const r=repo("site",{dirty:1,behind:3,next:down,choices:{actions:[down,commit]}}),worker=repo("site",{sessionKey:"agent:main:worker:site",branch:"feature/worker",toMerge:1,taskSessionKey:r.sessionKey});
+ const data={...collection([r]),subSessions:[{name:"helper",collection:"task--helper",repos:[worker]}]},first=await mount(kind,data),second=await mount(kind==="panel"?"composer":"panel",data,undefined,first.context.props.sessionKey,{focus:"activity"});
+ let release,running,read=true;
+ try{
+  nextResult=({payload})=>route==="selected"&&read&&payload.key===down.key?(read=false,new Promise(resolve=>release=resolve)):{ok:true,result:{performed:false,repo:{...r,next:commit}}};
+  if(route==="selected"){await chooseSteps(first.host);await clickText(first.host,"Select suggested");await clickText(first.host,"Run selected (1)");}
+  else{catchUpResult=new Promise(resolve=>release=resolve);const matcher=route==="catch-up"?/^3 new on/:/^1 commit on feature\/worker/;running=[...first.host.all()].find(n=>n.tagName==="BUTTON"&&matcher.test(n.title)).onclick();}
+  for(let i=0;i<5;i++)await settle();assert.ok(release);await expireRequests(clock.expirations);await acknowledgeRequests((kind==="panel"?first:second).host);
+  calls.length=0;await localChangeButton(second.host).onclick();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"new explicit request owns the released repository");
+  calls.length=0;release({ok:true,result:{performed:true,repo:r,code:1,message:"merging base conflicts in: task.md. The merge was aborted"}});await running;for(let i=0;i<10;i++)await settle();
+  assert.equal(calls.some(c=>c.method==="sessions.send"),false,"an obsolete native response cannot initiate conflict resolution");
+  await localChangeButton(first.host).onclick();await settle();assert.equal(calls.some(c=>c.method==="sessions.send"),false,"old finalizers cannot release the new request");
+ }finally{release?.({ok:true,result:{code:0,repo:r}});await running;for(let i=0;i<4;i++)await settle();first.view.dispose();second.view.dispose();clock.restore();nextResult=undefined;catchUpResult=oldCatch;}
+});
+
+test("an old selected handoff cannot clear a newer running selection after cross-surface acknowledgement",async()=>{
+ const clock=requestClock(),commit={step:"commit",by:"agent",skill:"wtc",key:"batch-owner:commit",available:true,reason:"Save changes"},r=repo("site",{dirty:1,next:commit,choices:{actions:[commit]}});
+ const first=await mount("composer",collection([r])),second=await mount("panel",collection([r]),undefined,first.context.props.sessionKey,{focus:"activity"});
+ let releaseOld,releaseNew;
+ try{
+  nextResult={ok:true,result:{performed:false,repo:r}};controlledSend=new Promise(resolve=>releaseOld=resolve);await (await chooseRenderedCommitSelection(first.host)).onclick();for(let i=0;i<5;i++)await settle();
+  await expireRequests(clock.expirations);await acknowledgeRequests(second.host);
+  controlledSend=new Promise(resolve=>releaseNew=resolve);calls.length=0;await (await chooseRenderedCommitSelection(first.host)).onclick();for(let i=0;i<5;i++)await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+  releaseOld({runId:"old"});for(let i=0;i<8;i++)await settle();
+  assert.ok([...first.host.all()].some(n=>n.tagName==="BUTTON"&&/Stop queued dispatches/.test(n.title)),"only the current batch owns its controls");
+  assert.ok(commitColumnButton(second.host).disabled,"the newer request remains reserved");
+ }finally{controlledSend=undefined;releaseOld?.({});releaseNew?.({});for(let i=0;i<8;i++)await settle();first.view.dispose();second.view.dispose();clock.restore();nextResult=undefined;}
+});
+
+for(const route of ["direct","planned"])for(const reason of ["conflict","recovery"])test(`${route}/${reason} a lost native follow-up response retains its reservation`,async()=>{
+ const previous=catchUpResult,step={step:"catch-up",by:"wtc",command:["wtc","catch-up"],available:true,key:"unknown-native:catch",reason:"Merge base"},commit={step:"commit",by:"agent",skill:"wtc",available:true,key:"unknown-native:commit",reason:"Save edits"};
+ const r=repo("site",{dirty:1,behind:3,next:step,choices:{actions:[step,commit]}}),data=collection([r]),card=await mount("composer",data),panel=await mount("panel",data,undefined,card.context.props.sessionKey,{focus:"activity"});
+ try{
+  const out={performed:true,repo:r,code:1,message:reason==="conflict"?"merging base conflicts in: task.md. The merge was aborted":"local changes need recovery",...(reason==="recovery"?{json:{data:{recoveryRequired:true,recoveryRef:"refs/taba/recovery/example"}}}:{})};
+  catchUpResult={ok:true,result:out};nextResult={ok:true,result:out};failing.add("sessions.send");
+  if(route==="direct")await [...card.host.all()].find(n=>n.tagName==="BUTTON"&&/^3 new on/.test(n.title)).onclick();
+  else await [...card.host.all()].find(n=>n.tagName==="BUTTON"&&n.title.includes("Merge base")&&n.textContent==="Catch up").onclick();
+  await settle();failing.delete("sessions.send");assert.ok(commitColumnButton(panel.host).disabled,"lost follow-up delivery is not a finished mutation");assert.match(readable(panel.host),/unconfirmed/i);
+  calls.length=0;await localChangeButton(panel.host).onclick();await settle();assert.equal(calls.some(c=>c.method==="sessions.send"),false);
+ }finally{failing.delete("sessions.send");card.view.dispose();panel.view.dispose();nextResult=undefined;catchUpResult=previous;}
 });

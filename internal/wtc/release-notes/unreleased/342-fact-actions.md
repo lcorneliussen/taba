@@ -25,3 +25,9 @@
   the current action plan and recheck recovery before requesting commits.
   Partial commit progress retains its unresolved request reservation, and push
   preparation/confirmation recheck that reservation before dispatching.
+
+- Share repository-action reservations across default and chosen steps, native
+  catch-up and worker controls. Explicit acknowledgement releases the original
+  request in every view; delayed responses cannot revive it or release a newer
+  request. Missing handoff responses stay unconfirmed rather than enabling a
+  duplicate mutation.
