@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "collection": "sample",
+  "show_collection_column": false,
+  "stale_count": 1,
+  "repos": [
+    {
+      "collection": "sample",
+      "dir": "widget",
+      "repo": "widget",
+      "slug": "example/widget",
+      "forge": "github.com",
+      "branch_kind": "branch",
+      "branch": "topic",
+      "branch_display": "topic",
+      "ahead": 3,
+      "ahead_ref": "origin/main",
+      "ahead_basis": "upstream",
+      "upstream_state": "tracking",
+      "landing": {
+        "state": "unknown",
+        "reason": "full landing not established; inspect retained branch"
+      },
+      "behind": 2,
+      "tree": "clean",
+      "changed": 0,
+      "pr": null,
+      "tip": null,
+      "prod": null
+    }
+  ],
+  "prs": [
+    {
+      "repo": "widget",
+      "number": "42",
+      "state": "MERGED",
+      "checks": "SUCCESS",
+      "merge": "MERGED",
+      "review": "merged",
+      "title": "Synthetic change",
+      "display_title": "MERGED — landing unknown; inspect branch; still on topic  Synthetic change",
+      "slug": "example/widget",
+      "url": "https://github.com/example/widget/pull/42",
+      "follow_tip_build": null,
+      "follow_prod_build": null,
+      "landing": {
+        "state": "unknown",
+        "reason": "full landing not established; inspect retained branch"
+      },
+      "base": "main",
+      "archived": false,
+      "merged_on": "2026-11-10T12:00:00Z",
+      "draft": false,
+      "on_branch": true
+    }
+  ],
+  "orphans": []
+}
