@@ -20,4 +20,6 @@
 
 - Catch-up now refuses incoming tracked paths that would replace ignored local
   data, on clean checkouts as well as dirty ones. Unfinished operations remain
-  refused.
+  refused. Sandbox delivery and worker merges share the recovery lock and refuse
+  unverified recovery before changing HEAD or the index. Commit controls honor
+  the current action plan and recheck recovery before requesting commits.

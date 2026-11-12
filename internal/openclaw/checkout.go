@@ -474,6 +474,11 @@ func (c *Checkout) MergeFrom(from string) (CatchUp, error) {
 		return CatchUp{Dest: c.Dest}, fmt.Errorf("%s is detached: a branch merges into this repository's branch, and it has none yet", c.Dir)
 	}
 	result := CatchUp{Branch: c.Branch(), Dest: c.Dest}
+	unlock, err := c.catchUpLock()
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
 	// A branch by its own name: a sub-session names its branch after its
 	// change, not after this collection.
 	if from != "" && from != result.Branch && HasBranch(c.Dir, from) {

@@ -3025,9 +3025,11 @@ for (const kind of ["composer","panel"]) test(`${kind} catch-up and group commit
  const set=globalThis.setTimeout;let expire,release;
  globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expire=fn,{unref(){}}):set(fn,delay,...args);
  const step={step:"catch-up",by:"wtc",key:"race:catch",available:true};
- const r=repo("site",{dirty:1,behind:3,next:step,choices:{actions:[step]}});
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"race:commit",available:true};
+ const r=repo("site",{dirty:1,behind:3,next:step,choices:{actions:[step,commit]}});
  const {host,view}=await mount(kind,collection([r]));
  try {
+  nextResult={ok:true,result:{performed:false,repo:{...r,next:commit}}};
   controlledSend=new Promise(resolve=>release=resolve);calls.length=0;
   const running=localChangeButton(host).onclick();await settle();
   const down=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&/^3 new on/.test(n.title));
@@ -3039,7 +3041,7 @@ for (const kind of ["composer","panel"]) test(`${kind} catch-up and group commit
   assert.ok(commitColumnButton(host).disabled,"group commit cannot resend an unconfirmed request");
   calls.length=0;await localChangeButton(host).onclick();await settle();
   assert.equal(calls.some(c=>c.method==="sessions.send"||c.actionId==="catch-up"||c.actionId==="next"),false,"outcome inspection is read-only");
- }finally{release?.({runId:"cleanup"});controlledSend=undefined;globalThis.setTimeout=set;view.dispose();}
+ }finally{release?.({runId:"cleanup"});controlledSend=undefined;nextResult=undefined;globalThis.setTimeout=set;view.dispose();}
 });
 
 test("a person can release an unconfirmed no-commit request without retrying or claiming success",async()=>{
@@ -3059,4 +3061,76 @@ test("a person can release an unconfirmed no-commit request without retrying or 
   assert.equal([...host.all()].find(n=>n.tagName==="BUTTON"&&/^3 new on/.test(n.title)).disabled,false);
   await localChangeButton(host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"new explicit request can be sent after release");
  }finally{nextResult=undefined;globalThis.setTimeout=set;view.dispose();}
+});
+
+for (const kind of ["composer", "panel"]) test(`${kind} recovery and planner guards cover every commit control`, async () => {
+  const commit = {step:"commit",by:"agent",skill:"wtc",key:"guard:commit",available:true};
+  const resolve = {step:"resolve",by:"agent",skill:"wtc",key:"guard:resolve",available:true,reason:"Verify local changes recovery"};
+  for (const fields of [
+    {catchUpRecovery:"refs/wtc-catch-up/"+"a".repeat(40)+"-1"},
+    {catchUpRecoveryError:"invalid marker"}, {inProgress:"merge"}, {conflicted:1},
+    {choices:{actions:[]}}, {next:resolve},
+    {next:resolve,choices:{actions:[resolve,{...commit,available:false,blocked:"Recovery is unfinished"}]}},
+    {next:commit,choices:{actions:[{...commit,available:false,blocked:"Recovery is unfinished"}]}},
+    {next:commit,choices:{actions:[commit]},catchUpRecoveryError:"invalid marker"},
+  ]) {
+    const {host,view}=await mount(kind,collection([repo("site",{dirty:1,...fields})]));
+    try {
+      const cell=localChangeButton(host);
+      assert.ok(cell.disabled,JSON.stringify(fields));
+      assert.ok(commitColumnButton(host).disabled,"group excludes blocked repository");
+      const menu=[...host.all()].find(n=>n.ariaLabel==="Actions for site");
+      const option=menu&&[...menu.all()].find(n=>n.ariaLabel==="Commit changes");
+      if(option) assert.ok(option.disabled,"menu shows commit as unavailable");
+      assert.equal([...host.all()].some(n=>n.tagName==="BUTTON"&&n.textContent==="Commit changes"&&!n.disabled),false,"header/inline do not enable commit");
+      calls.length=0;
+      // Even retained callbacks cannot bypass the dispatch guard.
+      await cell.onclick();await option?.onclick();await commitColumnButton(host).onclick();
+      assert.equal(calls.some(c=>c.method==="sessions.send"||c.actionId==="next"),false);
+      if(fields.next===resolve) assert.ok([...host.all()].some(n=>n.tagName==="BUTTON"&&n.textContent==="Resolve conflicts"&&!n.disabled),"recovery help remains available");
+    } finally {view.dispose();}
+  }
+});
+
+for (const kind of ["composer", "panel"]) for (const group of [false,true]) test(`${kind} ${group?"group":"single"} commit rechecks recovery before a handoff`,async()=>{
+  const r=repo("site",{dirty:1,path:"/state/worktrees/site/task"});
+  const {host,view,context}=await mount(kind,collection([r]));
+  try {
+    const oldControl=group?commitColumnButton(host):localChangeButton(host);
+    collections.set(context.props.sessionKey,collection([{...r,catchUpRecoveryError:"marker appeared after rendering"}]));
+    calls.length=0;await oldControl.onclick();await settle();
+    assert.equal(calls.some(c=>c.method==="sessions.send"||c.actionId==="next"),false,"fresh refusal sends no mutation request");
+    assert.match(localChangeButton(host).title,/recovery/i);
+  }finally{view.dispose();}
+});
+
+test("pending commit reservations survive A to B to A and remain shared with the sidebar",async()=>{
+  const a=`agent:main:navigation-a:${++sessions}`, b=`agent:main:navigation-b:${++sessions}`;
+  const ownerA=`agent:main:collection-a:${sessions}`,ownerB=`agent:main:collection-b:${sessions}`;
+  const r=repo("site",{dirty:1,path:"/state/worktrees/site/a"});
+  const dataA={...collection([r]),collection:{sessionKey:ownerA,label:"Task A"}};
+  const dataB={...collection([{...r,path:"/state/worktrees/site/b"}]),collection:{sessionKey:ownerB,label:"Task B"}};
+  const card=await mount("composer",dataA,undefined,a);
+  const panel=await mount("panel",dataA,undefined,ownerA);
+  collections.set(b,dataB);
+  let release;
+  try {
+    controlledSend=new Promise(resolve=>release=resolve);calls.length=0;
+    const running=localChangeButton(card.host).onclick();await settle();
+    assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+    assert.equal(localChangeButton(panel.host).attributes["aria-busy"],"true","sidebar shares the active request");
+    release({runId:"commit-a"});await running;await settle();
+    card.view.update({...card.context,props:{...card.context.props,sessionKey:b}});await settle();
+    assert.equal(localChangeButton(card.host).attributes["aria-busy"],undefined,"B with the same repo session key is not reserved by A");
+    assert.equal(localChangeButton(card.host).disabled,false);
+    assert.equal(localChangeButton(panel.host).attributes["aria-busy"],"true","A remains visibly pending in its sidebar");
+    assert.ok(commitColumnButton(panel.host).disabled);
+    await localChangeButton(panel.host).onclick();await settle();
+    assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"switching a surface cannot release another surface's reservation");
+    card.view.update(card.context);await settle();
+    assert.equal(localChangeButton(card.host).attributes["aria-busy"],"true","returning to A restores pending feedback");
+    assert.match(localChangeButton(card.host).title,/reserved across views/);
+    await localChangeButton(card.host).onclick();await settle();
+    assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"returning opens details without resending");
+  }finally{release?.({runId:"cleanup"});controlledSend=undefined;card.view.dispose();panel.view.dispose();}
 });

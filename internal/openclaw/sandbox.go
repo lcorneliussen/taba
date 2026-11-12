@@ -91,6 +91,14 @@ func AcceptSandboxBranch(dir, commit, bundle string) (Delivery, error) {
 	if !fullHash.MatchString(commit) {
 		return d, fmt.Errorf("%q is not a commit hash", commit)
 	}
+	unlock, err := c.catchUpLock()
+	if err != nil {
+		return d, err
+	}
+	defer unlock()
+	if err := c.requireRecoveredChanges(); err != nil {
+		return d, err
+	}
 	if what := c.inProgress(); what != "" {
 		return d, fmt.Errorf("%s is in progress in the gateway's worktree: it has to finish first", what)
 	}

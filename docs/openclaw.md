@@ -960,7 +960,11 @@ If restoring the edits fails, catch-up reports a failure, retains the complete
 copy (including the original index and untracked files), and records a
 worktree-local Git recovery marker. Status offers Resolve conflicts, even when
 Git has no unmerged index entries. A repeated catch-up refuses to reapply the
-copy blindly. The owning conversation must inspect both copies and restore or
+copy blindly. Sandbox delivery and worker merges use the same checkout lock
+and refuse active or unreadable recovery markers before changing HEAD or the
+index. Commit controls respect recovery and the repository's current action
+plan, rechecking the checkout before asking for commits. The owning conversation
+must inspect both copies and restore or
 resolve the intended edits, including partial staging and untracked content.
 The bundled **wtc-catch-up** skill routes this through
 `wtc docs instructions/openclaw-recovery.md`; no separately learned skill is
@@ -996,4 +1000,6 @@ repository facts, `?` means no commit has yet been observed. Clicking either
 indicator opens action details. **Ask agent for help** requests a diagnosis in
 that same conversation without retrying, committing, restoring, or publishing.
 The action log is shared by the card and sidebar in the current browser
-session; it is not a durable gateway audit trail.
+session; it is not a durable gateway audit trail. Pending requests stay reserved
+for their collection and repository when navigating away and back, so switching
+views cannot dispatch a duplicate request.

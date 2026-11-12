@@ -96,3 +96,21 @@ func TestFinishRecoveryCommandRejectsSandboxAndMixedModes(t *testing.T) {
 		}
 	}
 }
+
+func TestFinishRecoveryRequiresPairedNonEmptyArgumentsBeforeHostLookup(t *testing.T) {
+	t.Setenv(openclaw.GatewayGitEnv, "http://127.0.0.1:1")
+	for _, args := range [][]string{
+		{"--finish-recovery", "ref"}, {"--expected-head", "head"},
+		{"--finish-recovery=", "--expected-head=head"},
+		{"--finish-recovery=ref", "--expected-head="},
+		{"--finish-recovery= ", "--expected-head=head"},
+	} {
+		root := &cobra.Command{Use: "taba", SilenceUsage: true, SilenceErrors: true}
+		asJSON := false
+		addCatchUpCommand(root, &asJSON)
+		root.SetArgs(append([]string{"catch-up"}, args...))
+		if err := root.Execute(); err == nil || !strings.Contains(err.Error(), "requires both --finish-recovery and --expected-head") {
+			t.Fatalf("missing pair %v should fail before gateway lookup: %v", args, err)
+		}
+	}
+}

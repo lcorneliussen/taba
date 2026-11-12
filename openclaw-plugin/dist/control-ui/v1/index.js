@@ -1094,6 +1094,7 @@ function collectionTables(v) {
   const nextPayload = (r, step) => ({ ownerSessionKey: r.sessionKey, key: step.key,
     ...(step.step === "catch-up" && step.by === "wtc" && step.approve === "agent" ? { approveCatchUp: true } : {}) });
   async function actNext(r, logId = uuid()) {
+    if (r.next?.step === "commit" && commitBlocked(r)) return;
     if (batchRunning || v.alive?.() === false || dispatched.has(handoffKey(r, r.next))) return;
     if (acting.has(r.sessionKey)) return;
     const sent = dispatched;
@@ -1119,6 +1120,7 @@ function collectionTables(v) {
         if (outcome?.recoveryRef) recordActivity(logKey, logId, { recoveryRef:outcome.recoveryRef });
       } else if (fresh?.next) {
         const step = fresh.next;
+        if (step.step === "commit" && commitBlocked(fresh)) throw Error(commitBlocked(fresh));
         switch (nextRoute(step)) {
           case "publish": {
             const outcome = await publish(fresh, conversationKey, () => true, false, logId);
@@ -1143,7 +1145,29 @@ function collectionTables(v) {
   let selection = new Map(), batchResults = new Map(), batchLabels = new Map(), batchKeys = new Map(), batchKinds = new Map(), batchActivityIds = new Map(), batchPreview = null, dispatched = new Set();
   let batchKey = null, batchRunning = false, batchCancelled = false;
   const handoffKey = (r, step) => `${r.sessionKey}:${r.choices ? step.key.split(":").at(-1) : step.key}`;
-  const choicesOf = (r) => r.choices?.actions ?? (r.next ? [{ ...r.next, available: true }] : []);
+  const rawChoicesOf = r => r.choices?.actions ?? (r.next ? [{ ...r.next, available: true }] : []);
+  const commitStep = r => rawChoicesOf(r).find(step => step.step === "commit");
+  function commitBlocked(r) {
+    if (r.error) return r.error;
+    if (r.catchUpRecovery || r.catchUpRecoveryError) return "Verify and finish local changes recovery before committing";
+    if (r.inProgress || r.conflicted) return "Finish the operation or resolve conflicts before committing";
+    const step = commitStep(r);
+    if ((r.choices || r.next) && !step) return "Commit changes is not offered by the current repository plan; refresh or resolve its next step";
+    if (step && (!step.available || !nextRoute(step))) return step.blocked || "Commit changes is unavailable in the current repository plan";
+    return "";
+  }
+  const choicesOf = r => rawChoicesOf(r).map(step => step.step === "commit" && commitBlocked(r) ? { ...step, available: false, blocked: commitBlocked(r) } : step);
+  async function recheckCommitTargets(repos, conversation, collection) {
+    const fresh = await call(v.host, "collection", conversation, v.agent());
+    if (!active(conversation) || (fresh.collection?.sessionKey ?? conversation) !== collection) throw Error("The collection changed before the commit request; refresh before retrying");
+    return repos.map(before => {
+      const r = fresh.repos?.find(r => r.sessionKey === before.sessionKey && r.path === before.path && r.branch === before.branch);
+      if (!r || !r.dirty) throw Error(`${nameOf(before)} changed before the commit request; refresh before retrying`);
+      const blocked = commitBlocked(r);
+      if (blocked) throw Error(`${nameOf(r)}: ${blocked}`);
+      return { ...r, next: commitStep(r) };
+    });
+  }
   async function runSelected(targets) {
     if (batchRunning || v.alive?.() === false) return;
     const conversation = v.key();
@@ -1189,6 +1213,7 @@ function collectionTables(v) {
             if (batchCancelled) { setResult(r.sessionKey, "Cancelled before dispatch"); continue; }
             const selected = fresh?.next;
             if (!selected || selected.key !== step.key) throw Error("The selection changed; choose again");
+            if (selected.step === "commit" && commitBlocked(fresh)) throw Error(commitBlocked(fresh));
             switch (nextRoute(selected)) {
               case "agent": agents.push({ repo: fresh, step: selected }); setResult(r.sessionKey, "Waiting for conversation handoff"); break;
               case "publish":
@@ -1290,9 +1315,9 @@ function collectionTables(v) {
   const recoveryButton = (...args) => { const button = nextButton(...args); button.className += " wtc-restore-control"; return button; };
   const recoveryQueued = r => recoveryQueues.get(v.collectionKey?.() ?? v.key())?.targets.has(r.sessionKey) && !recoveryBusy(r);
   function repoActionOptions(r) {
-    const options = choicesOf(r).map(step => ({ id: step.key, label: nextLabel(step), detail: dispatched.has(handoffKey(r, step)) ? "Already sent to the conversation; wait for its result" : step.available ? step.reason : step.blocked ?? step.reason,
-      disabled: !!r.error || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || dispatched.has(handoffKey(r, step)) || batchRunning || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => step.step === "commit" ? commitFromFact({ ...r, next: step }) : actNext({ ...r, next: step }) }));
-    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({id:"commit",label:"Commit changes",detail:"Review intended changes and save local commits",disabled:reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>commitFromFact(r)});
+    const options = choicesOf(r).map(step => ({ id: step.key, label: nextLabel(step), detail: step.step === "commit" && commitBlocked(r) || (dispatched.has(handoffKey(r, step)) ? "Already sent to the conversation; wait for its result" : step.available ? step.reason : step.blocked ?? step.reason),
+      disabled: !!r.error || step.step === "commit" && !!commitBlocked(r) || !step.available || !nextRoute(step) || nextRoute(step) === "pr" && !/^https?:\/\//.test(r.pullRequest?.url ?? "") || reserved(r) || dispatched.has(handoffKey(r, step)) || batchRunning || recoveryQueueBusy(), href: nextRoute(step) === "pr" ? r.pullRequest?.url : null, run: () => step.step === "commit" ? commitFromFact({ ...r, next: step }) : actNext({ ...r, next: step }) }));
+    if (!r.error && r.dirty && !options.some(o => o.label === "Commit changes")) options.unshift({id:"commit",label:"Commit changes",detail:commitBlocked(r)||"Review intended changes and save local commits",disabled:!!commitBlocked(r)||reserved(r)||batchRunning||recoveryQueueBusy(),run:()=>commitFromFact(r)});
     if (r.error === "checkout unavailable") options.unshift({ id: "restore", label: "Restore", detail: r.recovery?.reason ?? "Restore the saved checkout before running repository actions", disabled: r.recovery?.state !== "restorable" || recoveryQueueBusy(), run: () => restoreCheckouts([r]) });
     if (r.behind > 0 && !options.some(o => o.label === "Catch up")) options.push({ id: "catch-up-blocked", label: "Catch up", detail: r.error ? "Restore the checkout first" : r.dirty ? "Save or stash local changes before catching up" : "Not offered by the current repository plan; refresh its status", disabled: true });
     return options;
@@ -1489,7 +1514,7 @@ function collectionTables(v) {
     }
     else {
       const dirty = rows.find((r) => !r.next && !r.choices && r.dirty > 0);
-      if (dirty) primary = nextButton("Commit changes", `Review and commit intended changes in ${nameOf(dirty)}`, () => commitFromFact(dirty), reserved(dirty));
+      if (dirty && !commitBlocked(dirty)) primary = nextButton("Commit changes", `Review and commit intended changes in ${nameOf(dirty)}`, () => commitFromFact(dirty), reserved(dirty));
     }
     if (!primary) {
       const publishers = repos.filter(r => pushable(r) && PUSHES.has(r.forge) && mine[r.forge] !== false);
@@ -1867,7 +1892,7 @@ function collectionTables(v) {
   async function commitGroup(repos) {
     if (!repos.length || authorSending || batchRunning) return;
     const conversation = v.key(), collection = v.collectionKey?.() ?? conversation;
-    const targets = repos.filter(r => !reserved(r));
+    let targets = repos.filter(r => !reserved(r) && !commitBlocked(r));
     if (!targets.length) return;
     const states = targets.map(r => {
       const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid(), stepKey: r.next?.step === "commit" ? handoffKey(r,r.next) : null };
@@ -1876,6 +1901,7 @@ function collectionTables(v) {
     });
     notifyFactFeedback(collection);
     try {
+      targets = await recheckCommitTargets(targets, conversation, collection);
       await sendToAuthor(conversation, "wtc", `Review and commit the intended local changes in these eligible repositories only: ${targets.map(nameOf).join(", ")}. Recheck each repository's current state and branch policy. Preserve intended work and report each result. Publication and follow-up actions are separate.`);
       states.forEach(state => { if(state.phase!=="unconfirmed") state.phase = "pending"; recordActivity(collection,state.id,{state:state.phase === "unconfirmed" ? "unknown" : "handed-off",status:state.phase === "unconfirmed" ? "Request accepted; outcome remains unconfirmed" : "Sent to conversation; completion pending"}); });
     } catch (err) { states.forEach(state => { state.phase = "failed"; state.error = String(err?.message ?? err);recordActivity(collection,state.id,{state:"failed",status:"Commit request failed: "+state.error}); }); }
@@ -1883,10 +1909,12 @@ function collectionTables(v) {
   }
   async function commitFromFact(r) {
     const key = commitKey(r), collection = v.collectionKey?.() ?? v.key();
-    if (reserved(r)) return;
+    if (reserved(r) || commitBlocked(r)) return;
     const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid(), stepKey: r.next?.step === "commit" ? handoffKey(r,r.next) : null };
     commitFeedback.set(key, state); limitCommitFeedback(key, state, collection); recordActivity(collection,state.id,{repo:nameOf(r),repoSessionKey:r.sessionKey,action:"commit",state:"running",status:"Requesting local commits"}); notifyFactFeedback(collection);
     try {
+      [r] = await recheckCommitTargets([r], v.key(), collection);
+      state.stepKey = r.next?.step === "commit" ? handoffKey(r, r.next) : null;
       const result = r.next?.step === "commit" ? await actNext(r, state.id) : await askCommit(r);
       const last = activityStore.get(collection)?.get(state.id);
       if (result?.error || last?.action === "commit" && activityFailed(last)) throw Error(result?.error ?? last.status);
@@ -1912,7 +1940,7 @@ function collectionTables(v) {
     if (!r.dirty && !done && !["pending", "running", "unconfirmed"].includes(state?.phase)) return null;
     const option = repoActionOptions(r).find(o => o.label === "Commit changes");
     const pending = ["pending", "running"].includes(state?.phase);
-    const title = done ? "New local commits observed; working tree clean" : state?.phase === "unconfirmed" ? "No commit observed yet. Open action details to check the request or ask the agent for help" : state?.phase === "failed" ? `Commit request failed: ${state.error}. Retry` : pending ? "Sent to conversation; no commit observed yet. Open action details for status or agent help" : option?.disabled ? option.detail : `${plural(r.dirty, "file")} changed. Commit changes for ${nameOf(r)}; publication is separate`;
+    const title = done ? "New local commits observed; working tree clean" : state?.phase === "unconfirmed" ? "No commit observed yet. Open action details to check the request or ask the agent for help" : state?.phase === "failed" ? `Commit request failed: ${state.error}. Retry` : pending ? "Sent to conversation; no commit observed yet. This repository stays reserved across views. Open action details for status or agent help" : option?.disabled ? option.detail : `${plural(r.dirty, "file")} changed. Commit changes for ${nameOf(r)}; publication is separate`;
     const button = count(`± ${r.dirty || 0}`, title, done ? TONE.success : state?.phase === "failed" ? TONE.failure : TONE.pending, () => pending || state?.phase === "unconfirmed" ? openActivity() : commitFromFact(r));
     button.className += " wtc-local-change";
     if(done)button.setAttribute("data-feedback","completed");

@@ -46,6 +46,9 @@ func addCatchUpCommand(root *cobra.Command, asJSON *bool) {
 			if len(other) > 0 || len(args) > 0 {
 				return fmt.Errorf("finishing recovery takes only --finish-recovery, --expected-head and --json")
 			}
+			if strings.TrimSpace(finishRecovery) == "" || strings.TrimSpace(expectedHead) == "" {
+				return fmt.Errorf("finishing recovery requires both --finish-recovery and --expected-head with non-empty values")
+			}
 			return finishCheckoutRecovery(finishRecovery, expectedHead, *asJSON)
 		}
 		if gw := openclaw.GatewayFromEnv(os.Getenv); gw != nil {

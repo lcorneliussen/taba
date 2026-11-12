@@ -41,6 +41,7 @@ type CheckoutStatus struct {
 	Dirty      int    `json:"dirty"`
 	Untracked  int    `json:"untracked"`
 	Conflicted int    `json:"conflicted"`
+	InProgress string `json:"inProgress,omitempty"`
 	// Published says that the gateway has published this branch before.
 	Published bool `json:"published"`
 	// Unpublished counts the commits since then; with Dirty it is what the
@@ -189,6 +190,7 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 		return s
 	}
 	s.Branch, _ = git(top, "branch", "--show-current")
+	s.InProgress = (&Checkout{Dir: top}).inProgress()
 	if rounds, err := readCompletedRounds(top); err != nil {
 		s.Error = err.Error()
 		return s
@@ -273,7 +275,7 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 func (s CheckoutStatus) facts(top string) next.Facts {
 	f := next.Facts{Repo: s.Repo, Host: next.HostOpenClaw, Branch: s.Branch, Base: s.Base,
 		Ahead: s.Ahead, Behind: s.Behind, Dirty: s.Dirty, Conflicted: s.Conflicted,
-		InProgress: (&Checkout{Dir: top}).inProgress()}
+		InProgress: s.InProgress}
 	if s.CatchUpRecoveryError != "" {
 		f.InProgress = "local changes recovery marker needs inspection: " + s.CatchUpRecoveryError
 	} else if s.CatchUpRecovery != "" {
