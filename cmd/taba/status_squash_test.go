@@ -36,7 +36,7 @@ func TestStatusSquashStateCellFitsDenseLayouts(t *testing.T) {
 			layout := statusTUIPRLayout(width)
 			start := layout.number + 1 + layout.repo + 1
 			cell := strings.TrimSpace(ansi.Cut(lines[3], start, start+layout.state))
-			want := map[string]string{"follow-up": "⚠ extra", "unknown": "unknown"}[state]
+			want := map[string]string{"follow-up": "⚠ extra", "unknown": "merged"}[state]
 			if cell != want {
 				t.Fatalf("width=%d state=%s cell=%q want=%q", width, state, cell, want)
 			}

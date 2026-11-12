@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -938,7 +939,8 @@ func gatewayHarness(folder string, worktrees []string) *gatewayHarnessStatus {
 }
 
 // linkGatewayFolder keeps the collection's folder in step with its worktrees
-// and reads the services running for it.
+// and reads the services running for it. It repairs inherited project ports and
+// the generated env; a repair warning is returned alongside the services.
 func linkGatewayFolder(name string, repos []openclaw.CheckoutStatus) (string, []wtc.RuntimeItem, string) {
 	var linked []wtc.LinkedRepo
 	for _, r := range repos {
@@ -962,11 +964,103 @@ func linkGatewayFolder(name string, repos []openclaw.CheckoutStatus) (string, []
 	if err != nil {
 		return folder, []wtc.RuntimeItem{}, err.Error()
 	}
+	portErr := inheritGatewayProjectPorts(c, name, linked)
 	services := c.RuntimeStatus()
 	if services == nil {
 		services = []wtc.RuntimeItem{}
 	}
+	if portErr != nil {
+		return folder, services, portErr.Error()
+	}
 	return folder, services, ""
+}
+
+// Only the collection's recorded project supplies ports. Match through verified
+// checkout origins, including rename aliases; a repository basename is not proof.
+func inheritGatewayProjectPorts(c *wtc.Context, task string, linked []wtc.LinkedRepo) error {
+	name, remote, err := wtc.GatewayHarness(c.Collection)
+	if err != nil || name == "" || name == openclaw.NoHarness {
+		return err
+	}
+	cfg, err := gatewayConfig()
+	if err != nil {
+		return err
+	}
+	var selected *openclaw.Harness
+	for _, h := range cfg.Harnesses {
+		if h.Name == name && gatewayPortSameRemote(h.Remote, remote) {
+			copy := h
+			selected = &copy
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("recorded project %s is unavailable; check the gateway project configuration", name)
+	}
+	reg := readHarnessRegistry(*selected, task)
+	if reg.err != nil {
+		return reg.err
+	}
+	var ports []wtc.GatewayPort
+	for _, link := range linked {
+		origins := openclaw.GatewayProjectOrigins(link.Path)
+		matches := func(remote string) bool {
+			requested, ok := gatewayPortOrigin(remote)
+			if !ok {
+				return false
+			}
+			for _, origin := range origins {
+				if origin.Forge == requested.Forge && requested.Forge != openclaw.ForgeUnknown &&
+					strings.EqualFold(origin.Owner, requested.Owner) && strings.EqualFold(origin.Repo, requested.Repo) {
+					return true
+				}
+			}
+			return false
+		}
+		var match *wtc.Repo
+		for _, repo := range reg.repos {
+			if !matches(repo.Remote) {
+				continue
+			}
+			if match != nil {
+				return fmt.Errorf("project %s lists several entries for repository %s", name, link.Name)
+			}
+			copy := repo
+			match = &copy
+		}
+		if match == nil || match.PortOffset == nil {
+			continue
+		}
+		for _, local := range c.Registry.Repos {
+			if local.Name == link.Name && matches(local.Remote) {
+				ports = append(ports, wtc.GatewayPort{Name: local.Name, Remote: local.Remote, Offset: *match.PortOffset, Names: match.Names()})
+			}
+		}
+	}
+	return c.InheritGatewayPorts(ports)
+}
+
+func gatewayPortOrigin(remote string) (openclaw.Origin, bool) {
+	if !strings.Contains(remote, "://") {
+		if host, path, ok := strings.Cut(remote, ":"); ok && !strings.Contains(host, "/") {
+			remote = "ssh://" + host + "/" + path
+		}
+	}
+	u, err := url.Parse(remote)
+	if err != nil || !slices.Contains([]string{"http", "https", "ssh", "git"}, u.Scheme) || u.RawQuery != "" || u.Fragment != "" || u.EscapedPath() != u.Path {
+		return openclaw.Origin{}, false
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.Trim(u.Path, "/"), ".git"), "/")
+	if len(parts) != 2 || !metadataRepoPart.MatchString(parts[0]) || !metadataRepoPart.MatchString(parts[1]) || parts[0] == "." || parts[0] == ".." || parts[1] == "." || parts[1] == ".." {
+		return openclaw.Origin{}, false
+	}
+	origin := openclaw.ParseOrigin("https://" + u.Hostname() + "/" + strings.Join(parts, "/"))
+	return origin, origin.Forge != openclaw.ForgeUnknown
+}
+
+func gatewayPortSameRemote(a, b string) bool {
+	x, ok := gatewayPortOrigin(a)
+	y, other := gatewayPortOrigin(b)
+	return ok && other && x.Forge == y.Forge && strings.EqualFold(x.Owner, y.Owner) && strings.EqualFold(x.Repo, y.Repo)
 }
 
 // refuseUnderGateway stops commands that make folder collections: under
