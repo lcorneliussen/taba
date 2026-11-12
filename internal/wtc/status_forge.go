@@ -11,6 +11,7 @@ import (
 )
 
 type statusPRDetail struct {
+	StateSource     string
 	Freshness       string
 	ObservedAt      string
 	Number          string

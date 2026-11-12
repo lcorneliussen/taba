@@ -3,11 +3,13 @@ package wtc
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"taba.sh/taba/internal/envcompat"
 )
 
@@ -71,16 +73,29 @@ func statusReadForgeEntryAny(kind, forge, slug, key string) ([]byte, bool) {
 }
 
 func statusReadForgeEntryWithAge(kind, forge, slug, key string, age time.Duration) ([]byte, bool) {
+	data, _, ok := statusReadForgeEntryObserved(kind, forge, slug, key, age)
+	return data, ok
+}
+
+// Read bytes and observation time from the same opened regular file, even
+// while another pane atomically publishes a newer observation.
+func statusReadForgeEntryObserved(kind, forge, slug, key string, age time.Duration) ([]byte, time.Time, bool) {
 	path := statusForgeEntryPath(kind, forge, slug, key)
 	if !statusSecureCacheDir(filepath.Dir(path)) {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	info, err := os.Lstat(path)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || time.Since(info.ModTime()) >= age {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	data, err := os.ReadFile(path)
-	return data, err == nil && len(data) != 0
+	data, err := io.ReadAll(file)
+	return data, info.ModTime(), err == nil && len(data) != 0
 }
 
 func statusWriteForgeCache(forge, slug, number string, data []byte) {

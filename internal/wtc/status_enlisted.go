@@ -71,7 +71,7 @@ func (c *Context) statusRecordForge(record PRRecord, _ []StatusRepo) (slug, forg
 }
 
 func statusUnknownDetail(record PRRecord) statusPRDetail {
-	return statusPRDetail{Number: record.Number, State: "UNKNOWN", Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: record.Title}
+	return statusPRDetail{Number: record.Number, State: "UNKNOWN", Freshness: "deferred", Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: record.Title}
 }
 
 func statusDeferredDetail(record PRRecord) statusPRDetail {
@@ -98,7 +98,7 @@ func statusParseForgeDetail(forge string, raw []byte, record PRRecord) (statusPR
 func statusCachedSettledMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
 	// Reuse merged forge detail until its final facts are written to the
 	// collection registry; the registry then avoids later forge calls.
-	cached, ok := statusReadMergedForgeCache(forge, slug, record.Number)
+	cached, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusMergedCacheAge())
 	if !ok {
 		return statusPRDetail{}, false
 	}
@@ -106,11 +106,12 @@ func statusCachedSettledMerge(record PRRecord, slug, forge string) (statusPRDeta
 	if err != nil || detail.State != "MERGED" || detail.MergedOn == "" || detail.ChecksUnsettled || detail.Checks == "PENDING" {
 		return statusPRDetail{}, false
 	}
-	return detail, true
+	detail.Freshness = "settled"
+	return statusObserveAt(detail, observed, "settled-cache"), true
 }
 
 func statusReadCachedDetail(record PRRecord, slug, forge string) (statusPRDetail, bool) {
-	cached, ok := statusReadForgeCache(forge, slug, record.Number)
+	cached, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusForgeCacheAge())
 	if !ok {
 		return statusPRDetail{}, false
 	}
@@ -121,7 +122,7 @@ func statusReadCachedDetail(record PRRecord, slug, forge string) (statusPRDetail
 	if forge == "bitbucket.org" {
 		detail = statusBBCompleteMergeTime(detail, slug)
 	}
-	return detail, true
+	return statusObserveAt(detail, observed, "detail-cache"), true
 }
 
 func statusEnrichRecord(record PRRecord, slug, forge string) statusPRDetail {
@@ -184,6 +185,14 @@ func statusEnrichListed(record PRRecord, slug, forge string, item statusOpenPR) 
 		source = "stamp"
 	}
 	detail = statusConfirmFullPRLocked(record, slug, forge, detail, source)
+	detail = statusObserveDetail(detail, slug, forge)
+	// A fresh unchanged list confirms state without pretending the older full
+	// detail/check payload was fetched again. Preserve settled/newer responses.
+	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
+	if (detail.State == "OPEN" || detail.State == "DRAFT") && item.Started.After(observed) {
+		detail.Freshness = ""
+		detail = statusObserveAt(detail, item.Started, "open-list")
+	}
 	if lockErr == nil {
 		unlock()
 	}
@@ -318,7 +327,7 @@ func (c *Context) statusEnrichRecords(records []PRRecord, rows []StatusRepo) ([]
 			checks = "NONE"
 		}
 		details[i] = statusPRDetail{Number: record.Number, State: "MERGED", Checks: checks,
-			Merge: "MERGED", Review: "merged", Title: record.Title, MergedOn: record.MergedOn, MergeCommit: record.MergeCommit, HeadCommit: record.MergeHead, Base: record.MergeBase}
+			Merge: "MERGED", Review: "merged", Freshness: "recorded", StateSource: "registry", Title: record.Title, MergedOn: record.MergedOn, MergeCommit: record.MergeCommit, HeadCommit: record.MergeHead, Base: record.MergeBase}
 		recorded++
 	}
 	if recorded != 0 {
@@ -423,13 +432,14 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 				break
 			}
 		}
-		if detail.State == "OPEN" || detail.State == "DRAFT" {
+		if detail.State == "OPEN" || detail.State == "DRAFT" ||
+			((detail.State == "" || detail.State == "UNKNOWN") && statusObservationUnavailable(detail.Freshness)) {
 			statusPRBase(&snapshot, branchRow, detail.Base)
 			if branchRow >= 0 && snapshot.Repos[branchRow].PR == nil {
 				prURL := prURLForStatus(forge, slug, record.Number)
 				snapshot.Repos[branchRow].PR = &StatusPRFacts{Number: detail.Number, Head: detail.HeadCommit, Checks: detail.Checks,
 					URL: prURL, Merge: detail.Merge, Review: detail.Review, Draft: detail.State == "DRAFT",
-					Freshness: detail.Freshness, ObservedAt: detail.ObservedAt,
+					Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
 					MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
 			}
 		}
@@ -448,7 +458,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 			DisplayTitle: detail.Title, Slug: slug, URL: statusString(url), MergedOn: statusString(detail.MergedOn),
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
 			Archived:  detail.State == "MERGED" && branchRow < 0 && statusArchived(detail.MergedOn, time.Now()),
-			Freshness: detail.Freshness, ObservedAt: detail.ObservedAt,
+			Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
 			MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase,
 			worktreeDir: worktreeDir,
 		}
@@ -476,7 +486,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 			statusPRBase(&snapshot, i, detail.Base)
 			snapshot.Repos[i].PR = &StatusPRFacts{Number: detail.Number, Head: detail.HeadCommit, Checks: detail.Checks,
 				URL: prURLForStatus(forge, slug, number), Merge: detail.Merge, Review: detail.Review, Draft: detail.State == "DRAFT",
-				Freshness: detail.Freshness, ObservedAt: detail.ObservedAt,
+				Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
 				MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
 		}
 	}

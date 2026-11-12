@@ -68,6 +68,8 @@ type StatusRepo struct {
 }
 
 type StatusPRFacts struct {
+	// Freshness and ObservedAt describe PR state; checks retain their own coverage.
+	StateSource    string   `json:"observation_source,omitempty"`
 	Freshness      string   `json:"freshness,omitempty"`
 	ObservedAt     string   `json:"observed_at,omitempty"`
 	Number         string   `json:"number"`
@@ -107,6 +109,8 @@ type StatusFollow struct {
 }
 
 type StatusPRRow struct {
+	// Freshness and ObservedAt describe PR state, independently of snapshot age.
+	StateSource     string         `json:"observation_source,omitempty"`
 	Freshness       string         `json:"freshness,omitempty"`
 	ObservedAt      string         `json:"observed_at,omitempty"`
 	Repo            string         `json:"repo"`
@@ -291,7 +295,13 @@ func statusNext(snapshot *StatusSnapshot) {
 		r := &snapshot.Repos[i]
 		r.Next = nil
 		r.Choices = nil
-		if r.ReviewOnly || (r.PR != nil && statusObservationUnavailable(r.PR.Freshness)) {
+		blocked := r.PR != nil && statusObservationUnavailable(r.PR.Freshness)
+		for _, pr := range snapshot.PRs {
+			if pr.OnBranch && statusPRMatchesRepo(pr, *r) && statusObservationUnavailable(pr.Freshness) {
+				blocked = true
+			}
+		}
+		if r.ReviewOnly || blocked {
 			continue
 		}
 		f := statusFacts(*r)
