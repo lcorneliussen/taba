@@ -136,3 +136,29 @@ func TestGatewayPortsAcceptInitialNullRepos(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestGatewayPortsAllowLinkingAnotherRepositoryAfterRepair(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	dir := filepath.Join(t.TempDir(), "collections", "example")
+	web := LinkedRepo{Name: "web", Remote: "https://github.com/example-org/web.git", DefaultRef: "origin/main", Path: t.TempDir()}
+	c, err := LinkGatewayCollection(dir, []LinkedRepo{web})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.InheritGatewayPorts([]GatewayPort{{Name: web.Name, Remote: web.Remote, Offset: 1, Names: []string{"docs"}}}); err != nil {
+		t.Fatal(err)
+	}
+	api := LinkedRepo{Name: "api", Remote: "https://github.com/example-org/api.git", DefaultRef: "origin/main", Path: t.TempDir()}
+	c, err = LinkGatewayCollection(dir, []LinkedRepo{web, api})
+	if err != nil {
+		t.Fatalf("linking a repository after port repair: %v", err)
+	}
+	if len(c.Registry.Repos) != 2 || c.Registry.Repos[1].Name != api.Name || c.Registry.Repos[1].Remote != api.Remote {
+		t.Fatalf("additional repository was not retained: %#v", c.Registry.Repos)
+	}
+	repaired := c.Registry.Repos[0]
+	if repaired.Name != web.Name || repaired.PortOffset == nil || *repaired.PortOffset != 1 || len(repaired.Aliases) != 1 || repaired.Aliases[0] != "docs" {
+		t.Fatalf("inherited metadata changed after repository addition: %#v", repaired)
+	}
+}

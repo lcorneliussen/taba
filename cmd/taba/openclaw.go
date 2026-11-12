@@ -929,7 +929,8 @@ func gatewayHarness(folder string, worktrees []string) *gatewayHarnessStatus {
 }
 
 // linkGatewayFolder keeps the collection's folder in step with its worktrees
-// and reads the services running for it.
+// and reads the services running for it. It repairs inherited project ports and
+// the generated env; a repair warning is returned alongside the services.
 func linkGatewayFolder(name string, repos []openclaw.CheckoutStatus) (string, []wtc.RuntimeItem, string) {
 	var linked []wtc.LinkedRepo
 	for _, r := range repos {

@@ -109,9 +109,13 @@ func (c *Context) InheritGatewayPorts(ports []GatewayPort) error {
 	}
 	data := old
 	if changed {
-		if data, err = yaml.Marshal(&doc); err != nil {
+		var out bytes.Buffer
+		encoder := yaml.NewEncoder(&out)
+		encoder.SetIndent(2)
+		if err := encoder.Encode(&doc); err != nil {
 			return err
 		}
+		data = out.Bytes()
 	}
 	reg, err := ParseRegistry(data)
 	if err != nil {
