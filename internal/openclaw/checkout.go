@@ -344,7 +344,8 @@ type CatchUp struct {
 // the merge with the next publication (a worker's, with its task's). A
 // conflicted merge is aborted. A detached worktree is not merged into but
 // moved to the tip (forward). Local edits and staging are retained in a pinned
-// recovery copy and restored after the operation.
+// recovery copy. If restoration fails, RecoveryRequired keeps that copy active
+// for the owning agent to reconcile before publication or another merge.
 func (c *Checkout) CatchUp() (CatchUp, error) {
 	result := CatchUp{Branch: c.Branch(), Dest: c.Dest}
 	if c.Detached {

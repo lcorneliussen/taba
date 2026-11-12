@@ -955,7 +955,6 @@ function collectionTables(v) {
   const FACT_GAP = 10;
   const factTracks = () => [44, ...(repoFacts.ahead ? [36] : []), ...(repoFacts.behind ? [36] : [])];
   const factWidth = () => factTracks().reduce((n, x) => n + x, 0) + (factTracks().length - 1) * FACT_GAP;
-  // Fit retains observed fact tracks until the conversation changes; extra room goes to actions.
   const repoBaseWidth = () => 128 + factWidth() + (repoFacts.pr ? 164 : 0) + (repoFacts.pr ? 4 : 3) * REPO_COLUMN_GAP;
   const repositoryCompact = width => width > 0 && width < repoBaseWidth() + (actionColumns ? REPO_NEXT_WIDTH : 24);
   const repoCapacity = width => Math.max(1, Math.floor(((width || 0) - repoBaseWidth() - 24) / 108));
@@ -2272,7 +2271,8 @@ function collectionTables(v) {
       const actionWidth = actionColumns ? inlineCapacity * 108 + 24 : 24;
       const columns = repositoryColumns(narrow, actionWidth, { width: factWidth(), pr: repoFacts.pr });
       const sharedGrid = !narrow && globalThis.CSS?.supports?.("grid-template-columns", "subgrid");
-      // Share natural name sizing with the headings; older browsers align from the right.
+      // Without subgrid, a flexible branch track and fixed action width align
+      // the independently sized header and rows from their shared right edge.
       if (!narrow && !sharedGrid) {
         columns[1].width = "minmax(64px,1fr)";
         columns.at(-1).width = `${actionWidth}px`;
