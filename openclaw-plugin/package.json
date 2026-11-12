@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "private": true,
-  "files": ["index.js", "sandbox-git.js", "dist", "skills", "openclaw.plugin.json"],
+  "files": ["index.js", "sandbox-git.js", "publication.js", "dist", "skills", "openclaw.plugin.json"],
   "openclaw": {
     "extensions": ["./index.js"],
     "install": { "minHostVersion": ">=2026.10.2" },

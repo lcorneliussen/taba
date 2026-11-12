@@ -1,3 +1,4 @@
+import { renderPRPreview } from "./pr-preview.js";
 // The Collection panel: everything a collection's session works with — its
 // repositories, their pull requests and the services running for it — in one
 // place. Plain ESM, no build step and no SDK import.
@@ -69,7 +70,7 @@ async function publishRepo(host, agentId, r, say, review, mayDispatch = () => tr
   }
   say(`Pushing ${name}…`);
   const p = proposalOf(r);
-  const out = await host.request("sessions.github.publish", {
+  const out = await host.request("wtc.github.publish", {
     ...target, idempotencyKey: uuid(), selection: { source: "personal", account: mine.account, generation: mine.generation },
     ...(p?.title ? { title: p.title } : {}), ...(p?.body ? { body: p.body } : {}),
   });
@@ -80,7 +81,7 @@ async function confirmRepo(host, agentId, r, pending, say, review, mayDispatch =
   const name = r.repo ?? r.project;
   const target = { sessionKey: r.sessionKey, agentId };
   say(`Pushing ${name}…`);
-  const out = await host.request("sessions.github.confirm", { ...target, requestId: pending.requestId, ...pending.confirmation });
+  const out = await host.request("wtc.github.confirm", { ...target, requestId: pending.requestId, ...pending.confirmation });
   return settle(host, target, r, out, say, review, mayDispatch);
 }
 // What a publish or confirm came back with: done, failed, or a confirmation
@@ -114,7 +115,7 @@ function publicationResult(r, out, say, review) {
     : existing
       ? `pushed commits to existing ${pr}. Its title and description are unchanged.`
       : `pushed branch commits.${number ? ` Pull request: ${pr}.` : ""}`;
-  say(`${name}: ${message}${url ? ` ${url}` : ""}${out.warning ? ` Warning: ${out.warning}` : ""}`, false, number && review ? {
+  say(`${name}: ${message}${url ? ` ${url}` : ""}${out.warning ? ` Warning: ${out.warning}` : ""}${out.tracking?.state === "pending" ? ` Tracking pending: ${out.tracking.message}` : ""}`, false, number && review ? {
     label: "Review PR text",
     title: "Ask the conversation to review the PR title and description against its full current diff",
     run: (action) => review(r, url, action),
@@ -167,7 +168,7 @@ async function confirmBitbucket(host, agentId, r, pending, say, review, mayDispa
   if (!mayDispatch()) return { cancelled: true };
   const name = r.repo ?? r.project;
   say(`Pushing ${name}…`);
-  const out = await bitbucketAction(host, agentId, r, "publish-confirm", { requestId: pending.requestId, requestDigest: pending.confirmation.requestDigest });
+  const out = await host.request("wtc.bitbucket.confirm", {sessionKey:r.sessionKey,agentId,requestId:pending.requestId,requestDigest:pending.confirmation.requestDigest});
   if (out?.status !== "published") {
     say(`${name}: ${out?.status ?? "no answer"}${out?.error ? ` — ${out.error.message ?? out.error}` : out?.message ? ` — ${out.message}` : ""}`, true);
     return null;
@@ -891,6 +892,29 @@ const actionFeedback = () => el("style", { textContent: `
 }
 @container wtc-card (max-width:260px) { .wtc-brand-word { display:none; } .wtc-collection-card>summary>span:first-child { align-self:center; } }
 
+.wtc-pr-preview { overflow-wrap:anywhere;border-left:2px solid var(--border,rgba(128,128,128,.3));padding-left:10px;margin-top:6px;padding-bottom:8px; }
+.wtc-publication-summary>strong { font-size:14px !important; }
+.wtc-publication-controls>.wtc-action-control { height:32px !important;min-height:32px !important; }
+.wtc-pr-preview-cue { font-size:11px;color:var(--muted,#888);padding:0 0 6px;border-bottom:1px solid var(--border,rgba(128,128,128,.3)); }
+.wtc-pr-preview>summary { cursor:pointer;color:var(--muted,#888);font-size:11px;margin-bottom:6px; }
+.wtc-pr-preview>strong { display:block;font-size:12px;line-height:1.5; }
+.wtc-pr-preview-markdown { font-size:12px;line-height:1.55;overflow-wrap:anywhere; }
+.wtc-pr-preview-markdown :is(p,ul,ol,blockquote,pre,table) { margin:8px 0; }
+.wtc-pr-preview-markdown :is(h2,h3,h4,h5,h6) { font-size:12px;line-height:1.5;margin:12px 0 4px;font-weight:600; }
+.wtc-pr-preview-markdown :is(ul,ol) { padding-left:20px; }
+.wtc-pr-preview-markdown li>p { margin:3px 0; }
+.wtc-pr-preview-markdown p { color:inherit; }
+.wtc-preview-task-item { list-style:none; }
+.wtc-preview-task { display:inline-block;width:14px;margin-left:-18px;margin-right:4px; }
+.wtc-pr-preview-markdown blockquote { border-left:2px solid var(--border);padding-left:10px;color:var(--muted); }
+.wtc-pr-preview-markdown code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;white-space:pre-wrap; }
+.wtc-pr-preview-markdown pre { padding:8px;background:var(--bg-elevated,rgba(128,128,128,.08));border-radius:6px;overflow:auto; }
+.wtc-pr-preview-markdown a { color:var(--text,inherit);text-decoration:underline; }
+.wtc-pr-preview-markdown table { border-collapse:collapse;width:100%; }
+.wtc-pr-preview-table { overflow:auto; }
+.wtc-pr-preview-markdown :is(th,td) { text-align:left;padding:3px 8px;border-bottom:1px solid var(--border); }
+.wtc-publication-confirmation>.wtc-publication-controls { flex:none; }
+
 ` });
 function collectionTables(v) {
   let inlineCapacity = 1, actionColumns = 1;
@@ -899,13 +923,13 @@ function collectionTables(v) {
   const catching = new Set();
   const acting = new Set();
   let authorSending = false;
-  const openDisclosures = new Set();
+  const openDisclosures = new Map();
   const keepDisclosure = (node, key) => {
     key = JSON.stringify([v.collectionKey?.() ?? v.key(), key]);
-    node.open = openDisclosures.has(key);
+    node.open = openDisclosures.has(key) ? openDisclosures.get(key) : !!node.open;
     node.ontoggle = () => {
-      if (node.open) { openDisclosures.add(key); if (openDisclosures.size > 200) openDisclosures.delete(openDisclosures.values().next().value); }
-      else openDisclosures.delete(key);
+      openDisclosures.set(key, !!node.open);
+      if (openDisclosures.size > 200) openDisclosures.delete(openDisclosures.keys().next().value);
     };
     return node;
   };
@@ -1433,7 +1457,7 @@ function collectionTables(v) {
     secondary.style.flexBasis = compact ? "36px" : "24px";
     return css(el("span", { className: "wtc-action-toolbar" }, secondary, ...[...extras].reverse().map(o => { const button = optionButton(o); button.className += " wtc-toolbar-inline"; return button; }), slot), `display:inline-flex;align-items:baseline;gap:${compact ? 4 : 8}px;min-width:0;flex-wrap:nowrap;white-space:nowrap`);
   }
-  function publicationConfirmations(repos) {
+  function publicationConfirmations(repos, above = false) {
     const pending = repos.filter(r => confirming.has(r.sessionKey));
     if (!pending.length) return null;
     return css(el("div", { className: "wtc-publication-confirmations" }, ...pending.map(r => {
@@ -1442,19 +1466,33 @@ function collectionTables(v) {
       const accountKnown = prepared.forge === BITBUCKET ? !!c.account : !!c.account?.login;
       const account = prepared.forge === BITBUCKET ? bitbucketAccount(c) : `@${c.account?.login ?? "unknown"}`;
       const commits = Array.isArray(c.commits) ? c.commits : [], count = snapshot.unpublished ?? snapshot.ahead ?? 0;
-      const branch = c.branch ?? snapshot.branch ?? "current branch", dest = c.dest ?? snapshot.base?.replace(/^origin\//, "") ?? "base";
+      const branch = c.branch ?? snapshot.branch ?? "current branch", dest = c.dest ?? c.baseBranch ?? snapshot.base?.replace(/^origin\//, "") ?? "base";
       const proposal = proposalOf(snapshot);
       const confirm = nextButton("Confirm push", `Confirm the captured push of ${nameOf(r)} as ${account}`, () => { if (confirming.get(r.sessionKey) === prepared) return publish(r, prepared.conversationKey, () => true, true); }, reserved(r) || !accountKnown);
       confirm.className += " wtc-confirm-publication";
-      return css(el("section", { ariaLabel: `Confirm publication of ${nameOf(r)}` },
+      const preview = proposal?.title || proposal?.body ? keepDisclosure(css(el("details", {className:"wtc-pr-preview",open:true},
+        el("summary", {textContent:"Proposed PR text"}), el("strong", {textContent:proposal.title ?? ""}),
+        css(el("div", {textContent:"For new PRs; existing PR text is kept."}),"color:var(--muted,#888);font-size:11px"),
+        renderPRPreview(proposal.body ?? "",el),
+        keepDisclosure(css(el("details",{className:"wtc-pr-preview-source"},el("summary",{textContent:"Source"}),css(el("pre",{textContent:proposal.body??""}),"white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0;font-size:11px")),"font-size:11px;color:var(--muted,#888)"),`publication:${prepared.activityId}:source`)),`font-size:12px;min-height:0;overflow:auto;${above ? "max-height:240px;flex:1 1 auto" : "flex:none"}`),`publication:${prepared.activityId}:proposal`) : null;
+      const scrollCue = above && preview ? el("div",{className:"wtc-pr-preview-cue",textContent:"↓ Scroll to read the full proposal",hidden:true}) : null;
+      if (scrollCue) {
+        const measure = () => { scrollCue.hidden = !preview.open || preview.scrollHeight <= preview.clientHeight + 1; };
+        const toggled = preview.ontoggle;
+        preview.ontoggle = () => { toggled?.(); measure(); };
+        queueMicrotask(measure);
+      }
+      const info = css(el("div", {className:"wtc-publication-summary"},
         css(el("strong", { textContent: `Push ${nameOf(r)}` }), "font-size:12px"),
         css(el("div", { textContent: `${account} · ${snapshot.owner ?? ""}/${nameOf(r)}` }), "font-size:12px;overflow-wrap:anywhere"),
-        css(el("div", { textContent: `${branch} → ${dest}${c.head ? ` · ${String(c.head).slice(0, 7)}` : ""}` }), "font-size:12px;overflow-wrap:anywhere;color:var(--muted,#888)"),
+        css(el("div", { textContent: `${branch} → ${dest}${c.head || c.sourceHeadCommit ? ` · ${String(c.head ?? c.sourceHeadCommit).slice(0, 7)}` : ""}` }), "font-size:12px;overflow-wrap:anywhere;color:var(--muted,#888)"),
         css(el("div", { textContent: `${plural(count, "commit")}${snapshot.forge !== BITBUCKET && snapshot.dirty ? ` + ${plural(snapshot.dirty, "file")} to commit` : ""}${c.uncommitted ? `; ${plural(c.uncommitted, "uncommitted file")} left behind` : ""}. The gateway rechecks the captured request before publishing.` }), "font-size:11px;overflow-wrap:anywhere;color:var(--muted,#888)"),
-        commits.length ? keepDisclosure(css(el("details", {}, el("summary", { textContent: `Inspect ${commits.length} captured commits` }), ...commits.map(commit => el("div", { textContent: typeof commit === "string" ? commit : commit.subject ?? commit.title ?? commit.message ?? commit.sha ?? "Commit" }))), "font-size:11px;overflow-wrap:anywhere"), `publication:${prepared.activityId}:commits`) : null,
-        proposal?.title || proposal?.body ? keepDisclosure(css(el("details", {}, el("summary", { textContent: "Proposed PR text" }), el("strong", { textContent: proposal.title ?? "" }), el("div", { textContent: "For new PRs; existing PR text is kept." }), css(el("div", { textContent: proposal.body ?? "" }), "white-space:pre-wrap;overflow-wrap:anywhere")), "font-size:11px"), `publication:${prepared.activityId}:proposal`) : null,
-        css(el("div", {}, confirm,
-          nextButton("Cancel", `Cancel preparation for ${nameOf(r)}; nothing will be pushed`, () => { if (!active(prepared.conversationKey) || confirming.get(r.sessionKey) !== prepared) return; confirming.delete(r.sessionKey); if (prepared.activityId) recordActivity(prepared.logKey, prepared.activityId, { state: "cancelled", status: `${nameOf(r)}: publication cancelled.` }); v.say(`${nameOf(r)}: publication cancelled.`); v.rerender(); }, reserved(r))), "display:flex;align-items:center;gap:8px;padding-top:4px")), "display:grid;gap:4px;padding:10px 12px;border:1px solid var(--border-strong,rgba(128,128,128,.35));border-radius:8px;background:var(--bg,transparent)");
+        commits.length ? keepDisclosure(css(el("details", {}, el("summary", { textContent: `Inspect ${commits.length} captured commits` }), ...commits.map(commit => el("div", { textContent: typeof commit === "string" ? commit : commit.subject ?? commit.title ?? commit.message ?? commit.sha ?? "Commit" }))), "font-size:11px;overflow-wrap:anywhere"), `publication:${prepared.activityId}:commits`) : null),"display:grid;gap:4px;flex:none;min-width:0");
+      const controls = css(el("div", {className:"wtc-publication-controls"}, confirm,
+          nextButton("Cancel", `Cancel preparation for ${nameOf(r)}; nothing will be pushed`, () => { if (!active(prepared.conversationKey) || confirming.get(r.sessionKey) !== prepared) return; confirming.delete(r.sessionKey); if (prepared.activityId) recordActivity(prepared.logKey, prepared.activityId, { state: "cancelled", status: `${nameOf(r)}: publication cancelled.` }); v.say(`${nameOf(r)}: publication cancelled.`); v.rerender(); }, reserved(r))), "display:flex;align-items:center;gap:8px;padding-top:4px");
+      return css(el("section", { className:"wtc-publication-confirmation", ariaLabel: `Confirm publication of ${nameOf(r)}` },
+        ...(above ? [preview,scrollCue,info,controls] : [info,controls,preview]).filter(Boolean)),
+        `display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--border-strong,rgba(128,128,128,.35));border-radius:8px;background:var(--bg,transparent);min-width:0;${above ? "max-height:min(50dvh,420px)" : ""}`);
     })), "display:grid;gap:8px;min-width:0");
   }
   function bulkActions(repos, narrow, actionWidth = REPO_NEXT_WIDTH) {
@@ -2359,9 +2397,11 @@ function mountComposer(container, context) {
     tables.checkAccount(repos);
     detail.replaceChildren(...[tables.repoTable(repos, repoNarrow, entry.data.subSessions),
       groups.length ? css(el("section", { className: "wtc-base-services", ariaLabel: "Collection services" }, css(el("div", {}, css(el("h3", { textContent: "Services" }), "margin:0;font-size:12px;line-height:16px;font-weight:600;color:var(--text-strong,inherit)"), tables.serviceControls(groups)), "display:flex;align-items:baseline;gap:10px;margin-bottom:4px"), tables.serviceTable(groups, entry.data, narrow)), "min-width:0;border-top:1px solid var(--border,rgba(128,128,128,.2));margin-top:4px;padding-top:8px") : null].filter(Boolean));
-    const confirmations = tables.publicationConfirmations(repos);
+    const confirmations = tables.publicationConfirmations(repos,true);
     const temporary = [confirmations, tables.nextActions(repos), tables.notice()].filter(Boolean);
     extra.replaceChildren(...temporary);
+    extra.style.maxHeight = confirmations ? "none" : "min(40dvh,360px)";
+    extra.style.overflow = confirmations ? "visible" : "auto";
     const showTemporary = temporary.length > 0 && (card.open || !!confirmations);
     card.style.marginTop = showTemporary ? "0" : "4px";
     card.style.borderTopLeftRadius = card.style.borderTopRightRadius = showTemporary ? "0" : "14px";
