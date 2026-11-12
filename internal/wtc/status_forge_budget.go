@@ -142,6 +142,11 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 		tokens = burst
 		updated = now
 	}
+	// Keep one token per queued confirmation; spare burst capacity remains
+	// available to ordinary reads while confirmations retain FIFO order.
+	if confirmation == "" && tokens > len(queue) {
+		admitted = true
+	}
 	if tokens < 1 || !admitted {
 		statusSavePendingConfirmations(forge, queue)
 		return false

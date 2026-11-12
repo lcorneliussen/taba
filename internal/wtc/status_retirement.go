@@ -52,6 +52,9 @@ func statusRetirementFacts(snapshot *StatusSnapshot) {
 			a.Blockers = append(a.Blockers, reason)
 		}
 		for _, repo := range snapshot.Repos {
+			if repo.Collection == a.Collection && repo.PRUnconfirmed && repo.PR == nil {
+				add(fmt.Sprintf("%s: pull request state is unconfirmed in status.", repo.Dir))
+			}
 			if repo.Collection == a.Collection && repo.PR != nil {
 				if statusObservationUnavailable(repo.PR.Freshness) {
 					add(fmt.Sprintf("%s: pull request #%s state is unconfirmed in status.", repo.Dir, repo.PR.Number))

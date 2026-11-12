@@ -12,8 +12,9 @@ import (
 )
 
 // Only unresolved Bitbucket by-number confirmations reserve admission. The
-// existing budget lock guards this bounded FIFO; ordinary traffic resumes after an
-// abandoned reservation expires. Older clients do not honor these reservations.
+// existing budget lock guards this bounded FIFO. Ordinary reads may spend
+// unreserved tokens; reservations leave when served, resolved, or not retried
+// within statusPendingLifetime. Older clients do not honor these reservations.
 const statusPendingLifetime = 5 * time.Minute
 const statusPendingLimit = 256
 

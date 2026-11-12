@@ -54,10 +54,13 @@ type StatusRepo struct {
 	Conflict      bool           `json:"conflict,omitempty"`
 	Operation     string         `json:"operation,omitempty"`
 	PR            *StatusPRFacts `json:"pr"`
-	Tip           *StatusBuild   `json:"tip"`
-	Prod          *StatusBuild   `json:"prod"`
-	Runtime       string         `json:"runtime,omitempty"`
-	ReviewOnly    bool           `json:"review_only,omitempty"`
+	// PRUnconfirmed blocks actions when an enlisted PR on this branch has no
+	// usable state, without claiming it is an observed open PR.
+	PRUnconfirmed bool         `json:"pr_unconfirmed,omitempty"`
+	Tip           *StatusBuild `json:"tip"`
+	Prod          *StatusBuild `json:"prod"`
+	Runtime       string       `json:"runtime,omitempty"`
+	ReviewOnly    bool         `json:"review_only,omitempty"`
 	// Next is the repository's next step, read from the facts above; nil
 	// when nothing waits on anyone.
 	Next    *next.Step    `json:"next,omitempty"`
@@ -68,7 +71,8 @@ type StatusRepo struct {
 }
 
 type StatusPRFacts struct {
-	// Freshness and ObservedAt describe PR state; checks retain their own coverage.
+	// StateSource, Freshness and ObservedAt describe only PR state. They do not
+	// date checks, reviews or mergeability.
 	StateSource    string   `json:"observation_source,omitempty"`
 	Freshness      string   `json:"freshness,omitempty"`
 	ObservedAt     string   `json:"observed_at,omitempty"`
@@ -109,7 +113,8 @@ type StatusFollow struct {
 }
 
 type StatusPRRow struct {
-	// Freshness and ObservedAt describe PR state, independently of snapshot age.
+	// StateSource, Freshness and ObservedAt describe only PR state, independently
+	// of snapshot age. They do not date checks, reviews or mergeability.
 	StateSource     string         `json:"observation_source,omitempty"`
 	Freshness       string         `json:"freshness,omitempty"`
 	ObservedAt      string         `json:"observed_at,omitempty"`
@@ -295,7 +300,7 @@ func statusNext(snapshot *StatusSnapshot) {
 		r := &snapshot.Repos[i]
 		r.Next = nil
 		r.Choices = nil
-		blocked := r.PR != nil && statusObservationUnavailable(r.PR.Freshness)
+		blocked := r.PRUnconfirmed || (r.PR != nil && statusObservationUnavailable(r.PR.Freshness))
 		for _, pr := range snapshot.PRs {
 			if pr.OnBranch && statusPRMatchesRepo(pr, *r) && statusObservationUnavailable(pr.Freshness) {
 				blocked = true

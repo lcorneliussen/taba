@@ -477,3 +477,56 @@ func TestStatus319RetirementDoesNotClaimUnknownStateIsOpen(t *testing.T) {
 		}
 	}
 }
+
+func TestStatus319ReservationLeavesSpareBurstCapacity(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
+	forge := "bitbucket.org"
+	burst, _ := statusForgeAllowance(forge)
+	for range burst {
+		if !statusTakeForgeToken(forge) {
+			t.Fatal("initial burst")
+		}
+	}
+	key := statusConfirmationKey("example/widget#7")
+	if statusTakeForgeTokenFor(forge, key) {
+		t.Fatal("exhausted budget admitted confirmation")
+	}
+	// Refill the bucket while the one-shot confirmation's pane is absent.
+	if err := os.WriteFile(statusForgeStatePath("budget", forge), []byte(fmt.Sprintf("%d %d", burst, time.Now().UnixNano())), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for range burst - 1 {
+		if !statusTakeForgeToken(forge) {
+			t.Fatal("abandoned reservation idled unreserved burst tokens")
+		}
+	}
+	if statusTakeForgeToken(forge) {
+		t.Fatal("ordinary traffic spent the reserved token")
+	}
+	if !statusTakeForgeTokenFor(forge, key) || statusTakeForgeToken(forge) {
+		t.Fatal("reservation or ceiling was lost")
+	}
+}
+
+func TestStatus319UnknownEnlistedPRBlocksActionsWithoutClaimingOpen(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	fixtureGit(t, "-C", c.Harness, "switch", "-qc", "topic")
+	if _, err := c.EnlistPR(PRRecord{Repo: "agent-harness", Number: "12", Branch: "topic", Title: "Synthetic change"}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := c.StatusForgePreview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range snapshot.Repos {
+		if row.Dir != "harness" {
+			continue
+		}
+		if row.PR != nil || !row.PRUnconfirmed || row.Next != nil || row.Choices != nil {
+			t.Fatalf("unknown enlisted PR asserted open state or authorized action: %+v", row)
+		}
+		return
+	}
+	t.Fatal("harness row absent")
+}

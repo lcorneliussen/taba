@@ -7,7 +7,7 @@ func statusObservationUnavailable(freshness string) bool {
 }
 
 // Freshness describes PR state, not separate checks or mergeability evidence.
-// Never borrow a newer file's timestamp for different returned facts.
+// Only matching state and head may supply the state-observation timestamp.
 func statusObserveDetail(detail statusPRDetail, slug, forge string) statusPRDetail {
 	if detail.ObservedAt != "" || detail.State == "UNKNOWN" || detail.State == "" {
 		return detail
