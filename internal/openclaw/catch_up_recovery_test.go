@@ -198,3 +198,91 @@ func TestActiveRecoveryBlocksPublishAndWorkerMerge(t *testing.T) {
 		})
 	}
 }
+
+func TestRecoveryMarkersCompareCorrespondingSavedLayers(t *testing.T) {
+	const plain = "content\n"
+	const markers = "content\n<<<<<<< fixture\n=======\n>>>>>>> fixture\n"
+	for _, tc := range []struct {
+		name, head, savedIndex, savedWorktree, index, worktree string
+		refuse                                                 bool
+	}{
+		{"saved-index-fixture", plain, markers, plain, markers, plain, false},
+		{"saved-worktree-fixture", plain, plain, markers, plain, markers, false},
+		{"new-index-markers-from-other-layer", plain, plain, markers, markers, plain, true},
+		{"new-worktree-markers-from-other-layer", plain, markers, plain, plain, markers, true},
+		{"new-index-markers", plain, plain, plain, markers, plain, true},
+		{"new-worktree-markers", plain, plain, plain, plain, markers, true},
+		{"head-fixture", markers, plain, plain, markers, markers, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, g := managedWorktree(t, "https://example.invalid/project/docs.git")
+			write(t, c, "README.md", tc.head)
+			write(t, c, "anchor.txt", "baseline\n")
+			g("add", "README.md", "anchor.txt")
+			g("commit", "-qm", "baseline")
+			write(t, c, "README.md", tc.savedIndex)
+			g("add", "README.md")
+			write(t, c, "README.md", tc.savedWorktree)
+			write(t, c, "anchor.txt", "saved snapshot\n")
+			saved := g("stash", "create")
+			if saved == "" {
+				t.Fatal("missing saved index/worktree snapshot")
+			}
+			g("update-ref", "refs/test/recovery", saved)
+			write(t, c, "README.md", tc.index)
+			g("add", "README.md")
+			write(t, c, "README.md", tc.worktree)
+			head, index, status := g("rev-parse", "HEAD"), g("write-tree"), g("status", "--porcelain")
+			err := c.checkRecoveryMarkers("refs/test/recovery")
+			if (err != nil) != tc.refuse {
+				t.Fatalf("refuse=%v, got %v", tc.refuse, err)
+			}
+			if err != nil && !strings.Contains(err.Error(), "README.md") {
+				t.Fatalf("missing affected file: %v", err)
+			}
+			content, readErr := os.ReadFile(filepath.Join(c.Dir, "README.md"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(content) != tc.worktree || g("write-tree") != index || g("status", "--porcelain") != status || g("rev-parse", "HEAD") != head || g("rev-parse", "refs/test/recovery") != saved {
+				t.Fatal("marker verification mutated the saved or current work")
+			}
+		})
+	}
+}
+
+func TestFinishRecoveryRetainsMarkerFixturesInPartialStaging(t *testing.T) {
+	c, g, bare := dirtyCatchUpFixture(t)
+	const staged = "saved staged\n<<<<<<< fixture\n=======\n>>>>>>> fixture\n"
+	const unstaged = "saved unstaged\n"
+	write(t, c, "README.md", staged)
+	g("add", "README.md")
+	write(t, c, "README.md", unstaged)
+	write(t, c, "notes.txt", "saved untracked\n")
+	advanceOrigin(t, bare, "README.md", "upstream\n")
+	r, err := c.CatchUp()
+	if err == nil || !r.RecoveryRequired || r.RecoveryRef == "" {
+		t.Fatalf("expected recovery stop: %+v %v", r, err)
+	}
+	if g("show", r.RecoveryRef+"^2:README.md") != strings.TrimSpace(staged) || g("show", r.RecoveryRef+":README.md") != strings.TrimSpace(unstaged) {
+		t.Fatal("saved layers differ from intended partial staging")
+	}
+	write(t, c, "README.md", "upstream\n"+staged)
+	g("add", "README.md")
+	write(t, c, "README.md", "upstream\n"+unstaged)
+	head, index, status, backup := g("rev-parse", "HEAD"), g("write-tree"), g("status", "--porcelain"), g("rev-parse", r.RecoveryRef)
+	receipt, err := c.FinishCatchUpRecovery(r.RecoveryRef, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(c.Dir, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "upstream\n"+unstaged || receipt.IndexTree != index || g("write-tree") != index || g("status", "--porcelain") != status || g("rev-parse", "HEAD") != head || g("rev-parse", r.RecoveryRef) != backup {
+		t.Fatal("finishing changed partial staging, working edits, HEAD or backup")
+	}
+	if active, exists, err := c.recoveryMarker(); err != nil || exists || active != "" {
+		t.Fatalf("verified marker not archived: %q %v %v", active, exists, err)
+	}
+}

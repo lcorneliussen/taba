@@ -31,3 +31,7 @@
   request in every view; delayed responses cannot revive it or release a newer
   request. Missing handoff responses stay unconfirmed rather than enabling a
   duplicate mutation.
+
+- Recovery verifies staged and unstaged marker text against their corresponding
+  saved layers, preserving legitimate partially staged fixtures while refusing
+  newly introduced marker lines.

@@ -195,8 +195,8 @@ func (c *Checkout) FinishCatchUpRecovery(ref, expectedHead string) (*RecoveryCom
 }
 
 func (c *Checkout) checkRecoveryMarkers(ref string) error {
-	// Conflict-marker text already present on either side is retained. Reject new
-	// marker lines added in both comparisons, in the index or tracked edits.
+	// Compare each restored layer with HEAD and its corresponding saved layer.
+	// Partial staging can contain fixture markers absent from saved working edits.
 	for _, cached := range []bool{false, true} {
 		added := func(base string) (map[string]string, error) {
 			args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U0"}
@@ -225,7 +225,11 @@ func (c *Checkout) checkRecoveryMarkers(ref string) error {
 		if err != nil {
 			return err
 		}
-		b, err := added(ref)
+		saved := ref
+		if cached {
+			saved += "^2"
+		}
+		b, err := added(saved)
 		if err != nil {
 			return err
 		}
