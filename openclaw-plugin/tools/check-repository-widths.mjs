@@ -16,6 +16,8 @@ const names = ["component-library-workbench", "system-overview-documentation"];
 const scenarios = {
   idle: names.map(name => ({ repo: name, owner: "example-org", forge: "bitbucket", sessionKey: `demo:${name}`, branch: "main", base: "origin/main", ahead: 0, behind: 0 })),
   facts: names.map((name, i) => ({ repo: name, owner: "example-org", forge: "bitbucket", sessionKey: `demo:${name}`, branch: "feature/improve-search", base: "origin/main", ahead: 2, unpublished: 2, behind: i + 1, dirty: i + 1 })),
+  catchup: names.map((name, i) => ({ repo: name, owner: "example-org", forge: "bitbucket", sessionKey: `demo:${name}`, branch: "feature/improve-search", base: "origin/main", ahead: 0, behind: i + 1 })),
+  extreme: [{ repo: `component-${"x".repeat(70)}`, owner: "example-org", forge: "bitbucket", sessionKey: "demo:long", branch: "feature/improve-search", base: "origin/main", ahead: 0, behind: 0 }],
 };
 const browser = await chromium.launch({ headless: true });
 const results = [];
@@ -46,24 +48,36 @@ try {
       return { text: node.textContent, title: node.title, width: node.getBoundingClientRect().width, textWidth: text.getBoundingClientRect().width, parentTitle: node.parentElement.title };
     }));
     await root.screenshot({ path: `${out}/${scenario}-${view}-${width}.png` });
-    assert.deepEqual(metrics.map(row => row.text), names);
-    if (width >= 1037) for (const row of metrics) assert(row.width + 1 >= row.textWidth, `${scenario}/${view}/${width}: ${row.text} needlessly clipped (${row.width}/${row.textWidth})`);
+    assert.deepEqual(metrics.map(row => row.text), repos.map(repo => repo.repo));
+    if (width >= 1037 && scenario !== "extreme") for (const row of metrics) assert(row.width + 1 >= row.textWidth, `${scenario}/${view}/${width}: ${row.text} needlessly clipped (${row.width}/${row.textWidth})`);
+    if (width >= 1037 && scenario === "extreme") {
+      assert(metrics[0].width < metrics[0].textWidth, "extreme names truncate instead of taking the whole row");
+      assert(await root.locator(".wtc-repo-branch").evaluate(node => node.getBoundingClientRect().width > 100), "extreme names leave usable branch space");
+    }
     for (let i = 0; i < metrics.length; i++) {
       const label = labels.nth(i);
       await label.waitFor({ state: "visible" });
       const before = await label.boundingBox();
       await label.hover();
-      assert.equal(await label.getAttribute("title"), `example-org/${names[i]}`);
+      assert.equal(await label.getAttribute("title"), `example-org/${repos[i].repo}`);
       assert.deepEqual(await label.boundingBox(), before, "hover must not change layout");
       await label.focus();
       assert.deepEqual(await label.boundingBox(), before, "focus must not change layout");
     }
     assert.equal(await root.evaluate(node => node.scrollWidth > node.clientWidth + 1), false, `${scenario}/${view}/${width}: view overflow`);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    if (scenario === "catchup") {
+      const branches = root.locator(".wtc-repo-branch");
+      const before = await branches.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
+      await root.locator('button[title^="2 new on main."]').click();
+      await root.locator('.wtc-repo-warning button').waitFor();
+      const after = await branches.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().x));
+      if (width >= 760) assert.deepEqual(after, before, "an action error must not shift shared branch columns");
+      await root.screenshot({ path: `${out}/${scenario}-${view}-${width}-failure.png` });
+    }
     assert.deepEqual(errors, []);
     await page.evaluate(() => document.activeElement?.blur());
     await page.mouse.move(0, 0);
-    await root.screenshot({ path: `${out}/${scenario}-${view}-${width}.png` });
     results.push({ scenario, view, width, metrics });
     await page.close();
   }
