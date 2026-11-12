@@ -63,15 +63,22 @@ class FixtureTest(unittest.TestCase):
                 self.assertTrue(capture.check_frame(rows([r["dir"] for r in reversed(repos)]), case["columns"], case["rows"], frame["assert"])[1])
 
     def test_merge_and_landing_observations_are_both_required(self):
+        tested = 0
         for case in capture.load_fixture(capture.FIXTURE)["scenarios"]:
-            if not case["name"].startswith("merge-landing-"):
-                continue
-            checks = case["frames"][0]["assert"]
-            with self.subTest(layout=case["name"]):
-                good = "#42 widget merged\nlanding unknown; inspect branch"
-                self.assertEqual(capture.check_frame(good, case["columns"], case["rows"], checks)[1], [])
-                for bad in (good.replace("merged", "unknown"), good.replace("landing unknown; inspect branch", "")):
-                    self.assertTrue(capture.check_frame(bad, case["columns"], case["rows"], checks)[1])
+            for frame in case["frames"]:
+                merged = next((pr for pr in frame["snapshot"].get("prs", [])
+                               if pr.get("state") == "MERGED" and pr.get("on_branch") and
+                               (pr.get("landing") or {}).get("state") == "unknown"), None)
+                if merged is None:
+                    continue
+                tested += 1
+                checks = frame["assert"]
+                with self.subTest(layout=case["name"], phase=frame["phase"]):
+                    good = f"#{merged['number']} {merged['repo']} merged\nlanding unknown; inspect branch"
+                    self.assertEqual(capture.check_frame(good, case["columns"], case["rows"], checks)[1], [])
+                    for bad in (good.replace("merged", "unknown"), good.replace("landing unknown; inspect branch", "")):
+                        self.assertTrue(capture.check_frame(bad, case["columns"], case["rows"], checks)[1])
+        self.assertGreater(tested, 0)
 
     def test_malformed_fixtures_fail_before_execution(self):
         valid = json.loads(capture.FIXTURE.read_text())
