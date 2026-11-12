@@ -211,7 +211,7 @@ async function catchUpRepo(host, agentId, r, say, ask, request) {
   const conflicts = conflictsOf(out.message);
   if (conflicts.length) {
     const base = r.base ?? "its base";
-    await ask(`${name}: catching up with ${base} conflicts in ${conflicts.join(", ")}.`);
+    await ask(`${name}: catching up with ${base} conflicts in ${conflicts.join(", ")}. The merge was aborted; any saved local edits were restored. Before git merge, preserve dirty edits and their staging in a separately pinned Git stash and verify a clean checkout. Merge and resolve the base, then reconcile the saved staged, unstaged and untracked edits. Follow the bundled recovery procedure; do not publish or discard the backup.`);
     say(`${name}: ${conflicts.join(", ")} changed on both sides; the conversation was asked to merge and resolve them.`);
     return { handedOff: true };
   }
@@ -1013,7 +1013,8 @@ function collectionTables(v) {
   }
   // Mirror browser-local publication progress; this is not a gateway lock.
   const sharedPushBusy = (r) => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "push" && item.repoSessionKey === r.sessionKey && item.inFlight);
-  const reserved = (r) => acting.has(r.sessionKey) || busy.has(r.sessionKey) || catching.has(r.sessionKey) || sharedPushBusy(r);
+  const commitUnresolved = r => ["running", "pending", "unconfirmed"].includes(commitFeedback.get(`${v.collectionKey?.() ?? v.key()}|${r.sessionKey}`)?.phase);
+  const reserved = (r) => commitUnresolved(r) || acting.has(r.sessionKey) || busy.has(r.sessionKey) || catching.has(r.sessionKey) || sharedPushBusy(r);
   const recoveryQueueBusy = () => recoveryQueues.has(v.collectionKey?.() ?? v.key());
   const recoveryBusy = r => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "restore" && item.repoSessionKey === r.sessionKey && item.inFlight);
   async function restoreCheckouts(repos) {
@@ -1586,7 +1587,8 @@ function collectionTables(v) {
     : r.behind
     ? count(`↓ ${r.behind}`, `${r.behind} new on ${baseOf(r)}. Catch up locally by merging, without rebasing.${r.pullRequest?.state === "open" ? " Then Update PR / Push publishes the updated branch." : " Push is a separate action."}`, TONE.pending, () => catchUp([r]))
     : count("↓", `#${r.pullRequest.number} was merged. Return to ${baseOf(r)}'s tip; keep its completed PR in the pull request list`, TONE.pending, () => catchUp([r]));
-    if (!canCatchUp(r)) { button.disabled = true; button.title = r.catchUpRecovery ? "Local changes need recovery; use Resolve conflicts or ask the conversation for help" : r.dirty ? "Commit local changes with ± first, or update the gateway to catch up while preserving edits" : "Catch-up is unavailable in the current repository plan; inspect its next action"; }
+    if (reserved(r)) { button.disabled = true; button.title += " Wait for the current action or inspect its unconfirmed result."; }
+    else if (!canCatchUp(r)) { button.disabled = true; button.title = r.catchUpRecovery ? "Local changes need recovery; use Resolve conflicts or ask the conversation for help" : r.dirty ? "Commit local changes with ± first, or update the gateway to catch up while preserving edits" : "Catch-up is unavailable in the current repository plan; inspect its next action"; }
     return button;
   };
   const nameOf = (r) => r.repo ?? r.project ?? r.label;
@@ -1854,7 +1856,7 @@ function collectionTables(v) {
   async function commitGroup(repos) {
     if (!repos.length || authorSending || batchRunning) return;
     const conversation = v.key(), collection = v.collectionKey?.() ?? conversation;
-    const targets = repos.filter(r => !["running", "pending"].includes(commitFeedback.get(commitKey(r))?.phase));
+    const targets = repos.filter(r => !reserved(r));
     if (!targets.length) return;
     const states = targets.map(r => {
       const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid() };
@@ -1870,7 +1872,7 @@ function collectionTables(v) {
   }
   async function commitFromFact(r) {
     const key = commitKey(r), collection = v.collectionKey?.() ?? v.key();
-    if (["running", "pending"].includes(commitFeedback.get(key)?.phase)) return;
+    if (reserved(r)) return;
     const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid() };
     commitFeedback.set(key, state); limitCommitFeedback(key, state, collection); recordActivity(collection,state.id,{repo:nameOf(r),repoSessionKey:r.sessionKey,action:"commit",state:"running",status:"Requesting local commits"}); notifyFactFeedback(collection);
     try {

@@ -91,7 +91,7 @@ func ChoicesFor(f Facts) Choices {
 			conflicts := len(f.MergeConflicts) > 0 || f.PR != nil && f.PR.Mergeable == "conflicting"
 			add(Step{Step: "catch-up", By: ByWTC, Approve: ApproveAgent, Command: []string{"wtc", "catch-up"}, Reason: "Catch up with the base, preserving local changes and their staging in a recovery copy. Restore them after the merge; conflicts need the owning conversation."}, "", !conflicts)
 			if conflicts {
-				add(Step{Step: "merge", By: ByAgent, Skill: "wtc-catch-up", Reason: "The base merge conflicts. Preserve intended local edits with catch-up's recovery copy, then resolve the base and local changes in the owning environment."}, "", true)
+				add(Step{Step: "merge", By: ByAgent, Skill: "wtc-catch-up", Reason: "The base merge conflicts. Before git merge, preserve restored local edits and their staging in a separately pinned Git stash, verify the checkout is clean, then merge and resolve the base. Reconcile the saved staged, unstaged and untracked edits afterwards; do not publish or discard the backup. Follow the bundled recovery procedure in the owning environment."}, "", true)
 			}
 		}
 		return c

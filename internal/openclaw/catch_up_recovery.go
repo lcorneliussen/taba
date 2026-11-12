@@ -63,6 +63,19 @@ func (c *Checkout) recoveryMarker() (string, bool, error) {
 	return ref, true, nil
 }
 
+// A restored subset can be conflict-free while the complete saved intent is
+// still awaiting verification. Do not advance or publish it as finished work.
+func (c *Checkout) requireRecoveredChanges() error {
+	ref, exists, err := c.recoveryMarker()
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("local changes still need recovery from %s; verify and finish that recovery before merging or publishing", ref)
+	}
+	return nil
+}
+
 func (c *Checkout) recoveryCompletion() (*RecoveryCompletion, error) {
 	p, err := git(c.Dir, "rev-parse", "--path-format=absolute", "--git-path", recoveryCompletionFile)
 	if err != nil {

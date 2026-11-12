@@ -169,3 +169,32 @@ func TestFailedRecoveryArchiveCannotReportCompletion(t *testing.T) {
 		t.Fatal("safe retry failed", err)
 	}
 }
+
+func TestActiveRecoveryBlocksPublishAndWorkerMerge(t *testing.T) {
+	for _, marker := range []string{"refs/wtc-catch-up/" + strings.Repeat("a", 40) + "-1", "malformed"} {
+		t.Run(marker[len(marker)-1:], func(t *testing.T) {
+			c, g, _ := dirtyCatchUpFixture(t)
+			write(t, c, "notes.txt", "intended work\n")
+			g("add", "notes.txt")
+			g("commit", "-qm", "work")
+			g("branch", "other")
+			p := g("rev-parse", "--path-format=absolute", "--git-path", "wtc-catch-up-recovery")
+			if err := os.WriteFile(p, []byte(marker+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			head := g("rev-parse", "HEAD")
+			if _, err := c.PlanPublish(PublishOptions{}); err == nil || !strings.Contains(err.Error(), "recovery") {
+				t.Fatalf("publication not blocked: %v", err)
+			}
+			if _, err := c.MergeFrom("other"); err == nil || !strings.Contains(err.Error(), "recovery") {
+				t.Fatalf("merge not blocked: %v", err)
+			}
+			if g("rev-parse", "HEAD") != head {
+				t.Fatal("readiness moved HEAD")
+			}
+			if data, err := os.ReadFile(p); err != nil || string(data) != marker+"\n" {
+				t.Fatal("readiness removed recovery marker")
+			}
+		})
+	}
+}

@@ -30,6 +30,21 @@ operation. Stop if they differ, the marker is malformed, or another operation
 is running. Do not remove a lock without establishing who owns it. A recovery
 ref is repository-wide; `stash@{0}` may belong to another worktree.
 
+## An aborted base merge with restored edits
+
+A committed base conflict may abort the merge and restore the original local
+edits successfully. There is then no active recovery marker, but the checkout
+is dirty again. Do not start `git merge` over those edits or keep retrying the
+same catch-up. In the owning environment, inspect the existing pinned backup
+and preserve the current staged, unstaged and untracked edits in a separately
+pinned Git stash. Identify it by its exact object/ref, never `stash@{0}`.
+Verify that the intended content and staging are saved and the checkout is
+clean before merging the base. Resolve and commit that merge, then reconcile
+the saved edits and staging using the comparisons below. Keep both backups.
+If restoring creates a conflict, inspect partial restoration before applying
+anything else. Publication and committing the restored local work remain
+separate actions. Only finish an active recovery marker if one exists.
+
 ## Reconcile the intended work
 
 Inspect the saved ref rather than applying it blindly. For `<ref>`:

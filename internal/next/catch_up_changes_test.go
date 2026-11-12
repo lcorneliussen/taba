@@ -1,6 +1,9 @@
 package next
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDirtyGatewayOffersCatchUpAndCommit(t *testing.T) {
 	f := Facts{Repo: "example", Host: HostOpenClaw, Branch: "openclaw/example", Dirty: 1, Behind: 5}
@@ -23,5 +26,13 @@ func TestDirtyGatewayOffersCatchUpAndCommit(t *testing.T) {
 	f.InProgress = "local changes recovery"
 	if c := ChoicesFor(f); c.Primary() == nil || c.Primary().Step != "resolve" || len(c.Actions) != 1 {
 		t.Fatalf("recovery can be retried: %+v", c)
+	}
+}
+
+func TestDirtyConflictingGatewayHandoffPreservesBeforeMerge(t *testing.T) {
+	c := ChoicesFor(Facts{Repo: "example", Host: HostOpenClaw, Branch: "openclaw/example", Dirty: 1, Behind: 2, MergeConflicts: []string{"notes.md"}})
+	p := c.Primary()
+	if p == nil || p.Step != "merge" || !strings.Contains(p.Reason, "Before git merge") || !strings.Contains(p.Reason, "verify the checkout is clean") || !strings.Contains(p.Reason, "unstaged and untracked") {
+		t.Fatalf("unsafe dirty merge handoff: %+v", p)
 	}
 }

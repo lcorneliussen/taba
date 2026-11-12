@@ -579,7 +579,9 @@ test("composer: the actions are on the facts they change", async () => {
   calls.length = 0;
   await named(/^3 new on main\. Catch up/).onclick();
   assert.deepEqual(calls.map((c) => c.actionId ?? c.method), ["catch-up", "sessions.send"]);
-  assert.equal(calls[1].message, "/skill wtc-catch-up api: catching up with origin/main conflicts in README.md, go.mod.");
+  assert.match(calls[1].message, /^\/skill wtc-catch-up api: catching up with origin\/main conflicts in README\.md, go\.mod\./);
+  assert.match(calls[1].message, /Before git merge, preserve dirty edits and their staging/);
+  assert.match(calls[1].message, /then reconcile the saved staged, unstaged and untracked edits/);
   catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
   await named(/^#7 conflicts with main\. Resolve/).onclick();
   assert.equal(calls.at(-1).message, "/skill wtc-catch-up api: pull request #7 conflicts with main.");
@@ -3017,4 +3019,25 @@ for (const route of ["direct", "batch", "resolve"]) test(`${route} recovery sett
     assert.match(log().textContent,/· (Catch up|Resolve conflicts)Done/);
     assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"completion neither retries nor dispatches another step");
   } finally {catchUpResult=original;nextResult=undefined;view.dispose();}
+});
+
+for (const kind of ["composer","panel"]) test(`${kind} catch-up and group commit cannot race an unresolved local commit`,async()=>{
+ const set=globalThis.setTimeout;let expire,release;
+ globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expire=fn,{unref(){}}):set(fn,delay,...args);
+ const step={step:"catch-up",by:"wtc",key:"race:catch",available:true};
+ const r=repo("site",{dirty:1,behind:3,next:step,choices:{actions:[step]}});
+ const {host,view}=await mount(kind,collection([r]));
+ try {
+  controlledSend=new Promise(resolve=>release=resolve);calls.length=0;
+  const running=localChangeButton(host).onclick();await settle();
+  const down=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&/^3 new on/.test(n.title));
+  assert.ok(down()?.disabled,"per-row catch-up disabled while commit dispatches");
+  release({runId:"commit"});await running;await settle();
+  assert.ok(down()?.disabled,"per-row catch-up disabled while awaiting commit");
+  expire();await settle();
+  assert.ok(down()?.disabled,"a timeout does not cancel the outstanding commit");
+  assert.ok(commitColumnButton(host).disabled,"group commit cannot resend an unconfirmed request");
+  calls.length=0;await localChangeButton(host).onclick();await settle();
+  assert.equal(calls.some(c=>c.method==="sessions.send"||c.actionId==="catch-up"||c.actionId==="next"),false,"outcome inspection is read-only");
+ }finally{release?.({runId:"cleanup"});controlledSend=undefined;globalThis.setTimeout=set;view.dispose();}
 });

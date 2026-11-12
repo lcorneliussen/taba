@@ -231,6 +231,9 @@ type PublishOptions struct {
 // PlanPublish checks that publishing this checkout is safe and returns the
 // intent for it. It reads and never writes: no commit, no fetch, no push.
 func (c *Checkout) PlanPublish(opt PublishOptions) (Plan, error) {
+	if err := c.requireRecoveredChanges(); err != nil {
+		return Plan{}, err
+	}
 	if task := c.task(); task != "" {
 		return Plan{}, fmt.Errorf(branding.Text("%s is a worker of %s: a worker's work leaves through the task. Merge it into the task ({{command}} catch-up --from %s in the task's checkout), and the task publishes it"), c.Branch(), task, strings.TrimPrefix(c.Worktree, task+WorkerSeparator))
 	}
@@ -495,6 +498,9 @@ func (c *Checkout) MergeFrom(from string) (CatchUp, error) {
 }
 
 func (c *Checkout) readyToMerge() error {
+	if err := c.requireRecoveredChanges(); err != nil {
+		return err
+	}
 	if what := c.inProgress(); what != "" {
 		return fmt.Errorf("%s is in progress in %s: finish or abort it first", what, c.Dir)
 	}
