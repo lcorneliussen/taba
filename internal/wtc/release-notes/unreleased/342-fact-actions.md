@@ -4,7 +4,8 @@
   folded facts with their bulk controls. Click `±N` to request local commits,
   or the column's `±` for eligible repositories together. Hover, pending and
   brief observed-success feedback retain the same cell dimensions. Publication
-  remains separate. See [fact actions](docs/openclaw-fact-actions.md) (#342).
+  remains separate. See [fact actions](https://github.com/lcorneliussen/taba/blob/541bd5b5cce3c776b2a5a3142caa869571077a1b/docs/openclaw-fact-actions.md)
+  ([#342](https://github.com/lcorneliussen/taba/issues/342)).
 
 - Gateway base catch-up preserves staged, unstaged and untracked edits in a
   pinned recovery copy and restores staging after the merge. Failed restoration
