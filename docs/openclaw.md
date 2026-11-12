@@ -214,7 +214,7 @@ OpenClaw binds publication to the owner's managed branch. Returning to the
 tip does not rebind that owner or permit publishing an arbitrary new branch:
 another publication round needs a fresh managed worktree and owner. Support
 for starting that round in the same collection is tracked in
-[#207](https://github.com/lcorneliussen/wtc-cli/issues/207).
+[#207](https://github.com/lcorneliussen/taba/issues/207).
 
 On a live branch, `wtc catch-up` merges and never rebases, and aborts a
 conflicted merge so the worktree is as before.
@@ -312,7 +312,7 @@ folder, one conversation driving several repositories, needs the agent's
 commands on the gateway itself, with the trust that implies. Do not bind the
 managed worktrees or the gateway's clones into a sandbox to get it: that goes
 around the private copy and its reconciliation
-([#105](https://github.com/lcorneliussen/wtc-cli/issues/105)).
+([#105](https://github.com/lcorneliussen/taba/issues/105)).
 
 ## Git the gateway runs
 
@@ -421,13 +421,13 @@ key that name only: OpenClaw's own OpenAI provider reads `OPENAI_API_KEY`,
 and the chat model could then use it. With the key, the person's sent
 message goes to OpenAI. Without either, the suggestion comes from matching
 the message's words against the names and roles
-([#159](https://github.com/lcorneliussen/wtc-cli/issues/159) tracks moving
+([#159](https://github.com/lcorneliussen/taba/issues/159) tracks moving
 to OpenClaw's decision models).
 
 OpenAI's decision model (`openai/gpt-6-luna`, which needs an OpenAI Platform
 API key; a ChatGPT or Codex subscription doesn't authorize it) suits this
 best. In a small comparison
-([#155](https://github.com/lcorneliussen/wtc-cli/pull/155)), on twelve test
+([#155](https://github.com/lcorneliussen/taba/pull/155)), on twelve test
 messages over two projects, it chose right eleven times,
 in about 200 ms and a few hundred tokens each. The local ONNX classifiers
 chose right at most six times, mostly the same repository whatever was
@@ -479,7 +479,7 @@ A collection works in at most one wtc project:
 Not yet: hooks, secret links and mise pins from a harness do not run on a
 gateway, and herdr layouts do not apply. Several projects in one collection,
 stacked rather than merged, are tracked in
-[#100](https://github.com/lcorneliussen/wtc-cli/issues/100).
+[#100](https://github.com/lcorneliussen/taba/issues/100).
 
 ### Repository renames
 
@@ -640,10 +640,10 @@ from an image by CI/CD, see [Gateway image and CI/CD](#gateway-image-and-cicd)
 instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
 
 1. **`wtc`** on the `PATH` of the gateway and of the agents' shells: a
-   [release](https://github.com/lcorneliussen/wtc-cli/releases)'s
+   [release](https://github.com/lcorneliussen/taba/releases)'s
    `taba_<version>_linux_<arch>.tar.gz` (`wtc_…` before the taba releases)
    unpacked into `/usr/local/bin`, or
-   `mise use -g github:lcorneliussen/wtc-cli@<version>`.
+   `mise use -g github:lcorneliussen/taba@<version>`.
 2. **Git 2.42 or newer and the GitHub CLI.** OpenClaw 2026.10.2 checks Git
    attributes with `git var GIT_ATTR_GLOBAL` before it publishes; its image
    ships Git 2.39 and no `gh`, and publication fails there with "workspace
@@ -668,7 +668,7 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
 4. **Bitbucket**, if repositories live there:
 
    ```sh
-   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.4 --accept-capabilities
+   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.6 --accept-capabilities
    openclaw config set plugins.entries.bitbucket.config.execLogin false
    ```
 
@@ -676,8 +676,9 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
    commands, so that pushing goes only through the card.
 5. **Each person** connects their own accounts, which the gateway pushes
    with: GitHub under **Settings → Profile → GitHub connections → For me**,
-   Bitbucket on `/plugins/bitbucket/connect` opened in its own tab. The card
-   says so the first time it needs one.
+   Bitbucket under **Bitbucket** in the Control UI sidebar after signing in
+   to OpenClaw. Existing `/plugins/bitbucket/connect` links redirect there.
+   The card says so the first time it needs one.
 6. **Repositories** the gateway clones itself: **Add repository** in the
    Collection panel, or the gateway's own project settings. With a harness,
    add it the same way and configure it (see [wtc projects](#wtc-projects)).
@@ -708,8 +709,8 @@ In the image, with the versions pinned as build arguments:
 ```dockerfile
 ARG WTC_VERSION=<version>
 ARG OPENCLAW_BITBUCKET_TAG=<tag>
-RUN curl -fsSLO "https://github.com/lcorneliussen/wtc-cli/releases/download/v${WTC_VERSION}/taba_${WTC_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
- && curl -fsSL "https://github.com/lcorneliussen/wtc-cli/releases/download/v${WTC_VERSION}/checksums.txt" | grep "linux_$(dpkg --print-architecture)" | sha256sum -c - \
+RUN curl -fsSLO "https://github.com/lcorneliussen/taba/releases/download/v${WTC_VERSION}/taba_${WTC_VERSION}_linux_$(dpkg --print-architecture).tar.gz" \
+ && curl -fsSL "https://github.com/lcorneliussen/taba/releases/download/v${WTC_VERSION}/checksums.txt" | grep "linux_$(dpkg --print-architecture)" | sha256sum -c - \
  && tar -xzf taba_*.tar.gz -C /usr/local/bin taba wtc && rm taba_*.tar.gz \
  && wtc openclaw install --dir /opt/wtc-plugin
 # Only with Bitbucket repositories:
@@ -763,13 +764,18 @@ image instead (above).
    In either case, reload open Control UI tabs to get the new card. Until
    this step, the Collection panel says that the plugin and the gateway's
    `wtc` differ.
-3. **openclaw-bitbucket**, when its release notes call for it: install the new
-   tag over the old one and reload it.
+3. **openclaw-bitbucket**, when its release notes call for it: install the
+   verified 0.3.6 tag over the old one, preserving enablement, allowlists and
+   denylists with `--no-enable`:
 
    ```sh
-   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@<tag> --force --accept-capabilities
-   openclaw plugins reload bitbucket
+   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.6 --force --no-enable --accept-capabilities
    ```
+
+   For an enabled installation, run `openclaw plugins reload bitbucket`, then
+   refresh the Control UI. If intentionally disabled, leave it disabled and
+   skip the reload. Existing personal logins and plugin settings are reused.
+   OpenClaw 2026.10.2 remains the minimum supported host.
 
 `openclaw plugins update` does not upgrade the wtc plugin: it skips plugins
 installed from a path, which is how `wtc openclaw install` installs.
@@ -863,10 +869,10 @@ selection-only `keys`. For example, an empty initialized view is:
 Save this as `/tmp/tui-input.json`, then run from the CLI source:
 
 ```sh
-WTC_RECORDING_INPUT=/tmp/tui-input.json WTC_RECORDING_OUTPUT=/tmp/tui-frames.json go test -tags recording ./cmd/wtc -run '^TestStatusRecordingFrames$' -count=1
+WTC_RECORDING_INPUT=/tmp/tui-input.json WTC_RECORDING_OUTPUT=/tmp/tui-frames.json go test -tags recording ./cmd/taba -run '^TestStatusRecordingFrames$' -count=1
 ```
 
-Without those inputs the test skips; `go test -tags recording ./cmd/wtc -run
+Without those inputs the test skips; `go test -tags recording ./cmd/taba -run
 '^TestStatusRecordingFrames$'` still compiles the adapter. This is an author-run
 recording check, not current CI coverage. It renders native ANSI frames, refuses
 unknown keys and any returned command, and never initializes the collector.
@@ -874,7 +880,7 @@ The site's workflow turns these frames into casts, lossless PNG/video and paired
 replays; the adapter alone does not record a live terminal or gateway.
 
 Preparation for direct table actions is tracked in
-[the shared next-action issue](https://github.com/lcorneliussen/wtc-cli/issues/179).
+[the shared next-action issue](https://github.com/lcorneliussen/taba/issues/179).
 Resolve the selected collection/repository/worktree/action key, re-read through
 `statusNextCurrent`, and reuse ownership, busy and publication checks. Agent
 steps must target the verified owner/pane, never the focused terminal or a typed

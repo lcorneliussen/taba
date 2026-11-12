@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/envcompat"
 )
 
 var statusAuditNote func(string)
@@ -121,6 +121,10 @@ func statusIncrementalMissLog() string {
 }
 
 func statusFetchPRRaw(record PRRecord, slug, forge string) ([]byte, error) {
+	return statusFetchPRRawWithRequest(record, slug, forge, nil)
+}
+
+func statusFetchPRRawWithRequest(record PRRecord, slug, forge string, onRequest func()) ([]byte, error) {
 	if statusForgeCooling(forge) {
 		return nil, errForgeCooling
 	}
@@ -131,11 +135,17 @@ func statusFetchPRRaw(record PRRecord, slug, forge string) ([]byte, error) {
 	var err error
 	switch forge {
 	case "github.com":
-		raw, err = statusJSON("gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit")
+		if onRequest != nil {
+			onRequest()
+		}
+		raw, err = statusJSON("gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid")
 	case "bitbucket.org":
 		parts := strings.SplitN(slug, "/", 2)
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid Bitbucket repository slug")
+		}
+		if onRequest != nil {
+			onRequest()
 		}
 		raw, err = statusJSON("bb", "pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json")
 	default:

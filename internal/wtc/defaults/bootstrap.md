@@ -5,7 +5,7 @@ each task gets a collection of worktrees, including its harness.
 
 The minimal harness path requires **v0.1.39 or newer**. Earlier releases use a
 populated harness; see the compatible bootstrap in the CLI repository:
-https://github.com/lcorneliussen/wtc-cli/blob/main/docs/released-bootstrap.md .
+https://github.com/lcorneliussen/taba/blob/main/docs/released-bootstrap.md .
 
 ## 1. Create your harness repo
 

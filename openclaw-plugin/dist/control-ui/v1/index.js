@@ -819,7 +819,7 @@ const inlineActionCapacity = (width, narrow = false) => narrow ? 1 : Math.max(1,
 const headerActionCapacity = width => Math.max(1, Math.min(4, Math.floor(((width || 0) - 300) / 108)));
 const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH) => narrow
   ? [{ head: "Repository", width: "minmax(0,1fr)", overflow: true }, { head: "Next", width: `${actionWidth}px`, align: "end" }]
-  : [{ head: "Repository", width: "minmax(76px,1.2fr)" }, { head: "Branch", width: "minmax(64px,1.8fr)" }, { head: "Changes", width: "116px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${actionWidth}px`, align: "end" }];
+  : [{ head: "Repository", width: "fit-content(40%)" }, { head: "Branch", width: "minmax(64px,1fr)" }, { head: "Changes", width: "116px" }, { head: "Pull request", width: "164px" }, { head: "Next", width: `${actionWidth}px`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
 .wtc-tunnel-trigger:hover,.wtc-tunnel-existing:hover,.wtc-tunnel-option:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
 .wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
@@ -829,6 +829,7 @@ const actionFeedback = () => el("style", { textContent: `
 .wtc-service-play:is(:hover,:focus-visible) { --wtc-service-play-bg:var(--bg-hover,rgba(128,128,128,.12));--wtc-service-play-color:var(--text-strong,var(--text,inherit)); }
 
 .wtc-service-label:disabled { cursor:default !important;text-decoration:none !important; }
+.wtc-repo-identity .wtc-repo-warning:empty { display:none !important; }
 .wtc-next-step { width:var(--wtc-action-width,${REPO_NEXT_WIDTH}px);justify-content:flex-end !important; }
  .wtc-next-step>.wtc-action-control,.wtc-next-step>select,.wtc-next-step>.wtc-step-status,.wtc-next-step>.wtc-primary-spacer { width:104px;flex:0 0 104px; }
 .wtc-next-step>.wtc-action-menu { width:24px;flex:0 0 24px; }
@@ -1790,7 +1791,9 @@ function collectionTables(v) {
     }
     const last = lastActivity(r);
     const failure = activityFailed(last) ? nextButton("⚠", `${nameOf(r)}: ${last.status}. Open action details`, openActivity) : null;
-    return css(el("span", {}, leadSlot(check ?? forgeIcon(r.forge, 13)), label, failure), "display:inline-flex;align-items:baseline;gap:6px;min-width:0;max-width:100%");
+    // Keep wide name tracks steady when action feedback appears.
+    const warning = css(el("span", { className: "wtc-repo-warning" }, failure), "display:inline-flex;align-items:baseline;flex:0 0 24px;width:24px");
+    return css(el("span", { className: "wtc-repo-name", title: label.title }, leadSlot(check ?? forgeIcon(r.forge, 13)), label, warning), "display:inline-flex;align-items:baseline;gap:6px;min-width:0;max-width:100%");
   };
   // ↑: the push, as a button only where the gateway pushes it (GitHub and,
   // with its plugin, Bitbucket, each with the person's own account); a

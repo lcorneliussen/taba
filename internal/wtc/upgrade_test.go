@@ -3,8 +3,11 @@ package wtc
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 func TestCompatibilityRangeAndRewrite(t *testing.T) {
@@ -31,7 +34,8 @@ func TestCompatibilityRangeAndRewrite(t *testing.T) {
 }
 
 // upgradeFixture commits a wtc.toml into the fixture harness and puts a fake
-// gh on PATH that publishes 0.1.9 to 0.1.12 (plus a draft 0.1.13).
+// gh on PATH that publishes 0.1.9 to 0.1.12, a prerelease 0.1.12-rc.1 and a
+// draft 0.1.13.
 func upgradeFixture(t *testing.T) (*Context, string) {
 	t.Helper()
 	c := newWorkspaceFixture(t)
@@ -42,10 +46,11 @@ func upgradeFixture(t *testing.T) (*Context, string) {
 	fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
 case "$*" in
   *releases/latest*) echo v0.1.12 ;;
-  *releases/tags/v0.1.1[0-2]*) echo ok ;;
+  *releases/tags/v0.1.1[0-2]*|*releases/tags/v0.1.12-rc.1*) echo ok ;;
   *releases/tags/*) exit 1 ;;
   *releases\?per_page=100*)
     for v in 9 10 11 12; do printf '{"tag_name":"v0.1.%s","body":"# wtc 0.1.%s\\n","draft":false,"prerelease":false}\n' $v $v; done
+    printf '%s\n' '{"tag_name":"v0.1.12-rc.1","body":"# wtc 0.1.12-rc.1\n","draft":false,"prerelease":true}'
     printf '%s\n' '{"tag_name":"v0.1.13","body":"draft","draft":true,"prerelease":false}' ;;
   *) exit 2 ;;
 esac
@@ -99,6 +104,19 @@ func TestUpgradeBumpsPinAndRangeWithPublishedNotes(t *testing.T) {
 	fixtureGit(t, "-C", c.Harness, "checkout", "--", ".wtc-cli-version", "wtc.toml")
 	if _, err := c.Upgrade(UpgradeOptions{Version: "0.1.9"}); err == nil || !strings.Contains(err.Error(), "not newer") {
 		t.Fatalf("same version accepted: %v", err)
+	}
+}
+
+func TestUpgradeToPrereleaseReadsItsOwnNotes(t *testing.T) {
+	c, _ := upgradeFixture(t)
+	dry, err := c.Upgrade(UpgradeOptions{DryRun: true, Version: "0.1.12-rc.1"})
+	if err != nil || dry.To != "0.1.12-rc.1" || len(dry.Notes) != 3 || dry.Notes[2].Version != "0.1.12-rc.1" || dry.Notes[1].Version != "0.1.11" {
+		t.Fatalf("prerelease target: %+v %v", dry, err)
+	}
+	// A prerelease that is not the target stays out of the notes.
+	dry, err = c.Upgrade(UpgradeOptions{DryRun: true})
+	if err != nil || dry.To != "0.1.12" || len(dry.Notes) != 3 || dry.Notes[2].Version != "0.1.12" {
+		t.Fatalf("stable target: %+v %v", dry, err)
 	}
 }
 
@@ -348,5 +366,43 @@ case "$*" in *releases/latest*) echo v0.1.12 ;; *) exit 1 ;; esac
 	fixtureGit(t, "-C", c.Harness, "checkout", "--", ".wtc-cli-version", "wtc.toml")
 	if _, err := c.Upgrade(UpgradeOptions{DryRun: true}); err == nil {
 		t.Fatal("a dry run without notes should fail: it has nothing else to show")
+	}
+}
+
+func TestPublishedReleaseNotesRangePrereleasePolicy(t *testing.T) {
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
+printf '%s\n' \
+'{"tag_name":"v0.2.1","body":"future","draft":false,"prerelease":false}' \
+'{"tag_name":"v0.2.0","body":"stable","draft":false,"prerelease":false}' \
+'{"tag_name":"v0.2.0-rc.2","body":"candidate","draft":false,"prerelease":true}' \
+'{"tag_name":"v0.2.0-rc.1","body":"unflagged candidate","draft":false,"prerelease":false}' \
+'{"tag_name":"v0.1.12","body":"flagged prerelease","draft":false,"prerelease":true}' \
+'{"tag_name":"v0.1.11","body":"draft","draft":true,"prerelease":false}' \
+'{"tag_name":"v0.1.10","body":"intermediate","draft":false,"prerelease":false}' \
+'{"tag_name":"v0.1.9","body":"baseline","draft":false,"prerelease":false}'
+`, 0755)
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	for _, tt := range []struct {
+		target string
+		want   []string
+	}{
+		{"0.2.0", []string{"0.1.10", "0.2.0"}},
+		{"0.2.0-rc.2", []string{"0.1.10", "0.2.0-rc.2"}},
+		{"0.1.12", []string{"0.1.10", "0.1.12"}},
+	} {
+		t.Run(tt.target, func(t *testing.T) {
+			notes, err := publishedReleaseNotes(semver.MustParse("0.1.9"), semver.MustParse(tt.target))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var versions []string
+			for _, note := range notes {
+				versions = append(versions, note.Version)
+			}
+			if !reflect.DeepEqual(versions, tt.want) {
+				t.Fatalf("got %v, want %v", versions, tt.want)
+			}
+		})
 	}
 }

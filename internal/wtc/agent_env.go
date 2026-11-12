@@ -5,11 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"taba.sh/taba/internal/envcompat"
 )
 
 // AgentToolchainPath collects sibling mise bins, keeping product repositories

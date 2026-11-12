@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/envcompat"
 )
 
 var safeName = regexp.MustCompile(`[^a-z0-9_-]`)
@@ -261,7 +261,9 @@ func (c *Context) RenderMise() ([]byte, error) {
 		if !cliVersionPattern.MatchString(version) {
 			return nil, fmt.Errorf("invalid CLI version in %s: %q", versionFile, version)
 		}
-		if _, exists := tools[cliMiseTool]; exists {
+		_, current := tools[cliMiseTool]
+		_, legacy := tools[legacyCLIMiseTool]
+		if current || legacy {
 			return nil, fmt.Errorf("mise.tools must not override the committed CLI pin")
 		}
 		tools[cliMiseTool] = version

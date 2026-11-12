@@ -153,7 +153,7 @@ func TestMisePinSurvivesEnvRegeneration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"[tools]", `"github:lcorneliussen/wtc-cli" = "0.1.1"`, "[env]"} {
+		for _, want := range []string{"[tools]", `"github:lcorneliussen/taba" = "0.1.1"`, "[env]"} {
 			if !strings.Contains(string(data), want) {
 				t.Fatalf("mise.toml missing %q: %s", want, data)
 			}
@@ -181,7 +181,7 @@ func TestMiseKeepsHarnessToolsBesideCLIPin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"bun" = "1.2.3"`, `"npm:example-cli" = "4.5.6"`, `"github:lcorneliussen/wtc-cli" = "0.1.2"`} {
+	for _, want := range []string{`"bun" = "1.2.3"`, `"npm:example-cli" = "4.5.6"`, `"github:lcorneliussen/taba" = "0.1.2"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("missing %s in %s", want, data)
 		}
@@ -279,5 +279,16 @@ func TestRegistryRejectsPortNameCollision(t *testing.T) {
 	}
 	if _, err := OpenCollection(c.Collection); err == nil {
 		t.Fatal("accepted duplicate port variable")
+	}
+}
+
+func TestMiseToolsCannotOverrideEitherCLIPinKey(t *testing.T) {
+	for _, key := range []string{cliMiseTool, legacyCLIMiseTool} {
+		c := fixture(t)
+		fixtureFile(t, filepath.Join(c.Harness, ".wtc-cli-version"), "0.2.0\n", 0644)
+		c.Config.Mise.Tools = map[string]string{key: "0.1.0"}
+		if _, err := c.RenderMise(); err == nil || !strings.Contains(err.Error(), "must not override") {
+			t.Errorf("%s override accepted: %v", key, err)
+		}
 	}
 }

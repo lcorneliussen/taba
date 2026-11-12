@@ -9,8 +9,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/lcorneliussen/wtc-cli/internal/next"
-	"github.com/lcorneliussen/wtc-cli/internal/next/nexttest"
+	"taba.sh/taba/internal/next"
+	"taba.sh/taba/internal/next/nexttest"
 )
 
 func main() {

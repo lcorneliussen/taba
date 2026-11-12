@@ -72,7 +72,7 @@ readable TUI screen transcripts. The optional
 [agg](https://github.com/asciinema/agg) 1.9.0 executable converts casts to GIFs:
 
 ```sh
-go build -o ./wtc ./cmd/wtc
+go build -o ./wtc ./cmd/taba
 python3 -m venv /tmp/wtc-demo-venv
 /tmp/wtc-demo-venv/bin/pip install pyte==0.8.2
 /tmp/wtc-demo-venv/bin/python docs/demos/record.py --wtc ./wtc --agg /path/to/agg

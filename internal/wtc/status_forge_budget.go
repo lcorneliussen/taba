@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
 	"golang.org/x/sys/unix"
+	"taba.sh/taba/internal/envcompat"
 )
 
 // Status talks to Bitbucket and GitHub from every open status pane. Those

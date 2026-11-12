@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lcorneliussen/wtc-cli/internal/envcompat"
+	"taba.sh/taba/internal/envcompat"
 )
 
 func statusBBMergeEventTime(raw []byte) string {
@@ -156,12 +156,12 @@ func statusEnrichRecordMetadata(record PRRecord, slug, forge string) statusPRDet
 		if detail, ok := statusReadCachedDetail(record, slug, forge); ok && detail.State != "OPEN" && detail.State != "DRAFT" {
 			return statusConfirmFullPR(record, slug, forge, detail, "list-omitted")
 		}
-		viewed := statusViewPR(record, slug, forge, true)
-		if statusFullRefreshDue(forge, slug, record.Number) && (viewed.State == "OPEN" || viewed.State == "DRAFT") {
-			statusLogIncrementalMiss(forge, slug, "#"+record.Number, "list-omitted", "state:"+viewed.State)
-			statusMarkFullRefresh(forge, slug, record.Number)
-		}
-		return viewed
+		return statusViewPRWithLive(record, slug, forge, true, false, func(viewed statusPRDetail) {
+			if statusFullRefreshDue(forge, slug, record.Number) && (viewed.State == "OPEN" || viewed.State == "DRAFT") {
+				statusLogIncrementalMiss(forge, slug, "#"+record.Number, "list-omitted", "state:"+viewed.State)
+				statusMarkFullRefresh(forge, slug, record.Number)
+			}
+		})
 	}
 	if detail, ok := statusReadCachedDetail(record, slug, forge); ok {
 		return detail
@@ -198,6 +198,10 @@ func statusViewFreshPR(record PRRecord, slug, forge string) statusPRDetail {
 }
 
 func statusViewPRWithFreshness(record PRRecord, slug, forge string, bypassCache, requireFresh bool) statusPRDetail {
+	return statusViewPRWithLive(record, slug, forge, bypassCache, requireFresh, nil)
+}
+
+func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requireFresh bool, onLive func(statusPRDetail)) statusPRDetail {
 	fetch := func() ([]byte, error) {
 		switch forge {
 		case "github.com":
@@ -246,6 +250,9 @@ func statusViewPRWithFreshness(record PRRecord, slug, forge string, bypassCache,
 	}
 	if err == nil {
 		if detail, parseErr := statusParseForgeDetail(forge, raw, record); parseErr == nil {
+			if live && onLive != nil {
+				onLive(detail)
+			}
 			if forge == "bitbucket.org" {
 				detail = statusBBCompleteMergeTime(detail, slug)
 			}
@@ -351,6 +358,12 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 		}
 	}
 	enlistedBranches := map[string]bool{}
+	// Retain the original references for branch-return authority. A recovered
+	// URL repairs status metadata; it must not move a checkout in this refresh.
+	originalRecords := append([]PRRecord(nil), records...)
+	if recordMerges && !c.statusSweep {
+		c.repairPRReferences(records)
+	}
 	details, err := c.statusEnrichRecords(records, snapshot.Repos)
 	if err != nil {
 		return snapshot, err
@@ -361,7 +374,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 		} else if count != 0 {
 			c.statusProgress(fmt.Sprintf("Recorded %d final merges", count))
 		}
-		c.statusReturnMerged(&snapshot, records, details)
+		c.statusReturnMerged(&snapshot, originalRecords, details)
 	}
 	repos := c.prRepositories()
 	for i, record := range records {

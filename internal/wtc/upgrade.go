@@ -14,14 +14,18 @@ import (
 	"strings"
 
 	"github.com/Masterminds/semver/v3"
-	"github.com/lcorneliussen/wtc-cli/internal/branding"
+	"taba.sh/taba/internal/branding"
 )
 
 // cliReleaseRepo is the GitHub repository that publishes wtc releases, and
 // cliMiseTool the mise tool a harness pin renders to.
 const (
-	cliReleaseRepo = "lcorneliussen/wtc-cli"
+	cliReleaseRepo = "lcorneliussen/taba"
 	cliMiseTool    = "github:" + cliReleaseRepo
+	// legacyCLIMiseTool is the pin key before the repository rename. 0.1.x
+	// binaries still render it; GitHub's rename redirect is expected to keep it
+	// installable, which is checked once a release is published.
+	legacyCLIMiseTool = "github:lcorneliussen/wtc-cli"
 )
 
 // UpgradeOptions selects the release a harness moves its pin to. An empty
@@ -90,6 +94,14 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 	if c.AdHoc {
 		return result, errors.New(branding.Text("{{command}} upgrade needs a harness collection; an ad-hoc collection uses the installed wtc"))
 	}
+	if operation := catchUpOperation(catchUpTarget{path: c.Harness}); operation != "" {
+		// The shared guard also fails closed when Git cannot inspect a marker.
+		// Preserve that error instead of diagnosing an operation that may not exist.
+		if _, err := gitOutput("-C", c.Harness, "rev-parse", "--git-path", operation); err != nil {
+			return result, err
+		}
+		return result, fmt.Errorf("the harness has an in-progress %s; finish or abort it before upgrading", operation)
+	}
 	pinFile, err := pinInput(c.Harness)
 	if err != nil {
 		return result, err
@@ -99,6 +111,16 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 		return result, err
 	}
 	result.Files = []string{filepath.Base(pinFile), filepath.Base(configFile)}
+	// Follow aliases before reading or writing, and check every link as well as
+	// its destination: Git reports target edits under the target's own name.
+	pinFile, err = upgradeInput(c.Harness, pinFile)
+	if err != nil {
+		return result, err
+	}
+	configFile, err = upgradeInput(c.Harness, configFile)
+	if err != nil {
+		return result, err
+	}
 	pin, err := os.ReadFile(pinFile)
 	if err != nil {
 		return result, fmt.Errorf("cannot read the harness pin: %w", err)
@@ -140,11 +162,6 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 	if err != nil {
 		return result, err
 	}
-	if dirty, err := gitOutput("-C", c.Harness, "status", "--porcelain", "--", result.Files[0], result.Files[1]); err != nil {
-		return result, err
-	} else if dirty != "" {
-		return result, fmt.Errorf("the harness pin or %s has uncommitted changes; commit or discard them first", result.Files[1])
-	}
 	if !opt.DryRun {
 		if err := os.WriteFile(pinFile, []byte(result.To+"\n"), 0644); err != nil {
 			return result, err
@@ -169,6 +186,104 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 		return result, nil
 	}
 	return result, err
+}
+
+// upgradeInput resolves a selected input within the harness and requires each
+// symlink and the final regular file to be tracked and clean. Resolving one
+// component at a time also protects intermediate aliases and directory links.
+func upgradeInput(harness, input string) (string, error) {
+	harnessPath, err := filepath.Abs(harness)
+	if err != nil {
+		return "", err
+	}
+	root, err := filepath.EvalSymlinks(harnessPath)
+	if err != nil {
+		return "", err
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	current := root
+	pending := []string{filepath.Base(input)}
+	links := 0
+	for len(pending) > 0 {
+		part := pending[0]
+		pending = pending[1:]
+		if part == "" || part == "." {
+			continue
+		}
+		if part == ".." {
+			if current == root {
+				return "", fmt.Errorf("upgrade input %s escapes the harness", filepath.Base(input))
+			}
+			current = filepath.Dir(current)
+			continue
+		}
+		path := filepath.Join(current, part)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || len(pending) == 0 {
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return "", err
+			}
+			spec := ":(literal)" + filepath.ToSlash(rel)
+			if _, err := gitOutput("-C", root, "ls-files", "--error-unmatch", "--", spec); err != nil {
+				return "", fmt.Errorf("upgrade input %s must be tracked by the harness", rel)
+			}
+			if dirty, err := gitOutput("-C", root, "status", "--porcelain", "--untracked-files=all", "--", spec); err != nil {
+				return "", err
+			} else if dirty != "" {
+				return "", fmt.Errorf("upgrade input %s has uncommitted changes; commit or discard them first", rel)
+			}
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			links++
+			if links > 40 {
+				return "", fmt.Errorf("too many symlinks in upgrade input %s", filepath.Base(input))
+			}
+			target, err := os.Readlink(path)
+			if err != nil {
+				return "", err
+			}
+			if filepath.IsAbs(target) {
+				// Accept either spelling of a symlinked harness root, retaining target
+				// components so a symlink followed by ".." is resolved in filesystem order.
+				relative := ""
+				for _, prefix := range []string{root, harnessPath} {
+					if target == prefix {
+						relative = "."
+						break
+					}
+					if strings.HasPrefix(target, prefix+string(filepath.Separator)) {
+						relative = strings.TrimPrefix(target, prefix+string(filepath.Separator))
+						break
+					}
+				}
+				if relative == "" {
+					return "", fmt.Errorf("upgrade input %s escapes the harness", filepath.Base(input))
+				}
+				current, target = root, relative
+			}
+			pending = append(strings.Split(target, string(filepath.Separator)), pending...)
+			continue
+		}
+		if len(pending) > 0 && !info.IsDir() || len(pending) == 0 && !info.Mode().IsRegular() {
+			return "", fmt.Errorf("upgrade input %s must resolve to a regular file", filepath.Base(input))
+		}
+		current = path
+	}
+	info, err := os.Stat(current)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("upgrade input %s must resolve to a regular file", filepath.Base(input))
+	}
+	return current, nil
 }
 
 // upgradeNotes prefers the target binary's own archive, which carries later
@@ -203,7 +318,8 @@ func latestCLIRelease() (string, error) {
 }
 
 // publishedReleaseNotes returns the published releases after from, up to and
-// including to, oldest first.
+// including to, oldest first. Prereleases are skipped unless one is the
+// target itself, so `--version <v>-rc.N` finds its own notes.
 func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
 	out, err := exec.Command("gh", "api", "--paginate", "repos/"+cliReleaseRepo+"/releases?per_page=100",
 		"--jq", ".[] | {tag_name, body, draft, prerelease}").Output()
@@ -228,7 +344,7 @@ func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
 			return nil, fmt.Errorf("unexpected gh release output: %w", err)
 		}
 		v, err := releaseVersion(item.Tag)
-		if err != nil || item.Draft || item.Prerelease || !v.GreaterThan(from) || v.GreaterThan(to) {
+		if err != nil || item.Draft || !releaseNoteInRange(v, from, to, item.Prerelease) {
 			continue
 		}
 		releases = append(releases, release{v, ReleaseNote{Version: v.String(), Content: item.Body}})

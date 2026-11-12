@@ -131,7 +131,7 @@ func testImage(t *testing.T) string {
 			fail("Dockerfile", err, nil)
 			return
 		}
-		build := exec.Command("go", "build", "-o", filepath.Join(dir, "wtc"), "../../cmd/wtc")
+		build := exec.Command("go", "build", "-o", filepath.Join(dir, "wtc"), "../../cmd/taba")
 		build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+strings.TrimSpace(string(arch)))
 		if out, err := build.CombinedOutput(); err != nil {
 			fail("go build wtc", err, out)

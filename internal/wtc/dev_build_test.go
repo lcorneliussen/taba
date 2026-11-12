@@ -7,6 +7,52 @@ import (
 	"testing"
 )
 
+func TestDevBuildBypassAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name, canonical, legacy string
+		disabled, warning       bool
+	}{
+		{"empty", "", "", false, false},
+		{"new-only", "off", "", true, false},
+		{"legacy-only", "", "off", true, false},
+		{"both-off", "off", "off", true, false},
+		{"both-on", "on", "on", false, false},
+		{"canonical-off", "off", "on", true, true},
+		{"legacy-off", "on", "off", true, true},
+		{"empty-canonical", "", "on", false, false},
+		{"empty-legacy", "on", "", false, false},
+		{"other-conflict", "arbitrary", "on", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("TABA_DEV_BUILD", tc.canonical)
+			t.Setenv("WTC_DEV_BUILD", tc.legacy)
+			if got := DevBuildDisabled(); got != tc.disabled {
+				t.Fatalf("disabled = %v, want %v", got, tc.disabled)
+			}
+			if got := DevBuildEnvWarning() != ""; got != tc.warning {
+				t.Fatalf("warning = %v, want %v", got, tc.warning)
+			}
+			want := tc.canonical
+			if want == "" {
+				want = tc.legacy
+			}
+			if tc.disabled {
+				want = "off"
+			}
+			if got := devBuildSetting(); got != want {
+				t.Fatalf("resolved value = %q, want %q", got, want)
+			}
+		})
+	}
+	t.Setenv("TABA_DEV_BUILD", "off")
+	t.Setenv("WTC_DEV_BUILD", "off")
+	os.Unsetenv("TABA_DEV_BUILD")
+	os.Unsetenv("WTC_DEV_BUILD")
+	if DevBuildDisabled() || DevBuildEnvWarning() != "" {
+		t.Fatal("unset variables must preserve normal selection")
+	}
+}
+
 func TestDevVersionSortsBetweenReleases(t *testing.T) {
 	for describe, want := range map[string]string{
 		"v0.1.39-0-g69e3a79":       "0.1.39+dev.g69e3a79",
@@ -43,6 +89,7 @@ func TestDevVersionSortsBetweenReleases(t *testing.T) {
 
 func writeDevBuild(t *testing.T, collection, version string, mode os.FileMode) string {
 	t.Helper()
+	fixtureFile(t, filepath.Join(collection, "harness", ".harness-repos.yml"), "repos: []\n", 0644)
 	dir := filepath.Join(collection, ".wtc", "dev")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
@@ -86,7 +133,7 @@ func TestReadDevBuildOnlyTrustsPrivateExecutables(t *testing.T) {
 
 func TestDevBuildSourceFindsWtcCheckout(t *testing.T) {
 	collection := t.TempDir()
-	for name, module := range map[string]string{"harness": "", "app": "example.invalid/app", "ext.wtc-cli": wtcModule} {
+	for name, module := range map[string]string{"harness": "", "app": "example.invalid/app", "ext.wtc-cli": cliModules[0]} {
 		dir := filepath.Join(collection, name)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
@@ -121,6 +168,7 @@ func TestInstallAndUninstallDevBuild(t *testing.T) {
 		t.Skip("checkout has no release tag (shallow clone)")
 	}
 	collection := t.TempDir()
+	fixtureFile(t, filepath.Join(collection, "harness", ".harness-repos.yml"), "repos: []\n", 0644)
 	fixtureFile(t, filepath.Join(collection, ".taba", "dev", "wtc"), "#!/bin/sh\n", 0755)
 	fixtureFile(t, filepath.Join(collection, ".taba", "dev", "version"), "0.1.40-dev.1+dev.gabc1234\n", 0644)
 	build, err := InstallDevBuild(collection, source)
@@ -131,10 +179,16 @@ func TestInstallAndUninstallDevBuild(t *testing.T) {
 	if read == nil || read.Version != build.Version || read.Source != source || !strings.Contains(build.Version, "dev") {
 		t.Fatalf("installed build not readable: %+v / %+v", build, read)
 	}
-	if build.Binary != filepath.Join(collection, ".wtc", "dev", "wtc") {
-		t.Fatalf("install changed the default namespace: %+v", build)
+	if filepath.Dir(filepath.Dir(build.Binary)) != filepath.Join(collection, ".taba", "dev-generations") || !strings.HasPrefix(filepath.Base(filepath.Dir(build.Binary)), "oneshot-") || build.Generation != "" || build.FollowProtocol != 0 {
+		t.Fatalf("one-shot is not an immutable selected-namespace artifact: %+v", build)
 	}
-	if _, err := os.Stat(filepath.Join(collection, ".wtc", "dev", ".wtc.tmp")); !os.IsNotExist(err) {
+	bridge, err := os.ReadFile(filepath.Join(collection, ".taba", "dev", "wtc"))
+	artifact, artifactErr := os.ReadFile(build.Binary)
+	legacy, legacyErr := os.ReadFile(filepath.Join(collection, ".taba", "dev", "version"))
+	if err != nil || artifactErr != nil || legacyErr != nil || string(bridge) != string(artifact) || string(legacy) != build.Version+"\n"+source+"\n" {
+		t.Fatal("legacy bootstrap bridge does not match the committed artifact")
+	}
+	if _, err := os.Stat(filepath.Join(collection, ".taba", "dev", ".wtc.tmp")); !os.IsNotExist(err) {
 		t.Fatal("temporary binary left behind")
 	}
 	if _, err := InstallDevBuild(collection, t.TempDir()); err == nil {
@@ -169,5 +223,29 @@ func TestFindCollectionRootRecognizesHarnessAndAdHocCollections(t *testing.T) {
 	}
 	if FindCollectionRoot(t.TempDir()) != "" {
 		t.Fatal("a plain directory is not a collection")
+	}
+}
+
+func TestDevBuildAcceptsEitherModulePath(t *testing.T) {
+	for _, module := range cliModules {
+		dir := t.TempDir()
+		fixtureFile(t, filepath.Join(dir, "go.mod"), "module "+module+"\n\ngo 1.27\n", 0644)
+		if !cliModule(filepath.Join(dir, "go.mod")) {
+			t.Errorf("%s not accepted", module)
+		}
+		if got := cliPackage(dir); got != "./cmd/wtc" {
+			t.Errorf("checkout without cmd/taba builds %s", got)
+		}
+		if err := os.MkdirAll(filepath.Join(dir, "cmd", "taba"), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if got := cliPackage(dir); got != "./cmd/taba" {
+			t.Errorf("checkout with cmd/taba builds %s", got)
+		}
+	}
+	dir := t.TempDir()
+	fixtureFile(t, filepath.Join(dir, "go.mod"), "module example.invalid/other\n", 0644)
+	if cliModule(filepath.Join(dir, "go.mod")) {
+		t.Error("an unrelated module was accepted")
 	}
 }
