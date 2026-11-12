@@ -33,7 +33,7 @@ func TestHostedReviewActivityDistinguishesWaitingReportsAndUnavailable(t *testin
 		{"stale-check", `"reviewRequests":[{"login":"copilot-pull-request-reviewer"}],"statusCheckRollup":[{"name":"Copilot code review","status":"COMPLETED","conclusion":"STALE"}]`, `[[]]`, "unavailable", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseReviewActivity([]byte(`{"headRefOid":"`+head+`",`+tc.meta+`}`), []byte(tc.reviews), activityRaw([]any{activityThreadPage(head, false)}))
+			got, err := parseReviewActivity([]byte(`{"headRefOid":"`+head+`",`+tc.meta+`}`), []byte(tc.reviews), activityRaw([]any{activityThreadPage(head, false)}), []byte(`[{"total_count":0,"check_runs":[]}]`))
 			if err != nil || got.Reports[0].State != tc.want || (len(got.Waiting) > 0) != tc.wait {
 				t.Fatalf("%+v %v", got, err)
 			}
@@ -49,7 +49,7 @@ func TestHostedReviewActivityKeepsAllOpenThreadsAcrossPages(t *testing.T) {
 	meta := activityRaw(map[string]any{"headRefOid": head})
 	reviews := []byte(`[[{"user":{"login":"cursor[bot]"},"state":"COMMENTED","commit_id":"` + head + `","body":"reported"}]]`)
 	pages := []any{activityThreadPage(head, true, thread("cursor[bot]", false, true)), activityThreadPage(head, false, thread("copilot-pull-request-reviewer", false, false), thread("cursor[bot]", true, false), thread("human", false, false))}
-	got, err := parseReviewActivity(meta, reviews, activityRaw(pages))
+	got, err := parseReviewActivity(meta, reviews, activityRaw(pages), []byte(`[{"total_count":0,"check_runs":[]}]`))
 	if err != nil || len(got.Findings) != 2 || !got.Findings[0].Outdated || got.Findings[0].Head == head || got.Reports[1].State != "reported" {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -59,7 +59,7 @@ func TestHostedReviewActivityKeepsAllOpenThreadsAcrossPages(t *testing.T) {
 		[]any{map[string]any{"errors": []any{map[string]any{"message": "denied"}}}},
 		[]any{},
 	} {
-		if _, err := parseReviewActivity(meta, reviews, activityRaw(bad)); err == nil {
+		if _, err := parseReviewActivity(meta, reviews, activityRaw(bad), []byte(`[{"total_count":0,"check_runs":[]}]`)); err == nil {
 			t.Fatalf("incomplete or stale activity accepted: %+v", bad)
 		}
 	}
