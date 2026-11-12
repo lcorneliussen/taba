@@ -47,9 +47,14 @@ and viewport/menu clipping. Screenshots and a JSON measurement report go to the
 chosen directory. It contacts no gateway or forge and dispatches only into its
 synthetic host. This optional browser check is separate from the Node tests.
 
-
 Group Catch up controls highlight their eligible rows on hover or keyboard
 focus. This changes paint only. Gateway catch-up can retain and restore local
 edits and staging; an unresolved operation or unavailable checkout stays out of
 the group. See [gateway recovery](openclaw.md#gateway-catch-up-with-local-changes)
 for recovery-copy retention and the gateway/sandbox boundary.
+
+If a local commit request becomes unconfirmed, open its Action log details and
+check the owning conversation. The diagnostic help action does not retry work.
+After confirming that the earlier request has finished, **I checked: request
+has finished** releases the browser reservation. It does not cancel work or
+verify a commit; subsequent actions still require explicit selection.
