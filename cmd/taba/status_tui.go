@@ -905,7 +905,7 @@ func statusTUIPRSignals(checks, merge, review *string, styled bool) [3]string {
 func statusTUIPRSuffix(pr *wtc.StatusPRFacts, styled bool) string {
 	cells := statusTUIPRSignals(&pr.Checks, &pr.Merge, &pr.Review, styled)
 	suffix := strings.Join(cells[:], " ")
-	if pr.Freshness == "stale" || pr.Freshness == "deferred" {
+	if pr.Freshness == "stale" || pr.Freshness == "deferred" || pr.Freshness == "unavailable" {
 		return pr.Freshness
 	}
 	if statusTUIPRConflict(pr) {
@@ -1606,9 +1606,16 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		number := statusTUIPRNumberCell(row.Number, target, l.number, styled, linkTone)
 		repo := statusTUIFit(statusTUISafe(row.Repo), l.repo)
-		if row.Freshness == "stale" || row.Freshness == "deferred" {
+		if row.Freshness == "stale" || row.Freshness == "deferred" || row.Freshness == "unavailable" {
 			state = row.Freshness
-			label = "last " + strings.ToLower(row.State) + "; observed " + statusTUISafe(row.ObservedAt) + "; " + label
+			observation := "not yet observed"
+			if row.State != "" && row.State != "UNKNOWN" {
+				observation = "last " + strings.ToLower(row.State)
+			}
+			if row.ObservedAt != "" {
+				observation += "; observed " + statusTUISafe(row.ObservedAt)
+			}
+			label = row.Freshness + ": " + observation + "; " + label
 		}
 		stateCell := statusTUIFit(state, l.state)
 		signals := statusTUIPRSignals(row.Checks, row.Merge, row.Review, styled)

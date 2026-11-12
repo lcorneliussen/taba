@@ -3,7 +3,7 @@ package wtc
 import "time"
 
 func statusObservationUnavailable(freshness string) bool {
-	return freshness == "stale" || freshness == "deferred"
+	return freshness == "stale" || freshness == "deferred" || freshness == "unavailable"
 }
 
 // Freshness describes PR state, not separate checks or mergeability evidence.

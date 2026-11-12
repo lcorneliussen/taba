@@ -60,10 +60,6 @@ func statusReadForgeCache(forge, slug, number string) ([]byte, bool) {
 	return statusReadForgeEntry("pr", forge, slug, number)
 }
 
-func statusReadMergedForgeCache(forge, slug, number string) ([]byte, bool) {
-	return statusReadForgeEntryWithAge("pr", forge, slug, number, statusMergedCacheAge())
-}
-
 func statusReadForgeEntry(kind, forge, slug, key string) ([]byte, bool) {
 	return statusReadForgeEntryWithAge(kind, forge, slug, key, statusForgeCacheAge())
 }

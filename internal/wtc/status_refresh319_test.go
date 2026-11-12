@@ -58,7 +58,7 @@ func TestStatus319CompetingPanesEventuallyConfirm(t *testing.T) {
 	fixtureFile(t, dir+"/bb", "#!/bin/sh\nprintf '%s' '{\"id\":7,\"state\":\"MERGED\",\"merged_on\":\"2026-11-04T10:01:00Z\"}'\n", 0700)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	for tick := 0; tick < 3; tick++ {
-		// One replenished token per scheduling interval; another pane always arrives first.
+		// A competing pane attempts admission before confirmation on each interval.
 		if err := os.WriteFile(statusForgeStatePath("budget", forge), []byte("1 "+fmt.Sprint(time.Now().UnixNano())), 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -204,7 +204,11 @@ func TestStatus319ConfirmationFailuresPreserveFacts(t *testing.T) {
 			fixtureFile(t, dir+"/bb", script, 0700)
 			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			got := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
-			if got.State != "DRAFT" || got.Freshness != "deferred" {
+			wantFreshness := "unavailable"
+			if mode == "cooling" || mode == "rate-limit" {
+				wantFreshness = "deferred"
+			}
+			if got.State != "DRAFT" || got.Freshness != wantFreshness {
 				t.Fatalf("failed read claimed current/merged or lost cached state: %+v", got)
 			}
 			saved, _ := statusReadForgeEntryAny("pr", forge, slug, "7")
@@ -395,6 +399,81 @@ func TestStatus319StaleMergedFactsCannotReturnBranch(t *testing.T) {
 			if row.Repo == "widget" && (row.Next != nil || row.Choices != nil) {
 				t.Fatalf("%s merge proposed next action", freshness)
 			}
+		}
+	}
+}
+
+func TestStatus319ResolvedConfirmationReleasesReservation(t *testing.T) {
+	for _, resolved := range []string{"listed", "settled"} {
+		t.Run(resolved, func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+			forge, slug := "bitbucket.org", "example/widget"
+			list, _ := statusEncodeOpenPRs(nil, false, time.Now())
+			statusWriteForgeEntry("openprs", forge, slug, "open", list)
+			body := []byte(`{"id":7,"state":"OPEN","draft":true}`)
+			statusWriteForgeCache(forge, slug, "7", body)
+			if !statusTakeForgeToken(forge) {
+				t.Fatal("initial token")
+			}
+			if got := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge); got.Freshness != "deferred" {
+				t.Fatal(got)
+			}
+			if resolved == "listed" {
+				list, _ = statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Fingerprint: "current", Raw: body}}, false, time.Now())
+				statusWriteForgeEntry("openprs", forge, slug, "open", list)
+			} else {
+				statusWriteForgeCache(forge, slug, "7", []byte(`{"id":7,"state":"MERGED","merged_on":"2026-11-04T10:01:00Z"}`))
+			}
+			status319Refill(t, forge)
+			got := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
+			if statusObservationUnavailable(got.Freshness) || !statusTakeForgeToken(forge) {
+				t.Fatalf("resolved %s confirmation blocked ordinary traffic: %+v", resolved, got)
+			}
+		})
+	}
+}
+
+func TestStatus319CoolingRecoversWithFullValidResponse(t *testing.T) {
+	for _, draft := range []bool{false, true} {
+		t.Run(fmt.Sprint(draft), func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+			forge, slug := "bitbucket.org", "example/widget"
+			list, _ := statusEncodeOpenPRs(nil, false, time.Now())
+			statusWriteForgeEntry("openprs", forge, slug, "open", list)
+			statusWriteForgeCache(forge, slug, "7", []byte(fmt.Sprintf(`{"id":7,"state":"OPEN","draft":%t}`, draft)))
+			fakeLargeBB(t, map[string]string{"view": `{"id":7,"state":"MERGED","draft":true,"merged_on":"2026-11-04T10:01:00Z"}`})
+			statusForgeCool(forge, time.Minute)
+			before := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
+			if before.Freshness != "deferred" || before.State == "MERGED" {
+				t.Fatalf("cooling claimed merge: %+v", before)
+			}
+			// Expire only the synthetic cooldown; the next pass still gets one token.
+			if err := os.WriteFile(statusForgeStatePath("cool", forge), []byte(fmt.Sprint(time.Now().Add(-time.Second).UnixNano())), 0600); err != nil {
+				t.Fatal(err)
+			}
+			status319Refill(t, forge)
+			after := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
+			if after.State != "MERGED" || after.Freshness != "live" || after.ObservedAt == "" || statusTakeForgeToken(forge) {
+				t.Fatalf("recovery lost state/full response or exceeded allowance: %+v", after)
+			}
+		})
+	}
+}
+
+func TestStatus319RetirementDoesNotClaimUnknownStateIsOpen(t *testing.T) {
+	for _, represented := range []bool{false, true} {
+		snapshot := StatusSnapshot{Collection: "synthetic", Retirement: []RetirementAssessment{{Collection: "synthetic"}}}
+		if represented {
+			snapshot.Repos = []StatusRepo{{Collection: "synthetic", Repo: "widget", Dir: "widget", PR: &StatusPRFacts{Number: "7", Freshness: "unavailable"}}}
+		} else {
+			snapshot.PRs = []StatusPRRow{{Repo: "widget", Number: "7", State: "UNKNOWN", Freshness: "unavailable"}}
+		}
+		statusRetirementFacts(&snapshot)
+		reasons := strings.Join(snapshot.Retirement[0].Blockers, "\n")
+		if !strings.Contains(reasons, "state is unconfirmed") || strings.Contains(reasons, "remains open") {
+			t.Fatal(reasons)
 		}
 	}
 }

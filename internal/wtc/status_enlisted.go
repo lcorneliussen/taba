@@ -71,7 +71,7 @@ func (c *Context) statusRecordForge(record PRRecord, _ []StatusRepo) (slug, forg
 }
 
 func statusUnknownDetail(record PRRecord) statusPRDetail {
-	return statusPRDetail{Number: record.Number, State: "UNKNOWN", Freshness: "deferred", Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: record.Title}
+	return statusPRDetail{Number: record.Number, State: "UNKNOWN", Freshness: "unavailable", Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: record.Title}
 }
 
 func statusDeferredDetail(record PRRecord) statusPRDetail {
@@ -96,8 +96,8 @@ func statusParseForgeDetail(forge string, raw []byte, record PRRecord) (statusPR
 }
 
 func statusCachedSettledMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
-	// Reuse merged forge detail until its final facts are written to the
-	// collection registry; the registry then avoids later forge calls.
+	// Settled merge detail retains authority within statusMergedCacheAge (24h
+	// by default). A successful registry write also avoids later forge calls.
 	cached, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusMergedCacheAge())
 	if !ok {
 		return statusPRDetail{}, false
@@ -143,10 +143,12 @@ func statusEnrichRecordMetadata(record PRRecord, slug, forge string) (result sta
 		return statusUnknownDetail(record)
 	}
 	if detail, ok := statusCachedSettledMerge(record, slug, forge); ok {
+		statusForgetConfirmation(forge, slug+"#"+record.Number)
 		return detail
 	}
 	if listed, truncated, err := statusOpenPRs(forge, slug); err == nil {
 		if item, ok := listed[record.Number]; ok {
+			statusForgetConfirmation(forge, slug+"#"+record.Number)
 			return statusEnrichListed(record, slug, forge, item)
 		}
 		if truncated {
@@ -284,7 +286,7 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 	if bypassCache && err != nil {
 		if saved, ok := statusReadForgeEntryAny("pr", forge, slug, record.Number); ok {
 			if detail, parseErr := statusParseForgeDetail(forge, saved, record); parseErr == nil {
-				detail.Freshness = "deferred"
+				detail.Freshness = "unavailable"
 				return statusObserveDetail(detail, slug, forge)
 			}
 		}

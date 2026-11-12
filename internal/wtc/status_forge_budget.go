@@ -177,6 +177,11 @@ func statusWithForgeBudget(forge string, stale []byte, fetch func() ([]byte, err
 }
 
 func statusWithForgeBudgetKey(forge, confirmation string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
+	// GitHub identity recovery already schedules its ordinary and repair reads.
+	// Reserve admission only for Bitbucket omission confirmations.
+	if forge != "bitbucket.org" {
+		confirmation = ""
+	}
 	if statusForgeCooling(forge) {
 		if len(stale) > 0 {
 			return stale, false, nil

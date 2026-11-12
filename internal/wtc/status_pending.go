@@ -11,8 +11,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Only unresolved by-number confirmations reserve admission. The existing
-// budget lock guards this bounded FIFO; ordinary traffic resumes after an
+// Only unresolved Bitbucket by-number confirmations reserve admission. The
+// existing budget lock guards this bounded FIFO; ordinary traffic resumes after an
 // abandoned reservation expires. Older clients do not honor these reservations.
 const statusPendingLifetime = 5 * time.Minute
 const statusPendingLimit = 256
@@ -81,5 +81,25 @@ func statusSavePendingConfirmations(forge string, queue []statusPendingConfirmat
 	raw, err := json.Marshal(queue)
 	if err == nil {
 		statusWriteForgeEntry("pending", forge, "", "", raw)
+	}
+}
+
+// A list or settled cache can resolve a queued confirmation before its turn.
+func statusForgetConfirmation(forge, identity string) {
+	if forge != "bitbucket.org" {
+		return
+	}
+	unlock, err := statusLockCache(statusForgeStatePath("budget", forge))
+	if err != nil {
+		return
+	}
+	defer unlock()
+	queue := statusReadPendingConfirmations(forge, time.Now())
+	key := statusConfirmationKey(identity)
+	for i, item := range queue {
+		if item.Key == key {
+			statusSavePendingConfirmations(forge, append(queue[:i], queue[i+1:]...))
+			return
+		}
 	}
 }
