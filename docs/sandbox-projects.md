@@ -26,9 +26,12 @@ harness remote and ref, default status, and its entire repository registry
 (names, remotes, roles and default branches) to every sandbox session of that
 agent. Use separate agents when their project metadata visibility must differ.
 
-The service identifies the agent from the gateway's running Docker container
-and uniquely owned managed worktree, rechecking the container for every discovery
-request. Request parameters and headers cannot select another identity or
+The service identifies the agent from the gateway's running Docker container,
+rechecking the container for every discovery request. A sandbox that projects a
+managed worktree must also have that worktree's single owning session. A
+sandbox without one, such as a new conversation's before it has a collection,
+is identified by its container's agent alone, and its result names no
+collection. Request parameters and headers cannot select another identity or
 project. Unknown or ambiguous ownership is refused. Only allowlisted registries
 are read. Remotes are returned as credential-free GitHub or Bitbucket HTTPS
 URLs; unsupported remotes or unreadable registries produce a generic project

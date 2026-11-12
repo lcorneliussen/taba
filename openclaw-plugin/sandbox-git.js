@@ -10,6 +10,8 @@
 // runs that container on one managed worktree's projection; the session that
 // owns the worktree decides what the sandbox may read: the repositories of
 // its collection, with the collection's branches and what origin has.
+// Project discovery needs only the container's agent, so it also answers a
+// sandbox that has no managed worktree yet.
 import { spawn } from "node:child_process";
 import { createWriteStream, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
@@ -111,13 +113,18 @@ export function startSandboxGit({ host, port, run, openclaw, listSessionEntries,
   // collection may read.
   // A delivery or project discovery asks Docker again: an address a container gave up may
   // already be another's.
-  const identify = async (address, fresh = false) => {
+  // Project discovery (agentOnly) needs only the agent: a conversation looks
+  // for its project before it has a collection, so a sandbox without a
+  // managed worktree is identified by its container's agent alone. One that
+  // projects a worktree still needs that worktree's single owner.
+  const identify = async (address, fresh = false, { agentOnly = false } = {}) => {
     let container = (await containersByAddress(fresh)).get(address);
     if (!container && !fresh) container = (await containersByAddress(true)).get(address);
     if (container === null) return { error: "this address belongs to more than one sandbox container" };
     if (!container) return { error: "this address is no sandbox container of the gateway's" };
     const id = projectionWorktreeId(container.workspaceDir);
     const agentId = String(container.sessionKey ?? "").match(/^agent:([^:]+):.+$/)?.[1];
+    if (agentOnly && agentId && !id) return { agentId, self: {}, repos: new Map() };
     if (!id || !agentId) return { error: "this sandbox works on no managed worktree" };
     const owners = [...(await listSessionEntries({ agentId }))].filter((s) => s.entry?.worktree?.id === id);
     if (owners.length !== 1) return { error: "no single session owns this sandbox's worktree" };
@@ -217,7 +224,7 @@ export function startSandboxGit({ host, port, run, openclaw, listSessionEntries,
       if (projectsRequest) res.setHeader("cache-control", "no-store");
       const address = String(req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
       const delivery = req.method === "POST" && req.url.startsWith("/wtc/deliver");
-      const who = await identify(address, delivery || projectsRequest);
+      const who = await identify(address, delivery || projectsRequest, { agentOnly: projectsRequest });
       if (who.error) {
         req.resume();
         return send(res, 403, { error: who.error });
@@ -228,11 +235,12 @@ export function startSandboxGit({ host, port, run, openclaw, listSessionEntries,
         if (!Array.isArray(allowed) || allowed.length === 0 || !allowed.every((p) => typeof p === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(p) && p !== "none" && p !== "ad-hoc")) {
           return send(res, 403, { error: "project discovery is not enabled for this agent" });
         }
-        if (!who.self.dir) return send(res, 403, { error: "this session owns no repository" });
         // The caller controls neither identity nor project selection. Do not
         // return command diagnostics, which can contain gateway paths/config.
+        // Without a worktree, an empty directory: projects, but no collection.
+        const neutral = who.self.dir ? null : mkdtempSync(path.join(os.tmpdir(), "wtc-projects-"));
         try {
-          const r = await run(["wtc", "openclaw", "sandbox-projects", ...[...new Set(allowed)].flatMap((p) => ["--project", p])], { cwd: who.self.dir, timeoutMs: 30000, env: { WTC_GATEWAY_GIT: "" } });
+          const r = await run(["wtc", "openclaw", "sandbox-projects", ...[...new Set(allowed)].flatMap((p) => ["--project", p])], { cwd: who.self.dir || neutral, timeoutMs: 30000, env: { WTC_GATEWAY_GIT: "" } });
           if (r.code !== 0) return send(res, 503, { error: "gateway project metadata unavailable" });
           const result = JSON.parse(r.stdout);
           if (!Array.isArray(result.projects) || result.projects.some((p) => !allowed.includes(p.name))) throw new Error("invalid project metadata");
@@ -240,6 +248,8 @@ export function startSandboxGit({ host, port, run, openclaw, listSessionEntries,
           return send(res, 200, result);
         } catch {
           return send(res, 503, { error: "gateway project metadata unavailable" });
+        } finally {
+          if (neutral) rmSync(neutral, { recursive: true, force: true });
         }
       }
       if (parts[0] === "wtc" && parts[1] === "session" && req.method === "GET") {
