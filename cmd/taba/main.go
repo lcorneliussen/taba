@@ -40,19 +40,27 @@ func main() {
 			version = v
 		}
 	}
-	handOverToDevBuild()
+	if err := handOverToDevBuild(); err != nil {
+		fmt.Fprintln(os.Stderr, branding.Text("{{command}}:"), err)
+		os.Exit(1)
+	}
 	printRenameNotice(os.Stderr)
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, branding.Text("{{command}}:"), err)
 		os.Exit(1)
 	}
 }
-func run() error {
-	var asJSON bool
+func commandRoot(asJSON *bool) *cobra.Command {
 	root := &cobra.Command{Use: branding.Name(), Short: "Worktree collection tools", SilenceUsage: true, SilenceErrors: true}
 	root.CompletionOptions.DisableDefaultCmd = true
-	root.PersistentFlags().BoolVar(&asJSON, "json", false, "Emit a JSON result")
+	root.PersistentFlags().BoolVar(asJSON, "json", false, "Emit a JSON result")
 	root.Version = versionLabel()
+	return root
+}
+
+func run() error {
+	var asJSON bool
+	root := commandRoot(&asJSON)
 	wtc.CLIVersion = version
 	cwd := func() (*wtc.Context, error) {
 		dir, err := os.Getwd()

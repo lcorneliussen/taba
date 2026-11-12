@@ -2007,6 +2007,21 @@ test("baseline labels agree while hover text identifies actual branch versus det
  } finally { view.dispose(); }
 });
 
+test("repository names retain full text and hover disclosure over the whole identity", async () => {
+ for (const kind of ["composer", "panel"]) {
+  const name = "component-library-with-a-long-name";
+  const path = `/demo/collections/task/${name}`;
+  const { host, view } = await mount(kind, collection([repo(name, { path })]));
+  try {
+   const label = [...host.all()].find(n => n.className === "wtc-repo-label");
+   assert.equal(label.textContent, name);
+   assert.equal(label.title, `octo/${name}\n${path}`);
+   assert.equal(label.parentNode.title, label.title, "the icon and clipped label share the full-name hint");
+   assert.equal(label.href, `https://github.com/octo/${name}`);
+  } finally { view.dispose(); }
+ }
+});
+
 
 test("publication discards a pre-action refresh and stays busy until a fresh status returns", async () => {
   const r = repo("api", { unpublished: 1 });
