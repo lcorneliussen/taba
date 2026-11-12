@@ -45,3 +45,22 @@ func statusFreshnessLabel(freshness, observed string) string {
 	}
 	return "(" + label + ")"
 }
+
+// Observe the actual cached payload without fetching ancillary evidence or
+// changing its timestamp. Callers choose the existing retention policy.
+func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
+	raw, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, age)
+	if !ok {
+		return statusPRDetail{}, false
+	}
+	detail, err := statusParseForgeDetail(forge, raw, record)
+	if err != nil {
+		return statusPRDetail{}, false
+	}
+	return statusObserveAt(detail, observed, "detail-cache"), true
+}
+
+func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
+	detail, ok := statusReadObservedDetail(record, slug, forge, statusMergedCacheAge())
+	return detail, ok && detail.State == "MERGED"
+}

@@ -75,6 +75,11 @@ func statusEncodeOpenPRs(prs []statusOpenPR, truncated bool, started time.Time) 
 var statusBeforeOpenPublish func()
 
 func statusDetailFromOpenItem(record PRRecord, slug, forge string, item statusOpenPR) (statusPRDetail, bool, bool) {
+	// A changed list fingerprint cannot reopen a confirmed merge, even while
+	// its merge time or checks are still being collected.
+	if known, ok := statusRetainedMerge(record, slug, forge); ok {
+		return known, true, true
+	}
 	if stamp, ok := statusReadForgeEntryAny("stamp", forge, slug, record.Number); ok && string(stamp) == item.Fingerprint {
 		if cached, ok := statusReadForgeEntryAny("pr", forge, slug, record.Number); ok {
 			if detail, err := statusParseForgeDetail(forge, cached, record); err == nil {
@@ -90,7 +95,7 @@ func statusDetailFromOpenItem(record PRRecord, slug, forge string, item statusOp
 		statusBeforeOpenPublish()
 	}
 	if !statusWriteForgeEntrySince("pr", forge, slug, record.Number, item.Raw, item.Started) {
-		if cached, ok := statusReadCachedDetail(record, slug, forge); ok {
+		if cached, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
 			statusWriteForgeEntry("stamp", forge, slug, record.Number, []byte(item.Fingerprint))
 			return cached, true, true
 		}

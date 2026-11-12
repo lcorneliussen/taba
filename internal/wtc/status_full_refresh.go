@@ -184,7 +184,15 @@ func statusConfirmFullPRLocked(record PRRecord, slug, forge string, incremental 
 	if forge == "bitbucket.org" {
 		full = statusBBCompleteMergeTime(full, slug)
 	}
-	statusWriteForgeEntrySince("pr", forge, slug, record.Number, raw, started)
+	if !statusWriteForgeEntrySince("pr", forge, slug, record.Number, raw, started) {
+		if winner, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
+			if winner.State != full.State {
+				winner.Freshness = "unavailable"
+			}
+			return winner
+		}
+		return incremental
+	}
 	statusMarkFullRefresh(forge, slug, record.Number)
 	statusLogIncrementalMiss(forge, slug, "#"+record.Number, source, statusPRDetailDiff(incremental, full))
 	return full

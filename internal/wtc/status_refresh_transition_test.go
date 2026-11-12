@@ -271,7 +271,12 @@ func (s *status319Wire) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			values = append(values, s.item(99, false))
 		} else {
 			if !merged || mode == "old-list" {
-				values = append(values, s.item(7, false), s.item(8, false))
+				oldOpen, oldDraft := s.item(7, false), s.item(8, false)
+				if mode == "old-list" {
+					oldOpen["comment_count"] = 99
+					oldDraft["comment_count"] = 99
+				}
+				values = append(values, oldOpen, oldDraft)
 			}
 			values = append(values, s.item(9, false))
 		}

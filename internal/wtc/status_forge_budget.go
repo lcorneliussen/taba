@@ -257,8 +257,11 @@ func statusFetchShared(kind, forge, slug, key string, fetch func() ([]byte, erro
 	if err != nil {
 		return nil, false, err
 	}
-	if live {
-		statusWriteForgeEntrySince(kind, forge, slug, key, raw, started)
+	if live && !statusWriteForgeEntrySince(kind, forge, slug, key, raw, started) {
+		if winner, ok := statusReadForgeEntryAny(kind, forge, slug, key); ok {
+			return winner, false, nil
+		}
+		return nil, false, errors.New("superseding forge observation is unavailable")
 	}
 	return raw, live, nil
 }

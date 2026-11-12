@@ -13,6 +13,9 @@
   snapshot age and separate check coverage. Fresh unchanged lists keep list-start
   provenance without changing the full-detail cache file timestamp. Historical
   `settled` and registry `recorded` merges retain their existing authority.
+  A confirmed merge within the existing retention window cannot be reopened by
+  an active replica response, even if its merge timestamp is still unavailable.
+  Conflicting views preserve the original observation and remain unconfirmed.
   Markdown and the live view
   label stale, deferred, and unavailable observations. Such facts cannot authorize
   branch returns, settled merge recording, or next actions. A `pr_unconfirmed`

@@ -9,6 +9,82 @@ import (
 	"time"
 )
 
+func TestStatus319RetainedMergeRejectsActiveWriters(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		for _, writer := range []string{"list", "view", "full-audit", "shared-fetch"} {
+			t.Run(forge+"/"+writer, func(t *testing.T) {
+				t.Setenv("TMPDIR", t.TempDir())
+				t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+				t.Setenv("WTC_FORGE_FULL_REFRESH", "60")
+				record, slug := PRRecord{Number: "7"}, "example/widget"
+				merged := []byte(`{"number":7,"id":7,"state":"MERGED"}`)
+				active := []byte(`{"number":7,"id":7,"state":"OPEN"}`)
+				statusWriteForgeEntrySince("pr", forge, slug, "7", merged, time.Now().Add(-time.Hour))
+				past := time.Now().Add(-time.Hour)
+				if err := os.Chtimes(statusForgeCachePath(forge, slug, "7"), past, past); err != nil {
+					t.Fatal(err)
+				}
+				before, _ := statusReadObservedDetail(record, slug, forge, 24*time.Hour)
+				bin := t.TempDir()
+				for _, command := range []string{"gh", "bb"} {
+					fixtureFile(t, bin+"/"+command, "#!/bin/sh\nprintf '%s' '{\"number\":7,\"id\":7,\"state\":\"OPEN\"}'\n", 0700)
+				}
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+				var got statusPRDetail
+				switch writer {
+				case "list":
+					got, _, _ = statusDetailFromOpenItem(record, slug, forge, statusOpenPR{Number: "7", Fingerprint: "changed", Raw: active, Started: time.Now()})
+				case "view":
+					got = statusViewPRWithLive(record, slug, forge, true, true, nil)
+				case "full-audit":
+					got = statusConfirmFullPR(record, slug, forge, before, "merged-cache")
+				case "shared-fetch":
+					raw, live, err := statusFetchShared("pr", forge, slug, "7", func() ([]byte, error) { return active, nil })
+					if err != nil || live {
+						t.Fatalf("losing fetch: live=%v err=%v", live, err)
+					}
+					got, _ = statusParseForgeDetail(forge, raw, record)
+				}
+				if got.State != "MERGED" || got.MergedOn != "" {
+					t.Fatalf("confirmed merge replaced or dated: %+v", got)
+				}
+				if writer != "shared-fetch" && got.ObservedAt != before.ObservedAt {
+					t.Fatalf("merge observation redated: before=%+v after=%+v", before, got)
+				}
+				if writer == "view" || writer == "full-audit" {
+					if got.Freshness != "unavailable" {
+						t.Fatalf("conflicting response claimed confirmed: %+v", got)
+					}
+				}
+				if saved, _ := statusReadForgeEntryAny("pr", forge, slug, "7"); string(saved) != string(merged) {
+					t.Fatalf("merge cache replaced: %s", saved)
+				}
+				for _, kind := range []string{"omit", "full"} {
+					if _, ok := statusReadForgeEntryAny(kind, forge, slug, "7"); ok {
+						t.Fatalf("losing response published %s marker", kind)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestStatus319FirstMergeWinsAcrossNewerActiveResponse(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	started := time.Now()
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		active := []byte(`{"number":7,"id":7,"state":"OPEN"}`)
+		merged := []byte(`{"number":7,"id":7,"state":"MERGED"}`)
+		statusWriteForgeEntrySince("pr", forge, "example/widget", "7", active, started.Add(time.Second))
+		if !statusWriteForgeEntrySince("pr", forge, "example/widget", "7", merged, started) {
+			t.Fatal("first confirmed merge lost to active replica")
+		}
+		if statusWriteForgeEntrySince("pr", forge, "example/widget", "7", active, started.Add(2*time.Second)) {
+			t.Fatal("active replica reopened confirmed merge")
+		}
+	}
+}
+
 func TestStatus319OmittedObservationIsDeferred(t *testing.T) {
 	for _, draft := range []bool{false, true} {
 		t.Run(map[bool]string{false: "open", true: "draft"}[draft], func(t *testing.T) {

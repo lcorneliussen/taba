@@ -106,7 +106,18 @@ func statusWriteForgeEntrySince(kind, forge, slug, key string, data []byte, star
 	if len(data) == 0 {
 		return false
 	}
-	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) {
+	promotesMerge := false
+	if kind == "pr" {
+		candidate, parseErr := statusParseForgeDetail(forge, data, PRRecord{Number: key})
+		current, known := statusReadObservedDetail(PRRecord{Number: key}, slug, forge, statusMergedCacheAge())
+		if known && current.State == "MERGED" && (parseErr != nil || candidate.State != "MERGED") {
+			return false
+		}
+		promotesMerge = parseErr == nil && candidate.State == "MERGED" && (!known || current.State != "MERGED")
+	}
+	// A first confirmed merge supersedes an active-list observation. Within
+	// the same state, request-start provenance still selects the winning facts.
+	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return false
 	}
 	statusWriteForgeEntry(kind, forge, slug, key, data)

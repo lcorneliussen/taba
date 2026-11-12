@@ -98,31 +98,20 @@ func statusParseForgeDetail(forge string, raw []byte, record PRRecord) (statusPR
 func statusCachedSettledMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
 	// Settled merge detail retains authority within statusMergedCacheAge (24h
 	// by default). A successful registry write also avoids later forge calls.
-	cached, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusMergedCacheAge())
-	if !ok {
+	detail, ok := statusRetainedMerge(record, slug, forge)
+	if !ok || detail.MergedOn == "" || detail.ChecksUnsettled || detail.Checks == "PENDING" {
 		return statusPRDetail{}, false
 	}
-	detail, err := statusParseForgeDetail(forge, cached, record)
-	if err != nil || detail.State != "MERGED" || detail.MergedOn == "" || detail.ChecksUnsettled || detail.Checks == "PENDING" {
-		return statusPRDetail{}, false
-	}
-	detail.Freshness = "settled"
-	return statusObserveAt(detail, observed, "settled-cache"), true
+	detail.Freshness, detail.StateSource = "settled", "settled-cache"
+	return detail, true
 }
 
 func statusReadCachedDetail(record PRRecord, slug, forge string) (statusPRDetail, bool) {
-	cached, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusForgeCacheAge())
-	if !ok {
-		return statusPRDetail{}, false
-	}
-	detail, err := statusParseForgeDetail(forge, cached, record)
-	if err != nil {
-		return statusPRDetail{}, false
-	}
-	if forge == "bitbucket.org" {
+	detail, ok := statusReadObservedDetail(record, slug, forge, statusForgeCacheAge())
+	if ok && forge == "bitbucket.org" {
 		detail = statusBBCompleteMergeTime(detail, slug)
 	}
-	return statusObserveAt(detail, observed, "detail-cache"), true
+	return detail, ok
 }
 
 func statusEnrichRecord(record PRRecord, slug, forge string) statusPRDetail {
@@ -186,6 +175,9 @@ func statusEnrichListed(record PRRecord, slug, forge string, item statusOpenPR) 
 	if matched {
 		source = "stamp"
 	}
+	if detail.State == "MERGED" {
+		source = "merged-cache"
+	}
 	detail = statusConfirmFullPRLocked(record, slug, forge, detail, source)
 	detail = statusObserveDetail(detail, slug, forge)
 	// Only state is confirmed at list-start time; the timestamp does not date
@@ -232,7 +224,13 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 	fetch := func() ([]byte, error) {
 		raw, err := fetchRaw()
 		if err == nil {
-			_, err = statusParseForgeDetail(forge, raw, record)
+			var candidate statusPRDetail
+			candidate, err = statusParseForgeDetail(forge, raw, record)
+			if err == nil && candidate.State != "MERGED" {
+				if _, known := statusRetainedMerge(record, slug, forge); known {
+					err = fmt.Errorf("forge response conflicts with a retained merge observation")
+				}
+			}
 		}
 		return raw, err
 	}
@@ -253,7 +251,12 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 		started := time.Now()
 		raw, live, err = statusWithForgeBudgetKey(forge, slug+"#"+record.Number, stale, fetch)
 		if live && len(raw) > 0 {
-			statusWriteForgeEntrySince("pr", forge, slug, record.Number, raw, started)
+			if !statusWriteForgeEntrySince("pr", forge, slug, record.Number, raw, started) {
+				if winner, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
+					return winner
+				}
+				return statusDeferredDetail(record)
+			}
 			statusWriteForgeEntry("omit", forge, slug, record.Number, []byte("ok"))
 		}
 	} else {
@@ -265,6 +268,10 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 		var ok bool
 		raw, ok = statusReadForgeCache(forge, slug, record.Number)
 		if !ok {
+			if known, found := statusRetainedMerge(record, slug, forge); found {
+				known.Freshness = "deferred"
+				return known
+			}
 			return statusDeferredDetail(record)
 		}
 	}
@@ -282,6 +289,12 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 				detail.Freshness = "deferred"
 			}
 			return statusObserveDetail(detail, slug, forge)
+		}
+	}
+	if err != nil {
+		if known, ok := statusRetainedMerge(record, slug, forge); ok {
+			known.Freshness = "unavailable"
+			return known
 		}
 	}
 	if bypassCache && err != nil {
