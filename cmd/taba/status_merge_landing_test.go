@@ -38,8 +38,8 @@ func TestStatusMergedUnknownCanonicalSnapshots(t *testing.T) {
 						t.Errorf("width=%d styled=%v: known merge rendered as %q", width, styled, cell)
 					}
 					out := ansi.Strip(strings.Join(lines, "\n"))
-					if !strings.Contains(out, "landing unknown") {
-						t.Errorf("width=%d styled=%v: missing landing uncertainty:\n%s", width, styled, out)
+					if !strings.Contains(out, "landing unknown") || !strings.Contains(out, "inspect branch") {
+						t.Errorf("width=%d styled=%v: missing full landing explanation:\n%s", width, styled, out)
 					}
 					for _, line := range lines {
 						if ansi.StringWidth(line) > width {
@@ -47,7 +47,7 @@ func TestStatusMergedUnknownCanonicalSnapshots(t *testing.T) {
 						}
 					}
 				}
-				if out := statusTable(snapshot, false, width); !strings.Contains(out, "merged") || !strings.Contains(out, "landing unknown") {
+				if out := statusTable(snapshot, false, width); !strings.Contains(out, "merged") || !strings.Contains(out, "landing unknown") || !strings.Contains(out, "inspect branch") {
 					t.Errorf("width=%d: plain table lost independent facts:\n%s", width, out)
 				}
 			}
@@ -98,7 +98,7 @@ func TestStatusMergedLandingDetailGeometry(t *testing.T) {
 			positions = append(positions, line)
 		})
 		wantGap := 1
-		if width < 80 {
+		if width <= 80 {
 			wantGap++
 		}
 		if len(positions) != 2 || positions[0] != 3 || positions[1]-positions[0] != wantGap || len(lines) != positions[1]+1 {

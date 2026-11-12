@@ -1638,7 +1638,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		lines = append(lines, line+title)
 		if row.OnBranch && (row.State == "MERGED" || merged) && row.Landing != nil && row.Landing.State == "unknown" &&
-			!strings.Contains(ansi.Strip(title), "landing unknown") {
+			!strings.Contains(ansi.Strip(title), row.LandingLabel()) {
 			for _, detail := range strings.Split(ansi.Wrap(row.LandingLabel(), max(1, width), ""), "\n") {
 				if styled {
 					detail = statusTUIStyle(detail, statusToneWarning)
