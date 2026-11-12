@@ -35,3 +35,7 @@
 - Recovery verifies staged and unstaged marker text against their corresponding
   saved layers, preserving legitimate partially staged fixtures while refusing
   newly introduced marker lines.
+
+- Recovery and sandbox continuation share marker verification that decodes
+  Git-quoted paths and separates patch headers from added content. Unverifiable
+  diffs stop before recovery completion or a sandbox merge commit.

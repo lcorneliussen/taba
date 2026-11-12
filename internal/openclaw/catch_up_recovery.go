@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -198,54 +197,16 @@ func (c *Checkout) checkRecoveryMarkers(ref string) error {
 	// Compare each restored layer with HEAD and its corresponding saved layer.
 	// Partial staging can contain fixture markers absent from saved working edits.
 	for _, cached := range []bool{false, true} {
-		added := func(base string) (map[string]string, error) {
-			args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U0"}
-			if cached {
-				args = append(args, "--cached")
-			}
-			args = append(args, base, "--")
-			out, err := git(c.Dir, args...)
-			if err != nil {
-				return nil, err
-			}
-			m := map[string]string{}
-			file := ""
-			for _, line := range strings.Split(out, "\n") {
-				if name, ok := strings.CutPrefix(line, "+++ b/"); ok {
-					file = name
-					continue
-				}
-				if body, ok := strings.CutPrefix(line, "+"); ok && isConflictMarker(body) {
-					m[file+"\x00"+body] = file
-				}
-			}
-			return m, nil
-		}
-		a, err := added("HEAD")
-		if err != nil {
-			return err
-		}
 		saved := ref
 		if cached {
 			saved += "^2"
 		}
-		b, err := added(saved)
+		files, err := newConflictMarkerFiles(c.Dir, "HEAD", saved, cached)
 		if err != nil {
 			return err
 		}
-		files := map[string]bool{}
-		for key, file := range a {
-			if _, ok := b[key]; ok {
-				files[file] = true
-			}
-		}
 		if len(files) > 0 {
-			names := []string{}
-			for file := range files {
-				names = append(names, file)
-			}
-			sort.Strings(names)
-			return fmt.Errorf("recovery still adds conflict markers in %s", strings.Join(names, ", "))
+			return fmt.Errorf("recovery still adds conflict markers in %s", strings.Join(files, ", "))
 		}
 	}
 	return nil

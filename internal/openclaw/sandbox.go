@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"taba.sh/taba/internal/branding"
@@ -215,40 +214,8 @@ func conflictMarkers(dir, merge string) []string {
 // stagedConflictMarkers lists the files where the index adds a conflict
 // marker that neither side of the merge has: one a side brings, in a test
 // fixture say, is not left over.
-func stagedConflictMarkers(dir string) []string {
-	added := func(against string) map[string]map[string]bool {
-		out, err := git(dir, "diff", "--cached", "--no-color", "--no-renames", "-U0", against)
-		markers := map[string]map[string]bool{}
-		if err != nil {
-			return markers
-		}
-		file := ""
-		for _, line := range strings.Split(out, "\n") {
-			if name, ok := strings.CutPrefix(line, "+++ b/"); ok {
-				file = name
-				continue
-			}
-			if body, ok := strings.CutPrefix(line, "+"); ok && isConflictMarker(body) {
-				if markers[file] == nil {
-					markers[file] = map[string]bool{}
-				}
-				markers[file][body] = true
-			}
-		}
-		return markers
-	}
-	ours, theirs := added("HEAD"), added("MERGE_HEAD")
-	var files []string
-	for file, lines := range ours {
-		for line := range lines {
-			if theirs[file][line] {
-				files = append(files, file)
-				break
-			}
-		}
-	}
-	sort.Strings(files)
-	return files
+func stagedConflictMarkers(dir string) ([]string, error) {
+	return newConflictMarkerFiles(dir, "HEAD", "MERGE_HEAD", true)
 }
 
 func isConflictMarker(line string) bool {
@@ -414,7 +381,11 @@ func SandboxCatchUpCheckout(dir string, gw SandboxGateway, cont bool) (SandboxCa
 			r.Conflicts = strings.Fields(conflicts)
 			return r, fmt.Errorf(branding.Text("still unresolved: %s. Resolve them and git add each, then run {{command}} catch-up --continue"), strings.Join(r.Conflicts, ", "))
 		}
-		if files := stagedConflictMarkers(top); len(files) > 0 {
+		files, err := stagedConflictMarkers(top)
+		if err != nil {
+			return r, fmt.Errorf("cannot verify staged conflict markers: %w", err)
+		}
+		if len(files) > 0 {
 			return r, fmt.Errorf(branding.Text("conflict markers are still in %s: resolve them, git add, then run {{command}} catch-up --continue"), strings.Join(files, ", "))
 		}
 		if _, err := git(top, append(identity(top), "commit", "--quiet", "--no-edit")...); err != nil {

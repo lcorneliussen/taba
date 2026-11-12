@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -284,5 +285,190 @@ func TestFinishRecoveryRetainsMarkerFixturesInPartialStaging(t *testing.T) {
 	}
 	if active, exists, err := c.recoveryMarker(); err != nil || exists || active != "" {
 		t.Fatalf("verified marker not archived: %q %v %v", active, exists, err)
+	}
+}
+
+func TestRecoveryMarkersKeepGitPathIdentityAcrossBaselines(t *testing.T) {
+	for _, name := range []string{"z-normal.txt", "z space.txt", "z\ttab.txt", "z\nline.txt", "zé.txt", "z\"quote.txt", "z\\slash.txt"} {
+		for _, quote := range []string{"true", "false"} {
+			for _, cached := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%q/quote=%s/cached=%v", name, quote, cached), func(t *testing.T) {
+					c, g := managedWorktree(t, "https://example.invalid/project/docs.git")
+					config := filepath.Join(t.TempDir(), "gitconfig")
+					if err := os.WriteFile(config, []byte("[core]\n\tquotePath = "+quote+"\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					t.Setenv("GIT_CONFIG_GLOBAL", config)
+					write(t, c, "aa-saved.txt", "baseline\n")
+					write(t, c, name, "baseline\n")
+					g("add", "--", "aa-saved.txt", name)
+					g("commit", "-qm", "baseline paths")
+					write(t, c, "aa-saved.txt", "saved-only edit\n")
+					g("add", "aa-saved.txt")
+					saved := g("stash", "create")
+					if saved == "" {
+						t.Fatal("missing snapshot")
+					}
+					g("update-ref", "refs/test/parser", saved)
+					write(t, c, "aa-saved.txt", "baseline\n")
+					g("add", "aa-saved.txt")
+					write(t, c, name, "<<<<<<< unresolved\nnew\n>>>>>>> unresolved\n")
+					if cached {
+						g("add", "--", name)
+					}
+					head, index, status := g("rev-parse", "HEAD"), g("write-tree"), g("status", "--porcelain")
+					err := c.checkRecoveryMarkers("refs/test/parser")
+					if err == nil || !strings.Contains(err.Error(), name) {
+						t.Fatalf("new markers hidden or wrong file identity: %v", err)
+					}
+					if g("rev-parse", "HEAD") != head || g("write-tree") != index || g("status", "--porcelain") != status || g("rev-parse", "refs/test/parser") != saved {
+						t.Fatal("verification changed work or snapshot")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRecoveryMarkersDoNotReadAddedTextAsFileHeaders(t *testing.T) {
+	c, g := managedWorktree(t, "https://example.invalid/project/docs.git")
+	write(t, c, "aa-saved.txt", "baseline\n")
+	write(t, c, "z.txt", "baseline\n")
+	g("add", ".")
+	g("commit", "-qm", "baseline paths")
+	write(t, c, "aa-saved.txt", "saved-only edit\n")
+	g("add", "aa-saved.txt")
+	saved := g("stash", "create")
+	g("update-ref", "refs/test/parser", saved)
+	write(t, c, "aa-saved.txt", "baseline\n")
+	g("add", "aa-saved.txt")
+	write(t, c, "z.txt", "++ b/not-the-path\n<<<<<<< unresolved\n>>>>>>> unresolved\n")
+	g("add", "z.txt")
+	err := c.checkRecoveryMarkers("refs/test/parser")
+	if err == nil || !strings.Contains(err.Error(), "z.txt") || strings.Contains(err.Error(), "not-the-path") {
+		t.Fatalf("hunk text replaced the actual file: %v", err)
+	}
+}
+
+func TestSandboxContinueRefusesQuotedMarkersBeforeCommitting(t *testing.T) {
+	for _, name := range []string{"z\ttab.txt", "zé.txt"} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			c, gw := managedWorktree(t, "https://github.com/example-org/docs.git")
+			write(t, c, "aa-saved.txt", "baseline\n")
+			write(t, c, name, "baseline\n")
+			gw("add", "--", "aa-saved.txt", name)
+			gw("commit", "-qm", "baseline paths")
+			gateway, sb, g := sandboxCopy(t, c)
+			writeAt(t, sb, "README.md", "sandbox\n")
+			g("commit", "-qam", "sandbox work")
+			upstream(t, c, "README.md", "upstream\n")
+			upstream(t, c, "aa-saved.txt", "other side\n")
+			out, err := SandboxCatchUpCheckout(sb, gateway, false)
+			if err != nil || len(out.Conflicts) == 0 {
+				t.Fatalf("expected merge conflict: %+v %v", out, err)
+			}
+			writeAt(t, sb, "README.md", "resolved\n")
+			writeAt(t, sb, "aa-saved.txt", "baseline\n")
+			writeAt(t, sb, name, "<<<<<<< unresolved\n>>>>>>> unresolved\n")
+			g("add", "--", "README.md", "aa-saved.txt", name)
+			head, index, merge, gatewayHead := g("rev-parse", "HEAD"), g("write-tree"), g("rev-parse", "MERGE_HEAD"), gw("rev-parse", "HEAD")
+			if _, err = SandboxCatchUpCheckout(sb, gateway, true); err == nil || !strings.Contains(err.Error(), "conflict markers") {
+				t.Fatalf("unresolved marker continuation: %v", err)
+			}
+			if g("rev-parse", "HEAD") != head || g("write-tree") != index || g("rev-parse", "MERGE_HEAD") != merge || gw("rev-parse", "HEAD") != gatewayHead {
+				t.Fatal("unresolved markers were committed or delivered")
+			}
+		})
+	}
+}
+
+func TestAddedMarkerDiffParserBoundaries(t *testing.T) {
+	const marker = "<<<<<<< pending"
+	ordinary := "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n"
+	for _, tc := range []struct {
+		name, diff, path string
+		refuse           bool
+	}{
+		{"ordinary", ordinary + "+" + marker + "\n", "a.txt", false},
+		{"header-like-content", ordinary + "+++ b/not-a-header\n+" + marker + "\n", "a.txt", false},
+		{"quoted-octal", "diff --git x y\n--- x\n+++ \"b/z\\303\\251.txt\"\n@@ -0,0 +1 @@\n+" + marker + "\n", "zé.txt", false},
+		{"spaces-with-tab-separator", "diff --git x y\n--- x\n+++ b/z space \t\n@@ -0,0 +1 @@\n+" + marker + "\n", "z space ", false},
+		{"deleted", "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-" + marker + "\n", "", false},
+		{"binary-after-text", ordinary + "+" + marker + "\ndiff --git a/z.bin b/z.bin\nBinary files a/z.bin and b/z.bin differ\n", "a.txt", false},
+		{"mode-only", "diff --git a/a b/a\nold mode 100644\nnew mode 100755\n", "", false},
+		{"missing-header-after-patch", ordinary + "+" + marker + "\ndiff --git a/z b/z\n@@ -0,0 +1 @@\n+" + marker + "\n", "", true},
+		{"bad-quote", "diff --git x y\n+++ \"b/unterminated\n@@ -0,0 +1 @@\n+" + marker + "\n", "", true},
+		{"bad-prefix", "diff --git x y\n+++ z/unknown\n@@ -0,0 +1 @@\n+" + marker + "\n", "", true},
+		{"nul-path", "diff --git x y\n+++ \"b/\\000name\"\n@@ -0,0 +1 @@\n+" + marker + "\n", "", true},
+		{"missing-path", "diff --git x y\n+++ b/\n@@ -0,0 +1 @@\n+" + marker + "\n", "", true},
+		{"bad-hunk", "diff --git x y\n+++ b/file\n@@ malformed\n+" + marker + "\n", "", true},
+		{"unsupported-combined", "diff --cc z.txt\n+++ b/z.txt\n@@@ -1 -1 +1 @@@\n++" + marker + "\n", "", true},
+		{"no-identity", "+" + marker + "\n", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseAddedConflictMarkers(tc.diff)
+			if (err != nil) != tc.refuse {
+				t.Fatalf("refuse=%v got %v", tc.refuse, err)
+			}
+			if err != nil {
+				return
+			}
+			want := map[string]string{}
+			if tc.path != "" {
+				want[tc.path+"\x00"+marker] = tc.path
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("wrong patch identity: got %#v want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestStagedMarkerVerificationErrorsFailClosed(t *testing.T) {
+	c, _ := managedWorktree(t, "https://example.invalid/project/docs.git")
+	if _, err := stagedConflictMarkers(c.Dir); err == nil {
+		t.Fatal("missing merge parent treated as a verified clean index")
+	}
+}
+
+func TestFinishRecoveryRefusesQuotedMarkersAndRetainsOperation(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cached=%v", cached), func(t *testing.T) {
+			c, g, bare := dirtyCatchUpFixture(t)
+			const name = "z\tfixture.txt"
+			write(t, c, "aa-saved.txt", "baseline\n")
+			write(t, c, name, "baseline\n")
+			g("add", ".")
+			g("commit", "-qm", "baseline paths")
+			write(t, c, "aa-saved.txt", "saved-only edit\n")
+			write(t, c, "README.md", "saved staged\n")
+			g("add", ".")
+			write(t, c, "README.md", "saved unstaged\n")
+			advanceOrigin(t, bare, "README.md", "upstream\n")
+			r, err := c.CatchUp()
+			if err == nil || !r.RecoveryRequired {
+				t.Fatalf("expected recovery stop: %+v %v", r, err)
+			}
+			write(t, c, "README.md", "resolved\n")
+			write(t, c, "aa-saved.txt", "baseline\n")
+			g("add", ".")
+			write(t, c, name, "<<<<<<< unresolved\n>>>>>>> unresolved\n")
+			if cached {
+				g("add", "--", name)
+			}
+			head, index, status, backup := g("rev-parse", "HEAD"), g("write-tree"), g("status", "--porcelain"), g("rev-parse", r.RecoveryRef)
+			if _, err := c.FinishCatchUpRecovery(r.RecoveryRef, head); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("quoted marker accepted or hidden: %v", err)
+			}
+			if g("rev-parse", "HEAD") != head || g("write-tree") != index || g("status", "--porcelain") != status || g("rev-parse", r.RecoveryRef) != backup {
+				t.Fatal("refusal changed work or backup")
+			}
+			if active, exists, err := c.recoveryMarker(); err != nil || !exists || active != r.RecoveryRef {
+				t.Fatalf("refusal released recovery: %q %v %v", active, exists, err)
+			}
+			if receipt, err := c.recoveryCompletion(); err != nil || receipt != nil {
+				t.Fatalf("refusal published completion: %+v %v", receipt, err)
+			}
+		})
 	}
 }
