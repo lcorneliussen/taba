@@ -337,7 +337,7 @@ func (c *Context) statusEnrichRecords(records []PRRecord, rows []StatusRepo) ([]
 		c.statusProgress(fmt.Sprintf("Using %d recorded merges", recorded))
 	}
 	if len(pending) != 0 {
-		c.statusProgress(fmt.Sprintf("Checking %d live pull requests", len(pending)))
+		c.statusProgress(fmt.Sprintf("Collecting %d pull request facts", len(pending)))
 	}
 	previousNote := statusAuditNote
 	statusAuditNote = func(message string) { c.statusProgress(message) }
@@ -360,7 +360,7 @@ func (c *Context) statusEnrichRecords(records []PRRecord, rows []StatusRepo) ([]
 	}
 	for i := range pending {
 		<-done
-		c.statusProgress(fmt.Sprintf("Checked live pull requests %d/%d", i+1, len(pending)))
+		c.statusProgress(fmt.Sprintf("Collected pull request facts %d/%d", i+1, len(pending)))
 	}
 	workers.Wait()
 	return details, nil

@@ -119,6 +119,43 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 	if confirmation != "" {
 		queue = statusQueueConfirmation(queue, confirmation, now)
 	}
+	tokens, updated := statusReadForgeBudget(path, burst, every, now)
+	// Released clients honor this existing lock but do not know the FIFO.
+	// Keep its next refill for the head confirmation, bounded by the standard
+	// Bitbucket interval. Provider I/O starts only after this lock is released.
+	if forge == "bitbucket.org" && confirmation != "" && admitted && tokens == 0 && !statusForgeCooling(forge) {
+		delay := updated.Add(every).Sub(now)
+		if delay > 0 && delay <= statusBitbucketEvery {
+			statusSavePendingConfirmations(forge, queue)
+			timer := time.NewTimer(delay)
+			<-timer.C
+			now = time.Now()
+			tokens, updated = statusReadForgeBudget(path, burst, every, now)
+			if statusForgeCooling(forge) {
+				return false
+			}
+		}
+	}
+	// Keep one token per queued confirmation; spare burst capacity remains
+	// available to ordinary reads while confirmations retain FIFO order.
+	if confirmation == "" && tokens > len(queue) {
+		admitted = true
+	}
+	if tokens < 1 || !admitted {
+		statusSavePendingConfirmations(forge, queue)
+		return false
+	}
+	if confirmation != "" && len(queue) > 0 && queue[0].Key == confirmation {
+		queue = queue[1:]
+	}
+	statusSavePendingConfirmations(forge, queue)
+	tokens--
+	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil
+}
+
+// Caller holds the existing budget lock; re-reading after a wait retains the
+// released two-field protocol and revalidates capacity before admission.
+func statusReadForgeBudget(path string, burst int, every time.Duration, now time.Time) (int, time.Time) {
 	tokens, updated := burst, now
 	if raw, err := os.ReadFile(path); err == nil {
 		fields := strings.Fields(string(raw))
@@ -142,21 +179,7 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 		tokens = burst
 		updated = now
 	}
-	// Keep one token per queued confirmation; spare burst capacity remains
-	// available to ordinary reads while confirmations retain FIFO order.
-	if confirmation == "" && tokens > len(queue) {
-		admitted = true
-	}
-	if tokens < 1 || !admitted {
-		statusSavePendingConfirmations(forge, queue)
-		return false
-	}
-	if confirmation != "" && len(queue) > 0 && queue[0].Key == confirmation {
-		queue = queue[1:]
-	}
-	statusSavePendingConfirmations(forge, queue)
-	tokens--
-	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil
+	return tokens, updated
 }
 
 func statusLockCache(path string) (func(), error) {

@@ -480,7 +480,7 @@ func TestStatus319RetirementDoesNotClaimUnknownStateIsOpen(t *testing.T) {
 
 func TestStatus319ReservationLeavesSpareBurstCapacity(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
 	forge := "bitbucket.org"
 	burst, _ := statusForgeAllowance(forge)
 	for range burst {
@@ -492,6 +492,9 @@ func TestStatus319ReservationLeavesSpareBurstCapacity(t *testing.T) {
 	if statusTakeForgeTokenFor(forge, key) {
 		t.Fatal("exhausted budget admitted confirmation")
 	}
+	// With no near refill the one-shot pane exits; restore the standard burst.
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
+	burst, _ = statusForgeAllowance(forge)
 	// Refill the bucket while the one-shot confirmation's pane is absent.
 	if err := os.WriteFile(statusForgeStatePath("budget", forge), []byte(fmt.Sprintf("%d %d", burst, time.Now().UnixNano())), 0600); err != nil {
 		t.Fatal(err)
