@@ -19,7 +19,9 @@
   Markdown and the live view
   label stale, deferred, and unavailable observations. Such facts cannot authorize
   branch returns, settled merge recording, or next actions. A `pr_unconfirmed`
-  branch flag blocks actions when its enlisted PR has no usable state.
+  branch flag blocks actions for stale, deferred or unavailable enlisted PR state.
+  Retirement also remains blocked on unconfirmed PR state, including stale or
+  unavailable MERGED and CLOSED observations, until that evidence is confirmed.
 - **Keep manual refresh bounded.** Manual refresh, including `r` and `--forge`,
   respects the shared cache and allowance and can report deferred observations.
   ([#319](https://github.com/lcorneliussen/taba/issues/319)).
