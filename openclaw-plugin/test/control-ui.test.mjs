@@ -489,7 +489,7 @@ test("next actions: run the rechecked step and hand judgment to the conversation
   }
 });
 
-test("pending files offer a commit handoff and publication refusal is a visible failure for the selected repository", async () => {
+test("pending commits block captured publication callbacks before provider dispatch", async () => {
   for (const kind of ["composer", "panel"]) {
     const { host, view } = await mount(kind, collection([repo("harness"), repo("site", { dirty: 14, unpublished: 1 })]));
     const commit = [...host.all()].find((n) => n.tagName === "BUTTON" && n.textContent === "Commit changes");
@@ -508,9 +508,10 @@ test("pending files offer a commit handoff and publication refusal is a visible 
     calls.length = 0;
     await push.onclick();
     await settle();
-    assert.equal(calls.find((c) => c.method === "sessions.github.publish").sessionKey, "agent:main:owner:site");
-    assert.ok([...host.all()].some((n) => (n.role ?? n.attributes.role) === "alert" && /site: blocked/.test(n.ariaLabel ?? n.textContent)));
-    assert.match(readable(host), /Review and commit its intended changes first/);
+    assert.equal(calls.some(c => c.method === "sessions.github.publish"), false);
+    const currentPush = [...host.all()].find(n => n.tagName === "BUTTON" && /^14 uncommitted files and 1 commit to publish/.test(n.title));
+    assert.ok(currentPush.disabled);
+    assert.match(currentPush.title, /Wait for the current action/);
     personal = null;
     githubPublishResult = { status: "needs_confirmation", requestId: "req-1" };
     view.dispose();
@@ -2822,7 +2823,8 @@ test("a cleared working tree without new local commits does not earn a commit ch
   await localChangeButton(host).onclick();
   collections.set(context.props.sessionKey,collection([repo("site",{dirty:0,unpublished:0})]));
   await [...host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();
-  assert.equal(localChangeButton(host),undefined);
+  assert.match(localChangeButton(host).textContent,/\?/);
+  assert.doesNotMatch(localChangeButton(host).textContent,/✓/);
  }finally{view.dispose();}
 });
 
@@ -2850,7 +2852,7 @@ test("a blocked commit stays a read-only fact and a failed request offers a retr
  }finally{failing.delete("sessions.send");active.view.dispose();}
 });
 
-test("partial commits settle the fact feedback while preserving the remaining dirty count", async () => {
+test("partial commit progress keeps the dirty count with unconfirmed feedback", async () => {
  const {host,view,context}=await mount("panel",collection([repo("site",{dirty:3,unpublished:0})]));
  try {
   await localChangeButton(host).onclick();
@@ -2858,6 +2860,8 @@ test("partial commits settle the fact feedback while preserving the remaining di
   await titled(host,"Refresh").onclick({preventDefault(){},stopPropagation(){}});await settle();
   assert.doesNotMatch(localChangeButton(host).textContent,/✓/);
   assert.match(localChangeButton(host).textContent,/1/);
+  assert.match(localChangeButton(host).textContent,/\?/);
+  assert.match(localChangeButton(host).title,/Some local commits observed; request outcome unconfirmed/);
   assert.equal(localChangeButton(host).attributes["aria-busy"],undefined);
   assert.equal(localChangeButton(host).disabled,false);
  }finally{view.dispose();}
@@ -3133,4 +3137,67 @@ test("pending commit reservations survive A to B to A and remain shared with the
     await localChangeButton(card.host).onclick();await settle();
     assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"returning opens details without resending");
   }finally{release?.({runId:"cleanup"});controlledSend=undefined;card.view.dispose();panel.view.dispose();}
+});
+
+
+test("pending commit remains reserved after partial progress",async()=>{
+ const {host,view,context}=await mount("panel",collection([repo("site",{dirty:3,unpublished:0})]));
+ try{
+  await localChangeButton(host).onclick();
+  collections.set(context.props.sessionKey,collection([repo("site",{dirty:1,unpublished:1})]));
+  await titled(host,"Refresh").onclick({preventDefault(){},stopPropagation(){}});await settle();
+  calls.length=0;await localChangeButton(host).onclick();await settle();
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"partial progress does not prove the first request has finished");
+  const release=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="I checked: request has finished");assert.ok(release);
+  await release.onclick();await settle();
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"acknowledgement alone never retries");
+  await localChangeButton(host).onclick();await settle();
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"a new explicit request is possible after checking completion");
+ }finally{view.dispose();}
+});
+
+test("a provider publication refusal remains visible when no commit request is pending",async()=>{
+ for(const kind of ["composer","panel"]){
+  personal={state:"connected",account:{id:1,login:"octo"},generation:"g1"};
+  const previous=githubPublishResult;
+  githubPublishResult={status:"blocked",message:"The managed branch cannot publish yet. Review and commit its intended changes first."};
+  const {host,view}=await mount(kind,collection([repo("site",{dirty:14,unpublished:1})]));
+  try{
+   calls.length=0;
+   await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^14 uncommitted files and 1 commit to publish/.test(n.title)).onclick();await settle();
+   assert.equal(calls.find(c=>c.method==="sessions.github.publish").sessionKey,"agent:main:owner:site");
+   assert.ok([...host.all()].some(n=>(n.role??n.attributes.role)==="alert"&&/site: blocked/.test(n.ariaLabel??n.textContent)));
+   assert.match(readable(host),/Review and commit its intended changes first/);
+  }finally{view.dispose();personal=null;githubPublishResult=previous;}
+ }
+});
+test("captured publication confirmation respects a pending commit",async()=>{
+ bitbucket={user:"ada@example.com",name:"Ada"};
+ const {host,view}=await mount("panel",collection([repo("site",{forge:"bitbucket",dirty:1,unpublished:1})]));
+ try{
+  await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^1 commit.*to push/.test(n.title)).onclick();await settle();
+  const confirm=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Confirm push");assert.ok(confirm);
+  await localChangeButton(host).onclick();await settle();calls.length=0;
+  await confirm.onclick();await settle();
+  assert.equal(calls.filter(c=>c.actionId==="publish-confirm").length,0,"stale publication callback cannot race unresolved commit");
+ }finally{view.dispose();bitbucket=undefined;}
+});
+
+
+test("an awaited publication cannot race a commit started from the other surface",async()=>{
+ personal={state:"connected",account:{id:1,login:"octo"},generation:"g1"};
+ const push={step:"push",by:"wtc",approve:"person",gateway:"github_publish",key:"race:push",available:true,reason:"Publish work"};
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"race:commit",available:true,reason:"Save changes"};
+ const r=repo("site",{dirty:1,unpublished:1,next:push,choices:{actions:[push,commit]}});
+ const card=await mount("composer",collection([r]));const panel=await mount("panel",collection([r]),undefined,card.context.props.sessionKey,{focus:"activity"});
+ let release;
+ try{
+  nextResult=({payload})=>payload.key===push.key?new Promise(resolve=>release=resolve):{ok:true,result:{performed:false,repo:{...r,next:commit}}};
+  const button=[...card.host.all()].find(n=>n.tagName==="BUTTON"&&n.className?.includes("wtc-action-control")&&n.textContent==="Push");assert.ok(button);
+  const running=button.onclick();await settle();assert.ok(release);
+  await localChangeButton(panel.host).onclick();await settle();calls.length=0;
+  release({ok:true,result:{performed:false,repo:r}});await running;await settle();
+  assert.equal(calls.some(c=>c.method==="sessions.github.publish"||c.method==="sessions.github.confirm"),false);
+  assert.match(readable(panel.host),/local commit request is unresolved/);
+ }finally{release?.({ok:false,error:"cleanup"});card.view.dispose();panel.view.dispose();personal=null;nextResult=undefined;}
 });

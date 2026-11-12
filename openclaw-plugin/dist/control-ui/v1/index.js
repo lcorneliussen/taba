@@ -1124,7 +1124,7 @@ function collectionTables(v) {
         switch (nextRoute(step)) {
           case "publish": {
             const outcome = await publish(fresh, conversationKey, () => true, false, logId);
-            if (outcome?.pending) recordActivity(logKey, logId, { state: "blocked", status: "Another publication is active or already prepared; inspect its result.", detail: undefined });
+            if (outcome?.pending) recordActivity(logKey, logId, { state: "blocked", status: outcome.message ?? "Another publication is active or already prepared; inspect its result.", detail: undefined });
             break;
           }
           case "run": throw Error("The gateway did not execute this deterministic catch-up. Refresh or update its wtc plugin; no agent prompt was sent.");
@@ -1222,7 +1222,8 @@ function collectionTables(v) {
                 if (!confirming.has(r.sessionKey)) {
                   const outcome = await publish(fresh, conversation, () => !batchCancelled, false, `${runId}:${r.sessionKey}`);
                   if (outcome?.cancelled) { setResult(r.sessionKey, "Cancelled before publication dispatch"); recordActivity(logKey, `${runId}:${r.sessionKey}`, { state: "cancelled" }); break; }
-                  if (outcome?.pending) recordActivity(logKey, `${runId}:${r.sessionKey}`, { state: "blocked", status: "Another publication is active; inspect its result." });
+                  if (outcome?.pending) recordActivity(logKey, `${runId}:${r.sessionKey}`, { state: "blocked", status: outcome.message ?? "Another publication is active; inspect its result." });
+                  if (outcome?.reason === "commit") { results.set(r.sessionKey, "Waiting: commit outcome unconfirmed"); break; }
                 } else recordActivity(logKey, `${runId}:${r.sessionKey}`, { state: "blocked", status: "A publication is already prepared; review its existing personal confirmation." });
                 results.set(r.sessionKey, "Use the repository's publication result or confirmation above"); break;
               case "run": throw Error("The gateway did not execute this deterministic catch-up. Refresh or update its wtc plugin; no agent prompt was sent.");
@@ -1679,6 +1680,7 @@ function collectionTables(v) {
   async function publish(r, conversationKey = v.key(), continueAllowed = () => true, confirmed = false, requestedActivityId = null) {
     const mayDispatch = () => active(conversationKey) && continueAllowed();
     if (!mayDispatch()) return { cancelled: true };
+    if (commitUnresolved(r)) return { pending: true, reason: "commit", message: "A local commit request is unresolved; inspect its result before publishing." };
     if (busy.has(r.sessionKey) || sharedPushBusy(r)) return { pending: true };
     if (!PUSHES.has(r.forge) || mine[r.forge] === false) return;
     if (confirming.has(r.sessionKey) && !confirmed) { revealPublication(); v.rerender(); return { pending: true }; }
@@ -1927,12 +1929,16 @@ function collectionTables(v) {
     if (commitFeedback.get(key) && (commitFeedback.get(key).branch !== r.branch || commitFeedback.get(key).path !== r.path)) commitFeedback.delete(key);
     const state = commitFeedback.get(key);
     // New commits can be observed even when intentionally uncommitted files remain.
+    // Partial progress does not prove the handed-off request has finished.
     // A lower dirty count alone never earns a commit-success mark.
-    if (["pending", "unconfirmed"].includes(state?.phase) && !r.error && (toPush(r) > state.before || r.dirty < state.dirty)) {
-      state.phase = toPush(r) > state.before && !r.dirty ? "completed" : "settled";
+    const progress = `${toPush(r)}|${r.dirty}`;
+    if (["pending", "unconfirmed"].includes(state?.phase) && !r.error && (toPush(r) > state.before || r.dirty < state.dirty) && state.progress !== progress) {
+      state.progress = progress;
+      state.observedCommit = toPush(r) > state.before;
+      state.phase = toPush(r) > state.before && !r.dirty ? "completed" : "unconfirmed";
       state.at = Date.now();
       const outcome = state.phase;
-      queueMicrotask(() => recordActivity(collection,state.id,{state:outcome,status:outcome === "completed" ? "New local commits observed; working tree clean" : toPush(r) > state.before ? "New local commits observed; intended changes may remain" : "Changes decreased; commit outcome unverified"}));
+      queueMicrotask(() => recordActivity(collection,state.id,{state:outcome === "completed" ? "completed" : "unknown",status:outcome === "completed" ? "New local commits observed; working tree clean" : toPush(r) > state.before ? "Partial commit progress observed; request outcome unconfirmed. Check the conversation before releasing its reservation" : "Changes decreased without a new commit; request outcome unconfirmed. Check the conversation before releasing its reservation"}));
       const timer = setTimeout(() => { if (commitFeedback.get(key) === state && state.phase === "completed") state.phase = "settled"; notifyFactFeedback(collection); }, 5100); timer.unref?.();
     }
     if (state?.phase === "failed" && !r.dirty) state.phase = "settled";
@@ -1940,7 +1946,7 @@ function collectionTables(v) {
     if (!r.dirty && !done && !["pending", "running", "unconfirmed"].includes(state?.phase)) return null;
     const option = repoActionOptions(r).find(o => o.label === "Commit changes");
     const pending = ["pending", "running"].includes(state?.phase);
-    const title = done ? "New local commits observed; working tree clean" : state?.phase === "unconfirmed" ? "No commit observed yet. Open action details to check the request or ask the agent for help" : state?.phase === "failed" ? `Commit request failed: ${state.error}. Retry` : pending ? "Sent to conversation; no commit observed yet. This repository stays reserved across views. Open action details for status or agent help" : option?.disabled ? option.detail : `${plural(r.dirty, "file")} changed. Commit changes for ${nameOf(r)}; publication is separate`;
+    const title = done ? "New local commits observed; working tree clean" : state?.phase === "unconfirmed" ? `${state.observedCommit ? "Some local commits observed; request outcome unconfirmed" : "No commit observed yet"}. Open action details to check the request or ask the agent for help` : state?.phase === "failed" ? `Commit request failed: ${state.error}. Retry` : pending ? "Sent to conversation; no commit observed yet. This repository stays reserved across views. Open action details for status or agent help" : option?.disabled ? option.detail : `${plural(r.dirty, "file")} changed. Commit changes for ${nameOf(r)}; publication is separate`;
     const button = count(`± ${r.dirty || 0}`, title, done ? TONE.success : state?.phase === "failed" ? TONE.failure : TONE.pending, () => pending || state?.phase === "unconfirmed" ? openActivity() : commitFromFact(r));
     button.className += " wtc-local-change";
     if(done)button.setAttribute("data-feedback","completed");
@@ -2038,8 +2044,11 @@ function collectionTables(v) {
     }
 
     const left = r.forge === BITBUCKET && r.dirty ? " Uncommitted files stay behind: ask the conversation to commit them first." : "";
-    if (mine[r.forge] === null) return count(label, `${activity}. Pushing needs your own ${account}: click to push, or for how to connect it`, TONE.none, () => publish(r));
-    return count(label, `${activity}. ${pushTitle(r.pullRequest, r.forge)}, with your own ${account}, after you confirm.${proposalTitle(r)}${left}`, TONE.pending, () => publish(r));
+    const button = mine[r.forge] === null
+      ? count(label, `${activity}. Pushing needs your own ${account}: click to push, or for how to connect it`, TONE.none, () => publish(r))
+      : count(label, `${activity}. ${pushTitle(r.pullRequest, r.forge)}, with your own ${account}, after you confirm.${proposalTitle(r)}${left}`, TONE.pending, () => publish(r));
+    if (commitUnresolved(r)) { button.disabled = true; button.title += " Wait for the current action or inspect its unconfirmed result."; }
+    return button;
   }
   const openPRHistory = () => v.host.ui.openPanel("collection", { sessionKey: v.key(), agentId: v.agent(), focus: "pull-requests" });
   const otherPRs = (r) => [...new Map((r.pullRequests ?? []).filter((pr) => String(pr.number) !== String(r.pullRequest?.number)).map((pr) => [String(pr.number), pr])).values()];

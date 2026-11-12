@@ -940,7 +940,6 @@ width, and space already exposed during the conversation is retained while
 work is running so progress does not shift the repository facts. Changing the
 viewport never runs or selects an action.
 
-
 ### Gateway catch-up with local changes
 
 A base catch-up in a gateway-managed worktree preserves staged, unstaged and
@@ -1003,3 +1002,8 @@ The action log is shared by the card and sidebar in the current browser
 session; it is not a durable gateway audit trail. Pending requests stay reserved
 for their collection and repository when navigating away and back, so switching
 views cannot dispatch a duplicate request.
+Partial commit progress or fewer dirty files alone leaves the request
+unconfirmed and reserved. Push preparation and confirmation also wait for this
+reservation. A clean checkout with new local commits confirms success; otherwise
+check the conversation and explicitly acknowledge that its request has finished
+in the Action log before starting another mutation.

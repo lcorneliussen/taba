@@ -23,3 +23,5 @@
   refused. Sandbox delivery and worker merges share the recovery lock and refuse
   unverified recovery before changing HEAD or the index. Commit controls honor
   the current action plan and recheck recovery before requesting commits.
+  Partial commit progress retains its unresolved request reservation, and push
+  preparation/confirmation recheck that reservation before dispatching.
