@@ -1581,6 +1581,9 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 					state = "⚠ extra"
 				case "unknown":
 					state = "unknown"
+					if row.State == "MERGED" || merged {
+						state = "merged"
+					}
 				}
 			}
 		} else if row.Draft {
@@ -1634,6 +1637,15 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 			position[0](len(lines), row)
 		}
 		lines = append(lines, line+title)
+		if row.OnBranch && (row.State == "MERGED" || merged) && row.Landing != nil && row.Landing.State == "unknown" &&
+			!strings.Contains(ansi.Strip(title), "landing unknown") {
+			for _, detail := range strings.Split(ansi.Wrap(row.LandingLabel(), max(1, width), ""), "\n") {
+				if styled {
+					detail = statusTUIStyle(detail, statusToneWarning)
+				}
+				lines = append(lines, detail)
+			}
+		}
 	}
 	if len(snapshot.PRs) == 0 {
 		lines = append(lines, "(none enlisted)")

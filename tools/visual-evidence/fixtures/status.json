@@ -60,6 +60,66 @@
           "assert": {"contains": ["api", "web", "feature/alpha", "feature/beta"], "same_row": [["api", "feature/alpha"], ["web", "feature/beta"]], "aligned": [["feature/alpha", "feature/beta"]]}
         }
       ]
+    },
+    {
+      "name": "merge-landing-wide",
+      "columns": 140,
+      "rows": 20,
+      "frames": [
+        {
+          "at": 0,
+          "phase": "merged-landing-unknown",
+          "snapshot": {
+            "schema": 1,
+            "collection": "sample",
+            "repos": [],
+            "prs": [{"repo": "widget", "number": "42", "state": "MERGED", "merge": "MERGED", "on_branch": true, "landing": {"state": "unknown", "reason": "full landing not established; inspect retained branch"}, "title": "Synthetic change", "display_title": "MERGED — landing unknown; inspect branch; still on topic  Synthetic change"}]
+          },
+          "facts": [],
+          "keys": [],
+          "assert": {"contains": ["merged", "landing unknown", "inspect branch"], "same_row": [["#42", "merged"]], "aligned": []}
+        }
+      ]
+    },
+    {
+      "name": "merge-landing-compact",
+      "columns": 40,
+      "rows": 20,
+      "frames": [
+        {
+          "at": 0,
+          "phase": "merged-landing-unknown",
+          "snapshot": {
+            "schema": 1,
+            "collection": "sample",
+            "repos": [],
+            "prs": [{"repo": "widget", "number": "42", "state": "MERGED", "merge": "MERGED", "on_branch": true, "landing": {"state": "unknown", "reason": "full landing not established; inspect retained branch"}, "title": "Synthetic change", "display_title": "MERGED — landing unknown; inspect branch; still on topic  Synthetic change"}]
+          },
+          "facts": [],
+          "keys": [],
+          "assert": {"contains": ["merged", "landing unknown", "inspect branch"], "same_row": [["#42", "merged"]], "aligned": []}
+        }
+      ]
+    },
+    {
+      "name": "merge-landing-narrow",
+      "columns": 32,
+      "rows": 20,
+      "frames": [
+        {
+          "at": 0,
+          "phase": "merged-landing-unknown",
+          "snapshot": {
+            "schema": 1,
+            "collection": "sample",
+            "repos": [],
+            "prs": [{"repo": "widget", "number": "42", "state": "MERGED", "merge": "MERGED", "on_branch": true, "landing": {"state": "unknown", "reason": "full landing not established; inspect retained branch"}, "title": "Synthetic change", "display_title": "MERGED — landing unknown; inspect branch; still on topic  Synthetic change"}]
+          },
+          "facts": [],
+          "keys": [],
+          "assert": {"contains": ["merged", "landing unknown", "inspect branch"], "same_row": [["#42", "merged"]], "aligned": []}
+        }
+      ]
     }
   ]
 }
