@@ -3,6 +3,7 @@ package wtc
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -89,6 +90,58 @@ func TestSelectReleaseNotes(t *testing.T) {
 		if _, err := SelectReleaseNotes(args[0], args[1]); err == nil {
 			t.Fatalf("expected error for %q", args)
 		}
+	}
+}
+
+func TestSelectReleaseNotesWithPrereleases(t *testing.T) {
+	for _, target := range []string{"0.2.0", "0.2.0-rc.2"} {
+		t.Run(target, func(t *testing.T) {
+			archive := fstest.MapFS{
+				"0.1.9.md":             {Data: []byte("baseline")},
+				"0.1.10.md":            {Data: []byte("intermediate stable")},
+				"0.1.11-rc.1.md":       {Data: []byte("earlier prerelease")},
+				"0.2.0-rc.1.md":        {Data: []byte("earlier candidate")},
+				"0.2.0-rc.2.md":        {Data: []byte("target candidate")},
+				"unreleased/README.md": {Data: []byte("pending")},
+			}
+			if target == "0.2.0" {
+				archive["0.2.0.md"] = &fstest.MapFile{Data: []byte("stable target")}
+			}
+			notes, err := readReleaseNotes(archive)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Reading/listing the archive retains every prerelease and unreleased.
+			if len(notes) != len(archive) {
+				t.Fatalf("archive lost notes: %v", notes)
+			}
+			for _, tt := range []struct {
+				name, version, since string
+				want                 []string
+			}{
+				{"stable baseline", "", "v0.1.9", []string{"0.1.10", target}},
+				{"prerelease baseline", "", "0.2.0-rc.1", []string{target}},
+				{"target baseline", "", target, []string{}},
+				{"future baseline", "", "9.0.0", []string{}},
+				{"latest", "", "", []string{target}},
+				{"exact prerelease", "v0.2.0-rc.1", "", []string{"0.2.0-rc.1"}},
+				{"explicit unreleased", "unreleased", "", []string{"unreleased"}},
+			} {
+				t.Run(tt.name, func(t *testing.T) {
+					got, err := selectReleaseNotes(notes, tt.version, tt.since)
+					if err != nil {
+						t.Fatal(err)
+					}
+					versions := make([]string, 0, len(got))
+					for _, note := range got {
+						versions = append(versions, note.Version)
+					}
+					if !reflect.DeepEqual(versions, tt.want) {
+						t.Fatalf("got %v, want %v", versions, tt.want)
+					}
+				})
+			}
+		})
 	}
 }
 

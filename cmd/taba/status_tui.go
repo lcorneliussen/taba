@@ -40,6 +40,25 @@ type statusLoadedMsg struct {
 
 type statusOpenedMsg struct{ err error }
 
+type statusDevMsg struct {
+	state wtc.DevFollowState
+	err   error
+}
+
+// Only presentation crosses a restart. Selected action sets, confirmations,
+// cancellation functions and pending work deliberately do not.
+type statusTUIPresentation struct {
+	Help, Archived, Log, Next bool
+	Selected, AnchorKey       string
+	AnchorOffset, Scroll      int
+	Notice                    string
+}
+
+type statusDevRestart struct {
+	collection, binary, generation string
+	needsCheck                     bool
+}
+
 type statusTUIModel struct {
 	context        *wtc.Context
 	runtimeReading bool      // a service state read is in flight
@@ -75,6 +94,15 @@ type statusTUIModel struct {
 	progressLog    []string
 	progressStep   string
 	progressKey    string
+	devAllowed     bool
+	devCollection  string
+	devChecking    bool
+	devCheckAt     time.Time
+	devMessage     string
+	devError       bool
+	devRestart     *statusDevRestart
+	devAutoExit    bool
+	devResume      *statusTUIPresentation
 	startedAt      time.Time
 	errorText      string
 	hover          string
@@ -268,6 +296,100 @@ func statusTUIWait(events <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg { return <-events }
 }
 
+func statusCheckDev(collection string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		state, err := wtc.EnsureDevFollow(ctx, collection)
+		return statusDevMsg{state: state, err: err}
+	}
+}
+
+func (m statusTUIModel) devIdle() bool {
+	return !m.nextRunning && !m.refreshing && !m.runtimeReading && !m.devChecking
+}
+
+func (m statusTUIModel) devBlocksActions() bool {
+	return m.devChecking || m.devError || m.devRestart != nil
+}
+
+func (m statusTUIModel) devRestartCommand() tea.Cmd {
+	if m.devRestart != nil && !m.devRestart.needsCheck && m.devIdle() {
+		return tea.Quit
+	}
+	return nil
+}
+
+func (m statusTUIModel) finishDevUpdate() (tea.Model, tea.Cmd) {
+	if m.devRestart != nil && m.devRestart.needsCheck && m.devIdle() {
+		m.devChecking = true
+		m.devMessage = "dev: revalidating source before restart"
+		return m, statusCheckDev(m.devCollection)
+	}
+	if command := m.devRestartCommand(); command != nil {
+		m.devAutoExit = true
+		return m, command
+	}
+	return m, nil
+}
+
+func (m statusTUIModel) devPresentation() statusTUIPresentation {
+	anchor := m.scrollAnchor()
+	state := statusTUIPresentation{Help: m.showHelp, Archived: m.showArchived, Log: m.showLog, Next: m.showNext,
+		AnchorKey: anchor.key, AnchorOffset: anchor.offset, Scroll: m.scroll, Notice: m.nextNotice}
+	if len(state.Notice) > 4096 {
+		state.Notice = state.Notice[:4096]
+	}
+	if repos := statusNextRepos(m.snapshot); m.selectedNext >= 0 && m.selectedNext < len(repos) {
+		state.Selected = statusNextIdentity(repos[m.selectedNext])
+	}
+	return state
+}
+
+func (m *statusTUIModel) restoreDevPresentation() {
+	if m.devResume == nil {
+		return
+	}
+	s := m.devResume
+	m.showHelp, m.showArchived, m.showLog, m.showNext, m.nextNotice = s.Help, s.Archived, s.Log, s.Next, s.Notice
+	m.scroll = max(0, s.Scroll)
+	m.restoreScroll(statusTUIAnchor{key: s.AnchorKey, offset: max(0, s.AnchorOffset)})
+	for i, repo := range statusNextRepos(m.snapshot) {
+		if statusNextIdentity(repo) == s.Selected {
+			m.selectedNext = i
+			break
+		}
+	}
+}
+
+func (m statusTUIModel) devTick() (tea.Model, tea.Cmd, bool) {
+	if m.devRestart != nil {
+		if m.devIdle() {
+			revalidating := m.devRestart.needsCheck
+			next, command := m.finishDevUpdate()
+			if revalidating {
+				command = tea.Batch(statusTUITick(), command)
+			}
+			return next, command, true
+		}
+		return m, statusTUITick(), true
+	}
+	if m.devAllowed && !m.devChecking && m.context != nil && time.Since(m.devCheckAt) >= 3*time.Second {
+		if m.devCollection == "" {
+			cwd, _ := os.Getwd()
+			m.devCollection = wtc.FindCollectionRoot(cwd)
+		}
+		if m.devCollection == "" {
+			m.devAllowed = false
+			return m, statusTUITick(), true
+		}
+		m.devChecking, m.devCheckAt = true, time.Now()
+		m.devMessage = "dev: checking source / building changes"
+		return m, tea.Batch(statusTUITick(), statusCheckDev(m.devCollection)), true
+	}
+	return m, nil, false
+}
+
 func (m *statusTUIModel) startRefresh() {
 	m.refreshing = true
 	m.startedAt = time.Now()
@@ -357,8 +479,16 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		anchor := m.scrollAnchor()
 		m.snapshot.Runtime, m.runtimeReading = msg.items, false
 		m.restoreScroll(anchor)
+		if m.devRestart != nil {
+			next, command := m.finishDevUpdate()
+			return next, tea.Batch(statusTUIRuntimeTick(), command)
+		}
 		return m, statusTUIRuntimeTick()
 	case statusRuntimeTickMsg:
+		if m.devRestart != nil {
+			next, command := m.finishDevUpdate()
+			return next, tea.Batch(statusTUIRuntimeTick(), command)
+		}
 		if m.context == nil {
 			return m, nil
 		}
@@ -445,10 +575,38 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.revealNext()
 			}
 		}
+		if m.devResume != nil {
+			m.restoreDevPresentation()
+			m.devResume = nil
+		}
+	case statusDevMsg:
+		m.devChecking, m.devError = false, msg.err != nil
+		m.devCheckAt = time.Now()
+		m.devRestart = nil
+		m.devMessage = ""
+		if msg.err != nil {
+			m.devMessage = "dev build stale: " + statusTUISafe(msg.err.Error())
+		} else if msg.state.Active && msg.state.Build != nil && msg.state.Build.Generation != devRunningGeneration {
+			m.devRestart = &statusDevRestart{collection: m.devCollection, binary: msg.state.Build.Binary, generation: msg.state.Build.Generation, needsCheck: !m.devIdle()}
+			m.devMessage = "dev build ready; waiting for active work before restart"
+		} else if !msg.state.Active && devRunningGeneration != "" {
+			if devAmbientExecutable != "" {
+				m.devRestart = &statusDevRestart{collection: m.devCollection, binary: devAmbientExecutable, needsCheck: !m.devIdle()}
+				m.devMessage = "dev mode inactive; returning to the selected CLI when idle"
+			} else {
+				m.devError = true
+				m.devMessage = "dev mode inactive; restart status with the selected CLI"
+			}
+		}
 	case statusTickMsg:
 		if !m.refreshing && !m.nextRunning && !m.nextRefresh.IsZero() && !time.Now().Before(m.nextRefresh) {
-			m.startRefresh()
-			return m, tea.Batch(statusTUITick(), statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge))
+			if m.devRestart == nil {
+				m.startRefresh()
+				return m, tea.Batch(statusTUITick(), statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge))
+			}
+		}
+		if next, command, handled := m.devTick(); handled {
+			return next, command
 		}
 		return m, statusTUITick()
 	case tea.MouseMotionMsg:
@@ -509,6 +667,9 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.nextNotice = msg.err.Error() + "\n" + msg.text
 		}
 		m.revealNextNotice()
+		if m.devRestart != nil {
+			return m.finishDevUpdate()
+		}
 		if !m.refreshing {
 			m.startRefresh()
 			return m, statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge)
@@ -586,6 +747,9 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.revealNextNotice()
 				}
 			case "enter":
+				if m.devBlocksActions() {
+					return m, nil
+				}
 				if !m.refreshing && !m.nextRunning && len(m.nextSelected) > 0 {
 					for _, r := range m.nextSelected {
 						if m.nextPending[statusNextPendingKey(r)] {
@@ -631,6 +795,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
+			m.devAutoExit, m.devRestart = false, nil
 			if m.nextCancel != nil {
 				m.nextCancel()
 			}
@@ -676,7 +841,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.hover = ""
 		}
 	}
-	return m, nil
+	return m.finishDevUpdate()
 }
 
 func statusTUIFit(value string, width int) string {
@@ -720,53 +885,70 @@ func statusTUIBehind(row wtc.StatusRepo) string {
 	return count
 }
 
-func statusTUIPR(pr *wtc.StatusPRFacts) string {
-	if pr == nil || pr.Number == "" {
+func statusTUIPRNumber(number string) string {
+	if number == "" {
 		return "·"
 	}
-	parts := []string{"#" + pr.Number}
-	if pr.Draft {
-		parts = append(parts, "◇")
-	}
-	tokens := []string{pr.Checks, pr.Merge, pr.Review}
-	if statusTUIPRConflict(pr) {
-		parts = append(parts, "✗ conflict")
-		tokens = []string{pr.Checks, pr.Review}
-	}
-	for _, token := range tokens {
-		switch token {
-		case "SUCCESS", "approved":
-			parts = append(parts, "✓")
-		case "FAILURE", "ERROR", "CONFLICTING", "DIRTY":
-			parts = append(parts, "✗")
-		case "PENDING", "EXPECTED":
-			parts = append(parts, "●")
-		case "BEHIND":
-			parts = append(parts, "↓")
-		case "BLOCKED":
-			parts = append(parts, "⊘")
-		case "changes":
-			parts = append(parts, "!")
-		case "waiting":
-			parts = append(parts, "…")
-		case "commented":
-			parts = append(parts, "✎")
-		case "noreviewers":
-			parts = append(parts, "∅")
+	return "#" + statusTUISafe(number)
+}
+
+func statusTUIPRSignals(checks, merge, review *string, styled bool) [3]string {
+	cells := [3]string{statusTUIPRGlyph(checks), statusTUIPRGlyph(merge), statusTUIPRGlyph(review)}
+	if styled {
+		for i := range cells {
+			cells[i] = statusTUIGlyphStyle(cells[i])
 		}
 	}
-	return strings.Join(parts, " ")
+	return cells
+}
+
+func statusTUIPRSuffix(pr *wtc.StatusPRFacts, styled bool) string {
+	cells := statusTUIPRSignals(&pr.Checks, &pr.Merge, &pr.Review, styled)
+	suffix := strings.Join(cells[:], " ")
+	if statusTUIPRConflict(pr) {
+		warning := " conflict"
+		if styled {
+			warning = statusTUIStyle(warning, statusToneFailure)
+		}
+		suffix += warning
+	}
+	if pr.Draft {
+		suffix += " ◇"
+	}
+	return suffix
+}
+
+// Numbers use the cohort width. Reserve " ↗" when it fits; the identifier
+// takes priority over that optional marker within the same column.
+func statusTUIPRNumberCell(number, target string, width int, styled bool, tone string) string {
+	labelWidth, slot := max(1, width-2), "  "
+	if ansi.StringWidth(statusTUIPRNumber(number)) > labelWidth {
+		labelWidth, slot = width, ""
+	}
+	label := statusTUIFit(statusTUIPRNumber(number), labelWidth)
+	if styled && number != "" && statusTUIURL(target) != "" {
+		if slot != "" {
+			slot = " ↗"
+		}
+		return statusTUILinkTone(label+slot, target, tone)
+	}
+	if styled {
+		label = statusTUIStyle(label, statusToneLabel)
+	}
+	return label + slot
 }
 
 type statusRepoLayout struct {
-	name, branch, pr, tree, ahead, behind, tip, prod, runtime int
-	showTree, showSync, showBuilds, showRuntime               bool
-	hasTip, hasProd                                           bool
+	name, branch, pr, number, tree, ahead, behind, tip, prod, runtime int
+	showTree, showSync, showBuilds, showRuntime                       bool
+	hasTip, hasProd                                                   bool
 }
 
 func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayout {
-	l := statusRepoLayout{name: 16, branch: 30, pr: 15, tree: 4, ahead: 3, behind: 3, tip: 8, prod: 8,
+	l := statusRepoLayout{name: 16, branch: 30, pr: 15, number: 1, tree: 4, ahead: 3, behind: 3, tip: 8, prod: 8,
 		showTree: true, showSync: true}
+	compactPRWidth := 1
+	hasPR := false
 	for _, row := range snapshot.Repos {
 		if marks := len(statusRuntimeSlots(statusRuntimeItems(snapshot, row))); marks > 0 && width >= 60 {
 			l.showRuntime = true
@@ -780,14 +962,27 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 		}
 		l.ahead = max(l.ahead, len(fmt.Sprint(row.Ahead)))
 		l.behind = max(l.behind, runewidth.StringWidth(statusTUIBehind(row)))
-		if statusTUIPRConflict(row.PR) {
-			prWidth := runewidth.StringWidth(statusTUIPR(row.PR))
-			if statusTUIURL(row.PR.URL) != "" {
-				prWidth += 2 // Linked number includes the arrow.
+		if row.PR != nil && row.PR.Number != "" {
+			hasPR = true
+			identifierWidth := ansi.StringWidth(statusTUIPRNumber(row.PR.Number))
+			l.number = max(l.number, identifierWidth)
+			if row.PR.Draft {
+				identifierWidth += 2
 			}
-			l.pr = max(l.pr, prWidth)
+			if statusTUIPRConflict(row.PR) {
+				identifierWidth += 2
+			}
+			compactPRWidth = max(compactPRWidth, identifierWidth)
 		}
 	}
+	l.pr = max(l.pr, l.number+8)
+	suffixWidth := 5
+	for _, row := range snapshot.Repos {
+		if row.PR != nil && row.PR.Number != "" {
+			suffixWidth = max(suffixWidth, ansi.StringWidth(statusTUIPRSuffix(row.PR, false)))
+		}
+	}
+	l.pr = max(l.pr, l.number+3+suffixWidth)
 	// Build columns exist only for the tiers a provider reported on.
 	l.showBuilds = l.hasTip || l.hasProd
 	if !l.hasTip {
@@ -809,7 +1004,10 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 		l.name = 10
 	}
 	if width < 40 {
-		l.name, l.pr = 8, 8
+		l.name = 8
+		if !hasPR {
+			l.pr = 8
+		}
 		l.showSync, l.showBuilds = false, false
 		l.showTree = width >= 31
 	}
@@ -842,8 +1040,14 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 	if other()+minBranch+1 > width {
 		l.showTree = false
 	}
+	// Reclaim descriptive space before clipping an identifier and its state markers.
+	compactBudget := width - (other() - l.pr) - minBranch - 1
+	l.name -= min(max(0, compactPRWidth-compactBudget), max(0, l.name-len("REPO")))
 	l.pr = min(l.pr, max(1, width-(other()-l.pr)-minBranch-1))
 	l.branch = max(minBranch, min(l.branch, width-other()-1))
+	// Reserve two number-field spare cells, one gap and the five-cell C/M/R suffix.
+	// Per-row state labels compact before they can displace another row's signals.
+	l.number = min(l.number, max(0, l.pr-2-1-5))
 	return l
 }
 
@@ -931,40 +1135,62 @@ func statusTUIBuildCell(prefix string, build *wtc.StatusBuild) string {
 	return cell
 }
 
-func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool) string {
-	plain := statusTUIPR(pr)
-	needed := runewidth.StringWidth(plain)
-	if styled && pr != nil && statusTUIURL(pr.URL) != "" {
-		needed += 2
+func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWidth ...int) string {
+	if pr == nil || pr.Number == "" {
+		return statusTUIFit("·", width)
 	}
-	if statusTUIPRConflict(pr) && needed > width {
-		// Keep the warning visible even when the number and signals do not fit.
-		marker, label := "✗ ", "#"+pr.Number
-		if styled {
-			marker = statusTUIStyle(marker, statusToneFailure)
-			label = statusTUILinkCell(label, pr.URL, statusToneLabel)
-			return statusTUIFitANSI(marker+label, width)
+	n := ansi.StringWidth(statusTUIPRNumber(pr.Number))
+	if len(numberWidth) > 0 {
+		n = numberWidth[0]
+	}
+	cell := statusTUIPRNumberCell(pr.Number, pr.URL, n+2, styled, statusToneLink) + " " + statusTUIPRSuffix(pr, styled)
+	if ansi.StringWidth(cell) > width || ansi.StringWidth(statusTUIPRNumber(pr.Number)) > n+2 {
+		// Draft state can use spare number-field cells while signals stay aligned.
+		// The merge signal itself preserves conflict state without the long label.
+		draft := ""
+		if pr.Draft {
+			draft = " ◇"
+			if styled {
+				draft = statusTUIStyle(draft, statusToneDim)
+			}
 		}
-		return statusTUIFit(marker+label, width)
+		signals := statusTUIPRSignals(&pr.Checks, &pr.Merge, &pr.Review, styled)
+		suffix := strings.Join(signals[:], " ")
+		numberCells, draftWidth := n+2, ansi.StringWidth(draft)
+		if ansi.StringWidth(statusTUIPRNumber(pr.Number))+draftWidth <= numberCells && numberCells+1+ansi.StringWidth(suffix) <= width {
+			compact := statusTUIPRNumberCell(pr.Number, pr.URL, numberCells-draftWidth, styled, statusToneLink) + draft + " " + suffix
+			if !styled {
+				return statusTUIFit(compact, width)
+			}
+			return statusTUIFitANSI(compact, width)
+		}
+		// Preserve PR state before optional signals if the cell or full identifier exceeds its column.
+		marker, label := "", statusTUIPRNumber(pr.Number)
+		if statusTUIPRConflict(pr) {
+			marker = "✗ "
+			if styled {
+				marker = statusTUIStyle(marker, statusToneFailure)
+			}
+		}
+		if pr.Draft {
+			draft := "◇ "
+			if styled {
+				draft = statusTUIStyle(draft, statusToneDim)
+			}
+			marker += draft
+		}
+		if styled {
+			label = statusTUILinkCell(label, pr.URL, statusToneLabel)
+		}
+		if !styled {
+			return statusTUIFit(marker+label, width)
+		}
+		return statusTUIFitANSI(marker+label, width)
 	}
-	if !styled || pr == nil || pr.Number == "" {
-		return statusTUIFit(plain, width)
+	if !styled {
+		return statusTUIFit(cell, width)
 	}
-	label := "#" + pr.Number
-	if statusTUIURL(pr.URL) != "" {
-		label = statusTUILink(label+" ↗", pr.URL)
-	} else {
-		label = statusTUIStyle(label, statusToneLabel)
-	}
-	suffix := strings.TrimPrefix(plain, "#"+pr.Number)
-	if strings.Contains(suffix, "✗") {
-		suffix = statusTUIStyle(suffix, statusToneFailure)
-	} else if strings.Contains(suffix, "✓") {
-		suffix = statusTUIStyle(suffix, statusToneSuccess)
-	} else if strings.Contains(suffix, "●") || strings.Contains(suffix, "↓") {
-		suffix = statusTUIStyle(suffix, statusToneWarning)
-	}
-	return statusTUIFitANSI(label+suffix, width)
+	return statusTUIFitANSI(cell, width)
 }
 
 func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, position ...func(int, wtc.StatusRepo)) []string {
@@ -973,7 +1199,7 @@ func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, pos
 	if l.showRuntime {
 		header += " " + statusTUIFit("LOCAL", l.runtime)
 	}
-	header += " " + statusTUIFit("PR", l.pr)
+	header += " " + statusTUIFit(statusTUIFit("PR", l.number+2)+" C M R", l.pr)
 	if l.showTree {
 		header += " " + statusTUIFit("±", l.tree)
 	}
@@ -1005,7 +1231,7 @@ func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, pos
 		}
 		nameCell := statusTUIFit(statusTUISafe(name), l.name)
 		branchCell := statusTUIFit(statusTUISafe(row.BranchDisplay), l.branch)
-		prCell := statusTUIRepoPRCell(row.PR, l.pr, styled)
+		prCell := statusTUIRepoPRCell(row.PR, l.pr, styled, l.number)
 		if styled {
 			if target := statusTUIRepoURL(row); target != "" {
 				nameCell = statusTUILinkCell(nameCell, target, statusToneLabel)
@@ -1160,7 +1386,8 @@ func (m statusTUIModel) buildClickTarget(x, y int) string {
 	if row.service != nil {
 		return statusTUIURL(statusTUIRuntimeLayout(m.snapshot, width).urlAt(*row.service, x))
 	}
-	if row.pr != nil && row.pr.URL != nil && x < statusTUIPRLayout(width).number {
+	visible, _ := statusTUIVisiblePRs(m.snapshot, m.showArchived)
+	if row.pr != nil && row.pr.URL != nil && x < statusTUIPRLayout(width, visible...).number {
 		return statusTUIURL(*row.pr.URL)
 	}
 	return ""
@@ -1189,7 +1416,7 @@ func statusTUIPRGlyph(value *string) string {
 		return "·"
 	}
 	switch *value {
-	case "SUCCESS", "approved", "MERGEABLE":
+	case "SUCCESS", "approved", "MERGEABLE", "CLEAN":
 		return "✓"
 	case "FAILURE", "ERROR", "changes", "CONFLICTING", "DIRTY":
 		return "✗"
@@ -1260,11 +1487,17 @@ func statusTUIVisiblePRs(snapshot wtc.StatusSnapshot, showArchived bool) ([]wtc.
 
 type statusPRLayout struct {
 	number, repo, state, title int
+	signalWidths               [3]int
 	signals                    bool
 }
 
-func statusTUIPRLayout(width int) statusPRLayout {
-	l := statusPRLayout{number: 7, repo: 16, state: 10, signals: true}
+func statusTUIPRLayout(width int, rows ...wtc.StatusPRRow) statusPRLayout {
+	l := statusPRLayout{number: 5, repo: 16, state: 10, signalWidths: [3]int{1, 1, 1}, signals: true}
+	identifier := 1
+	for _, row := range rows {
+		identifier = max(identifier, ansi.StringWidth(statusTUIPRNumber(row.Number)))
+		l.number = max(l.number, identifier+2)
+	}
 	switch {
 	case width >= 52:
 	case width >= 40:
@@ -1272,15 +1505,33 @@ func statusTUIPRLayout(width int) statusPRLayout {
 	case width >= 34:
 		l.repo, l.state, l.signals = 10, 8, false
 	default:
-		l.number, l.repo, l.state, l.signals = 5, 8, 7, false
+		l.repo, l.state, l.signals = 8, 7, false
 	}
 	if width >= 100 {
 		l.repo = 20
 	}
-	prefix := l.number + 1 + l.repo + 1 + l.state + 1
-	if l.signals {
-		prefix += 6 // C M R and the separating space before TITLE.
+	if width >= 80 {
+		l.signalWidths = [3]int{6, 5, 7}
 	}
+	signalWidth := 0
+	if l.signals {
+		for _, n := range l.signalWidths {
+			signalWidth += n + 1
+		}
+	}
+	// Prefer the identifier to optional signals and wider descriptive columns.
+	numberBudget := func() int { return width - l.repo - l.state - signalWidth - 4 }
+	if identifier > numberBudget() && l.signals {
+		l.signals, signalWidth = false, 0
+	}
+	if identifier > numberBudget() {
+		l.repo -= min(identifier-numberBudget(), max(0, l.repo-len("REPO")))
+	}
+	if identifier > numberBudget() {
+		l.state -= min(identifier-numberBudget(), max(0, l.state-len("STATE")))
+	}
+	l.number = min(l.number, max(3, numberBudget()))
+	prefix := l.number + 1 + l.repo + 1 + l.state + 1 + signalWidth
 	l.title = max(1, width-prefix)
 	return l
 }
@@ -1293,24 +1544,30 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 	if styled {
 		heading = statusTUIStyle(heading, statusToneHeading)
 	}
-	l := statusTUIPRLayout(width)
+	visible, archived := statusTUIVisiblePRs(snapshot, showArchived)
+	l := statusTUIPRLayout(width, visible...)
 	header := statusTUIFit("PR", l.number) + " " + statusTUIFit("REPO", l.repo) + " " + statusTUIFit("STATE", l.state) + " "
 	if l.signals {
-		header += "C M R "
+		labels := [3]string{"C", "M", "R"}
+		if l.signalWidths[0] > 1 {
+			labels = [3]string{"CHECKS", "MERGE", "REVIEWS"}
+		}
+		for i, label := range labels {
+			header += statusTUIFit(label, l.signalWidths[i]) + " "
+		}
 	}
 	header += statusTUIFit("TITLE", l.title)
 	if styled {
 		header = statusTUIStyle(header, statusToneDim)
 	}
 	lines := []string{"", heading, header}
-	visible, archived := statusTUIVisiblePRs(snapshot, showArchived)
 	for _, row := range visible {
 		label := statusTUISafe(row.DisplayTitle)
 		if label == "" {
 			label = statusTUISafe(row.Title)
 		}
 		if label == "" {
-			label = "PR #" + row.Number
+			label = "PR " + statusTUIPRNumber(row.Number)
 		}
 		state := "open"
 		merged := statusTUIMergedPR(row)
@@ -1333,22 +1590,23 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		} else if row.State == "UNKNOWN" {
 			state = "unknown"
 		}
-		number := statusTUIFit("#"+row.Number, l.number)
+		target := ""
+		if row.URL != nil {
+			target = *row.URL
+		}
+		linkTone := statusToneLink
+		if merged && !row.OnBranch {
+			linkTone = statusToneDim
+		}
+		number := statusTUIPRNumberCell(row.Number, target, l.number, styled, linkTone)
 		repo := statusTUIFit(statusTUISafe(row.Repo), l.repo)
 		stateCell := statusTUIFit(state, l.state)
-		checks, merge, review := statusTUIPRGlyph(row.Checks), statusTUIPRGlyph(row.Merge), statusTUIPRGlyph(row.Review)
+		signals := statusTUIPRSignals(row.Checks, row.Merge, row.Review, styled)
 		if merged && !row.OnBranch {
-			checks, merge, review = "·", "·", "·"
+			signals = statusTUIPRSignals(nil, nil, nil, styled)
 		}
 		title := statusTUIFit(label, l.title)
 		if styled {
-			if row.URL != nil && statusTUIURL(*row.URL) != "" {
-				linkTone := statusToneLink
-				if merged && !row.OnBranch {
-					linkTone = statusToneDim
-				}
-				number = statusTUIFitANSI(statusTUILinkTone("#"+row.Number+" ↗", *row.URL, linkTone), l.number)
-			}
 			rowTone := statusToneLabel
 			if merged && !row.OnBranch {
 				rowTone = statusToneDim
@@ -1365,13 +1623,12 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 			} else {
 				stateCell = statusTUIStyle(stateCell, statusToneDim)
 			}
-			checks = statusTUIGlyphStyle(checks)
-			merge = statusTUIGlyphStyle(merge)
-			review = statusTUIGlyphStyle(review)
 		}
 		line := number + " " + repo + " " + stateCell + " "
 		if l.signals {
-			line += checks + " " + merge + " " + review + " "
+			for i, signal := range signals {
+				line += statusTUIFitANSI(signal, l.signalWidths[i]) + " "
+			}
 		}
 		if len(position) > 0 {
 			position[0](len(lines), row)
@@ -1432,7 +1689,7 @@ func statusTUIGlyphStyle(glyph string) string {
 	switch glyph {
 	case "✓":
 		return statusTUIStyle(glyph, statusToneSuccess)
-	case "✗":
+	case "✗", "⊘":
 		return statusTUIStyle(glyph, statusToneFailure)
 	case "●", "↓", "⚠":
 		return statusTUIStyle(glyph, statusToneWarning)
@@ -1508,8 +1765,18 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 		if m.procs {
 			keys = "r refresh   l log   ? help   q quit"
 		}
-		lines = append(lines, keys, "↗ link: modifier-click   PR/T/P: click   ↑/↓ or wheel scroll   PgUp/PgDn page   Home/End",
-			"PRs: C checks · M mergeability · R reviews", "")
+		help := []string{keys,
+			"↗ link: modifier-click; PR/TEST/PROD: click; ↑/↓ or wheel scroll; PgUp/PgDn page; Home/End",
+			"PR signals, left to right: C checks · M mergeability · R reviews. ? toggles this help.",
+			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
+			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
+			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
+			"◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up.",
+		}
+		for _, text := range help {
+			lines = append(lines, strings.Split(ansi.Wrap(text, width, ""), "\n")...)
+		}
+		lines = append(lines, "")
 	}
 	if m.showLog {
 		lines = append(lines, statusTUIStyle("Refresh log", statusToneHeading), "")
@@ -1619,6 +1886,9 @@ func (m statusTUIModel) View() tea.View {
 	if m.hover != "" {
 		footer = m.hover
 	}
+	if m.devMessage != "" {
+		footer = m.devMessage + " · q quit"
+	}
 	visible := append([]string(nil), content.lines[:v.header]...)
 	start := v.header + v.scroll
 	for i := 0; i < v.body; i++ {
@@ -1629,7 +1899,11 @@ func (m statusTUIModel) View() tea.View {
 		visible = append(visible, line)
 	}
 	if height > 1 {
-		visible = append(visible, statusTUIStyle(footer, statusToneDim))
+		tone := statusToneDim
+		if m.devError {
+			tone = statusToneWarning
+		}
+		visible = append(visible, statusTUIStyle(footer, tone))
 	}
 	visibleLink := false
 	for i, line := range visible {
@@ -1673,6 +1947,11 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 		// cache another wtc may have written; live states follow from Init.
 		model.snapshot.Runtime = c.RuntimeEnlisted()
 	}
+	model.devAllowed = !wtc.DevBuildDisabled() && version != "dev"
+	cwd, _ := os.Getwd()
+	model.devCollection = wtc.FindCollectionRoot(cwd)
+	model.devResume = takeStatusDevPresentation()
+	model.restoreDevPresentation()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cleanup, err := c.RegisterStatusWatcher(cancel)
@@ -1680,7 +1959,11 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 		return err
 	}
 	defer cleanup()
-	_, err = tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	if updated, ok := final.(statusTUIModel); err == nil && ok && updated.devAutoExit && updated.devRestart != nil && updated.devIdle() {
+		cleanup()
+		return restartStatusDev(updated.devRestart.collection, updated.devRestart.binary, updated.devRestart.generation, updated.devPresentation())
+	}
 	if ctx.Err() != nil {
 		return nil // The watcher lease was cancelled.
 	}

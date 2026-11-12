@@ -32,6 +32,7 @@ case "$*" in
       echo '{"headRefOid":"1234567890abcdef1234567890abcdef12345678","reviewRequests":[],"statusCheckRollup":[]}'
     fi ;;
   *'pr view 7'*'--json headRefOid'*) echo '{"headRefOid":"1234567890abcdef1234567890abcdef12345678"}' ;;
+  *'commits/1234567890abcdef1234567890abcdef12345678/check-runs?per_page=100 --paginate --slurp'*) echo '[{"total_count":0,"check_runs":[]}]' ;;
   *'pulls/7/reviews?per_page=100'*) echo '[[]]' ;;
   *'api graphql'*)
     if [ "${FAKE_HOSTED_THREAD:-}" = 1 ]; then
