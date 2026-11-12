@@ -3041,3 +3041,22 @@ for (const kind of ["composer","panel"]) test(`${kind} catch-up and group commit
   assert.equal(calls.some(c=>c.method==="sessions.send"||c.actionId==="catch-up"||c.actionId==="next"),false,"outcome inspection is read-only");
  }finally{release?.({runId:"cleanup"});controlledSend=undefined;globalThis.setTimeout=set;view.dispose();}
 });
+
+test("a person can release an unconfirmed no-commit request without retrying or claiming success",async()=>{
+ const set=globalThis.setTimeout;let expire;
+ globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expire=fn,{unref(){}}):set(fn,delay,...args);
+ const commit={step:"commit",by:"agent",skill:"wtc",key:"release:commit",available:true};
+ const catchup={step:"catch-up",by:"wtc",key:"release:catch",available:true};
+ const r=repo("site",{dirty:1,behind:3,next:commit,choices:{actions:[commit,catchup]}});
+ const {host,view}=await mount("panel",collection([r]));
+ try {
+  nextResult={ok:true,result:{performed:false,repo:r}};
+  await localChangeButton(host).onclick();expire();await settle();calls.length=0;
+  const release=[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="I checked: request has finished");assert.ok(release);
+  await release.onclick();await settle();assert.equal(calls.length,0,"acknowledgement dispatches nothing");
+  assert.doesNotMatch(localChangeButton(host).textContent,/✓/);
+  assert.equal(localChangeButton(host).disabled,false);
+  assert.equal([...host.all()].find(n=>n.tagName==="BUTTON"&&/^3 new on/.test(n.title)).disabled,false);
+  await localChangeButton(host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"new explicit request can be sent after release");
+ }finally{nextResult=undefined;globalThis.setTimeout=set;view.dispose();}
+});

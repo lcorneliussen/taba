@@ -45,8 +45,10 @@ func (c *Checkout) protectIgnoredPaths(paths string) error {
 // checkout. Stash objects are local recovery data, never published commits.
 // Do not drop by stash position: other worktrees share the stash stack.
 // The Control UI matches "need recovery", "still need recovery" and "safe in"
-// through needsLocalRecovery; keep those wordings in sync. Other errors,
-// including preparatory "set aside" failures, remain plain failures.
+// from this file and catch_up_recovery.go through needsLocalRecovery. Keep both
+// emitters in sync. Failed reflog lookup or snapshot identification after stash
+// push leaves edits set aside in an unpinned stash entry; those are plain
+// failures, so inspect the stash before any retry.
 func (c *Checkout) withCatchUpChanges(result CatchUp, update func() (CatchUp, error)) (CatchUp, error) {
 	unlock, err := c.catchUpLock()
 	if err != nil {

@@ -191,7 +191,8 @@ const noteNode = (text, failed, style) => css(el("span", { textContent: failed ?
 // Asks the conversation to run one of the agent's skills on what the card saw.
 const askSkill = (host, sessionKey, skill, input) => askConversation(host, sessionKey, `/skill ${skill} ${input}`);
 
-// These phrases are emitted by internal/openclaw/catch_up_changes.go.
+// These phrases are emitted by internal/openclaw/catch_up_changes.go and
+// catch_up_recovery.go (requireRecoveredChanges). Keep both emitters in sync.
 const needsLocalRecovery = message => /local changes (?:need recovery|still need recovery)|local changes are safe in/.test(message ?? "");
 const recoveryResult = out => out?.json?.data?.recoveryRequired === true;
 const recoveryHandoff = r => r.catchUpRecovery
@@ -1415,6 +1416,15 @@ function collectionTables(v) {
       if (active(conversation)) v.say(`${item.repo}: asked this conversation's agent to investigate; the action was not retried.`);
     } catch (err) { recordActivity(collection,item.id,{help:"failed",helpError:String(err?.message ?? err)}); }
   }
+  function releaseCommitRequest(item) {
+    const collection = v.collectionKey?.() ?? v.key();
+    const state = commitFeedback.get(`${collection}|${item.repoSessionKey}`);
+    if (state?.id !== item.id || state.phase !== "unconfirmed") return;
+    state.phase = "settled";
+    if (state.stepKey) dispatched.delete(state.stepKey);
+    recordActivity(collection,item.id,{state:"acknowledged",status:"Request marked finished by the person; commit outcome remains unverified. Actions are available for explicit selection."});
+    notifyFactFeedback(collection);
+  }
   function activityLog() {
     const key = v.collectionKey?.() ?? v.key();
     const records = [...(activityStore.get(key)?.entries() ?? [])].map(([id, item]) => ({ ...item, id })).sort((a, b) => b.at - a.at);
@@ -1433,6 +1443,8 @@ function collectionTables(v) {
           css(timeLabel(item.at), "font-size:11px;color:var(--muted,#888);white-space:nowrap"), el("span", { textContent: "⌄", ariaHidden: "true" })), "display:grid;grid-template-columns:minmax(0,1fr) 96px 48px 12px;gap:8px;align-items:baseline;cursor:pointer;min-height:28px;list-style:none"),
         css(el("div", {}, el("span", { textContent: item.detail ?? item.status }), resultAction(item.followUp, v.say),
           item.id && ["Failed","Unconfirmed","Sent to agent","Needs attention"].includes(label) ? nextButton(item.help === "sent" ? "Help requested" : item.help === "sending" ? "Requesting help…" : "Ask agent for help", "Ask this conversation's agent to diagnose the blocker without retrying the action", () => askForActionHelp(item), ["sending","sent"].includes(item.help)) : null,
+          item.action === "commit" && commitFeedback.get(`${key}|${item.repoSessionKey}`)?.id === item.id && commitFeedback.get(`${key}|${item.repoSessionKey}`)?.phase === "unconfirmed"
+            ? nextButton("I checked: request has finished", "Only after checking the conversation: release this browser's action reservation. This does not cancel work, retry anything or verify a commit.", () => releaseCommitRequest(item)) : null,
           item.helpError ? el("span",{textContent:`Could not request help: ${item.helpError}`}) : null), "padding:6px 0 8px;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 8px;white-space:normal;overflow-wrap:anywhere;font-size:12px;color:var(--muted,#888)")), "font-size:12px;min-width:0");
       return keepDisclosure(detail, `activity:${item.id ?? item.at}`);
     }), records.length > 3 ? nextButton(showAllActivity ? "Show latest 3" : `Earlier activity (${records.length - 3})`, "Show or hide earlier activity", () => { showAllActivity = !showAllActivity; v.rerender(); }) : null), "display:grid;gap:4px;min-width:0");
@@ -1859,7 +1871,7 @@ function collectionTables(v) {
     const targets = repos.filter(r => !reserved(r));
     if (!targets.length) return;
     const states = targets.map(r => {
-      const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid() };
+      const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid(), stepKey: r.next?.step === "commit" ? handoffKey(r,r.next) : null };
       commitFeedback.set(commitKey(r), state); limitCommitFeedback(commitKey(r), state, collection);
       recordActivity(collection, state.id, {repo:nameOf(r),repoSessionKey:r.sessionKey,action:"commit",state:"running",status:"Requesting local commits"}); return state;
     });
@@ -1873,7 +1885,7 @@ function collectionTables(v) {
   async function commitFromFact(r) {
     const key = commitKey(r), collection = v.collectionKey?.() ?? v.key();
     if (reserved(r)) return;
-    const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid() };
+    const state = { phase: "running", before: toPush(r), dirty: r.dirty, branch: r.branch, path: r.path, id: uuid(), stepKey: r.next?.step === "commit" ? handoffKey(r,r.next) : null };
     commitFeedback.set(key, state); limitCommitFeedback(key, state, collection); recordActivity(collection,state.id,{repo:nameOf(r),repoSessionKey:r.sessionKey,action:"commit",state:"running",status:"Requesting local commits"}); notifyFactFeedback(collection);
     try {
       const result = r.next?.step === "commit" ? await actNext(r, state.id) : await askCommit(r);
