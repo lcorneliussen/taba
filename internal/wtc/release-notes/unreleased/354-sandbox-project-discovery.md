@@ -1,0 +1,3 @@
+## OpenClaw
+
+- **`wtc projects` works in a sandbox before the conversation has a collection.** The sandbox Git service used to identify project discovery requests only through a managed worktree. A new conversation's sandbox has none, so it was refused with "this sandbox works on no managed worktree" at exactly the moment it needed to find its project. Discovery now identifies the agent from its running sandbox container. `sandboxGit.projectsByAgent` still decides, and still denies by default. The Git, session and delivery routes still require the managed worktree ([#354](https://github.com/lcorneliussen/taba/issues/354)).
