@@ -75,7 +75,7 @@ func statusUnknownDetail(record PRRecord) statusPRDetail {
 }
 
 func statusDeferredDetail(record PRRecord) statusPRDetail {
-	return statusPRDetail{Number: record.Number, Checks: "PENDING", Title: record.Title}
+	return statusPRDetail{Number: record.Number, Freshness: "deferred", Checks: "PENDING", Title: record.Title}
 }
 
 func statusParseForgeDetail(forge string, raw []byte, record PRRecord) (statusPRDetail, error) {
@@ -136,7 +136,8 @@ func statusEnrichRecord(record PRRecord, slug, forge string) statusPRDetail {
 	return detail
 }
 
-func statusEnrichRecordMetadata(record PRRecord, slug, forge string) statusPRDetail {
+func statusEnrichRecordMetadata(record PRRecord, slug, forge string) (result statusPRDetail) {
+	defer func() { result = statusObserveDetail(result, slug, forge) }()
 	if slug == "" || forge == "" {
 		return statusUnknownDetail(record)
 	}
@@ -202,7 +203,7 @@ func statusViewPRWithFreshness(record PRRecord, slug, forge string, bypassCache,
 }
 
 func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requireFresh bool, onLive func(statusPRDetail)) statusPRDetail {
-	fetch := func() ([]byte, error) {
+	fetchRaw := func() ([]byte, error) {
 		switch forge {
 		case "github.com":
 			return statusJSON("gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid")
@@ -215,6 +216,13 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 		default:
 			return nil, fmt.Errorf("unsupported forge")
 		}
+	}
+	fetch := func() ([]byte, error) {
+		raw, err := fetchRaw()
+		if err == nil {
+			_, err = statusParseForgeDetail(forge, raw, record)
+		}
+		return raw, err
 	}
 	var raw []byte
 	var err error
@@ -231,7 +239,7 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 		}
 		stale, _ := statusReadForgeEntryAny("pr", forge, slug, record.Number)
 		started := time.Now()
-		raw, live, err = statusWithForgeBudget(forge, stale, fetch)
+		raw, live, err = statusWithForgeBudgetKey(forge, slug+"#"+record.Number, stale, fetch)
 		if live && len(raw) > 0 {
 			statusWriteForgeEntrySince("pr", forge, slug, record.Number, raw, started)
 			statusWriteForgeEntry("omit", forge, slug, record.Number, []byte("ok"))
@@ -256,7 +264,20 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 			if forge == "bitbucket.org" {
 				detail = statusBBCompleteMergeTime(detail, slug)
 			}
-			return detail
+			if live {
+				detail.Freshness = "live"
+			} else if bypassCache {
+				detail.Freshness = "deferred"
+			}
+			return statusObserveDetail(detail, slug, forge)
+		}
+	}
+	if bypassCache && err != nil {
+		if saved, ok := statusReadForgeEntryAny("pr", forge, slug, record.Number); ok {
+			if detail, parseErr := statusParseForgeDetail(forge, saved, record); parseErr == nil {
+				detail.Freshness = "deferred"
+				return statusObserveDetail(detail, slug, forge)
+			}
 		}
 	}
 	if errors.Is(err, errForgeBudget) || errors.Is(err, errForgeCooling) {
@@ -369,7 +390,13 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 		return snapshot, err
 	}
 	if recordMerges {
-		if count, err := c.recordMergedPRs(records, details); err != nil {
+		settled := append([]statusPRDetail(nil), details...)
+		for i := range settled {
+			if statusObservationUnavailable(settled[i].Freshness) {
+				settled[i].State = ""
+			}
+		}
+		if count, err := c.recordMergedPRs(records, settled); err != nil {
 			c.statusProgress(fmt.Sprintf("Could not record merged pull requests: %v", err))
 		} else if count != 0 {
 			c.statusProgress(fmt.Sprintf("Recorded %d final merges", count))
@@ -402,6 +429,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 				prURL := prURLForStatus(forge, slug, record.Number)
 				snapshot.Repos[branchRow].PR = &StatusPRFacts{Number: detail.Number, Head: detail.HeadCommit, Checks: detail.Checks,
 					URL: prURL, Merge: detail.Merge, Review: detail.Review, Draft: detail.State == "DRAFT",
+					Freshness: detail.Freshness, ObservedAt: detail.ObservedAt,
 					MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
 			}
 		}
@@ -419,7 +447,8 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 			Merge: statusString(detail.Merge), Review: statusString(detail.Review), Title: detail.Title,
 			DisplayTitle: detail.Title, Slug: slug, URL: statusString(url), MergedOn: statusString(detail.MergedOn),
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
-			Archived:       detail.State == "MERGED" && branchRow < 0 && statusArchived(detail.MergedOn, time.Now()),
+			Archived:  detail.State == "MERGED" && branchRow < 0 && statusArchived(detail.MergedOn, time.Now()),
+			Freshness: detail.Freshness, ObservedAt: detail.ObservedAt,
 			MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase,
 			worktreeDir: worktreeDir,
 		}
@@ -447,6 +476,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 			statusPRBase(&snapshot, i, detail.Base)
 			snapshot.Repos[i].PR = &StatusPRFacts{Number: detail.Number, Head: detail.HeadCommit, Checks: detail.Checks,
 				URL: prURLForStatus(forge, slug, number), Merge: detail.Merge, Review: detail.Review, Draft: detail.State == "DRAFT",
+				Freshness: detail.Freshness, ObservedAt: detail.ObservedAt,
 				MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
 		}
 	}
@@ -503,7 +533,7 @@ func (c *Context) statusReturnMerged(snapshot *StatusSnapshot, records []PRRecor
 	// settles on one state per branch. Both harness aliases name one worktree.
 	live := map[string]bool{}
 	for i, record := range records {
-		if details[i].State != "MERGED" {
+		if details[i].State != "MERGED" || statusObservationUnavailable(details[i].Freshness) {
 			live[worktreeDir(record.Repo)+"\x00"+record.Branch] = true
 		}
 	}
@@ -512,7 +542,7 @@ func (c *Context) statusReturnMerged(snapshot *StatusSnapshot, records []PRRecor
 			continue
 		}
 		dir := worktreeDir(record.Repo)
-		if details[i].State != "MERGED" || record.Branch == "" || live[dir+"\x00"+record.Branch] {
+		if details[i].State != "MERGED" || statusObservationUnavailable(details[i].Freshness) || record.Branch == "" || live[dir+"\x00"+record.Branch] {
 			continue
 		}
 		for j, row := range snapshot.Repos {

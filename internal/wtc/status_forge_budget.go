@@ -99,6 +99,10 @@ func statusForgeCool(forge string, retry time.Duration) {
 }
 
 func statusTakeForgeToken(forge string) bool {
+	return statusTakeForgeTokenFor(forge, "")
+}
+
+func statusTakeForgeTokenFor(forge, confirmation string) bool {
 	burst, every := statusForgeAllowance(forge)
 	if burst >= 1<<30 {
 		return true
@@ -110,6 +114,11 @@ func statusTakeForgeToken(forge string) bool {
 	}
 	defer unlock()
 	now := time.Now()
+	queue := statusReadPendingConfirmations(forge, now)
+	admitted := len(queue) == 0 || queue[0].Key == confirmation
+	if confirmation != "" {
+		queue = statusQueueConfirmation(queue, confirmation, now)
+	}
 	tokens, updated := burst, now
 	if raw, err := os.ReadFile(path); err == nil {
 		fields := strings.Fields(string(raw))
@@ -133,9 +142,14 @@ func statusTakeForgeToken(forge string) bool {
 		tokens = burst
 		updated = now
 	}
-	if tokens < 1 {
+	if tokens < 1 || !admitted {
+		statusSavePendingConfirmations(forge, queue)
 		return false
 	}
+	if confirmation != "" && len(queue) > 0 && queue[0].Key == confirmation {
+		queue = queue[1:]
+	}
+	statusSavePendingConfirmations(forge, queue)
 	tokens--
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil
 }
@@ -159,13 +173,17 @@ func statusLockCache(path string) (func(), error) {
 }
 
 func statusWithForgeBudget(forge string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
+	return statusWithForgeBudgetKey(forge, "", stale, fetch)
+}
+
+func statusWithForgeBudgetKey(forge, confirmation string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
 	if statusForgeCooling(forge) {
 		if len(stale) > 0 {
 			return stale, false, nil
 		}
 		return nil, false, errForgeCooling
 	}
-	if !statusTakeForgeToken(forge) {
+	if !statusTakeForgeTokenFor(forge, statusConfirmationKey(confirmation)) {
 		if len(stale) > 0 {
 			return stale, false, nil
 		}

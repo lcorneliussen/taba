@@ -68,6 +68,8 @@ type StatusRepo struct {
 }
 
 type StatusPRFacts struct {
+	Freshness      string   `json:"freshness,omitempty"`
+	ObservedAt     string   `json:"observed_at,omitempty"`
 	Number         string   `json:"number"`
 	Head           string   `json:"head,omitempty"`
 	URL            string   `json:"url,omitempty"`
@@ -105,6 +107,8 @@ type StatusFollow struct {
 }
 
 type StatusPRRow struct {
+	Freshness       string         `json:"freshness,omitempty"`
+	ObservedAt      string         `json:"observed_at,omitempty"`
 	Repo            string         `json:"repo"`
 	Number          string         `json:"number"`
 	State           string         `json:"state,omitempty"`
@@ -287,13 +291,13 @@ func statusNext(snapshot *StatusSnapshot) {
 		r := &snapshot.Repos[i]
 		r.Next = nil
 		r.Choices = nil
-		if r.ReviewOnly {
+		if r.ReviewOnly || (r.PR != nil && statusObservationUnavailable(r.PR.Freshness)) {
 			continue
 		}
 		f := statusFacts(*r)
 		if r.PR == nil && r.BranchKind == "branch" {
 			for _, pr := range snapshot.PRs {
-				if !pr.OnBranch || pr.State != "MERGED" || !statusPRMatchesRepo(pr, *r) {
+				if !pr.OnBranch || statusObservationUnavailable(pr.Freshness) || pr.State != "MERGED" || !statusPRMatchesRepo(pr, *r) {
 					continue
 				}
 				number, _ := strconv.Atoi(pr.Number)
