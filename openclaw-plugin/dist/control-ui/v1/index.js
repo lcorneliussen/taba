@@ -2145,7 +2145,7 @@ function collectionTables(v) {
   }
 
   // Collapsed, the same facts summed, in the same order: ± ↑ ↓, the pull
-  // requests, the services. ↑ pushes and ↓ catches up every repository.
+  // requests, the services. ↑ pushes and ↓ catches up eligible repositories.
   function totals(repos, groups) {
     // An action says what it is (↑ 3), a fact has its head before it (± 1).
     const slot = (head, value, title) => css(el("span", { title: title ?? "" }, value?.tagName === "BUTTON" ? null : muted(head), value ?? DOT()),
