@@ -3,13 +3,15 @@
 // unless someone wants a conversation per repository). The gateway knows the
 // sessions; `wtc` knows the checkouts and services. This joins the two.
 //
-// Plain ESM, no build step and no SDK import. Needs `wtc` on the gateway's
-// PATH, and `git`; pull requests also need `gh` with the gateway's login.
+// Plain ESM, no build step. Native publication uses the authenticated SDK.
+// Needs `wtc` and `git` on the gateway PATH. PR status also needs `gh`; native
+// publication uses the person's connection, never that gateway login.
 // Bitbucket repositories use the logins of the Bitbucket plugin
 // (openclaw-bitbucket) when it is installed.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { registerPublicationBridge } from "./publication.js";
 import { startSandboxGit } from "./sandbox-git.js";
 
 const PLUGIN_ID = "wtc";
@@ -507,6 +509,7 @@ export default {
     });
 
     const stateDir = api.runtime.state.resolveStateDir(process.env);
+    const publications = registerPublicationBridge(api,{run,getSessionEntry,stateDir});
 
     // Repositories from the accounts the person connected that the gateway
     // has no search for itself. GitHub's is the gateway's projects.searchRemote.
@@ -654,6 +657,7 @@ export default {
     // The collection a session is in, with what wtc status says about it.
     const loadCollection = async (agentId, sessionKey) => {
       const { parentKey, parent, children } = await collectionOf(agentId, sessionKey);
+      await publications.flush(children);
       const result = {
         schema: "wtc.collection/v1",
         collection: { sessionKey: parentKey, label: parent?.label ?? parent?.displayName ?? null },

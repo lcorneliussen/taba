@@ -1,3 +1,4 @@
+import { loadControlUIFixtureAssets, serveControlUIFixtureAsset } from "./control-ui-fixture-assets.mjs";
 // Synthetic card/sidebar geometry checks; no gateway or account is contacted.
 // Usage: node openclaw-plugin/tools/check-repository-widths.mjs <playwright module> <output directory> [renderer file]
 import { resolve } from "node:path";
@@ -10,7 +11,7 @@ if (!playwrightPath || !outputPath) throw Error("Pass a Playwright module and ou
 const { chromium } = await import(pathToFileURL(resolve(playwrightPath)).href);
 const out = resolve(outputPath);
 await mkdir(out, { recursive: true });
-const module = await readFile(rendererPath ? resolve(rendererPath) : new URL("../dist/control-ui/v1/index.js", import.meta.url), "utf8");
+const assets = await loadControlUIFixtureAssets(rendererPath);
 const template = await readFile(new URL("tunnel-menu-fixture.html", import.meta.url), "utf8");
 const names = ["component-library-workbench", "system-overview-documentation"];
 const scenarios = {
@@ -31,8 +32,7 @@ try {
     page.on("pageerror", error => errors.push(error.message));
     await page.route("**/*", route => route.request().url() === "https://demo.invalid/"
       ? route.fulfill({ contentType: "text/html", body: html })
-      : route.request().url() === "https://demo.invalid/plugin.js"
-        ? route.fulfill({ contentType: "text/javascript", body: module }) : route.abort());
+      : serveControlUIFixtureAsset(route, assets));
     await page.goto("https://demo.invalid/");
     await page.locator("#card details").waitFor();
     if (view === "card") await page.locator("#card details").evaluate(node => node.open = true);
