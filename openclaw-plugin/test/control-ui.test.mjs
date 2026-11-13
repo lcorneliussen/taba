@@ -3557,3 +3557,23 @@ for(const kind of ["composer","panel"]) test(`${kind} tracking pending preserves
   assert.ok(![...host.all()].some(n=>(n.role??n.attributes.role)==="alert"&&/Tracking pending/.test(n.textContent)),"tracking failure is not a failed publication");
  }finally{githubConfirmResult=undefined;personal=null;view.dispose();}
 });
+
+for (const kind of ["composer", "panel"]) for (const [exposure, label] of [
+  ["public", "Public access — anyone with the link"], ["tailnet", "Tailnet access"],
+  ["account", "Account access"], ["protected", "Protected access"],
+  ["unknown", "Access unknown"], [undefined, "Access unknown"], ["future", "Access unknown"], ["toString", "Access unknown"],
+]) test(`${kind}: tunnel access follows reported exposure (${exposure ?? "missing"})`, async () => {
+  const url = "https://synthetic-preview.example.invalid";
+  const services = [
+    {group:"api/web",repo:"api",kind:"service",state:"ready",url:"http://127.0.0.1:42201"},
+    {group:"api/web",repo:"api",kind:"endpoint",provider:exposure === "public" ? "tailscale" : "cloudflare",state:"ready",url,exposure},
+  ];
+  const {host, view} = await mount(kind, collection([repo("api")], services));
+  try {
+    const access = [...host.all()].find(n => n.className?.includes("wtc-tunnel-access"));
+    assert.ok(access); assert.equal(access.role, "img"); assert.equal(access.ariaLabel, label);
+    const route = [...host.all()].find(n => n.tagName === "A" && n.href === url);
+    assert.equal(route.title, `${url} — ${label}`, "hover retains the full address and access description");
+    assert.ok(titled(host, `Close the ${services[1].provider} tunnel`), "access status does not replace the close action");
+  } finally {view.dispose();}
+});

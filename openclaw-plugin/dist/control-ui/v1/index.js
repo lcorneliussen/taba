@@ -560,6 +560,12 @@ function portalNode(g, p, svc, label = "gateway") {
 // A wtc tunnel: running, a link and ✕; closed, a button that opens it again.
 // label is what the link says, the provider by default; closed, opener is
 // what the button says.
+const TUNNEL_ACCESS = new Map([
+  ["public", ["unlock", "Public access — anyone with the link"]],
+  ["tailnet", ["lock", "Tailnet access"]],
+  ["account", ["lock", "Account access"]],
+  ["protected", ["lock", "Protected access"]],
+]);
 function tunnelNode(g, t, svc, { label, opener } = {}) {
   const name = tunnelName(t);
   const pub = TUNNEL_PROVIDERS.some((p) => p.name === name && p.public);
@@ -571,16 +577,23 @@ function tunnelNode(g, t, svc, { label, opener } = {}) {
     return opener ? opener(title, again) : pill(`▶ ${name}`, title, again);
   }
   // Running, but not answering or not signed in: say so on it.
-  const trouble = isFailed(t) ? css(el("span", { textContent: "⚠", title: serviceState(t) }), "color:var(--danger, #cf222e)") : null;
+  const trouble = isFailed(t) ? css(el("span", { textContent: "⚠", role: "img", ariaLabel: `Tunnel health: ${serviceState(t)}`, title: `Tunnel health: ${serviceState(t)}` }), "flex:none;margin-left:2px;color:var(--danger, #cf222e)") : null;
+  const access = TUNNEL_ACCESS.get(t.exposure) ?? ["unknown", "Access unknown"];
+  const reach = controlIcon(access[0]);
+  reach.className += " wtc-tunnel-access";
+  reach.role = "img"; reach.ariaLabel = reach.title = access[1];
+  reach.style.flex = "none"; reach.style.color = "var(--muted, #888)";
+  const accessSlot = leadSlot(reach, 14);
+  accessSlot.children[0].style.top = "-.5ex";
   const route = t.url ? link(label ?? name, t.url) : label ?? name;
   if (typeof route === "object") {
-    css(route, "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap");
-    route.title = t.url;
+    css(route, "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit");
+    route.title = `${t.url} — ${access[1]}`;
   }
   const close = smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`));
   close.style.flex = "none";
-  return css(el("span", {}, trouble, route, close),
-    "display:inline-flex;align-items:center;gap:2px;min-width:0;max-width:100%;white-space:nowrap");
+  return css(el("span", {}, accessSlot, route, trouble, close),
+    "display:inline-flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap;color:var(--text,inherit)");
 }
 // A new way to a service, or null when none is left. compact: a "+" only,
 // whose title and options name the ways.
@@ -740,7 +753,7 @@ function actionMenu(trigger, options, label, fail) {
 
 // Geometric control glyphs avoid font-dependent centres and spinning hit targets.
 const controlIcon = (glyph, size = 14) => {
-  const paths = { "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "spinner": "M21 12a9 9 0 1 1-9-9", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
+  const paths = { "lock": "M6 11h12v10H6zM8 11V7a4 4 0 0 1 8 0v4", "unlock": "M6 11h12v10H6zM8 11V7a4 4 0 0 1 7.5-2", "unknown": "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M9.5 9a2.5 2.5 0 1 1 4 2c-1 .6-1.5 1-1.5 2M12 16h.01", "+": "M12 5v14M5 12h14", "▶": "M7 4l13 8-13 8V4z", "↻": "M20 11a8 8 0 1 0-2.3 6M20 4v7h-7", "spinner": "M21 12a9 9 0 1 1-9-9", "⤢": "M14 4h6v6M20 4l-7 7M4 20l7-7M4 14v6h6", "⌃": "M6 15l6-6 6 6", "⌄": "M6 9l6 6 6-6", "✕": "M6 6l12 12M18 6L6 18" };
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg"), path = document.createElementNS(ns, "path");
   for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: String(size), height: String(size), fill: "none", stroke: "currentColor", "stroke-width": "1.8", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) svg.setAttribute(key, value);
   svg.setAttribute("class", "wtc-header-glyph"); svg.style.cssText = "display:block;transform-box:fill-box;transform-origin:center";
@@ -2338,7 +2351,8 @@ function collectionTables(v) {
     if (foldWays) groups.forEach((g, index) => {
       const links = ways.map(w => wayNode(g, w)).filter(Boolean);
       if (!links.length && !g.loose) return;
-      const extra = css(el("span", {role:"group",ariaLabel:`Tunnels for ${g.label}`},muted("Tunnels"),...links,g.loose ? repair(g) : null), "grid-column:2 / -1;display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;min-width:0;margin-top:-4px;font-size:11px");
+      const values = css(el("span", {}, ...links, g.loose ? repair(g) : null), "display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 10px;min-width:0");
+      const extra = css(el("span", {role:"group",ariaLabel:`Tunnels for ${g.label}`},muted("Tunnels"),values), "grid-column:2 / -1;display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:baseline;column-gap:10px;min-width:0;margin-top:-4px;font-size:11px");
       extra.setAttribute("data-service-tunnels", "true");
       grid.insertBefore(extra, cells[(index + 2) * width] ?? null);
     });

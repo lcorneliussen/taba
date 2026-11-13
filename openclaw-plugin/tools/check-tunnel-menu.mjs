@@ -21,15 +21,37 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
  if(method==='plugins.sessionAction'&&params.actionId==='svc'){window.calls.push(params.payload);return {ok:true,result:{message:'done'}};}
  if(method==='sessions.send'){window.calls.push({handoff:params.message});return {};}
  `);
- if(topology!=='empty')html=html.replace("url:'http://127.0.0.1:4321'}]", "url:'http://127.0.0.1:4321'},{group:'web/preview',path:'web/preview/cloudflare',repo:'web',kind:'endpoint',provider:'cloudflare',state:'idle'},{group:'web/preview',path:'web/preview/ngrok',repo:'web',kind:'endpoint',provider:'ngrok',state:'ready',url:'https://a-long-synthetic-preview-name.ngrok.app'}]");
- if(topology==='loose')html=html.replace("url:'https://a-long-synthetic-preview-name.ngrok.app'}]", "url:'https://a-long-synthetic-preview-name.ngrok.app'},{group:'web/standalone',path:'web/standalone',repo:'web',kind:'endpoint',provider:'cloudflare',state:'ready',url:'https://standalone-example.trycloudflare.com'}]");
+ if(topology!=='empty')html=html.replace("url:'http://127.0.0.1:4321'}]", "url:'http://127.0.0.1:4321'},{group:'web/preview',path:'web/preview/cloudflare',repo:'web',kind:'endpoint',provider:'cloudflare',state:'idle'},{group:'web/preview',path:'web/preview/ngrok',repo:'web',kind:'endpoint',provider:'ngrok',state:'ready',exposure:'public',url:'https://a-long-synthetic-preview-name.ngrok.app'}]");
+ if(topology==='loose')html=html.replace("url:'https://a-long-synthetic-preview-name.ngrok.app'}]", "url:'https://a-long-synthetic-preview-name.ngrok.app'},{group:'web/standalone',path:'web/standalone',repo:'web',kind:'endpoint',provider:'cloudflare',state:'ready',exposure:'protected',url:'https://restricted-preview.example.invalid'},{group:'web/preview',path:'web/preview/custom',repo:'web',kind:'endpoint',provider:'custom',state:'ready',exposure:'unknown',answering:'no',answer_detail:'synthetic failure',url:'https://unknown-preview.example.invalid'}]");
  const colors=theme==='dark'?'--bg:#0e1015;--card:#161920;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8b8b94;--border:#1e2028;--border-strong:#2e3040;--bg-hover:#242832':'--bg:#f4f1eb;--card:#fff;--text:#333;--text-strong:#222;--muted:#71717a;--border:#e4e4e7;--border-strong:#d4d4d8;--bg-hover:#efefef';
- html=html.replace('</style>',`:root{color-scheme:${theme};${colors}}body{padding:16px}#stage>h1,#stage>p,#stage>footer{display:none}${view==='card'?'#stage{position:fixed;bottom:16px;left:16px;right:16px}':''}</style>`);
+ html=html.replace('</style>',`:root{color-scheme:${theme};${colors}}body{padding:16px}a,a:hover{color:#ff5555}#stage>h1,#stage>p,#stage>footer{display:none}${view==='card'?'#stage{position:fixed;bottom:16px;left:16px;right:16px}':''}</style>`);
  const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:2});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):serveControlUIFixtureAsset(r,assets));
  await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();await page.waitForTimeout(200);await page.locator('#card details').evaluate(n=>{n.open=true});
  if(view==='panel'){await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).click();await page.getByText('Repositories',{exact:true}).waitFor();}
  const root=view==='card'?page.locator('#card'):page.locator('#panel');
+ if(topology!=='empty') {
+  const access = root.getByRole('img',{name:'Public access — anyone with the link',exact:true});
+  await access.waitFor();
+  const route = root.locator('a[href="https://a-long-synthetic-preview-name.ngrok.app"]');
+  const geometry=await root.evaluate(root=>{const n=root.querySelector('a[href="https://a-long-synthetic-preview-name.ngrok.app"]');const icon=n.parentElement.querySelector('.wtc-tunnel-access');const a=n.getBoundingClientRect(),b=icon.getBoundingClientRect();const probe=document.createElement('span');probe.style.cssText='display:inline-block;width:0;height:1ex;vertical-align:baseline';n.append(probe);const ex=probe.getBoundingClientRect();probe.remove();const port=root.querySelector('[title^="http://127.0.0.1:4321 on the gateway"]');port.append(probe);const portBaseline=probe.getBoundingClientRect().bottom;probe.remove();return {color:getComputedStyle(n).color,expected:getComputedStyle(document.body).color,center:Math.abs(ex.y+ex.height/2-b.y-b.height/2),baselineDifference:Math.abs(ex.bottom-portBaseline),iconWidth:b.width,iconHeight:b.height,title:n.title};});
+  assert.equal(geometry.color,geometry.expected,'healthy tunnel overrides a red host-link accent');
+  assert(geometry.center<1,'access icon is centered on the text x-height');
+  if(width>=500)assert(geometry.baselineDifference<1,'tunnel and service address share the table baseline');
+  assert.equal(geometry.iconWidth,14);assert.equal(geometry.iconHeight,14);
+  assert(geometry.title.includes('https://a-long-synthetic-preview-name.ngrok.app')&&geometry.title.includes('Public access'));
+  await route.hover();assert.equal(await root.evaluate(root=>getComputedStyle(root.querySelector('a[href="https://a-long-synthetic-preview-name.ngrok.app"]')).color),geometry.expected,'hover does not imply failure');
+  if(topology==='loose') {
+   assert.equal(await root.getByRole('img',{name:'Protected access',exact:true}).count(),1);
+   assert.equal(await root.getByRole('img',{name:'Access unknown',exact:true}).count(),1);
+   const grouping=await root.evaluate(root=>{const unknown=root.querySelector('[aria-label="Access unknown"]');const health=root.querySelector('[aria-label^="Tunnel health:"]');const row=unknown.closest('[data-service-tunnels]');return {separated:health.getBoundingClientRect().left>unknown.getBoundingClientRect().right,indented:!row||unknown.getBoundingClientRect().left>=row.children[1].getBoundingClientRect().left-.5};});
+   assert(grouping.separated,'the health error follows the label rather than merging with unknown access');
+   assert(grouping.indented,'wrapped tunnel values retain their column indent');
+   assert.equal(await root.getByTitle('Tunnel health: ready, not answering now (synthetic failure)',{exact:true}).filter({hasText:/^⚠$/}).evaluate(n=>getComputedStyle(n).color),'rgb(207, 34, 46)','actual failure keeps the error colour');
+  }
+  await page.mouse.move(1,1);
+  await root.screenshot({path:fileURLToPath(new URL(`${topology}-${theme}-${width}-${view}-access.png`,out))});
+ }
  const trigger=root.getByRole('button',{name:'Add a tunnel to preview',exact:true});await trigger.waitFor();await page.waitForTimeout(100);
  await trigger.scrollIntoViewIfNeeded();const stable=await root.boundingBox();
  await trigger.click();const menu=page.getByRole('menu',{name:'Tunnel for preview',exact:true});await menu.waitFor();
@@ -57,7 +79,7 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
   assert(repairBox.x+repairBox.width<=closeBox.x||closeBox.x+closeBox.width<=repairBox.x||repairBox.y+repairBox.height<=closeBox.y||closeBox.y+closeBox.height<=repairBox.y,'Consolidate must not cover close');
  }
  assert.equal(await page.locator('.wtc-tunnel-menu:popover-open').count(),0);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
- results.push({topology,theme,width,view,menu:box,padding:gap,colors:colorsActual,checks:{theme:true,viewport:true,stableLayout:true,paddedTrigger:true,toggle:true,arrowKeys:true,escapeFocus:true,tabDismiss:true,outsideDismiss:true,unchangedUpdateStable:true,sessionSwitchDismiss:true,resizeDismiss:true,explicitProvider:true,noOverflow:true,noErrors:true,looseControl:topology==='loose'?true:null},errors});await page.close();
+ results.push({topology,theme,width,view,menu:box,padding:gap,colors:colorsActual,checks:{theme:true,viewport:true,stableLayout:true,paddedTrigger:true,toggle:true,arrowKeys:true,escapeFocus:true,tabDismiss:true,outsideDismiss:true,unchangedUpdateStable:true,sessionSwitchDismiss:true,resizeDismiss:true,explicitProvider:true,noOverflow:true,noErrors:true,accessGlyphs:true,neutralHealthyLinks:true,accessAlignment:true,looseControl:topology==='loose'?true:null},errors});await page.close();
 }
 await writeFile(new URL('browser-results.json',out),JSON.stringify(results,null,2));console.log(`${results.length} browser menu cases passed.`);
 }finally{await browser.close()}
