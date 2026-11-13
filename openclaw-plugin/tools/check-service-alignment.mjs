@@ -1,3 +1,4 @@
+import { loadControlUIFixtureAssets, serveControlUIFixtureAsset } from "./control-ui-fixture-assets.mjs";
 import {resolve} from 'node:path';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
@@ -8,7 +9,7 @@ const [playwrightPath,outputPath]=process.argv.slice(2);
 if(!playwrightPath||!outputPath)throw new Error('Pass a Playwright module and output directory');
 const {chromium}=await import(pathToFileURL(resolve(playwrightPath)).href);
 const out=pathToFileURL(resolve(outputPath)+'/');await mkdir(out,{recursive:true});
-const module=await readFile(new URL('../dist/control-ui/v1/index.js',import.meta.url),'utf8');
+const assets=await loadControlUIFixtureAssets();
 let html=await readFile(new URL('tunnel-menu-fixture.html',import.meta.url),'utf8');
 html=html.replace(/ repos:\[.*\],/,' repos:[repo("api"),repo("web"),repo("docs")],').replace(/ services:\[.*\]/,' services:[{group:"api/worker",path:"api/worker",repo:"api",kind:"service",label:"Worker",state:"idle"},{group:"web/server",path:"web/server",repo:"web",kind:"service",label:"Demo server",state:"idle",url:"http://127.0.0.1:42001"}]');
 html=html.replace('</style>',':root{--bg:#0e1015;--card:#161920;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8b8b94;--border:#1e2028;--border-strong:#2e3040;--bg-hover:#242832}body{padding:16px;font:14px/1.55 system-ui,sans-serif}#stage>h1,#stage>p,#stage>footer,.composer{display:none}#panel{min-height:0}</style>');
@@ -16,7 +17,7 @@ const browser=await chromium.launch({headless:true}),results=[];
 try{for(const touch of [false,true])for(const state of ['stopped','mixed','running'])for(const view of ['card','panel'])for(const width of [320,390,760,1100]){
  const caseHtml=state==='stopped'?html:html.replace(/ services:\[.*\]/, state==='mixed'?' services:[{group:"api/worker",path:"api/worker",repo:"api",kind:"service",label:"Worker",state:"idle"},{group:"web/server",path:"web/server",repo:"web",kind:"service",label:"Demo server",state:"ready",url:"http://127.0.0.1:42001"},{group:"docs/indexer",path:"docs/indexer",repo:"docs",kind:"service",label:"Indexer",state:"failed",exit_code:2}]': ' services:[{group:"api/worker",path:"api/worker",repo:"api",kind:"service",label:"Worker",state:"ready"},{group:"web/server",path:"web/server",repo:"web",kind:"service",label:"Demo server",state:"ready",url:"http://127.0.0.1:42001"}]');
  const page=await browser.newPage({viewport:{width,height:1200},deviceScaleFactor:2,hasTouch:touch}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:caseHtml}):r.request().url()==='https://demo.invalid/plugin.js'?r.fulfill({contentType:'text/javascript',body:module}):r.abort());await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();await page.waitForTimeout(80);
+ await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:caseHtml}):serveControlUIFixtureAsset(r,assets));await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();await page.waitForTimeout(80);
  if(view==='card')await page.locator('#card details').evaluate(n=>n.open=true);else await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).click();
  const root=page.locator(view==='card'?'#card details':'#panel');
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));

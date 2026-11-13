@@ -18,7 +18,7 @@ func addSkillsCommands(root *cobra.Command, asJSON *bool) {
 	render.Flags().StringVar(&collection, "collection", "", "Collection directory (default: current)")
 	render.Flags().BoolVar(&all, "all", false, "Render every collection in this workspace")
 	render.Flags().BoolVar(&dryRun, "dry-run", false, "Show changes without writing")
-	render.Flags().BoolVar(&seedScope, "seed-scope", false, "Seed WTC-SCOPE.md when absent")
+	render.Flags().BoolVar(&seedScope, "seed-scope", false, "Seed the scope file when absent (SCOPE.md for a harness on the new file names, else WTC-SCOPE.md)")
 	render.RunE = func(cmd *cobra.Command, args []string) error {
 		var c *wtc.Context
 		var err error

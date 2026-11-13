@@ -620,8 +620,8 @@ export default {
       const text = [
         "wtc: pull request news for this collection",
         ...lines.map((l) => `- ${l}`),
-        // What to do about each is the wtc-follow skill's.
-        "Act on it with the wtc-follow skill, and bring the task's progress up to date.",
+        // What to do about each is the taba-follow skill's.
+        "Act on it with the taba-follow skill, and bring the task's progress up to date.",
         "Tell the person only what they need to act on.",
       ].join("\n");
       try {

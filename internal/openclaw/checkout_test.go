@@ -730,11 +730,19 @@ func TestStatusNamesTheNextStep(t *testing.T) {
 		t.Fatal("predicting the merge touched the worktree")
 	}
 
-	// Uncommitted work offers an explicit commit handoff; catch-up waits.
+	// Dirty work retains Commit changes and a preserving catch-up alternative;
+	// the known committed merge conflict still needs the owning agent.
 	write(t, c, "draft.md", "wip\n")
 	git("add", "draft.md")
-	if s = checkoutStatus(c.Dir, false); s.Next == nil || s.Next.Step != "commit" || s.Next.By != next.ByAgent {
-		t.Fatalf("work in progress must stay with the author: %+v", s.Next)
+	if s = checkoutStatus(c.Dir, false); s.Next == nil || s.Next.Step != "merge" || s.Next.By != next.ByAgent {
+		t.Fatalf("known conflict must stay with the author: %+v", s.Next)
+	}
+	available := map[string]bool{}
+	for _, a := range s.Choices.Actions {
+		available[a.Step.Step] = a.Available
+	}
+	if !available["commit"] || !available["catch-up"] {
+		t.Fatalf("dirty alternatives hidden: %+v", s.Choices)
 	}
 	git("rm", "-q", "--cached", "draft.md")
 	if err := os.Remove(filepath.Join(c.Dir, "draft.md")); err != nil {

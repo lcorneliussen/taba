@@ -649,8 +649,8 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
    ships Git 2.39 and no `gh`, and publication fails there with "workspace
    attributes could not be verified".
 3. **The plugin**, which brings the collection card, the Collection panel and
-   the agent's skills: `wtc`, and the OpenClaw variants of `wtc-catch-up`,
-   `wtc-pr` and `wtc-follow` (each `SKILL.openclaw.md` among wtc's skills):
+   the agent's skills: `wtc`, and the OpenClaw variants of `taba-catch-up`,
+   `taba-pr` and `taba-follow` (each `SKILL.openclaw.md` among wtc's skills):
 
    ```sh
    wtc openclaw install
@@ -816,7 +816,7 @@ person to inspect the current merge requirements.
 Forge approval does not prove a current independent review. Independent review
 execution in the gateway remains unavailable until its shared review adapter is
 installed; the disabled alternative explains this. Local status can hand off the
-existing `wtc-local-review` skill, which checks existing review activity first.
+existing `taba-local-review` skill, which checks existing review activity first.
 Unchanged handoffs stay disabled in that view while completion is pending.
 After checking the conversation, **Allow retry** enables explicit reselection.
 There is no automatic continuation, durable job queue or cross-runner claim in
@@ -919,15 +919,17 @@ native service can reconcile its own registry during that listing. Restoration
 does not change OpenClaw's idle cleanup or snapshot retention policy.
 
 Repository actions use a shared fixed column: the main button and its `⋯` menu
-keep the same positions for Catch up, Commit changes and Restore. The menu
-shows available alternatives and explains blocked ones. If local changes keep
-catch-up out of the current plan, the menu says to save or stash them first;
-it does not override the plan or bypass the gateway's checks.
+keep the same positions for Catch up and Restore. The menu shows available
+alternatives and explains blocked ones. Commit changes uses the `±N` fact
+instead of a duplicate menu entry. Gateway catch-up can preserve local edits, so a dirty
+checkout behind its base offers both Catch up and Commit changes. An older
+gateway that cannot do this explains why Commit changes comes first.
 
 The header `⋯` menu keeps collection-wide Catch up, Restore and push preparation
 available even when a different action occupies the main button. Counts include
-only eligible repositories; catch-up excludes dirty and unavailable checkouts.
-Pushes retain their personal confirmation. **Choose steps…** opens mixed
+only eligible repositories; unavailable checkouts and unfinished operations are
+excluded. Hover or keyboard-focus a group Catch up control to highlight its
+exact target rows without changing their layout. Pushes retain their personal confirmation. **Choose steps…** opens mixed
 selection across repositories. Merely opening or navigating a menu runs nothing.
 
 Action groups are right-aligned, with `⋯` on the left. The recommended action
@@ -937,3 +939,79 @@ in the menu with their reasons. Each repository uses the same action-column
 width, and space already exposed during the conversation is retained while
 work is running so progress does not shift the repository facts. Changing the
 viewport never runs or selects an action.
+
+### Gateway catch-up with local changes
+
+A base catch-up in a gateway-managed worktree preserves staged, unstaged and
+untracked edits before merging, then restores them with their staging state.
+It creates no user commit and does not require a personal Git author merely to
+make the recovery copy. It never rebases or pushes. Merging committed branches
+can still require the agent's configured merge author. `--from` retains its
+clean-worktree requirement.
+
+Recovery copies stay in local Git under `refs/wtc-catch-up/` and in the stash
+stack. They are not uploaded or automatically expired. Copies are retained
+rather than dropped by stash position because worktrees share that stack.
+Ignored files are not included; a collision with incoming tracked files stops
+before overwriting ignored local data. Existing unfinished operations also stop.
+
+If restoring the edits fails, catch-up reports a failure, retains the complete
+copy (including the original index and untracked files), and records a
+worktree-local Git recovery marker. Status offers Resolve conflicts, even when
+Git has no unmerged index entries. A repeated catch-up refuses to reapply the
+copy blindly. Sandbox delivery and worker merges use the same checkout lock
+and refuse active or unreadable recovery markers before changing HEAD or the
+index. Commit controls respect recovery and the repository's current action
+plan, rechecking the checkout before asking for commits. The owning conversation
+must inspect both copies and restore or
+resolve the intended edits, including partial staging and untracked content.
+The bundled **taba-catch-up** skill routes this through
+`wtc docs instructions/openclaw-recovery.md`; no separately learned skill is
+required. After verification, run in the owning gateway checkout:
+
+```sh
+wtc catch-up --finish-recovery <exact-ref> --expected-head <verified-full-HEAD> --json
+```
+
+This checks the exact operation and HEAD, backup, unresolved Git state and
+new tracked conflict markers. It acknowledges the agent's content verification,
+archives the active marker and records a typed completion receipt. It does not
+apply edits, commit, push or delete backups. Only a matching receipt for the
+same repository owner, checkout and recovery operation settles that pending
+card action; dispatch acceptance or a cleared behind count does not.
+Failed catch-up JSON includes `recoveryRequired` and its `recoveryRef`. Status
+exports the active `catchUpRecovery` or `catchUpRecoveryError`; after a verified
+finish it exports `catchUpRecoveryCompleted` with the typed receipt. The pinned
+copy remains available. A retained crash lock must likewise be inspected before
+removal; never remove a live operation's lock.
+
+The gateway runs a card's deterministic catch-up against its managed worktree.
+An agent executes in the environment assigned to its conversation, which can
+be a sandbox. An agent's sandbox catch-up already preserves its sandbox edits;
+it is a separate operation, not permission to edit arbitrary gateway folders.
+Diagnostic handoffs must identify which copy owns the blocker. If the sandbox
+cannot reach gateway recovery data, it must report that boundary rather than
+pretend to restore it or run a command in another workspace.
+
+A commit spinner means a request was sent to the owning conversation; it is
+not evidence of a Git commit in progress. After 90 seconds without confirming
+repository facts, `?` means no commit has yet been observed. Clicking either
+indicator opens action details. **Ask agent for help** requests a diagnosis in
+that same conversation without retrying, committing, restoring, or publishing.
+The action log is shared by the card and sidebar in the current browser
+session; it is not a durable gateway audit trail. Pending requests stay reserved
+for their collection and repository when navigating away and back, so switching
+views cannot dispatch a duplicate request.
+Partial commit progress or fewer dirty files alone leaves the request
+unconfirmed and reserved. Push preparation and confirmation also wait for this
+reservation. A clean checkout with new local commits confirms success; otherwise
+check the conversation and explicitly acknowledge that its request has finished
+in the Action log before starting another mutation.
+
+The same browser-session reservation covers chosen/default agent steps, native
+catch-up and worker actions that can change a checkout. Worker merges and edit
+takeovers reserve the participating checkouts. A missing dispatch response is
+unconfirmed, not permission to retry. Changing views, branches or checkout
+observations does not cancel an outstanding request. After checking the owning
+conversation or native operation, **I checked: request has finished** releases
+that exact request across views without canceling work or starting another action.

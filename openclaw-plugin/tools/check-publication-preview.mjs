@@ -1,3 +1,4 @@
+import { loadControlUIFixtureAssets, serveControlUIFixtureAsset } from "./control-ui-fixture-assets.mjs";
 // Synthetic browser checks only: no account, gateway or real publication.
 import {readFile,writeFile,mkdir} from "node:fs/promises";
 import {resolve} from "node:path";
@@ -7,7 +8,7 @@ const [playwrightPath,outputPath]=process.argv.slice(2);
 if(!playwrightPath||!outputPath)throw Error("Usage: check-publication-preview.mjs <playwright module> <output directory>");
 const {chromium}=await import(pathToFileURL(resolve(playwrightPath)).href),root=new URL("../",import.meta.url),out=pathToFileURL(resolve(outputPath)+"/");
 await mkdir(out,{recursive:true});
-const files=new Map(await Promise.all([["/plugin.js","dist/control-ui/v1/index.js"],["/pr-preview.js","dist/control-ui/v1/pr-preview.js"],["/vendor/marked.esm.js","dist/control-ui/v1/vendor/marked.esm.js"]].map(async([url,file])=>[url,await readFile(new URL(file,root),"utf8")])));
+const assets=await loadControlUIFixtureAssets();
 const template=await readFile(new URL("tools/tunnel-menu-fixture.html",root),"utf8");
 const body="# Summary\n\nKeep **confirmation controls** in place and make the proposal readable.\n\n- [x] Preserve the captured text\n- Format lists, `code` and headings\n\n## Validation\n\n```sh\nnode --test\n```\n\n| Check | Result |\n|---|---|\n| Unit tests | Passed |\n| Review | Pending |\n\n<img src='https://private.invalid/pixel' onerror='alert(1)'>\n\n![Explicit image link](https://example.invalid/diagram.png)\n";
 const repo={repo:"web",forge:"github",owner:"example-org",sessionKey:"demo:web",branch:"openclaw/add-search",base:"origin/main",ahead:2,unpublished:2,behind:0,proposal:{branch:"openclaw/add-search",title:"Keep publication clear",body}};
@@ -18,7 +19,7 @@ try{for(const view of ["card","panel"])for(const width of [320,390,760,1100]){
  html=html.replace("</style>","body{padding:10px;font:14px/1.55 system-ui,sans-serif}#stage>h1,#stage>p,#stage>footer{display:none}#panel{min-height:0}.composer{margin:8px 0 0;font-size:13px;padding:14px}#stage{max-height:100vh}"+(view==="card"?"#stage{position:fixed;bottom:10px;left:10px;right:10px}":"")+"</style>");
  const page=await browser.newPage({viewport:{width,height:1000},deviceScaleFactor:2}),errors=[],external=[];
  page.on("pageerror",e=>errors.push(e.message));
- await page.route("**/*",route=>{const url=new URL(route.request().url());if(url.origin!=="https://demo.invalid"){external.push(url.href);return route.abort();}return url.pathname==="/"?route.fulfill({contentType:"text/html",body:html}):files.has(url.pathname)?route.fulfill({contentType:"text/javascript",body:files.get(url.pathname)}):route.abort();});
+ await page.route("**/*",route=>{const url=new URL(route.request().url());if(url.origin!=="https://demo.invalid"){external.push(url.href);return route.abort();}return url.pathname==="/"?route.fulfill({contentType:"text/html",body:html}):serveControlUIFixtureAsset(route,assets);});
  await page.goto("https://demo.invalid/");await page.locator("#card details").waitFor();
  if(view==="panel")await page.getByRole("button",{name:"Open the taba Collection panel",exact:true}).click();
  const host=page.locator(view==="card"?"#card":"#panel");

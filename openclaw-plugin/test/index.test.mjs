@@ -342,7 +342,7 @@ test("the collection's conversation hears what changed, and is woken for it", as
   await look();
   pr = { number: 2, url: "u", state: "open", draft: true, checks: "none" };
   await look();
-  assert.deepEqual(events, [{ text: "wtc: pull request news for this collection\n- site: pull request #2 (u) opened as a draft.\nAct on it with the wtc-follow skill, and bring the task's progress up to date.\nTell the person only what they need to act on.", agentId: "main", sessionKey: "agent:main:c" }]);
+  assert.deepEqual(events, [{ text: "wtc: pull request news for this collection\n- site: pull request #2 (u) opened as a draft.\nAct on it with the taba-follow skill, and bring the task's progress up to date.\nTell the person only what they need to act on.", agentId: "main", sessionKey: "agent:main:c" }]);
   assert.deepEqual(wakes, [{ source: "other", intent: "immediate", reason: "wtc-pull-request", agentId: "main", sessionKey: "agent:main:c", heartbeat: { target: "last" } }]);
   // Merged while nobody looks: the service's next round finds it.
   assert.equal(services.at(-1).id, "pull-request-watch");
@@ -363,11 +363,11 @@ test("the collection's conversation hears what changed, and is woken for it", as
   await new Promise((resolve) => setImmediate(resolve));
   services.at(-1).stop();
   mock.timers.reset();
-  assert.match(events.at(-1).text, /#2 \(u\) was merged\.\nAct on it with the wtc-follow skill/);
+  assert.match(events.at(-1).text, /#2 \(u\) was merged\.\nAct on it with the taba-follow skill/);
   // First seen already merged: the wtc-follow hint too.
   pr = { ...pr, number: 5, url: "u5", state: "merged" };
   await look();
-  assert.match(events.at(-1).text, /#5 \(u5\) was opened and merged\.\nAct on it with the wtc-follow skill/);
+  assert.match(events.at(-1).text, /#5 \(u5\) was opened and merged\.\nAct on it with the taba-follow skill/);
   // queue tells without waking; off says nothing.
   register({ pullRequestEvents: "queue" });
   pr = { ...pr, number: 3, state: "open" };

@@ -74,7 +74,7 @@ func TestInvocationBrandingAtCLIEntryPoint(t *testing.T) {
 				}
 			}
 			target := filepath.Join(root, "literal wtc {{command}}")
-			stdout, stderr, err := run("harness", "init", target, "--remote", "https://example.invalid/wtc/project.git", "--cli-version", "0.1.60", "--dry-run", "--json")
+			stdout, stderr, err := run("harness", "init", target, "--remote", "https://example.invalid/wtc/project.git", "--cli-version", "0.2.0", "--dry-run", "--json")
 			var result struct {
 				OK   bool `json:"ok"`
 				Data struct {
@@ -86,7 +86,7 @@ func TestInvocationBrandingAtCLIEntryPoint(t *testing.T) {
 				t.Fatalf("JSON payload was changed: %v, %q, %q", err, stdout, stderr)
 			}
 			files := strings.Join(result.Data.Files, ",")
-			if !strings.Contains(files, ".wtc-cli-version") || !strings.Contains(files, "wtc.toml") || strings.Contains(files, "taba") {
+			if !strings.Contains(files, ".taba-version") || !strings.Contains(files, "taba.toml") || strings.Contains(files, "wtc") {
 				t.Fatalf("generated names changed: %v", result.Data.Files)
 			}
 			if _, err := os.Stat(target); !os.IsNotExist(err) {

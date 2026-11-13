@@ -41,14 +41,14 @@ the archive; first finish or explicitly hand off the delivery obligations.
 ## Use status updates without repeating all the forge calls
 
 Read this collection's `.wtc-status.json` (`generated_at` is UTC), or the age
-shown by `wtc status --no-watch --cached`, before requesting a new table.
+shown by `taba status --no-watch --cached`, before requesting a new table.
 Default freshness limits for a follower are **2 minutes in the foreground**
 and **10 minutes in the background**. Unknown focus uses foreground. These
 are agent scheduling defaults, separate from the TUI render interval and
 forge cache TTL; they do not create a timer by themselves.
 
 - Reuse a valid, complete snapshot within the limit for triage. Refresh this
-  collection once with `wtc status --no-watch --json --no-fetch` when
+  collection once with `taba status --no-watch --json --no-fetch` when
   it is missing, malformed, older, or has an invalid/future timestamp. Do not
   widen to `--all` without explicit scope.
 - A push, review, check completion or merge notification invalidates the
@@ -82,7 +82,7 @@ cannot schedule work while no agent is running.
 
 ## Advance every actionable gate
 
-For each owned PR, use `wtc-pr` for forge commands and review mechanics:
+For each owned PR, use `taba-pr` for forge commands and review mechanics:
 
 1. **Base moved:** catch up the affected worktree, merge the default branch
    into live work, resolve routine conflicts within the task, validate and
@@ -122,7 +122,7 @@ For each owned PR, use `wtc-pr` for forge commands and review mechanics:
    environment if the task requires them. A successful build is not proof of
    production deployment. Prepare required downstream ports, docs or release
    PRs in dependency order, and follow their checks/reviews. Additional repos
-   go through `wtc-add-repo` and the collection scope rules. Prepare any manual
+   go through `taba-add-repo` and the collection scope rules. Prepare any manual
    release action fully before its human checkpoint; do not infer permission
    to deploy from permission to open/follow a PR.
 9. **Delivered:** catch this collection up, verify the agreed outcome, and
