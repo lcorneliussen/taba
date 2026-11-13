@@ -75,17 +75,20 @@ func run() error {
 	var envAll bool
 	var envSkipHooks bool
 	var envRunHooks bool
+	var envRepairRoots bool
 	setupFlags := func(cmd *cobra.Command) {
-		cmd.Flags().StringVar(&collection, "collection", "", "Collection directory (default: current)")
-		cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show generated environment without writing")
-		cmd.Flags().BoolVar(&envAll, "all", false, "Refresh every collection in the workspace")
-		cmd.Flags().BoolVar(&envSkipHooks, "skip-hooks", false, "Do not run environment lifecycle hooks or trust mise")
-		cmd.Flags().BoolVar(&envRunHooks, "run-hooks", false, "Run each target's hooks and trust mise during --all (requires trusted collections)")
+		envSetupFlags(cmd, &collection, &dryRun, &envAll, &envSkipHooks, &envRunHooks, &envRepairRoots)
 	}
 	setupFlags(envCmd) // Existing flagged invocations remain compatible.
 	setup := &cobra.Command{Use: "setup", Short: "Generate this collection's environment and mise configuration", Args: cobra.NoArgs}
 	setupFlags(setup)
 	runEnvSetup := func(cmd *cobra.Command, args []string) error {
+		if envRepairRoots {
+			if envAll || envRunHooks {
+				return fmt.Errorf("--repair-generated-roots is single-collection and cannot run hooks")
+			}
+			return repairGeneratedRoots(collection, dryRun, asJSON)
+		}
 		if envRunHooks && (!envAll || envSkipHooks) {
 			return fmt.Errorf("--run-hooks requires --all and cannot be combined with --skip-hooks")
 		}
@@ -178,7 +181,7 @@ func run() error {
 	envCmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if !cmd.Flags().Changed("collection") && !cmd.Flags().Changed("dry-run") &&
 			!cmd.Flags().Changed("all") && !cmd.Flags().Changed("skip-hooks") &&
-			!cmd.Flags().Changed("run-hooks") {
+			!cmd.Flags().Changed("run-hooks") && !cmd.Flags().Changed("repair-generated-roots") {
 			return cmd.Help()
 		}
 		return runEnvSetup(cmd, args)

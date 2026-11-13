@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 	"taba.sh/taba/internal/branding"
-	"taba.sh/taba/internal/envcompat"
 )
 
 // RunHook invokes an optional harness-level lifecycle hook. Pre-hooks can veto;
 // post-hooks report failures without hiding a completed operation.
 func (c *Context) RunHook(event string, values map[string]string) error {
+	if _, err := c.ValidateControlRoot(); err != nil {
+		return err
+	}
 	if event == "" || strings.ContainsAny(event, "/\\") || strings.Contains(event, "..") {
 		return fmt.Errorf("invalid hook event %q", event)
 	}
@@ -49,7 +51,10 @@ func (c *Context) RunHook(event string, values map[string]string) error {
 	}
 	command := exec.Command(path)
 	command.Dir = c.Collection
-	command.Env = append(append(os.Environ(), envcompat.Both("WTC_COLLECTION", filepath.Base(c.Collection))...), envcompat.Both("WTC_CONFIG_ROOT", c.ConfigRoot)...)
+	command.Env, err = c.ReceivingEnvironment(os.Environ())
+	if err != nil {
+		return fail(err)
+	}
 	command.Stdin = bytes.NewReader(payload)
 	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr

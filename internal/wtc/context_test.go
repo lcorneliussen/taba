@@ -58,17 +58,15 @@ func TestConfigRootDefaultsToWorkspaceConfigDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(c.Workspace, ".config"); opened.ConfigRoot != want {
+	if want := filepath.Join(realPath(t, c.Workspace), ".config"); opened.ConfigRoot != want {
 		t.Fatalf("default control root %q, want %q", opened.ConfigRoot, want)
 	}
 	fixtureFile(t, filepath.Join(c.Collection, ".env.collection"), "WTC_CONFIG_ROOT=/generated/root\n", 0644)
-	opened, err = OpenCollection(c.Collection)
-	if err != nil || opened.ConfigRoot != "/generated/root" {
-		t.Fatalf("generated environment did not win: %q %v", opened.ConfigRoot, err)
+	if _, err := OpenCollection(c.Collection); err == nil {
+		t.Fatal("generated root granted permission")
 	}
 	t.Setenv("WTC_CONFIG_ROOT", "/explicit/root")
-	opened, err = OpenCollection(c.Collection)
-	if err != nil || opened.ConfigRoot != "/explicit/root" {
-		t.Fatalf("explicit override did not win: %q %v", opened.ConfigRoot, err)
+	if _, err := OpenCollection(c.Collection); err == nil {
+		t.Fatal("inherited root granted permission")
 	}
 }

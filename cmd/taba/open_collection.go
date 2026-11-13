@@ -184,6 +184,10 @@ func openReadEnvironment(path string) ([]string, error) {
 }
 
 func openCreateWorkspace(target *wtc.Context, session, name string) error {
+	scope, err := target.ValidateControlRoot()
+	if err != nil {
+		return err
+	}
 	args := []string{"workspace", "create", "--cwd", target.Collection, "--label", name, "--no-focus"}
 	for _, file := range []string{".env.collection", ".env.collection.local"} {
 		settings, err := openReadEnvironment(filepath.Join(target.Collection, file))
@@ -191,8 +195,14 @@ func openCreateWorkspace(target *wtc.Context, session, name string) error {
 			return err
 		}
 		for _, setting := range settings {
+			if strings.HasPrefix(setting, "TABA_CONFIG_ROOT=") || strings.HasPrefix(setting, "WTC_CONFIG_ROOT=") {
+				continue
+			}
 			args = append(args, "--env", setting)
 		}
+	}
+	for _, setting := range envcompat.Both("WTC_CONFIG_ROOT", "'"+scope.Root+"'") {
+		args = append(args, "--env", setting)
 	}
 	path, err := target.AgentToolchainPath(true)
 	if err == nil && path != "" {

@@ -48,9 +48,13 @@ type EnvInventoryKey struct {
 var envKeyName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func (c *Context) ListEnv() (EnvInventory, error) {
+	scope, err := c.ValidateControlRoot()
+	if err != nil {
+		return EnvInventory{}, err
+	}
 	result := EnvInventory{Files: []EnvInventoryFile{}, Variables: []EnvInventoryKey{}}
 	seen := map[string]bool{}
-	machine, err := MachineEnvFile(c.ConfigRoot)
+	machine, err := MachineEnvFile(scope.Root)
 	if err != nil {
 		return result, err
 	}
@@ -114,6 +118,13 @@ func readEnvKeyNames(path string) ([]string, bool, error) {
 }
 
 func (c *Context) ListSecrets(repoFilter string) (SecretInventory, error) {
+	scope, err := c.ValidateControlRoot()
+	if err != nil {
+		return SecretInventory{}, err
+	}
+	if err := scope.validateSecretSources(); err != nil {
+		return SecretInventory{}, err
+	}
 	result := SecretInventory{Files: []SecretInventoryFile{}}
 	harnessRepo, _ := c.HarnessRepoName()
 	if repoFilter == "harness" && harnessRepo != "" {
@@ -126,10 +137,7 @@ func (c *Context) ListSecrets(repoFilter string) (SecretInventory, error) {
 	if err != nil {
 		return result, err
 	}
-	root, err := filepath.Abs(c.ConfigRoot)
-	if err != nil {
-		return result, err
-	}
+	root := scope.Root
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		entries = nil

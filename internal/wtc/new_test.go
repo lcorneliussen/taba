@@ -73,7 +73,6 @@ func newWorkspaceFixture(t *testing.T) *Context {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.ConfigRoot = filepath.Join(root, "control")
 	return c
 }
 

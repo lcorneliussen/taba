@@ -39,7 +39,7 @@ func TestDoctorAllReportsConventionsFromTheWorkspaceRoot(t *testing.T) {
 	run := func(dir string, args ...string) (string, error) {
 		cmd := exec.Command(binary, args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+filepath.Join(root, "xdg-config"), "XDG_DATA_HOME="+filepath.Join(root, "xdg-data"), "WTC_CONFIG_ROOT="+filepath.Join(root, "control"), "TABA_CONFIG_ROOT="+filepath.Join(root, "control"))
+		cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+filepath.Join(root, "xdg-config"), "XDG_DATA_HOME="+filepath.Join(root, "xdg-data"), "WTC_CONFIG_ROOT="+filepath.Join(workspace, ".config"), "TABA_CONFIG_ROOT="+filepath.Join(workspace, ".config"))
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}

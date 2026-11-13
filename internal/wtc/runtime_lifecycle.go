@@ -87,11 +87,26 @@ func runtimeCommand(m *runtimeManifest, sourceEnv bool, args ...string) ([]byte,
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	argv := append([]string{"-C", m.Root, "--json"}, args...)
-	cmd := exec.CommandContext(ctx, m.Binary, argv...)
+	receiver, err := OpenCollection(filepath.Dir(filepath.Dir(m.Root)))
+	if err != nil {
+		return nil, err
+	}
+	var cmd *exec.Cmd
 	if sourceEnv {
-		collection := filepath.Dir(filepath.Dir(m.Root))
-		args := append([]string{"-c", `set -ea; [ ! -f "$1" ] || . "$1"; [ ! -f "$2" ] || . "$2"; shift 2; exec "$@"`, "wtc-runtime", filepath.Join(collection, ".env.collection"), filepath.Join(collection, ".env.collection.local"), m.Binary}, argv...)
-		cmd = exec.CommandContext(ctx, "/bin/sh", args...)
+		cmd, err = receiver.ReceivingCommand(m.Binary, argv...)
+		if err != nil {
+			return nil, err
+		}
+		// Attach cancellation without changing the validated argv/environment.
+		args, env := cmd.Args, cmd.Env
+		cmd = exec.CommandContext(ctx, args[0], args[1:]...)
+		cmd.Env = env
+	} else {
+		cmd = exec.CommandContext(ctx, m.Binary, argv...)
+		cmd.Env, err = receiver.ReceivingEnvironment(os.Environ())
+		if err != nil {
+			return nil, err
+		}
 	}
 	cmd.Dir = m.Root
 	cmd.WaitDelay = 200 * time.Millisecond
@@ -199,7 +214,10 @@ func (c *Context) runtimeHooks(m *runtimeManifest, tasks []runtimeTask, hook str
 				fmt.Fprintf(os.Stderr, "%s: tearing down %s\n", task.Dir, strings.Join(names, ", "))
 			}
 		}
-		cmd := exec.Command("/bin/sh", "-c", `set -ea; [ ! -f "$1" ] || . "$1"; [ ! -f "$2" ] || . "$2"; shift 2; exec "$@"`, "wtc-runtime-hook", filepath.Join(c.Collection, ".env.collection"), filepath.Join(c.Collection, ".env.collection.local"), path)
+		cmd, err := c.ReceivingCommand(path)
+		if err != nil {
+			return err
+		}
 		cmd.Dir = worktree
 		logPath := filepath.Join(m.Root, "hook-logs", task.Dir, hook+".log")
 		if err := runtimeSafeParents(m.Root, logPath); err != nil {

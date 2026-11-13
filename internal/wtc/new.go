@@ -39,6 +39,9 @@ var githubSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9
 
 func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	result := NewResult{}
+	if _, err := c.ValidateControlRoot(); err != nil {
+		return result, err
+	}
 	if c.AdHoc {
 		if opt.Review {
 			return result, fmt.Errorf("review mode needs a harness collection")
@@ -226,9 +229,10 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	if err != nil {
 		return result, err
 	}
-	// A freshly created collection has no env file yet. Inherit the chosen
-	// control root from the creating collection rather than the machine default.
-	target.ConfigRoot = c.ConfigRoot
+	// Resolve the target permission independently of the creating collection.
+	if _, err := target.ValidateControlRoot(); err != nil {
+		return result, err
+	}
 	if err := target.ValidateEnvSupport(); err != nil {
 		return result, err
 	}
@@ -284,7 +288,7 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		RunRepoInit(path)
+		target.runRepoLifecycle(path, "init")
 	}
 	_, _ = target.AgentToolchainPath(true) // A bare agent shell can fill this later.
 	var branchNote string
