@@ -116,18 +116,31 @@ func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []by
 		return false
 	}
 	promotesMerge := false
+	isMerge := false
 	if kind == "pr" {
 		candidate, parseErr := statusParseForgeDetail(forge, data, PRRecord{Number: key})
-		current, known := statusReadObservedDetail(PRRecord{Number: key}, slug, forge, statusMergedCacheAge())
+		current, known := statusRetainedMerge(PRRecord{Number: key}, slug, forge)
 		if known && current.State == "MERGED" && (parseErr != nil || candidate.State != "MERGED") {
 			return false
 		}
-		promotesMerge = parseErr == nil && candidate.State == "MERGED" && (!known || current.State != "MERGED")
+		isMerge = parseErr == nil && candidate.State == "MERGED"
+		promotesMerge = isMerge && !known
 	}
 	// A confirmed merge supersedes any non-MERGED or absent observation.
 	// Otherwise request-start provenance selects the winner.
 	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return false
+	}
+	// Released publishers can overwrite the ordinary detail without this guard.
+	// Retain confirmed merge evidence independently, with its actual observation
+	// time and the same retention policy; reading it never renews authority.
+	if isMerge {
+		if observed.IsZero() {
+			observed = time.Now()
+		}
+		if !statusWriteForgeEntryObserved("merge", forge, slug, key, data, observed) {
+			return false
+		}
 	}
 	if !statusWriteForgeEntryObserved(kind, forge, slug, key, data, observed) {
 		return false

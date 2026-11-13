@@ -44,12 +44,16 @@ func TestStatusMergedPRCacheOutlivesActiveCache(t *testing.T) {
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.Title != "Refreshed detail" {
 		t.Fatalf("merged detail did not refresh after a day: %+v", detail)
 	}
+	// Active-cache expiry is a separate PR identity: the preceding confirmed
+	// merge remains retained even if a released publisher replaces its detail.
+	number = "8"
+	path = statusForgeCachePath(forge, slug, number)
 	t.Setenv("WTC_TEST_GH_DETAIL", "")
-	cache(`{"number":7,"state":"OPEN"}`)
+	cache(`{"number":8,"state":"OPEN"}`)
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "UNKNOWN" {
 		t.Fatalf("stale active result was trusted: %+v", detail)
 	}
-	cache(`{"number":7,"state":"MERGED"}`)
+	cache(`{"number":8,"state":"MERGED"}`)
 	t.Setenv("WTC_FORGE_CACHE_AGE", "1")
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "UNKNOWN" {
 		t.Fatalf("explicit short cache age was ignored: %+v", detail)
@@ -58,7 +62,7 @@ func TestStatusMergedPRCacheOutlivesActiveCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(t.TempDir(), "outside")
-	if err := os.WriteFile(outside, []byte(`{"number":7,"state":"MERGED"}`), 0600); err != nil {
+	if err := os.WriteFile(outside, []byte(`{"number":8,"state":"MERGED"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, path); err != nil {

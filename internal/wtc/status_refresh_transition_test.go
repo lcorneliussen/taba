@@ -33,12 +33,26 @@ type status319Event struct {
 }
 
 // Refresh children exercise the production collector and CLI transport without
-// a second collector. The legacy child is an independent released-budget fixture
-// that ignores the new queue and never calls production admission.
+// a second collector. Released fixtures exercise the original budget and cache
+// publication contracts independently of the new queue and merge guard.
 func TestStatus319RefreshProcess(t *testing.T) {
 	mode := os.Getenv("WTC_TEST_319_CHILD")
 	if mode == "" {
 		return
+	}
+	if mode == "released-cache" {
+		raw := []byte(os.Getenv("WTC_TEST_319_CACHE_RAW"))
+		nanos, _ := strconv.ParseInt(os.Getenv("WTC_TEST_319_CACHE_START"), 10, 64)
+		if !status319ReleasedWriteForgeEntrySince("pr", "bitbucket.org", "example/widget", "7", raw, time.Unix(0, nanos)) {
+			os.Exit(3)
+		}
+
+		if list := os.Getenv("WTC_TEST_319_CACHE_LIST"); list != "" {
+			if !status319ReleasedWriteForgeEntrySince("openprs", "bitbucket.org", "example/widget", "open", []byte(list), time.Unix(0, nanos)) {
+				os.Exit(4)
+			}
+		}
+		os.Exit(0)
 	}
 	if mode == "legacy" {
 		status319ReleasedConsumer()
@@ -265,6 +279,10 @@ func (s *status319Wire) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body = s.item(700, true)
 		}
 	case strings.HasPrefix(path, "/cli/activity/"):
+		if mode == "no-merge-time" {
+			body = map[string]any{"activities": []any{}}
+			break
+		}
 		body = map[string]any{"activities": []any{map[string]any{"description": strings.Repeat("synthetic ", 10000), "update": map[string]string{"state": "MERGED", "date": "2026-11-04T10:01:00.123456789Z"}}}}
 	case strings.Contains(path, "/pullrequests"):
 		values := []any{}
@@ -367,6 +385,9 @@ func status319Collection(t *testing.T, slug string) (*Context, string, string) {
 
 func status319Age(t *testing.T, kind, slug, key string) {
 	t.Helper()
+	if kind == "pr" {
+		status319Age(t, "merge", slug, key)
+	}
 	path := statusForgeEntryPath(kind, "bitbucket.org", slug, key)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return
@@ -638,7 +659,7 @@ func TestStatus319ProductionRefreshTransitionsAcrossProcesses(t *testing.T) {
 	before = wire.count()
 	cooling := status319Refresh(t, primary, server.URL, bin, false)
 	status319AssertMerged(t, cooling)
-	if wire.count() != before || !strings.Contains(cooling.Markdown, "deferred forge observation") {
+	if wire.count() != before || (!strings.Contains(cooling.Markdown, "deferred forge observation") && !strings.Contains(cooling.Markdown, "stale forge observation")) {
 		t.Fatal("cooling lost known merge state or dispatched a follow-up read")
 	}
 	for _, pr := range cooling.Snapshot.PRs {
@@ -844,6 +865,9 @@ func TestStatus319RefreshCoexistsWithReleasedBudgetConsumer(t *testing.T) {
 	if _, err := primary.EnlistPR(PRRecord{Repo: "widget", Number: "10", Branch: "another", URL: "https://bitbucket.org/example/widget/pull-requests/10", Title: "Synthetic interrupted"}); err != nil {
 		t.Fatal(err)
 	}
+	// Isolate the interrupted confirmation from ancillary reads for the prior
+	// merge, so the observed budget lock belongs to this pending record.
+	fixtureFile(t, primary.PRFile(), "widget 10 another https://bitbucket.org/example/widget/pull-requests/10 Synthetic interrupted\n", 0600)
 	fixtureFile(t, statusForgeStatePath("budget", "bitbucket.org"), fmt.Sprintf("0 %d\n", time.Now().UnixNano()), 0600)
 	cancelled := status319Start(t, primary, server.URL, bin, false)
 	cancelled.until(t, "ready")
@@ -963,5 +987,175 @@ func TestStatus319ProductionExpiredListProvenance(t *testing.T) {
 	}
 	if wire.count() != before {
 		t.Fatal("cooling dispatched a provider read")
+	}
+}
+
+// The released request-order publisher predates merge retention. Its algorithm
+// is copied unchanged from the released cache contract; only symbols differ.
+func status319ReleasedWriteForgeEntrySince(kind, forge, slug, key string, data []byte, started time.Time) bool {
+	if len(data) == 0 {
+		return false
+	}
+	if saved, ok := status319ReleasedForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) {
+		return false
+	}
+	status319ReleasedWriteForgeEntry(kind, forge, slug, key, data)
+	status319ReleasedWriteForgeEntry("since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)))
+	return true
+}
+
+func status319ReleasedForgeEntrySince(kind, forge, slug, key string) (time.Time, bool) {
+	saved, ok := statusReadForgeEntryAny("since", forge, slug, kind+":"+key)
+	if !ok {
+		return time.Time{}, false
+	}
+	nanos, err := strconv.ParseInt(string(saved), 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Unix(0, nanos), true
+}
+
+func status319ReleasedWriteForgeEntry(kind, forge, slug, key string, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	path := statusForgeEntryPath(kind, forge, slug, key)
+	if !statusSecureCacheDir(filepath.Dir(path)) {
+		return
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".pr-")
+	if err != nil {
+		return
+	}
+	defer os.Remove(tmp.Name())
+	if tmp.Chmod(0600) != nil {
+		tmp.Close()
+		return
+	}
+	if _, err = tmp.Write(data); err != nil {
+		tmp.Close()
+		return
+	}
+	if tmp.Close() != nil {
+		return
+	}
+	_ = os.Rename(tmp.Name(), path)
+}
+
+func TestStatus319ProductionReleasedCacheWriter(t *testing.T) {
+	for _, order := range []string{"active-first", "active-last"} {
+		for _, allowance := range []string{"available", "spent", "cooling"} {
+			t.Run(order+"/"+allowance, func(t *testing.T) {
+				t.Setenv("TMPDIR", t.TempDir())
+				statusHideBitbucketLogin(t)
+				c, head, base := status319Collection(t, "widget")
+				bin := t.TempDir()
+				fixtureFile(t, filepath.Join(bin, "bb"), "#!/bin/sh\nWTC_TEST_319_CHILD=bb exec \"$WTC_TEST_319_EXE\" -test.run=^TestStatus319RefreshProcess$ -- \"$@\"\n", 0700)
+				t.Setenv("BB_API_USER", "synthetic")
+				t.Setenv("BB_API_PASS", "synthetic")
+				wire := &status319Wire{head: head, base: base}
+				server := httptest.NewServer(wire)
+				defer server.Close()
+				status319Refresh(t, c, server.URL, bin, false)
+				raw, _ := json.Marshal(wire.item(7, false))
+				items := []statusOpenPR{}
+				for _, number := range []int{7, 8, 9} {
+					item := wire.item(number, false)
+					item["comment_count"] = 99
+					data, _ := json.Marshal(item)
+					var parsed statusBBListItem
+					_ = json.Unmarshal(data, &parsed)
+					items = append(items, statusOpenPR{Number: strconv.Itoa(number), Branch: parsed.Source.Branch.Name, Fingerprint: parsed.fingerprint(), Raw: data})
+				}
+				list, _ := statusEncodeOpenPRs(items, false, time.Now())
+				publish := func() {
+					t.Helper()
+					command := exec.Command(os.Args[0], "-test.run=^TestStatus319RefreshProcess$")
+					command.Env = append(os.Environ(), "WTC_TEST_319_CHILD=released-cache", "WTC_TEST_319_CACHE_RAW="+string(raw), "WTC_TEST_319_CACHE_LIST="+string(list), "WTC_TEST_319_CACHE_START="+strconv.FormatInt(time.Now().Add(time.Second).UnixNano(), 10))
+					if out, err := command.CombinedOutput(); err != nil {
+						t.Fatalf("released publisher: %v %s", err, out)
+					}
+				}
+				if order == "active-first" {
+					publish()
+				}
+				wire.mu.Lock()
+				wire.merged = true
+				wire.mode = "no-merge-time"
+				wire.mu.Unlock()
+				status319Age(t, "pr", "example/widget", "7")
+				status319Age(t, "openprs", "example/widget", "open")
+				status319Opportunity(t)
+				merged := status319Refresh(t, c, server.URL, bin, false)
+				for attempt := 0; attempt < 8; attempt++ {
+					found := false
+					for _, pr := range merged.Snapshot.PRs {
+						if pr.Number == "7" && pr.State == "MERGED" {
+							found = true
+						}
+					}
+					if found {
+						break
+					}
+					status319Opportunity(t)
+					status319Age(t, "omit", "example/widget", "7")
+					status319Age(t, "pr", "example/widget", "7")
+					merged = status319Refresh(t, c, server.URL, bin, false)
+				}
+				assertMerge := func(event status319Event) {
+					t.Helper()
+					found := false
+					for _, pr := range event.Snapshot.PRs {
+						if pr.Number == "7" {
+							found = true
+							if pr.State != "MERGED" || pr.MergedOn != nil {
+								t.Fatalf("missing-time merge regressed: %+v", pr)
+							}
+						}
+					}
+					if !found || !strings.Contains(event.Markdown, "merged") {
+						t.Fatalf("native merge missing: %s", event.Markdown)
+					}
+				}
+				assertMerge(merged)
+				observed := ""
+				for _, pr := range merged.Snapshot.PRs {
+					if pr.Number == "7" {
+						observed = pr.ObservedAt
+					}
+				}
+				if order == "active-last" {
+					publish()
+				}
+				// A changed active-list fingerprint and active view simulate a lagging replica.
+				wire.mu.Lock()
+				wire.merged = false
+				wire.mode = "old-list"
+				wire.mu.Unlock()
+				status319Age(t, "openprs", "example/widget", "open")
+				switch allowance {
+				case "available":
+					status319Opportunity(t)
+				case "spent":
+					fixtureFile(t, statusForgeStatePath("budget", "bitbucket.org"), fmt.Sprintf("0 %d\n", time.Now().UnixNano()), 0600)
+				case "cooling":
+					statusForgeCool("bitbucket.org", time.Hour)
+				}
+				before := wire.count()
+				for pass := 0; pass < 2; pass++ {
+					event := status319Refresh(t, c, server.URL, bin, false)
+					assertMerge(event)
+					for _, pr := range event.Snapshot.PRs {
+						if pr.Number == "7" && (pr.ObservedAt != observed || pr.Freshness == "live") {
+							t.Fatalf("cached merge claimed a new observation: %+v", pr)
+						}
+					}
+				}
+				if allowance != "available" && wire.count() != before {
+					t.Fatalf("denied allowance dispatched provider IO: %v", wire.calls[before:])
+				}
+			})
+		}
 	}
 }

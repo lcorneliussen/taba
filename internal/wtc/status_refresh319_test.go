@@ -836,3 +836,70 @@ func TestStatusOlderListPreservesNewerDetailObservation(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusRetainedMergeSurvivesReleasedCacheOverwrite(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		t.Run(forge, func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			t.Setenv("WTC_FORGE_CACHE_AGE", "")
+			record := PRRecord{Number: "7"}
+			slug := "example/widget"
+			merged, active := []byte(`{"number":7,"state":"MERGED"}`), []byte(`{"number":7,"state":"OPEN"}`)
+			if forge == "bitbucket.org" {
+				merged = []byte(`{"id":7,"state":"MERGED"}`)
+				active = []byte(`{"id":7,"state":"OPEN"}`)
+			}
+			observed := time.Now().Add(-23 * time.Hour)
+			if !statusWriteForgeEntrySinceObserved("pr", forge, slug, "7", merged, observed, observed) {
+				t.Fatal("merge not published")
+			}
+			status319ReleasedWriteForgeEntrySince("pr", forge, slug, "7", active, time.Now())
+			for i := 0; i < 2; i++ {
+				got, ok := statusRetainedMerge(record, slug, forge)
+				at, err := time.Parse(time.RFC3339Nano, got.ObservedAt)
+				if !ok || got.State != "MERGED" || got.MergedOn != "" || err != nil || at.Sub(observed).Abs() > time.Millisecond || got.Freshness != "stale" {
+					t.Fatalf("retained state/age changed: %+v %v", got, err)
+				}
+			}
+			if got, ok := statusReadObservedDetail(record, slug, forge, statusForgeCacheAge()); !ok || got.State != "MERGED" || got.Freshness != "stale" {
+				t.Fatalf("fresh active detail hid retained old merge: %+v", got)
+			}
+			for _, identity := range []struct{ slug, number string }{{"example/other", "7"}, {slug, "8"}} {
+				if _, ok := statusRetainedMerge(PRRecord{Number: identity.number}, identity.slug, forge); ok {
+					t.Fatal("merge crossed identity")
+				}
+			}
+			t.Setenv("WTC_FORGE_CACHE_AGE", "1")
+			if _, ok := statusRetainedMerge(record, slug, forge); ok {
+				t.Fatal("explicit short retention was ignored")
+			}
+			t.Setenv("WTC_FORGE_CACHE_AGE", "")
+			path := statusForgeEntryPath("merge", forge, slug, "7")
+			info, err := os.Stat(path)
+			if err != nil || info.Mode().Perm() != 0600 {
+				t.Fatalf("unsafe evidence file: %v %v", info, err)
+			}
+			expired := time.Now().Add(-25 * time.Hour)
+			if err := os.Chtimes(path, expired, expired); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := statusRetainedMerge(record, slug, forge); ok {
+				t.Fatal("expired merge retained authority")
+			}
+			if !statusWriteForgeEntrySince("pr", forge, slug, "7", active, time.Now()) {
+				t.Fatal("expired merge blocked new observation")
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), "outside")
+			fixtureFile(t, outside, string(merged), 0600)
+			if err := os.Symlink(outside, path); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := statusRetainedMerge(record, slug, forge); ok {
+				t.Fatal("followed merge evidence symlink")
+			}
+		})
+	}
+}

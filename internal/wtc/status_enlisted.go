@@ -276,6 +276,11 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 	}
 	if err == nil {
 		if detail, parseErr := statusParseForgeDetail(forge, raw, record); parseErr == nil {
+			if detail.State != "MERGED" {
+				if known, ok := statusRetainedMerge(record, slug, forge); ok {
+					return known
+				}
+			}
 			if live && onLive != nil {
 				onLive(detail)
 			}

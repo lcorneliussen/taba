@@ -49,7 +49,16 @@ func statusFreshnessLabel(freshness, observed string) string {
 // Observe the actual cached payload without fetching ancillary evidence or
 // changing its timestamp. Callers choose the existing retention policy.
 func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
-	raw, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, age)
+	// A fresh active detail from a released writer cannot supersede retained
+	// merge state. Its original age still controls freshness and action gates.
+	if detail, ok := statusRetainedMerge(record, slug, forge); ok {
+		return detail, true
+	}
+	return statusReadObservedDetailKind("pr", record, slug, forge, age)
+}
+
+func statusReadObservedDetailKind(kind string, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
+	raw, observed, ok := statusReadForgeEntryObserved(kind, forge, slug, record.Number, age)
 	if !ok {
 		return statusPRDetail{}, false
 	}
@@ -61,6 +70,12 @@ func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Dura
 }
 
 func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
-	detail, ok := statusReadObservedDetail(record, slug, forge, statusMergedCacheAge())
+	detail, ok := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
+	current, found := statusReadObservedDetailKind("pr", record, slug, forge, statusMergedCacheAge())
+	currentAt, _ := time.Parse(time.RFC3339Nano, current.ObservedAt)
+	retainedAt, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
+	if found && current.State == "MERGED" && (!ok || currentAt.After(retainedAt)) {
+		return current, true
+	}
 	return detail, ok && detail.State == "MERGED"
 }
