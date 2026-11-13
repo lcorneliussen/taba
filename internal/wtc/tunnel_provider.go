@@ -64,6 +64,9 @@ func validateTunnelProviderPolicy(e tunnelPolicyEntry) error {
 		return err
 	}
 	o := e.Options
+	if e.Provider != "cloudflare" && o.AccountID != "" || e.Provider != "ngrok" && o.Reserve {
+		return fmt.Errorf("unsupported provider account/reservation option")
+	}
 	allowedAccess := "public protected unknown"
 	switch e.Provider {
 	case "cloudflare":

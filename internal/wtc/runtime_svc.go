@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -68,11 +69,21 @@ func (c *Context) runtimeRepos() ([]runtimeRepo, error) {
 		return nil, err
 	}
 	var out []runtimeRepo
+	identities := c.prRepositories()
 	for _, r := range repos {
 		if filepath.Clean(r.path) == filepath.Clean(c.Harness) {
 			continue
 		}
-		out = append(out, runtimeRepo{dir: filepath.Base(r.path), repo: r.repo, path: r.path})
+		dir := filepath.Base(r.path)
+		name := r.repo
+		identity, err := identities.resolve(dir)
+		if err != nil {
+			return nil, err
+		}
+		if identity != nil {
+			name = identity.name
+		}
+		out = append(out, runtimeRepo{dir: dir, repo: name, path: r.path})
 	}
 	return out, nil
 }
@@ -281,7 +292,7 @@ func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, err
 	if err != nil {
 		return RuntimeResult{}, err
 	}
-	plan, _, err := c.runtimePlan("dekit")
+	plan, _, err := c.runtimePlanWithTunnels("dekit", false)
 	if err != nil {
 		return RuntimeResult{}, err
 	}
@@ -300,6 +311,23 @@ func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, err
 	if len(files) == 0 {
 		return RuntimeResult{}, fmt.Errorf(branding.Text("unknown service %s/%s; {{command}} svc lists them"), repo.dir, name)
 	}
+	// Clean retained named obligations before removing declarations. Managed
+	// task Source is TOML policy, never a YAML fragment to edit as a native task.
+	state, err := c.readTunnelJournal()
+	if err != nil {
+		return RuntimeResult{}, err
+	}
+	for _, old := range state.Entries {
+		if old.Key.Repo != repo.repo || old.Key.Service != name {
+			continue
+		}
+		if err = c.setTunnelStart(old.Key, false); err != nil {
+			return RuntimeResult{}, err
+		}
+		if err = c.executeRetainedTunnel(context.Background(), old, "unregister", c.tunnelProviders()); err != nil {
+			return RuntimeResult{}, err
+		}
+	}
 	if others == 0 {
 		// Nothing would be left to run; stop everything first, if it ever ran.
 		if m, err := c.runtimeManifest(); err != nil {
@@ -310,45 +338,51 @@ func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, err
 			}
 		}
 	}
-	for path, names := range files {
-		if err := runtimeEditFragment(path, func(tasks *yaml.Node) error {
-			var kept []*yaml.Node
-			for i := 0; i+1 < len(tasks.Content); i += 2 {
-				drop := false
-				for _, n := range names {
-					drop = drop || tasks.Content[i].Value == n
-				}
-				if !drop {
-					kept = append(kept, tasks.Content[i], tasks.Content[i+1])
-				}
-			}
-			tasks.Content = kept
-			return nil
-		}); err != nil {
-			return RuntimeResult{}, err
+	err = c.withRuntimeLock(func() error {
+		latest, err := c.readTunnelJournal()
+		if err != nil {
+			return err
 		}
-	}
-	if others == 0 {
-		// No task is left to render. Keep the manifest for the resources it
-		// records, which retirement must still tear down, without the tasks.
-		err := c.withRuntimeLock(func() error {
-			m, err := c.runtimeManifest()
-			if err != nil || m == nil {
+		for _, entry := range latest.Entries {
+			if entry.Key.Repo == repo.repo && entry.Key.Service == name && entry.needsCleanup() {
+				return fmt.Errorf("named tunnel obligations changed before service removal; clean them first")
+			}
+		}
+		for path, names := range files {
+			if err := runtimeEditFragment(path, func(tasks *yaml.Node) error {
+				var kept []*yaml.Node
+				for i := 0; i+1 < len(tasks.Content); i += 2 {
+					drop := false
+					for _, n := range names {
+						drop = drop || tasks.Content[i].Value == n
+					}
+					if !drop {
+						kept = append(kept, tasks.Content[i], tasks.Content[i+1])
+					}
+				}
+				tasks.Content = kept
+				return nil
+			}); err != nil {
 				return err
 			}
+		}
+		m, err := c.runtimeManifest()
+		if err != nil || m == nil {
+			return err
+		}
+		if others == 0 {
 			m.Tasks = []runtimeTask{}
 			for path, intent := range m.TunnelIntents {
 				intent.Definition = ""
 				m.TunnelIntents[path] = intent
 			}
 			return runtimeSaveManifest(m)
-		})
-		return RuntimeResult{Root: c.runtimeRoot(), Action: "rm", Items: c.RuntimeStatus()}, err
-	}
-	if m, err := c.runtimeManifest(); err != nil || m == nil {
-		return RuntimeResult{Root: c.runtimeRoot(), Action: "rm", Items: []RuntimeItem{}}, err
-	}
-	return c.RenderRuntime(false)
+		}
+		_, err = c.renderRuntime()
+		return err
+	})
+	return RuntimeResult{Root: c.runtimeRoot(), Action: "rm", Items: c.RuntimeStatus()}, err
+
 }
 
 // runtimeTunnelTemplate is the client command for a provider, reading the
@@ -378,17 +412,22 @@ func runtimeTunnelTemplate(provider, portEnv string, public bool) (cmd, ready st
 
 // TunnelOptions opens or closes a tunnel for a service.
 type TunnelOptions struct {
-	Service  string
-	Provider string
-	Public   bool
-	Stop     bool
-	Wait     time.Duration
+	Name               string
+	Action             string
+	DefinitionFile     string
+	Project            bool
+	ExpectedDefinition string
+	Service            string
+	Provider           string
+	Public             bool
+	Stop               bool
+	Wait               time.Duration
 }
 
 // Tunnel starts a service's tunnel through a provider, adding one to this
 // collection's task file when the service has none. A tunnel reachable from
 // the internet opens only with Public.
-func (c *Context) Tunnel(opt TunnelOptions) (RuntimeResult, error) {
+func (c *Context) legacyTunnel(opt TunnelOptions) (RuntimeResult, error) {
 	repo, name, err := c.runtimeServiceRepo(opt.Service, true)
 	if err != nil {
 		return RuntimeResult{}, err
@@ -438,42 +477,8 @@ func (c *Context) Tunnel(opt TunnelOptions) (RuntimeResult, error) {
 	if provider == "" {
 		provider = tunnels[0].Provider
 	}
-	// A client that is not signed in starts a host that cannot serve.
-	if missing := runtimeLoginCheck(provider); missing != "" {
-		return RuntimeResult{}, fmt.Errorf("%s; then open the tunnel again", missing)
-	}
 	if len(tunnels) == 0 {
-		if service.PortEnv == "" {
-			return RuntimeResult{}, fmt.Errorf("%s has no port variable; enlist it with --port-env or set x-wtc port_env", service.Path)
-		}
-		cmd, ready, err := runtimeTunnelTemplate(opt.Provider, service.PortEnv, opt.Public)
-		if err != nil {
-			return RuntimeResult{}, err
-		}
-		if p, ok := runtimeTunnelProviderNamed(opt.Provider); ok && p.command(cmd) == ExposurePublic && !opt.Public {
-			return RuntimeResult{}, fmt.Errorf("a %s tunnel is reachable from the internet; pass --public to open it", opt.Provider)
-		}
-		task := map[string]any{
-			"label": opt.Provider + " tunnel",
-			"cmd":   []string{"sh", "-c", cmd},
-			"deps":  []string{strings.TrimPrefix(service.Path, repo.dir+"/")},
-			"tags":  []string{"endpoint"},
-			"ready": map[string]any{"log": ready, "timeout": "60s"},
-			"x-wtc": map[string]any{"tunnel": opt.Provider},
-		}
-		if err := c.runtimeChange(c.runtimeLocalFragment(repo.dir), func(tasks *yaml.Node) error {
-			return runtimeAddTask(tasks, name+"/"+opt.Provider, task)
-		}); err != nil {
-			return RuntimeResult{}, err
-		}
-		if plan, _, err = c.runtimePlan(binary); err != nil {
-			return RuntimeResult{}, err
-		}
-		for _, t := range plan.Tasks {
-			if t.Path == group+"/"+opt.Provider {
-				tunnels = []runtimeTask{t}
-			}
-		}
+		return RuntimeResult{}, fmt.Errorf("configure a named receiving-local tunnel with explicit provider inputs before starting it")
 	}
 	tunnel := tunnels[0]
 	exposed := true

@@ -158,10 +158,10 @@ func TestTunnelIntentFailuresRetainChoiceAndDiagnostics(t *testing.T) {
 		t.Fatalf("missing provider failure: %v", err)
 	}
 	item := intentTunnel(t, c)
-	if item.TunnelIntent != "on" || item.Lifecycle == "" || item.Login == "" || item.Exposure != ExposureProtected {
+	if item.TunnelIntent != "on" || item.Lifecycle == "" || item.Login != "" || item.Exposure != ExposureProtected {
 		t.Fatalf("diagnostics conflated: %+v", item)
 	}
-	if text := RuntimeText([]RuntimeItem{item}); !strings.Contains(text, item.Lifecycle) || !strings.Contains(text, item.Login) {
+	if text := RuntimeText([]RuntimeItem{item}); !strings.Contains(text, item.Lifecycle) || strings.Contains(text, "synthetic login expired") {
 		t.Fatalf("diagnostics missing: %s", text)
 	}
 	runtimeLoginCheck = func(string) string { return "" }
@@ -245,7 +245,7 @@ func TestTunnelIntentUntargetedRestartLeavesStoppedServiceOff(t *testing.T) {
 	if _, err := c.RuntimeAction("restart", "widget/web", 0); err == nil || !strings.Contains(err.Error(), "login expired") {
 		t.Fatalf("restart hid provider failure: %v", err)
 	}
-	if item := intentTunnel(t, c); item.State != "idle" || item.Lifecycle == "" || item.Login == "" {
+	if item := intentTunnel(t, c); item.State != "idle" || item.Lifecycle == "" || item.Login != "" {
 		t.Fatalf("restart diagnostics missing: %+v", item)
 	}
 }

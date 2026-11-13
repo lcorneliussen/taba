@@ -10,12 +10,15 @@ import (
 )
 
 type tunnelDefinition struct {
-	Owner         string               `json:"owner"`
-	Entry         tunnelEffectiveEntry `json:"entry"`
-	Target        string               `json:"target"`
-	ProviderScope string               `json:"provider_scope"` // non-secret account/zone/cluster binding
-	HooksDigest   string               `json:"hooks_digest"`
-	ReloadDigest  string               `json:"reload_digest"`
+	ControlScope       string               `json:"control_scope,omitempty"`
+	Directory          string               `json:"directory,omitempty"`
+	RepositoryIdentity string               `json:"repository_identity,omitempty"`
+	Owner              string               `json:"owner"`
+	Entry              tunnelEffectiveEntry `json:"entry"`
+	Target             string               `json:"target"`
+	ProviderScope      string               `json:"provider_scope"` // non-secret account/zone/cluster binding
+	HooksDigest        string               `json:"hooks_digest"`
+	ReloadDigest       string               `json:"reload_digest"`
 }
 
 func tunnelDigest(data []byte) string {
@@ -29,6 +32,12 @@ func validTunnelDigest(s string) bool {
 }
 
 func (d tunnelDefinition) digest() (string, error) {
+	if d.ControlScope != "" && !validTunnelDigest(d.ControlScope) {
+		return "", fmt.Errorf("invalid receiving tunnel scope binding")
+	}
+	if d.Directory != "" && (!runtimeTaskPath(d.Directory) || filepath.Base(d.Directory) != d.Directory) || d.RepositoryIdentity != "" && !validTunnelDigest(d.RepositoryIdentity) {
+		return "", fmt.Errorf("invalid resolved tunnel repository identity")
+	}
 	if !tunnelComponent.MatchString(d.Owner) || d.ProviderScope == "" || len(d.ProviderScope) > 512 || strings.ContainsAny(d.ProviderScope, "\r\n\x00") || !d.Entry.Matched || d.Entry.Disabled || d.Entry.Policy.disabled() {
 		return "", fmt.Errorf("tunnel definition needs owner, provider scope and a matched enabled entry")
 	}
@@ -51,6 +60,9 @@ func (d tunnelDefinition) digest() (string, error) {
 	}
 	// Canonicalize enabled=true and absence to the same effective definition.
 	d.Entry.Policy.Enabled = nil
+	// Session selection changes without changing what was approved. Source,
+	// provider inputs, callbacks and reload targets remain definition-bound.
+	d.Entry.Selected = nil
 	data, err := json.Marshal(d)
 	if err != nil {
 		return "", err

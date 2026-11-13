@@ -30,6 +30,8 @@ func (k tunnelKey) validate() error {
 func (k tunnelKey) String() string { return k.Repo + "/" + k.Service + "/" + k.Name }
 
 type tunnelProviderOptions struct {
+	AccountID    string `toml:"account_id" json:"account_id,omitempty"`
+	Reserve      bool   `toml:"reserve" json:"reserve,omitempty"`
 	Hostname     string `toml:"hostname" json:"hostname,omitempty"`
 	Registration string `toml:"registration" json:"registration,omitempty"`
 	ZoneID       string `toml:"zone_id" json:"zone_id,omitempty"`
@@ -39,22 +41,50 @@ type tunnelProviderOptions struct {
 }
 
 type tunnelPolicyEntry struct {
-	Enabled          *bool                 `toml:"enabled" json:"enabled,omitempty"`
-	Provider         string                `toml:"provider" json:"provider"`
-	Mode             string                `toml:"mode" json:"mode"`
-	Access           string                `toml:"access" json:"access"`
-	StartWithService bool                  `toml:"start_with_service" json:"start_with_service"`
-	Options          tunnelProviderOptions `toml:"options" json:"options"`
+	Inputs           tunnelInputRefs               `toml:"inputs" json:"inputs"`
+	Events           map[string]tunnelEventCommand `toml:"events" json:"events,omitempty"`
+	Reload           []string                      `toml:"reload" json:"reload,omitempty"`
+	Enabled          *bool                         `toml:"enabled" json:"enabled,omitempty"`
+	Provider         string                        `toml:"provider" json:"provider"`
+	Mode             string                        `toml:"mode" json:"mode"`
+	Access           string                        `toml:"access" json:"access"`
+	StartWithService bool                          `toml:"start_with_service" json:"start_with_service"`
+	Options          tunnelProviderOptions         `toml:"options" json:"options"`
 }
 
 func (e tunnelPolicyEntry) disabled() bool { return e.Enabled != nil && !*e.Enabled }
 
 func (e tunnelPolicyEntry) validate() error {
 	if e.disabled() {
-		if e.Provider != "" || e.Mode != "" || e.Access != "" || e.StartWithService || e.Options != (tunnelProviderOptions{}) {
+		if e.Provider != "" || e.Mode != "" || e.Access != "" || e.StartWithService || e.Options != (tunnelProviderOptions{}) || e.Inputs != (tunnelInputRefs{}) || len(e.Events) > 0 || len(e.Reload) > 0 {
 			return fmt.Errorf("a disabled tunnel must contain only enabled = false")
 		}
 		return nil
+	}
+	if err := e.Inputs.validate(); err != nil {
+		return err
+	}
+	for event, cmd := range e.Events {
+		switch event {
+		case "registered", "started", "stopped", "unregistered":
+		default:
+			return fmt.Errorf("unknown tunnel event")
+		}
+		if len(cmd.Command) == 0 || !tunnelRelativePath(cmd.Command[0]) {
+			return fmt.Errorf("event command must name a receiving-repository file")
+		}
+		for _, arg := range cmd.Command {
+			if strings.ContainsAny(arg, "\x00\r\n") || len(arg) > 4096 {
+				return fmt.Errorf("invalid tunnel event command")
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, target := range e.Reload {
+		if !runtimeTaskPath(target) || len(strings.Split(target, "/")) < 3 || seen[target] {
+			return fmt.Errorf("reload targets must be distinct declared app task paths")
+		}
+		seen[target] = true
 	}
 	return validateTunnelProviderPolicy(e)
 }
@@ -65,6 +95,7 @@ func (e tunnelPolicyEntry) validate() error {
 type tunnelPolicy struct {
 	Source  string
 	Entries map[tunnelKey]tunnelPolicyEntry
+	Starts  map[tunnelKey]bool
 }
 
 func parseTunnelPolicy(source string, data []byte) (tunnelPolicy, error) {
@@ -75,6 +106,7 @@ func parseTunnelPolicy(source string, data []byte) (tunnelPolicy, error) {
 	var doc struct {
 		Schema  int                                                `toml:"schema"`
 		Tunnels map[string]map[string]map[string]tunnelPolicyEntry `toml:"tunnels"`
+		Starts  map[string]map[string]map[string]bool              `toml:"starts"`
 	}
 	meta, err := toml.Decode(string(data), &doc)
 	if err != nil {
@@ -96,7 +128,7 @@ func parseTunnelPolicy(source string, data []byte) (tunnelPolicy, error) {
 					return p, fmt.Errorf("invalid tunnel entry: %w", err)
 				}
 				if entry.disabled() {
-					for _, field := range []string{"provider", "mode", "access", "start_with_service", "options"} {
+					for _, field := range []string{"provider", "mode", "access", "start_with_service", "options", "start", "inputs", "events", "reload"} {
 						if meta.IsDefined("tunnels", repo, service, name, field) {
 							return p, fmt.Errorf("a disabled tunnel must contain only enabled = false")
 						}
@@ -106,10 +138,23 @@ func parseTunnelPolicy(source string, data []byte) (tunnelPolicy, error) {
 			}
 		}
 	}
+	p.Starts = map[tunnelKey]bool{}
+	for repo, services := range doc.Starts {
+		for service, names := range services {
+			for name, on := range names {
+				key := tunnelKey{repo, service, name}
+				if err := key.validate(); err != nil {
+					return p, err
+				}
+				p.Starts[key] = on
+			}
+		}
+	}
 	return p, nil
 }
 
 type tunnelEffectiveEntry struct {
+	Selected *bool             `json:"selected,omitempty"`
 	Key      tunnelKey         `json:"key"`
 	Policy   tunnelPolicyEntry `json:"policy"`
 	Source   string            `json:"source"`
@@ -127,7 +172,7 @@ func effectiveTunnelPolicy(project, collection tunnelPolicy, services map[string
 		policy tunnelPolicy
 		scope  string
 	}{{project, "project"}, {collection, "collection"}} {
-		if len(input.policy.Entries) > 0 && !filepath.IsAbs(input.policy.Source) {
+		if (len(input.policy.Entries) > 0 || len(input.policy.Starts) > 0) && !filepath.IsAbs(input.policy.Source) {
 			return nil, fmt.Errorf("tunnel policy requires an explicit resolved source path")
 		}
 		for key, entry := range input.policy.Entries {
@@ -140,7 +185,22 @@ func effectiveTunnelPolicy(project, collection tunnelPolicy, services map[string
 			// Drop the mutable pointer; absence and explicit true are equivalent.
 			disabled := entry.disabled()
 			entry.Enabled = nil
-			merged[key] = tunnelEffectiveEntry{key, entry, input.policy.Source, input.scope, services[key.Repo+"/"+key.Service], disabled}
+			merged[key] = tunnelEffectiveEntry{Key: key, Policy: entry, Source: input.policy.Source, Scope: input.scope, Matched: services[key.Repo+"/"+key.Service], Disabled: disabled}
+		}
+	}
+	for index, policy := range []tunnelPolicy{project, collection} {
+		for key, on := range policy.Starts {
+			entry, exists := merged[key]
+			if !exists {
+				scope := "project"
+				if index == 1 {
+					scope = "collection"
+				}
+				entry = tunnelEffectiveEntry{Key: key, Source: policy.Source, Scope: scope}
+			}
+			value := on
+			entry.Selected = &value
+			merged[key] = entry
 		}
 	}
 	entries := make([]tunnelEffectiveEntry, 0, len(merged))

@@ -30,11 +30,14 @@ var devTunnelAssetChecksums string
 // The caller supplies an already scoped transport and credential. There is no
 // default client, environment lookup, login or credential-store selection.
 type tunnelHTTP struct {
-	RoundTrip http.RoundTripper
-	Auth      string
+	CredentialContext string
+	RoundTrip         http.RoundTripper
+	Auth              string
 }
 
 func (c tunnelHTTP) request(ctx context.Context, method, address string, headers map[string]string, body any, result any) (int, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	if c.RoundTrip == nil || c.Auth == "" || strings.ContainsAny(c.Auth, "\r\n\x00") {
 		return 0, errors.New("explicit scoped provider transport and authorization required")
 	}

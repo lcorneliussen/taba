@@ -9,15 +9,17 @@ import (
 )
 
 var errTunnelReconcile = errors.New("tunnel effect needs reconciliation; it will not be replayed")
+var errTunnelNotApplied = errors.New("tunnel effect was refused before a mutation was submitted")
 
 // Update must serialize, validate and durably commit this SAME state journal
 // before returning. Its mutation closure performs no external effects. Fence
 // persists the existing runtime's forward schema before any provider or hook.
 // These are injected storage boundaries, not a second lock, ledger or resolver.
 type tunnelLifecycleStore struct {
-	Read   func(context.Context) (tunnelState, error)
-	Update func(context.Context, func(*tunnelState) error) error
-	Fence  func(context.Context) error
+	ProviderEffect func(context.Context, func(context.Context) (tunnelEffectResult, error)) (tunnelEffectResult, error)
+	Read           func(context.Context) (tunnelState, error)
+	Update         func(context.Context, func(*tunnelState) error) error
+	Fence          func(context.Context) error
 }
 
 type tunnelLifecycleRequest struct {
@@ -28,14 +30,15 @@ type tunnelLifecycleRequest struct {
 }
 
 type tunnelLifecycleOperation struct {
-	Definition   tunnelDefinition     `json:"definition"`
-	Stages       []string             `json:"stages"`
-	Previous     *tunnelAddress       `json:"previous"`
-	Registration *tunnelAddress       `json:"registration"`
-	Before       tunnelEventSnapshot  `json:"before"`
-	Event        *tunnelEvent         `json:"event,omitempty"`
-	View         *tunnelEventSnapshot `json:"view,omitempty"`
-	Cancelled    bool                 `json:"cancelled,omitempty"` // only an unattempted suffix; never an uncertain effect
+	ProviderIntent *tunnelProviderIntent `json:"provider_intent,omitempty"`
+	Definition     tunnelDefinition      `json:"definition"`
+	Stages         []string              `json:"stages"`
+	Previous       *tunnelAddress        `json:"previous"`
+	Registration   *tunnelAddress        `json:"registration"`
+	Before         tunnelEventSnapshot   `json:"before"`
+	Event          *tunnelEvent          `json:"event,omitempty"`
+	View           *tunnelEventSnapshot  `json:"view,omitempty"`
+	Cancelled      bool                  `json:"cancelled,omitempty"` // only an unattempted suffix; never an uncertain effect
 }
 
 // The adapter supplies only non-secret receipts and confirmed addresses. Even
@@ -95,6 +98,11 @@ func (l tunnelLifecycle) ReadState(ctx context.Context) (tunnelState, error) {
 }
 
 func (p tunnelLifecycleOperation) validate(owner string, entry tunnelEntryState, op tunnelOperation) error {
+	if p.ProviderIntent != nil {
+		if err := p.ProviderIntent.validate(); err != nil {
+			return err
+		}
+	}
 	if p.Cancelled && (lifecycleUncertain(&op) || op.Action != "start" && op.Action != "register") {
 		return fmt.Errorf("invalid cancelled tunnel operation")
 	}
@@ -140,6 +148,11 @@ func (p tunnelLifecycleOperation) validate(owner string, entry tunnelEntryState,
 		}
 	}
 	if p.Event != nil {
+		for _, r := range p.Event.Resources {
+			if err := r.validate(owner); err != nil {
+				return err
+			}
+		}
 		if err := p.Event.validate(); err != nil {
 			return err
 		}
@@ -390,6 +403,9 @@ func (l tunnelLifecycle) Execute(ctx context.Context, r tunnelLifecycleRequest) 
 		return fmt.Errorf("declared tunnel callbacks are unavailable")
 	}
 	err = l.update(ctx, func(s *tunnelState) error {
+		if s.Retiring && (r.Action == "register" || r.Action == "start") {
+			return fmt.Errorf("collection tunnel retirement is pending")
+		}
 		if err := s.validate(l.Owner); err != nil {
 			return err
 		}
@@ -437,7 +453,11 @@ func (l tunnelLifecycle) Execute(ctx context.Context, r tunnelLifecycleRequest) 
 		if r.Action == "register" || r.Action == "start" {
 			e.Consent = &consent
 		}
-		e.Operation = &tunnelOperation{ID: r.ID, Action: r.Action, Definition: digest, Lifecycle: &tunnelLifecycleOperation{Definition: r.Definition, Stages: stages, Previous: e.Active, Registration: e.Known, Before: before}}
+		previous := e.Active
+		if previous == nil {
+			previous = e.Last
+		}
+		e.Operation = &tunnelOperation{ID: r.ID, Action: r.Action, Definition: digest, Lifecycle: &tunnelLifecycleOperation{Definition: r.Definition, Stages: stages, Previous: previous, Registration: e.Known, Before: before}}
 		return nil
 	})
 	if err != nil {
@@ -484,7 +504,7 @@ func (l tunnelLifecycle) call(s tunnelState, e tunnelEntryState, stage string) (
 		if name == "unregistered" {
 			previous, current = op.Lifecycle.Registration, (*tunnelAddress)(nil)
 		}
-		call.Event = &tunnelEvent{Schema: 1, ID: tunnelDigest([]byte(op.ID + "/" + e.Key.String() + "/" + name)), OperationID: op.ID, Type: name, Key: e.Key, Definition: e.Definition, Previous: previous, Current: current, Before: op.Lifecycle.Before, After: after}
+		call.Event = &tunnelEvent{Resources: append([]tunnelResourceRef(nil), e.Resources...), Schema: 1, ID: tunnelDigest([]byte(op.ID + "/" + e.Key.String() + "/" + name)), OperationID: op.ID, Type: name, Key: e.Key, Definition: e.Definition, Previous: previous, Current: current, Before: op.Lifecycle.Before, After: after}
 	}
 	return call, nil
 }
@@ -568,6 +588,12 @@ func (l tunnelLifecycle) advance(ctx context.Context, key tunnelKey, id string) 
 			return err
 		}
 		result, effectErr := l.effect(ctx, call)
+		if errors.Is(effectErr, errTunnelNotApplied) {
+			if err = l.unapplied(ctx, key, id, stage, result); err != nil {
+				return err
+			}
+			return effectErr
+		}
 		if err = l.finish(ctx, key, id, stage, result, effectErr == nil); err != nil {
 			return err
 		}
@@ -577,9 +603,39 @@ func (l tunnelLifecycle) advance(ctx context.Context, key tunnelKey, id string) 
 	}
 }
 
+// This is only for a trusted adapter's positive no-mutation evidence. Unknown
+// transport/hook failures keep their pending step. Earlier completed effects
+// and receipts remain; reconciliation can resume the unattempted suffix.
+func (l tunnelLifecycle) unapplied(ctx context.Context, key tunnelKey, id, stage string, result tunnelEffectResult) error {
+	return l.update(ctx, func(s *tunnelState) error {
+		e := lifecycleEntry(s, key)
+		if e == nil || e.Operation == nil || e.Operation.ID != id || len(e.Operation.Steps) == 0 {
+			return errTunnelReconcile
+		}
+		op := e.Operation
+		last := op.Steps[len(op.Steps)-1]
+		if last.Name != stage || last.Status != "pending" {
+			return errTunnelReconcile
+		}
+		if err := lifecycleApply(e, l.Owner, "receipt", result, false); err != nil {
+			return err
+		}
+		op.Steps = op.Steps[:len(op.Steps)-1]
+		if op.Lifecycle.ProviderIntent != nil {
+			op.Lifecycle.ProviderIntent.Outcome = "not-applied"
+		}
+		op.Lifecycle.View = nil
+		op.Lifecycle.Event = nil
+		return nil
+	})
+}
+
 func (l tunnelLifecycle) effect(ctx context.Context, call tunnelEffectCall) (tunnelEffectResult, error) {
 	switch call.Stage {
 	case "register", "start", "stop", "unregister":
+		if l.Store.ProviderEffect != nil {
+			return l.Store.ProviderEffect(ctx, func(bound context.Context) (tunnelEffectResult, error) { return l.Effects.Provider(bound, call) })
+		}
 		return l.Effects.Provider(ctx, call)
 	case "publish":
 		return tunnelEffectResult{}, l.Effects.Publish(ctx, call.Snapshot)
@@ -666,6 +722,7 @@ func lifecycleApply(e *tunnelEntryState, owner, stage string, result tunnelEffec
 				return fmt.Errorf("started tunnel has no confirmed address")
 			}
 			e.Active = result.Address
+			e.Last = result.Address
 			if e.Registered {
 				e.Known = result.Address
 			}
@@ -740,7 +797,17 @@ func (l tunnelLifecycle) Reconcile(ctx context.Context, key tunnelKey, id string
 	if err = l.Store.Fence(ctx); err != nil {
 		return fmt.Errorf("tunnel forward schema could not be persisted")
 	}
-	result, confirmed, err := l.Effects.Confirm(ctx, call)
+	var result tunnelEffectResult
+	var confirmed bool
+	if l.Store.ProviderEffect != nil && (call.Stage == "register" || call.Stage == "start" || call.Stage == "stop" || call.Stage == "unregister") {
+		result, err = l.Store.ProviderEffect(ctx, func(bound context.Context) (tunnelEffectResult, error) {
+			r, ok, e := l.Effects.Confirm(bound, call)
+			confirmed = ok
+			return r, e
+		})
+	} else {
+		result, confirmed, err = l.Effects.Confirm(ctx, call)
+	}
 	if err != nil || !confirmed {
 		return errTunnelReconcile
 	}

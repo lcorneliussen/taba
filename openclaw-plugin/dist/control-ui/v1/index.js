@@ -565,7 +565,33 @@ const TUNNEL_ACCESS = new Map([
 ]);
 // A running tunnel has an access glyph, link, close action and separate health error.
 // label names its link; opener renders the action for a closed tunnel.
+function managedTunnelNode(g, t, svc) {
+  const name=t.tunnelName ?? t.tunnel_name ?? t.label ?? t.provider;
+  const key=`${g.group}:${name}`;
+  const definition=t.definitionId ?? t.definition_id;
+  const desired=t.desiredDefinitionId ?? t.desired_definition_id;
+  const run=(action)=>svc.run({op:"tunnel",group:g.group,provider:t.provider,name,action,expectedDefinition:action==="start" || action==="register" ? desired : definition,public:action==="start" || action==="register"}, `${action} ${name}…`, key);
+  if(svc.busy(key)) return el("span",{textContent:`${name} …`});
+  const state=t.state ?? "idle";
+  const pending=state==="pending";
+  const active=state==="ready" && !!t.url;
+  const known=t.registrationUrl ?? t.registration_url;
+  const nodes=[active ? link(name,t.url) : el("span",{textContent:name,title:known ? `Registered address (stopped): ${known}` : t.lifecycle ?? state})];
+  nodes.push(el("span",{textContent:` · ${state}`,title:t.lifecycle ?? "Recorded state; provider access has not been probed"}));
+  if(pending) nodes.push(smallButton("Reconcile",`Confirm ${name}'s pending operation without replaying unknown effects`,()=>run("reconcile")));
+  else if(active) nodes.push(smallButton("✕",`Stop ${name}; retain its registration`,()=>run("stop")));
+  else if(state!=="disabled" && !t.lifecycle?.includes("unmatched")) {
+    if(desired) {
+      nodes.push(smallButton("▶",`Start ${name}; approve potentially public exposure for this definition`,()=>run("start")));
+      if(!t.registered && !["quick","temporary"].includes(t.tunnel_mode ?? t.tunnelMode)) nodes.push(smallButton("Register",`Register ${name}; approve potentially public exposure for this definition`,()=>run("register")));
+    } else nodes.push(el("span",{textContent:" · resolve service first",title:"Run taba svc up for this service, then refresh its resolved desired definition before approving exposure"}));
+  }
+  if(t.registered && !active && !pending) nodes.push(smallButton("Unregister",`Remove only ${name}'s verified owned registration resources`,()=>run("unregister")));
+  return css(el("span",{},...nodes),"display:inline-flex;align-items:baseline;gap:4px;flex-wrap:wrap");
+}
+
 function tunnelNode(g, t, svc, { label, opener } = {}) {
+  if (t.managedTunnel || t.managed_tunnel) return managedTunnelNode(g,t,svc);
   const name = tunnelName(t);
   const pub = TUNNEL_PROVIDERS.some((p) => p.name === name && p.public);
   if (svc.busy(`${g.group}:${name}`)) return css(el("span", { textContent: label ? "…" : `${name} …` }), "color:var(--muted, #888)");
@@ -608,10 +634,10 @@ function newTunnel(g, svc, data = {}, { compact = false } = {}) {
   const free = TUNNEL_PROVIDERS.filter((p) => !taken(p) && (!p.team || data.teamTailnet))
     .sort((a, b) => Number(!ingress && !!a.portal) - Number(!ingress && !!b.portal));
   const ready = (p) => p.portal || data.tunnelProviders?.includes(p.name);
-  const note = (p) => p.portal ? (ingress ? "" : " · needs ingress") : ready(p) ? "" : " · install first";
+  const note = (p) => p.portal ? (ingress ? "" : " · needs ingress") : " · configure first";
   const open = async (p) => {
     if (p.portal) return svc.run({ op: "portal", port, title: g.label }, `Opening a portal to ${g.label}…`, `${g.group}:gateway`);
-    const r = await svc.run({ op: "tunnel", group: g.group, provider: p.name, public: !!p.public, add: true }, `Opening a ${p.name} tunnel to ${g.label}…`, `${g.group}:${p.name}`);
+    const r = await svc.run({ op: "tunnel", group: g.group, provider: p.name, add: true }, `Preparing ${p.name} setup for ${g.label}…`, `${g.group}:${p.name}`);
     if (r?.missing) await svc.ask(installTunnel(g, p.name, r.missing));
   };
   if (!g.main || g.loose || !free.length) return null;
@@ -871,7 +897,7 @@ async function trackedServiceRequest(host, sessionKey, agentId, payload, doing, 
   try {
     const result = await svcRequest(host, sessionKey, agentId, payload);
     const message = result?.missing ? `Install ${result.missing} before retrying this service action.` : result?.message ?? `${payload.op} request completed; check the service state.`;
-    recordActivity(logKey, id, { state: result?.missing ? "blocked" : "completed", status: message });
+    recordActivity(logKey, id, { state: result?.missing || result?.setup ? "blocked" : "completed", status: message });
     say(`${repo}: ${message}`, false, null, id);
     return result;
   } catch (err) {

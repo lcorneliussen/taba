@@ -21,6 +21,7 @@ type tunnelEventSnapshot struct {
 // callbacks run exactly once. A lost callback response requires reconciliation.
 // Payloads contain addresses and identity, never provider credentials or argv.
 type tunnelEvent struct {
+	Resources   []tunnelResourceRef `json:"resources"`
 	Schema      int                 `json:"schema"`
 	ID          string              `json:"id"`
 	OperationID string              `json:"operation_id"`

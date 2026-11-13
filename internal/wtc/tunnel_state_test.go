@@ -7,7 +7,7 @@ import (
 )
 
 func testTunnelResource(kind, id string) tunnelResourceRef {
-	return tunnelResourceRef{Provider: "cloudflare", Scope: "synthetic-account/synthetic-zone", Kind: kind, ID: id, Ownership: "owned", Owner: "synthetic-owner", Fingerprint: tunnelDigest([]byte(kind + ":" + id))}
+	return tunnelResourceRef{CredentialContext: tunnelDigest([]byte("synthetic-provider-context")), Provider: "cloudflare", Scope: "synthetic-account/synthetic-zone", Kind: kind, ID: id, Ownership: "owned", Owner: "synthetic-owner", Fingerprint: tunnelDigest([]byte(kind + ":" + id))}
 }
 
 func testTunnelState() tunnelState {
@@ -67,7 +67,7 @@ func TestTunnelCleanupUsesExactOwnershipAndCurrentObservation(t *testing.T) {
 	receipts := []tunnelResourceRef{callback, dns, tunnel, borrowed}
 	// Synthetic observations stand in for an injected exact-ID provider/HTTP
 	// transport. No real executable, account, DNS or callback is touched.
-	observations := []tunnelResourceObservation{{tunnel, false}, {dns, true}, {callback, false}}
+	observations := []tunnelResourceObservation{{Resource: tunnel}, {Resource: dns, Absent: true, CredentialContext: dns.CredentialContext}, {Resource: callback}}
 	targets, err := tunnelCleanupTargets("synthetic-owner", receipts, observations)
 	if err != nil || !reflect.DeepEqual(targets, []tunnelResourceRef{callback, tunnel}) {
 		t.Fatalf("cleanup must preserve borrowed domain and skip exact not-found: %+v %v", targets, err)

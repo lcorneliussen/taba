@@ -153,7 +153,8 @@ func deleteCloudflareResource(ctx context.Context, client tunnelHTTP, owner stri
 		return errors.New("stopped owned connector and exact Cloudflare receipt required")
 	}
 	if current.Absent && current.Resource == receipt {
-		return nil
+		_, err := tunnelCleanupTargets(owner, []tunnelResourceRef{receipt}, []tunnelResourceObservation{current})
+		return err
 	}
 	if err := cloudflareOwnedTarget(owner, receipt.Kind, receipt, current); err != nil {
 		return err

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 )
 
@@ -12,9 +13,11 @@ import (
 // effect. These pure codecs do not discover paths, run hooks or call providers.
 // A pending effect after interruption is uncertain, not permission to replay.
 type tunnelState struct {
-	Schema  int                `json:"schema"`
-	Owner   string             `json:"owner"`
-	Entries []tunnelEntryState `json:"entries"`
+	Policy   *tunnelPolicyReceipt `json:"policy,omitempty"`
+	Retiring bool                 `json:"retiring,omitempty"`
+	Schema   int                  `json:"schema"`
+	Owner    string               `json:"owner"`
+	Entries  []tunnelEntryState   `json:"entries"`
 }
 
 type tunnelEntryState struct {
@@ -25,6 +28,7 @@ type tunnelEntryState struct {
 	Consent    *tunnelConsent      `json:"consent,omitempty"`
 	Registered bool                `json:"registered"`
 	Known      *tunnelAddress      `json:"known,omitempty"`
+	Last       *tunnelAddress      `json:"last,omitempty"`
 	Active     *tunnelAddress      `json:"active,omitempty"`
 	Resources  []tunnelResourceRef `json:"resources"`
 	Operation  *tunnelOperation    `json:"operation,omitempty"`
@@ -61,14 +65,15 @@ func (op tunnelOperation) nextStep(name string) (bool, error) {
 }
 
 type tunnelResourceRef struct {
-	Provider    string `json:"provider"`
-	Scope       string `json:"scope"` // non-secret provider account/zone/cluster
-	Kind        string `json:"kind"`
-	ID          string `json:"id"`
-	Ownership   string `json:"ownership"` // owned, borrowed, or unverified (never deletion authority)
-	Owner       string `json:"owner,omitempty"`
-	Fingerprint string `json:"fingerprint,omitempty"`
-	Lifetime    string `json:"lifetime,omitempty"` // registration or session; absent legacy receipts are retained conservatively
+	CredentialContext string `json:"credential_context,omitempty"`
+	Provider          string `json:"provider"`
+	Scope             string `json:"scope"` // non-secret provider account/zone/cluster
+	Kind              string `json:"kind"`
+	ID                string `json:"id"`
+	Ownership         string `json:"ownership"` // owned, borrowed, or unverified (never deletion authority)
+	Owner             string `json:"owner,omitempty"`
+	Fingerprint       string `json:"fingerprint,omitempty"`
+	Lifetime          string `json:"lifetime,omitempty"` // registration or session; absent legacy receipts are retained conservatively
 }
 
 func (r tunnelResourceRef) key() string {
@@ -77,6 +82,9 @@ func (r tunnelResourceRef) key() string {
 }
 
 func (r tunnelResourceRef) validate(owner string) error {
+	if r.CredentialContext != "" && !validTunnelDigest(r.CredentialContext) {
+		return fmt.Errorf("invalid provider credential context")
+	}
 	if r.Lifetime != "" && r.Lifetime != "registration" && r.Lifetime != "session" {
 		return fmt.Errorf("unknown tunnel resource lifetime")
 	}
@@ -101,6 +109,9 @@ func (s tunnelState) validate(owner string) error {
 	if s.Schema != 1 || !tunnelComponent.MatchString(owner) || s.Owner != owner {
 		return fmt.Errorf("unsupported tunnel state or receiving owner mismatch")
 	}
+	if s.Policy != nil && (!filepath.IsAbs(s.Policy.Path) || !validTunnelDigest(s.Policy.Digest)) {
+		return fmt.Errorf("invalid owned tunnel policy receipt")
+	}
 	keys, resources := map[tunnelKey]bool{}, map[string]bool{}
 	for _, entry := range s.Entries {
 		if err := entry.Key.validate(); err != nil {
@@ -120,7 +131,7 @@ func (s tunnelState) validate(owner string) error {
 		if entry.Consent != nil && !validTunnelDigest(entry.Consent.Definition) {
 			return fmt.Errorf("invalid tunnel consent receipt")
 		}
-		for _, address := range []*tunnelAddress{entry.Active, entry.Known} {
+		for _, address := range []*tunnelAddress{entry.Active, entry.Known, entry.Last} {
 			if address != nil {
 				a, err := parseTunnelAddress(address.URL)
 				if err != nil || a != *address {
@@ -271,8 +282,9 @@ func encodeTunnelState(s tunnelState, owner string) ([]byte, error) {
 }
 
 type tunnelResourceObservation struct {
-	Resource tunnelResourceRef
-	Absent   bool // exact-ID not-found, never a failed query
+	CredentialContext string // supplied by pinned transport, never provider JSON
+	Resource          tunnelResourceRef
+	Absent            bool // exact-ID not-found, never a failed query
 }
 
 // Only an exact receipt and a current exact-ID observation permit deletion.
@@ -307,6 +319,9 @@ func tunnelCleanupTargets(owner string, receipts []tunnelResourceRef, observatio
 			return nil, fmt.Errorf("owned tunnel resource needs reconciliation")
 		}
 		if observation.Absent {
+			if receipt.CredentialContext == "" || observation.CredentialContext != receipt.CredentialContext {
+				return nil, fmt.Errorf("provider absence is not bound to the recorded credential context")
+			}
 			continue
 		}
 		if observation.Resource != receipt {

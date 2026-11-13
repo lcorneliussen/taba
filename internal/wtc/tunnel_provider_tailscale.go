@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The supplied transport must open only the already-authorized Unix socket.
@@ -47,6 +48,8 @@ func (t tailscaleServeTarget) resource(owner string) (tunnelResourceRef, error) 
 }
 
 func tailscaleLocalRequest(ctx context.Context, transport tailscaleLocalTransport, socket, method, suffix, etag string, body []byte) ([]byte, http.Header, error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
 	if transport == nil || !filepath.IsAbs(socket) || !(method == http.MethodGet && (suffix == "status?peers=false" || suffix == "serve-config") || method == http.MethodPost && suffix == "serve-config") {
 		return nil, nil, errors.New("explicit authorized Tailscale socket transport required")
 	}
@@ -158,6 +161,11 @@ func tailscaleCanonicalPorts(entries map[string]json.RawMessage, hostport bool) 
 // a conflict is reconciliation, never a blind replay or listener-wide reset.
 func changeTailscaleServe(ctx context.Context, transport tailscaleLocalTransport, owner string, receipt tunnelResourceRef, target tailscaleServeTarget, stop bool) error {
 	expected, err := target.resource(owner)
+	// Session lifetime is controller metadata, separate from the exact daemon
+	// target fingerprint. A registration reservation is never a serve receipt.
+	if receipt.Lifetime == "session" {
+		expected.Lifetime = "session"
+	}
 	if err != nil || receipt != expected || transport == nil {
 		return errors.New("exact owned Tailscale reservation and scoped transport required")
 	}

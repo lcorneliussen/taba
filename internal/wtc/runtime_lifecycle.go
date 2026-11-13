@@ -282,7 +282,7 @@ func runtimeGroupTasks(selector string, tasks []runtimeTask, starting bool) ([]r
 }
 
 func (c *Context) RuntimeAction(action, target string, wait time.Duration) (RuntimeResult, error) {
-	return c.runtimeAction(action, target, wait, nil)
+	return c.managedRuntimeAction(action, target, wait)
 }
 
 func (c *Context) runtimeAction(action, target string, wait time.Duration, choice *runtimeTunnelIntent) (RuntimeResult, error) {
@@ -326,6 +326,10 @@ func (c *Context) runtimeAction(action, target string, wait time.Duration, choic
 		if err != nil {
 			return err
 		}
+		// Named managed hosts are controlled only by their persisted lifecycle.
+		// Native application selectors cannot restart them behind the journal.
+		tasks = slices.DeleteFunc(slices.Clone(tasks), func(t runtimeTask) bool { return t.ManagedTunnel })
+
 		if choice != nil {
 			if len(tasks) != 1 || tasks[0].Kind != "endpoint" || choice.On && tasks[0].Definition != choice.Definition {
 				return fmt.Errorf("tunnel declaration changed; choose the tunnel again")
@@ -680,13 +684,16 @@ func (c *Context) RetireRuntime() error {
 	if err := c.runtimeConflict(); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(filepath.Join(c.runtimeRoot(), "manifest.json")); os.IsNotExist(err) {
-		return nil
+	if err := c.cleanupManagedTunnels(context.Background()); err != nil {
+		return err
 	}
 	return c.withRuntimeLock(c.retireRuntime)
 }
 
 func (c *Context) retireRuntime() error {
+	if err := c.refuseTunnelObligations(); err != nil {
+		return err
+	}
 	m, err := c.runtimeManifest()
 	if err != nil {
 		return err

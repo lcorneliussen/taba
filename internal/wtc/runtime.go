@@ -13,6 +13,14 @@ import (
 // RuntimeItem is a repository-owned dekit task. Ready means its startup probe
 // passed, not that it has continuous health monitoring.
 type RuntimeItem struct {
+	DesiredDefinitionID string `json:"desired_definition_id,omitempty"`
+	TunnelMode          string `json:"tunnel_mode,omitempty"`
+	ManagedTunnel       bool   `json:"managed_tunnel,omitempty"`
+	TunnelName          string `json:"tunnel_name,omitempty"`
+	Registered          bool   `json:"registered,omitempty"`
+	RegistrationURL     string `json:"registration_url,omitempty"`
+	OperationID         string `json:"operation_id,omitempty"`
+	DefinitionID        string `json:"definition_id,omitempty"`
 	// runnerStarting distinguishes runner readiness from an observed task state.
 	runnerStarting bool
 
@@ -251,7 +259,7 @@ func (c *Context) runtimeManifest() (*runtimeManifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
-	if m.Schema != 1 || m.Root != c.runtimeRoot() || !filepath.IsAbs(m.Binary) {
+	if (m.Schema != 1 && m.Schema != 2) || m.Root != c.runtimeRoot() || !filepath.IsAbs(m.Binary) {
 		return nil, fmt.Errorf("runtime manifest does not describe this collection")
 	}
 	for _, task := range m.Tasks {
@@ -315,14 +323,12 @@ func runtimeTaskPath(path string) bool {
 	return true
 }
 
-// RuntimeStatus reads existing runner state and checks ready addresses and
-// tunnel-provider logins. It never renders configuration, sources shell env,
-// starts a runner, or executes repository hooks.
+// RuntimeStatus reads recorded tunnel facts and the existing runner. Provider
+// credentials, accounts and daemon state are never probed by a read/status.
 func (c *Context) RuntimeStatus() []RuntimeItem {
 	items := runtimeTaskDiagnostics(c.runtimeStatusOnly())
 	// What people are shown is also looked at now: whether each ready
 	// address answers, and whether each tunnel's provider can serve.
-	runtimeTunnelLogins(items, runtimeLoginCheck)
 	runtimeAnswering(items, runtimeAnswerCheck)
 	return c.runtimeWithDeclarations(items)
 }
@@ -429,10 +435,11 @@ func (c *Context) runtimeStatus(m *runtimeManifest) []RuntimeItem {
 	if err != nil || state != "running" {
 		return items
 	}
-	tailscale := runtimeTailscaleCheck()
 	defer func() {
 		for i := range m.Tasks {
-			runtimeTunnelExposure(&items[i], tailscale)
+			if !items[i].ManagedTunnel {
+				runtimeTunnelExposure(&items[i], nil)
+			}
 		}
 	}()
 	data, err := runtimeCommand(m, false, "ls")

@@ -22,7 +22,7 @@ func (c *Context) runtimeWithDeclarations(observed []RuntimeItem) []RuntimeItem 
 			seen[item.Path] = true
 		}
 	}
-	return observed
+	return c.recordedTunnelItems(observed)
 }
 
 func (c *Context) runtimeDeclarations() []RuntimeItem {
@@ -31,8 +31,17 @@ func (c *Context) runtimeDeclarations() []RuntimeItem {
 		return []RuntimeItem{c.runtimeDeclarationError("", err)}
 	}
 	var items []RuntimeItem
+	identities := c.prRepositories()
 	for _, entry := range repos {
 		repo := runtimeRepo{dir: filepath.Base(entry.path), repo: entry.repo, path: entry.path}
+		identity, identityErr := identities.resolve(repo.dir)
+		if identityErr != nil {
+			items = append(items, c.runtimeDeclarationError(repo.dir, identityErr))
+			continue
+		}
+		if identity != nil {
+			repo.repo = identity.name
+		}
 		declared, err := c.runtimeRepoDeclarations(repo)
 		if err != nil {
 			items = append(items, c.runtimeDeclarationError(repo.dir, err))

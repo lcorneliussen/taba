@@ -98,7 +98,7 @@ in the manifest for read-only status. `x-wtc.url` can instead hold a literal
 address. `x-wtc` also takes `port_env` (the variable holding a service's port:
 status shows `http://127.0.0.1:<port>`, readiness defaults to that port
 accepting connections, the resolved value is put in the env of the service and
-its tunnels, and `taba svc tunnel` builds tunnels from it), `url_log` (a
+its tunnels, and named tunnel targets resolve from it), `url_log` (a
 pattern finding an address in the task's output), `tunnel`
 (`tailscale|cloudflare|ngrok|devtunnel`; usually recognised from the command),
 `public` (`true` or `false`, overriding what WTC infers), and `mark` (one
@@ -106,7 +106,7 @@ letter for status). WTC strips that metadata before passing the task to dekit;
 dekit does not expand shell variables in argv or a literal `ready.http` string.
 
 A collection can add its own services and tunnels without changing the
-repository: `taba svc add` and `taba svc tunnel` write `svc/<repo>.yaml` in the
+repository: `taba svc add` writes `svc/<repo>.yaml` in the
 collection's runtime home (`.wtc`, or `.taba` where it already holds this
 state), read together with the committed file and never
 committed. `--shared` writes the committed file instead.
@@ -210,8 +210,8 @@ taba svc add web --port-env WIDGET_PORT -- npm run dev   # enlist and start
 taba svc up [web]               # provision, then start all (or one service)
 taba svc restart web
 taba svc logs web [--tail 100] [-f]
-taba svc tunnel web tailscale   # private tunnel; --public for one on the internet
-taba svc tunnel web --stop
+taba svc tunnel web --name preview --public  # approve/start configured definition
+taba svc tunnel web --name preview --stop   # retain registration, record start-off
 taba svc down [web]             # stop one service, or the runner (logs, data kept)
 taba svc rm web                 # stop and remove, others keep running
 taba svc render --dry-run       # ownership preview; no tool required or writes
@@ -224,23 +224,127 @@ taba svc dekit -- why widget/web/server   # anything else, with the pinned dekit
 `taba up`, `taba down`, `taba restart` and `taba logs` are shortcuts for the same
 commands. A name without its repository works when only one repository has it.
 
-`taba svc tunnel` records an explicit on/off choice for that collection and
-service endpoint. `--stop` records off, including when stopping fails; retry the
-stop to confirm shutdown. Ordinary `down` keeps the choice. Service `up` and
-`restart` restore enabled tunnels after checking the provider login, including
-previously approved public tunnels. Untargeted `restart` restores them only for
-services that were running. Untargeted `up` restores them for autostart or
-already running services. Without an explicit choice, declaration defaults
-keep their existing behavior.
+Named tunnels use receiving-local desired policy at collection `.config/tunnels.toml`,
+over project-root `.config/tunnels.toml` defaults. These paths do not follow a
+credential-root override. Each identity is `<registered-repo>/<service>/<name>`;
+registered repository identity resolves checkout aliases such as `ext.widget`.
+A collection entry replaces the entire matching default. An entry containing
+only `enabled = false` disables it; removing that override restores inheritance.
+Unmatched definitions are displayed without provisioning. Several names can
+expose the same service independently.
 
-Approval belongs to the current tunnel definition. Changing its command,
-provider, destination or exposure, or removing and later reusing its task path,
-requires a fresh `taba svc tunnel` choice (and `--public` when applicable).
-Changed or explicitly disabled tunnels do not autostart. Choices live in this
-collection's runtime manifest and never change another collection's settings.
-An intended tunnel that is not running reports a lifecycle problem separately
-from provider login, current reachability and exposure; JSON includes
-`tunnel_intent` and `lifecycle` alongside the observed runner `state`.
+For example, save this one-entry definition as an absolute local TOML file:
+
+```toml
+schema = 1
+[tunnels.widget.web.preview]
+provider = "ngrok"
+mode = "domain"
+access = "public"
+start_with_service = false
+[tunnels.widget.web.preview.options]
+domain = "web.example.test"
+reserve = false
+[tunnels.widget.web.preview.inputs]
+hosting_file = "providers/ngrok-host.token"
+```
+
+```sh
+taba svc tunnel widget/web --name preview --action configure --definition /absolute/entry.toml
+taba svc tunnel widget/web --name preview --action register --public
+taba svc tunnel widget/web --name preview --public
+taba svc tunnel widget/web --name preview --stop
+taba svc tunnel widget/web --name preview --action unregister
+taba svc tunnel widget/web --name preview --action reconcile
+```
+
+Configure and disable write this collection's override. A native operator may
+explicitly add `--project` to configure/disable receiving project defaults from
+an actual member collection. A remote harness snapshot does not make the local
+receiving project root immutable; the snapshot itself is never written. Actual
+snapshot-only contexts remain read-only. Collection UI authority never grants
+project writes or arbitrary definition-file selection. UI provider setup entries
+show these receiving-local instructions; they do not install or start a client.
+Existing explicitly declared temporary endpoints retain their own task commands;
+provider shorthand never invents a global-login task for a new endpoint.
+
+Credential fields are **file references**, relative to the approved receiving
+credential root (absolute references must remain inside that scope), never token
+literals. Built-in provider clients use only explicitly supplied inputs, with no
+login, keychain/profile discovery or runtime package fetch. Management, hosting
+and cleanup are distinct roles; permissions are enforced by the provider, not
+inferred from the existence of a file. Missing/expired/insufficient capability
+refuses the effect and retains cleanup information. A capability is pinned across
+an effect. Credential rotation cannot turn another account's 404 into proof that
+a recorded resource disappeared; a positive exact identity/fingerprint match is
+required before rebinding cleanup to the new capability.
+
+| Provider/mode | Explicit inputs and lifetime |
+|---|---|
+| `ngrok/domain` | `options.domain`, `inputs.hosting_file`; existing domain is borrowed. Only `options.reserve = true` plus management/cleanup files reserves and owns a new domain. Uses the bundled Go SDK; no ngrok CLI is needed. |
+| `cloudflare/named` | Exact account/zone IDs, hostname, optional registration name; management/cleanup/hosting files and an absolute `inputs.executable` for cloudflared. Owns a dedicated tunnel, exact configuration and created DNS record; never adopts/replaces pre-existing DNS. Hosting token must bind the exact tunnel, or the explicit hosting API capability must retrieve it. |
+| `cloudflare/quick` | Absolute cloudflared executable; public, temporary session, no persistent registration events. |
+| `devtunnel/persistent` | Management/cleanup files, hosting token or explicit Bearer hosting API capability, optional registration name, absolute `inputs.node`. Retains exact tunnel/cluster/port identity. |
+| `devtunnel/temporary` | Explicit management and cleanup files plus Node even though registration is temporary. Its owned provider resources survive in pending cleanup state on interruption. |
+| `tailscale/serve` | Explicit authorized `inputs.socket`, expected `node_id`/`dns_name`, `options.listener_port` and optional `options.path`. Configuring this input must authorize I/O to that exact daemon socket. No socket/profile discovery, Funnel enabling, reset or shared listener widening. |
+
+Dev Tunnel hosting requires an already installed Node22 or newer runtime and the
+shipped pinned self-contained helper. Other providers, registration status and
+pure reads need no Node. The helper never fetches packages at runtime. Dev Tunnel
+backends require an explicit IPv4/localhost HTTP port without a backend path;
+HTTPS/private access declarations alone do not establish enforced access.
+Tailscale verifies the expected running node and uses conditional configuration
+writes, preserving unrelated handlers. Its configuration ETag is not an atomic
+profile-identity lock: an external profile switch cannot be excluded by that API.
+Explicit credentials and minimal child environments are not an OS sandbox.
+
+`--public` approves potential public exposure for the current effective definition,
+including target, provider inputs, receiving scope, hook code and reload targets.
+Provider names, HTTPS and declared `protected`/`account` access are not proof of
+private enforcement. Tailscale can use fresh observed tailnet evidence; otherwise
+explicit potential-public approval is required. UI start/register clicks name the
+exact current desired-definition hash. Changing a definition requires renewed
+approval and cleanup of retained old obligations before replacement.
+
+`--stop` records start-off for this collection while retaining stable registration.
+Ordinary service down stops sessions without erasing desired selection; up/restart
+restore selected entries or `start_with_service` entries only with current approval.
+Stable registration URL (`registration_url`) is separate from active URL (`url`).
+Registered-but-stopped entries never appear in active host/origin publications.
+`pending` and `lifecycle` identify interrupted operations; reconcile queries supported
+exact evidence, never blindly repeats an unknown remote effect or arbitrary hook.
+Some ambiguous effects require manual restoration/confirmation and remain pending.
+
+Optional `[tunnels.widget.web.preview.events.registered]` (and `started`, `stopped`,
+`unregistered`) tables use `command = ["relative/executable", "argument"]`, resolved
+inside the registered receiving checkout. Each receives typed JSON on stdin with
+stable event/operation IDs, entry identity, previous/current URL/hostname/origin,
+resource receipts and complete before/after active snapshots. Successful callbacks
+may return `resources`/`released` identities (`kind`, `scope`, `id`, `fingerprint`);
+only exact retained receipts may be released. Failures are strict and keep the
+original event pending; arbitrary callback effects are not exactly once. Restore
+changed cleanup code before retiring; output is not copied into public diagnostics.
+Temporary modes emit started/stopped only. `reload = ["widget/app/server"]` names
+only declared app services, in dependency order; tunnel targets/cycles are refused.
+Reload occurs after events and active-data publication, never by restarting a tunnel.
+
+Consumers read runtime `tunnel-publications/current.json` once, then both immutable
+`hosts_file` and `origins_file` paths from that revision. Hostnames are deduplicated;
+full origins retain scheme and port. A stale publisher cannot overwrite a newer
+committed snapshot. Status/discovery only read desired and recorded tunnel state:
+no provider/daemon/account queries, credential reads, hook runs, repair or allocation.
+
+Managed obligations persist the existing runtime manifest as Schema2 before
+external allocation. New clients accept Schema1/2 and preserve the fence through
+stopped registrations, interruption and regeneration. Published0.2.4 refuses
+Schema2 before runtime teardown/worktree deletion, **but its earlier `retire.pre`
+hook may already have run**. Corrupted/deleted old manifests cannot be protected
+retroactively. New retirement consults the ownership journal even without a
+manifest, cleans/validates tunnels before destructive legacy pre-hooks, and refuses
+unknown/uncertain cleanup without a force bypass. Keep code/credentials available
+until all obligations clear. Only exact verified tool-owned non-secret collection
+policy can be removed; sole credentials, unknown/edited files and project control
+data are preserved.
 
 `up` and `restart` wait up to 30 seconds for startup readiness; `--wait 60s`
 changes this, and `--wait 0` returns immediately. Untargeted `up` waits for
@@ -249,12 +353,10 @@ wait for all its selected tasks. `restart`
 requires a running runner. A readiness failure remains visible in status and
 logs, and the failed command's output includes the last lines of each failed
 or unready task's log, so a build error is in the failure itself. **Ready
-means a startup probe passed**, not continuous health checking. So `taba svc`
-and `taba status` also look at each ready task's address as they report: one
-that gives no answer, or a 5xx such as a tunnel's 502 while the service
-behind it restarts, shows `not answering now`. A tunnel whose provider's
-client is not signed in (Tailscale, devtunnel) shows how to sign it in, and
-`taba svc tunnel` refuses to open one until it is.
+means a startup probe passed**, not continuous health checking. Ordinary local
+application addresses can be checked as status is reported. Managed tunnel status
+reports persisted registration/session facts without provider login or endpoint
+queries; it does not claim that a remote account or access policy was verified.
 
 The detailed terminal status table labels internet-reachable tunnels with
 `[public]`. A healthy public tunnel uses the same health color as a healthy
