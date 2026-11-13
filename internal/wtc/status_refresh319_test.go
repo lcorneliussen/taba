@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -660,4 +661,177 @@ func TestStatus319UnknownEnlistedPRBlocksActionsWithoutClaimingOpen(t *testing.T
 		return
 	}
 	t.Fatal("harness row absent")
+}
+
+func TestStatusStaleListPublicationKeepsObservation(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		for _, draft := range []bool{false, true} {
+			for _, prior := range []bool{false, true} {
+				for _, cooling := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/draft=%v/prior=%v/cooling=%v", forge, draft, prior, cooling), func(t *testing.T) {
+						t.Setenv("TMPDIR", t.TempDir())
+						t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+						t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
+						record := PRRecord{Number: "7"}
+						slug := "example/widget"
+						old := time.Now().Add(-3 * time.Minute)
+						raw, _ := json.Marshal(map[string]any{"number": 7, "id": 7, "state": "OPEN", "isDraft": draft, "draft": draft, "title": "Synthetic"})
+						if prior {
+							statusWriteForgeEntrySince("pr", forge, slug, "7", raw, old.Add(-time.Minute))
+							if err := os.Chtimes(statusForgeCachePath(forge, slug, "7"), old.Add(-time.Minute), old.Add(-time.Minute)); err != nil {
+								t.Fatal(err)
+							}
+							statusWriteForgeEntry("stamp", forge, slug, "7", []byte("old"))
+						}
+						listed, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: raw, Fingerprint: "changed"}}, false, old)
+						statusWriteForgeEntry("openprs", forge, slug, "open", listed)
+						if err := os.Chtimes(statusForgeEntryPath("openprs", forge, slug, "open"), old, old); err != nil {
+							t.Fatal(err)
+						}
+						if cooling {
+							statusForgeCool(forge, time.Hour)
+						} else if !statusTakeForgeToken(forge) {
+							t.Fatal("initial token")
+						}
+						want := "OPEN"
+						if draft {
+							want = "DRAFT"
+						}
+						for pass := 0; pass < 2; pass++ {
+							got := statusEnrichRecordMetadata(record, slug, forge)
+							observed, err := time.Parse(time.RFC3339Nano, got.ObservedAt)
+							if got.State != want || !statusObservationUnavailable(got.Freshness) || err != nil || observed.Sub(old).Abs() > time.Millisecond {
+								t.Errorf("pass%d old list became current: %+v", pass, got)
+							}
+							saved, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour)
+							if !ok || !statusObservationUnavailable(saved.Freshness) {
+								t.Errorf("cache lost list age: %+v ok=%v", saved, ok)
+							}
+							if _, active := statusReadCachedDetail(record, slug, forge); active {
+								t.Error("expired list became active detail cache")
+							}
+						}
+						for _, kind := range []string{"omit", "full"} {
+							if _, ok := statusReadForgeEntryAny(kind, forge, slug, "7"); ok {
+								t.Errorf("denied response published %s marker", kind)
+							}
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestStatusUnconfirmedTerminalProducerRows(t *testing.T) {
+	for _, tc := range []struct{ forge, state, segment string }{{"github.com", "CLOSED", "pull"}, {"bitbucket.org", "CLOSED", "pull-requests"}, {"bitbucket.org", "DECLINED", "pull-requests"}, {"bitbucket.org", "SUPERSEDED", "pull-requests"}} {
+		for _, onBranch := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%s/onBranch=%v", tc.forge, tc.state, onBranch), func(t *testing.T) {
+				c, worktree := enlistedIdentityFixture(t, true)
+				if tc.forge != "github.com" {
+					path := c.registryPath()
+					raw, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					fixtureFile(t, path, strings.ReplaceAll(string(raw), "https://github.com/example/widget.git", "https://bitbucket.org/example/widget.git"), 0644)
+					fixtureGit(t, "-C", worktree, "remote", "set-url", "origin", "https://bitbucket.org/example/widget.git")
+					if err := c.load(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+				t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
+				bin := t.TempDir()
+				for _, name := range []string{"gh", "bb"} {
+					fixtureFile(t, filepath.Join(bin, name), "#!/bin/sh\nexit 97\n", 0700)
+				}
+				t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+				repo := "reference"
+				if onBranch {
+					repo = "widget"
+				}
+				record := PRRecord{Repo: repo, Number: "7", Branch: "topic", URL: "https://" + tc.forge + "/example/widget/" + tc.segment + "/7"}
+				if _, err := c.EnlistPR(record); err != nil {
+					t.Fatal(err)
+				}
+				raw := []byte(`{"number":7,"id":7,"state":"` + tc.state + `","title":"Synthetic"}`)
+				statusWriteForgeCache(tc.forge, "example/widget", "7", raw)
+				past := time.Now().Add(-3 * time.Minute)
+				if err := os.Chtimes(statusForgeCachePath(tc.forge, "example/widget", "7"), past, past); err != nil {
+					t.Fatal(err)
+				}
+				list, _ := statusEncodeOpenPRs(nil, false, time.Now())
+				statusWriteForgeEntry("openprs", tc.forge, "example/widget", "open", list)
+				if !statusTakeForgeToken(tc.forge) {
+					t.Fatal("initial token")
+				}
+				snapshot, err := c.statusForgePreview(false, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(snapshot.PRs) != 1 || snapshot.PRs[0].State != tc.state || !statusObservationUnavailable(snapshot.PRs[0].Freshness) {
+					t.Errorf("unconfirmed terminal row omitted: %+v", snapshot.PRs)
+				}
+				if len(snapshot.Orphans) != 0 {
+					t.Errorf("unconfirmed terminal state became an orphan: %+v", snapshot.Orphans)
+				}
+				if !strings.Contains(snapshot.Markdown(), "deferred forge observation") {
+					t.Error("native rendering hid terminal uncertainty")
+				}
+				snapshot.Retirement = []RetirementAssessment{{Collection: snapshot.Collection}}
+				statusRetirementFacts(&snapshot)
+				if reasons := strings.Join(snapshot.Retirement[0].Blockers, " "); !strings.Contains(reasons, "state is unconfirmed") {
+					t.Errorf("retirement lost uncertainty: %q", reasons)
+				}
+				if onBranch {
+					for _, row := range snapshot.Repos {
+						if row.Dir == "ext.widget" && (!row.PRUnconfirmed || row.Next != nil) {
+							t.Errorf("branch actions unblocked: %+v", row)
+						}
+					}
+				}
+				// A confirmed terminal response keeps the established omission/orphan policy.
+				statusWriteForgeEntrySince("pr", tc.forge, "example/widget", "7", raw, time.Now())
+				confirmed, err := c.statusForgePreview(false, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(confirmed.PRs) != 0 || (len(confirmed.Orphans) != 0) != onBranch {
+					t.Errorf("confirmed terminal policy changed: PRs=%+v orphans=%+v", confirmed.PRs, confirmed.Orphans)
+				}
+				// Closed/declined/superseded observations are reversible; only MERGED is terminal.
+				reopened := []byte(`{"number":7,"id":7,"state":"OPEN","title":"Reopened synthetic"}`)
+				list, _ = statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: reopened, Fingerprint: "reopened"}}, false, time.Now())
+				statusWriteForgeEntry("openprs", tc.forge, "example/widget", "open", list)
+				current, err := c.statusForgePreview(false, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(current.PRs) != 1 || current.PRs[0].State != "OPEN" || statusObservationUnavailable(current.PRs[0].Freshness) {
+					t.Errorf("valid reopen lost: %+v", current.PRs)
+				}
+			})
+		}
+	}
+}
+
+func TestStatusOlderListPreservesNewerDetailObservation(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		t.Run(forge, func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
+			record := PRRecord{Number: "7"}
+			slug := "example/widget"
+			current := []byte(`{"number":7,"id":7,"state":"OPEN","isDraft":true,"draft":true,"title":"Newer full detail"}`)
+			statusWriteForgeEntrySince("pr", forge, slug, "7", current, time.Now())
+			before, _ := statusReadObservedDetail(record, slug, forge, time.Hour)
+			listed := []byte(`{"number":7,"id":7,"state":"OPEN","title":"Older list"}`)
+			got := statusEnrichListed(record, slug, forge, statusOpenPR{Number: "7", Raw: listed, Fingerprint: "changed", Started: time.Now().Add(-3 * time.Minute)})
+			after, _ := statusReadObservedDetail(record, slug, forge, time.Hour)
+			if got.State != "DRAFT" || got.Title != before.Title || got.ObservedAt != before.ObservedAt || after.ObservedAt != before.ObservedAt || statusObservationUnavailable(got.Freshness) {
+				t.Fatalf("newer detail replaced or redated: before=%+v got=%+v after=%+v", before, got, after)
+			}
+		})
+	}
 }

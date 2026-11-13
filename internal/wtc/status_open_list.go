@@ -94,14 +94,14 @@ func statusDetailFromOpenItem(record PRRecord, slug, forge string, item statusOp
 	if statusBeforeOpenPublish != nil {
 		statusBeforeOpenPublish()
 	}
-	if !statusWriteForgeEntrySince("pr", forge, slug, record.Number, item.Raw, item.Started) {
+	if !statusWriteForgeEntrySinceObserved("pr", forge, slug, record.Number, item.Raw, item.Started, item.Started) {
 		if cached, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
 			statusWriteForgeEntry("stamp", forge, slug, record.Number, []byte(item.Fingerprint))
 			return cached, true, true
 		}
 	}
 	statusWriteForgeEntry("stamp", forge, slug, record.Number, []byte(item.Fingerprint))
-	return detail, true, false
+	return statusObserveAt(detail, item.Started, "open-list"), true, false
 }
 
 type statusGHListItem struct {

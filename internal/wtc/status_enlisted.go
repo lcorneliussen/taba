@@ -180,9 +180,8 @@ func statusEnrichListed(record PRRecord, slug, forge string, item statusOpenPR) 
 	}
 	detail = statusConfirmFullPRLocked(record, slug, forge, detail, source)
 	detail = statusObserveDetail(detail, slug, forge)
-	// Only state is confirmed at list-start time; the timestamp does not date
-	// checks, reviews or mergeability and does not touch the detail cache file.
-	// Preserve settled/newer responses.
+	// A newer list dates only returned OPEN/DRAFT state here, not checks,
+	// reviews or mergeability. This override does not rewrite cached full detail.
 	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
 	if (detail.State == "OPEN" || detail.State == "DRAFT") && item.Started.After(observed) {
 		detail.Freshness = ""
@@ -461,7 +460,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 					MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
 			}
 		}
-		if detail.State == "CLOSED" || detail.State == "DECLINED" || detail.State == "SUPERSEDED" {
+		if (detail.State == "CLOSED" || detail.State == "DECLINED" || detail.State == "SUPERSEDED") && !statusObservationUnavailable(detail.Freshness) {
 			if branchRow >= 0 {
 				snapshot.Orphans = append(snapshot.Orphans, StatusOrphan{Repo: worktreeDir, Branch: record.Branch, State: detail.State})
 			}

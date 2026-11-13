@@ -105,6 +105,12 @@ func statusWriteForgeCache(forge, slug, number string, data []byte) {
 // Callers hold the record lock when it can be taken; without it two writers can
 // still interleave between the check and the write.
 func statusWriteForgeEntrySince(kind, forge, slug, key string, data []byte, started time.Time) bool {
+	return statusWriteForgeEntrySinceObserved(kind, forge, slug, key, data, started, time.Time{})
+}
+
+// List-backed detail carries the list's observation time through atomic
+// publication, so later cache reads cannot mistake publication for a new read.
+func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []byte, started, observed time.Time) bool {
 	if len(data) == 0 {
 		return false
 	}
@@ -122,7 +128,9 @@ func statusWriteForgeEntrySince(kind, forge, slug, key string, data []byte, star
 	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return false
 	}
-	statusWriteForgeEntry(kind, forge, slug, key, data)
+	if !statusWriteForgeEntryObserved(kind, forge, slug, key, data, observed) {
+		return false
+	}
 	statusWriteForgeEntry("since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)))
 	return true
 }
@@ -140,28 +148,36 @@ func statusForgeEntrySince(kind, forge, slug, key string) (time.Time, bool) {
 }
 
 func statusWriteForgeEntry(kind, forge, slug, key string, data []byte) {
+	statusWriteForgeEntryObserved(kind, forge, slug, key, data, time.Time{})
+}
+
+func statusWriteForgeEntryObserved(kind, forge, slug, key string, data []byte, observed time.Time) bool {
 	if len(data) == 0 {
-		return
+		return false
 	}
 	path := statusForgeEntryPath(kind, forge, slug, key)
 	if !statusSecureCacheDir(filepath.Dir(path)) {
-		return
+		return false
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".pr-")
 	if err != nil {
-		return
+		return false
 	}
 	defer os.Remove(tmp.Name())
 	if tmp.Chmod(0600) != nil {
 		tmp.Close()
-		return
+		return false
 	}
 	if _, err = tmp.Write(data); err != nil {
 		tmp.Close()
-		return
+		return false
+	}
+	if !observed.IsZero() && os.Chtimes(tmp.Name(), observed, observed) != nil {
+		tmp.Close()
+		return false
 	}
 	if tmp.Close() != nil {
-		return
+		return false
 	}
-	_ = os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path) == nil
 }

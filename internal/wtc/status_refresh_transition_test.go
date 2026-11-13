@@ -893,3 +893,75 @@ func TestStatus319RefreshCoexistsWithReleasedBudgetConsumer(t *testing.T) {
 		}
 	}
 }
+
+func TestStatus319ProductionExpiredListProvenance(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	statusHideBitbucketLogin(t)
+	primary, head, base := status319Collection(t, "widget")
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "bb"), "#!/bin/sh\nWTC_TEST_319_CHILD=bb exec \"$WTC_TEST_319_EXE\" -test.run=^TestStatus319RefreshProcess$ -- \"$@\"\n", 0700)
+	t.Setenv("BB_API_USER", "synthetic")
+	t.Setenv("BB_API_PASS", "synthetic")
+	wire := &status319Wire{head: head, base: base}
+	server := httptest.NewServer(wire)
+	defer server.Close()
+	warm := status319Refresh(t, primary, server.URL, bin, false)
+	if len(warm.Snapshot.PRs) != 3 {
+		t.Fatal(warm.Snapshot.PRs)
+	}
+	raw, ok := statusReadForgeEntryAny("openprs", "bitbucket.org", "example/widget", "open")
+	if !ok {
+		t.Fatal("missing warm list")
+	}
+	items, truncated, _, err := statusParseOpenPRs(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-3 * time.Minute)
+	prior := old.Add(-time.Minute)
+	raw, _ = statusEncodeOpenPRs(items, truncated, old)
+	statusWriteForgeEntry("openprs", "bitbucket.org", "example/widget", "open", raw)
+	if err := os.Chtimes(statusForgeEntryPath("openprs", "bitbucket.org", "example/widget", "open"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	for _, number := range []string{"7", "8", "9"} {
+		if err := os.Chtimes(statusForgeCachePath("bitbucket.org", "example/widget", number), prior, prior); err != nil {
+			t.Fatal(err)
+		}
+		statusWriteForgeEntry("since", "bitbucket.org", "example/widget", "pr:"+number, []byte(fmt.Sprint(prior.UnixNano())))
+	}
+	if err := os.Remove(statusForgeCachePath("bitbucket.org", "example/widget", "7")); err != nil {
+		t.Fatal(err)
+	}
+	statusWriteForgeEntry("stamp", "bitbucket.org", "example/widget", "8", []byte("changed"))
+	statusForgeCool("bitbucket.org", time.Hour)
+	before := wire.count()
+	for pass := 0; pass < 2; pass++ {
+		event := status319Refresh(t, primary, server.URL, bin, false)
+		if len(event.Snapshot.PRs) != 3 {
+			t.Fatal(event.Snapshot.PRs)
+		}
+		for _, pr := range event.Snapshot.PRs {
+			observed, err := time.Parse(time.RFC3339Nano, pr.ObservedAt)
+			want := "DRAFT"
+			if pr.Number == "7" {
+				want = "OPEN"
+			}
+			if pr.State != want || !statusObservationUnavailable(pr.Freshness) || err != nil || observed.Sub(old).Abs() > time.Millisecond {
+				t.Errorf("pass%d old list became current: %+v", pass, pr)
+			}
+		}
+		blocked := false
+		for _, repo := range event.Snapshot.Repos {
+			if repo.Repo == "widget" {
+				blocked = repo.PRUnconfirmed && repo.Next == nil
+			}
+		}
+		if !blocked || !strings.Contains(event.Markdown, "stale forge observation") {
+			t.Errorf("pass%d producer/native safety gate missing: %+v", pass, event.Snapshot.Repos)
+		}
+	}
+	if wire.count() != before {
+		t.Fatal("cooling dispatched a provider read")
+	}
+}
