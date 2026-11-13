@@ -145,6 +145,31 @@ func TestGeneratedRootRepairCLI(t *testing.T) {
 			if raw, err := legacy.CombinedOutput(); err != nil || json.Unmarshal(raw, &payload) != nil || payload.Data.Env != preview {
 				t.Fatalf("legacy repair required dev bypass: %v %s", err, raw)
 			}
+			for _, asJSON := range []bool{false, true} {
+				args := []string{"env"}
+				if asJSON {
+					args = append([]string{"--json"}, args...)
+				}
+				current := exec.Command(bin, args...)
+				current.Dir = collection
+				// Isolate the ordinary help-dispatch control from the intentionally
+				// unavailable dev source; repair itself below has no bypass.
+				current.Env = []string{"HOME=" + t.TempDir(), "PATH=" + mockBin + ":/usr/bin:/bin", "TABA_DEV_BUILD=off", "WTC_DEV_BUILD=off"}
+				if raw, err := current.CombinedOutput(); err != nil || read(generated) != old || !strings.Contains(string(raw), "Usage:") {
+					t.Fatalf("env without setup flags no longer shows help: %v %s", err, raw)
+				}
+				current = exec.Command(bin, append(args, "--repair-generated-roots")...)
+				current.Dir = collection
+				current.Env = []string{"HOME=" + t.TempDir(), "PATH=" + mockBin + ":/usr/bin:/bin"}
+				raw, err := current.CombinedOutput()
+				if err != nil || read(generated) != preview || read(local) != localData {
+					t.Fatalf("current-directory legacy repair did not write: %v %s", err, raw)
+				}
+				if asJSON && (json.Unmarshal(raw, &payload) != nil || payload.Data.Env != preview || !payload.Data.Changed) {
+					t.Fatalf("current-directory legacy repair omitted JSON result: %s", raw)
+				}
+				write(generated, old)
+			}
 			for _, flags := range [][]string{{"--all"}, {"--run-hooks"}} {
 				if out, err := run(true, flags...); err == nil {
 					t.Fatalf("repair widened effects: %s", out)

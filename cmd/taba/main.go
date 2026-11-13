@@ -181,7 +181,7 @@ func run() error {
 	envCmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if !cmd.Flags().Changed("collection") && !cmd.Flags().Changed("dry-run") &&
 			!cmd.Flags().Changed("all") && !cmd.Flags().Changed("skip-hooks") &&
-			!cmd.Flags().Changed("run-hooks") {
+			!cmd.Flags().Changed("run-hooks") && !cmd.Flags().Changed("repair-generated-roots") {
 			return cmd.Help()
 		}
 		return runEnvSetup(cmd, args)
