@@ -30,26 +30,33 @@ func TestStatusMergedPRCacheOutlivesActiveCache(t *testing.T) {
 		t.Fatalf("stale merged result was needlessly refetched: %+v", detail)
 	}
 	beforeDay := time.Now().Add(-23 * time.Hour)
-	if err := os.Chtimes(path, beforeDay, beforeDay); err != nil {
-		t.Fatal(err)
+	for _, kind := range []string{"pr", "merge"} {
+		if err := os.Chtimes(statusForgeEntryPath(kind, forge, slug, number), beforeDay, beforeDay); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "MERGED" {
 		t.Fatalf("merged result expired before a day: %+v", detail)
 	}
 	afterDay := time.Now().Add(-25 * time.Hour)
-	if err := os.Chtimes(path, afterDay, afterDay); err != nil {
-		t.Fatal(err)
+	for _, kind := range []string{"pr", "merge"} {
+		if err := os.Chtimes(statusForgeEntryPath(kind, forge, slug, number), afterDay, afterDay); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("WTC_TEST_GH_DETAIL", `{"number":7,"state":"MERGED","title":"Refreshed detail"}`)
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.Title != "Refreshed detail" {
 		t.Fatalf("merged detail did not refresh after a day: %+v", detail)
 	}
+	// Use a separate PR identity for the unrelated active-cache expiry checks.
+	number = "8"
+	path = statusForgeCachePath(forge, slug, number)
 	t.Setenv("WTC_TEST_GH_DETAIL", "")
-	cache(`{"number":7,"state":"OPEN"}`)
+	cache(`{"number":8,"state":"OPEN"}`)
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "UNKNOWN" {
 		t.Fatalf("stale active result was trusted: %+v", detail)
 	}
-	cache(`{"number":7,"state":"MERGED"}`)
+	cache(`{"number":8,"state":"MERGED"}`)
 	t.Setenv("WTC_FORGE_CACHE_AGE", "1")
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "UNKNOWN" {
 		t.Fatalf("explicit short cache age was ignored: %+v", detail)
@@ -58,7 +65,7 @@ func TestStatusMergedPRCacheOutlivesActiveCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	outside := filepath.Join(t.TempDir(), "outside")
-	if err := os.WriteFile(outside, []byte(`{"number":7,"state":"MERGED"}`), 0600); err != nil {
+	if err := os.WriteFile(outside, []byte(`{"number":8,"state":"MERGED"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, path); err != nil {

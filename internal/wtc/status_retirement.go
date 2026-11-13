@@ -52,8 +52,15 @@ func statusRetirementFacts(snapshot *StatusSnapshot) {
 			a.Blockers = append(a.Blockers, reason)
 		}
 		for _, repo := range snapshot.Repos {
+			if repo.Collection == a.Collection && repo.PRUnconfirmed && repo.PR == nil {
+				add(fmt.Sprintf("%s: pull request state is unconfirmed in status.", repo.Dir))
+			}
 			if repo.Collection == a.Collection && repo.PR != nil {
-				add(fmt.Sprintf("%s: pull request #%s remains open in status.", repo.Dir, repo.PR.Number))
+				if statusObservationUnavailable(repo.PR.Freshness) {
+					add(fmt.Sprintf("%s: pull request #%s state is unconfirmed in status.", repo.Dir, repo.PR.Number))
+				} else {
+					add(fmt.Sprintf("%s: pull request #%s remains open in status.", repo.Dir, repo.PR.Number))
+				}
 			}
 		}
 		if !snapshot.ShowCollectionColumn && snapshot.Collection == a.Collection {
@@ -64,8 +71,12 @@ func statusRetirementFacts(snapshot *StatusSnapshot) {
 						represented = true
 					}
 				}
-				if (pr.State == "OPEN" || pr.State == "DRAFT") && !represented {
-					add(fmt.Sprintf("%s: pull request #%s remains open in status.", pr.Repo, pr.Number))
+				if !represented {
+					if statusObservationUnavailable(pr.Freshness) {
+						add(fmt.Sprintf("%s: pull request #%s state is unconfirmed in status.", pr.Repo, pr.Number))
+					} else if pr.State == "OPEN" || pr.State == "DRAFT" {
+						add(fmt.Sprintf("%s: pull request #%s remains open in status.", pr.Repo, pr.Number))
+					}
 				}
 				if pr.Follow != nil && pr.Follow.Stage != "done" {
 					add(fmt.Sprintf("%s: pull request #%s still has delivery follow-up.", pr.Repo, pr.Number))

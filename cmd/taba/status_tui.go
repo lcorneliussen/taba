@@ -905,6 +905,9 @@ func statusTUIPRSignals(checks, merge, review *string, styled bool) [3]string {
 func statusTUIPRSuffix(pr *wtc.StatusPRFacts, styled bool) string {
 	cells := statusTUIPRSignals(&pr.Checks, &pr.Merge, &pr.Review, styled)
 	suffix := strings.Join(cells[:], " ")
+	if pr.Freshness == "stale" || pr.Freshness == "deferred" || pr.Freshness == "unavailable" {
+		return pr.Freshness
+	}
 	if statusTUIPRConflict(pr) {
 		warning := " conflict"
 		if styled {
@@ -1603,6 +1606,17 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		number := statusTUIPRNumberCell(row.Number, target, l.number, styled, linkTone)
 		repo := statusTUIFit(statusTUISafe(row.Repo), l.repo)
+		if row.Freshness == "stale" || row.Freshness == "deferred" || row.Freshness == "unavailable" {
+			state = row.Freshness
+			observation := "not yet observed"
+			if row.State != "" && row.State != "UNKNOWN" {
+				observation = "last " + strings.ToLower(row.State)
+			}
+			if row.ObservedAt != "" {
+				observation += "; observed " + statusTUISafe(row.ObservedAt)
+			}
+			label = row.Freshness + ": " + observation + "; " + label
+		}
 		stateCell := statusTUIFit(state, l.state)
 		signals := statusTUIPRSignals(row.Checks, row.Merge, row.Review, styled)
 		if merged && !row.OnBranch {
@@ -1783,7 +1797,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
 			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
-			"◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up.",
+			"Refresh uses shared cache and rate limits; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up.",
 		}
 		for _, text := range help {
 			lines = append(lines, strings.Split(ansi.Wrap(text, width, ""), "\n")...)

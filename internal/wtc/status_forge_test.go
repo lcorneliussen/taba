@@ -292,6 +292,8 @@ printf '%s\n' '{"number":7,"state":"MERGED","mergedAt":"2026-09-30T12:00:00Z","s
 	if err != nil || strings.Count(string(data), "called") != 2 {
 		t.Fatalf("unsettled merge was not refreshed: %s %v", data, err)
 	}
+	// Use a separate repository identity for the missing-time case.
+	slug = "example/other-widget"
 	statusWriteForgeCache(forge, slug, number, []byte(`{"number":7,"state":"MERGED","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}]}`))
 	if err := os.Chtimes(statusForgeCachePath(forge, slug, number), old, old); err != nil {
 		t.Fatal(err)
