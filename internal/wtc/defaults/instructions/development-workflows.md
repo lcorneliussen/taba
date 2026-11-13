@@ -18,7 +18,7 @@ identity — at the first commit — and not before:
 - A repo brought into a collection only for context never grows a branch at
   all, and never has to be cleaned up.
 
-`wtc new` and `wtc add-repo` therefore create detached worktrees; the
+`taba new` and `taba add-repo` therefore create detached worktrees; the
 collection name is the branch the work is *expected* to get, recorded in the
 launch note.
 
@@ -62,10 +62,10 @@ Treat "catch up" as: reconcile this collection with development outside it.
    push the merge when the branch has a PR (open or draft); abort and report
    on conflicts rather than resolving them.
 4. Merged PRs → stash if dirty; detach at tip; prune the local branch when
-   `git branch -d` allows it; `wtc pr unlist <repo> <n>` for an
+   `git branch -d` allows it; `taba pr unlist <repo> <n>` for an
    enlisted row that landed.
-5. Re-run `wtc skills render`, `wtc mcp render`, `wtc env setup`
-   and `wtc secrets link`.
+5. Re-run `taba skills render`, `taba mcp render`, `taba env setup`
+   and `taba secrets link`.
 
 Do not skip a dirty sibling that is behind — stash, move, pop. Mid-merge or
 mid-rebase is still a skip; that is someone else's in-progress operation.
@@ -75,16 +75,16 @@ mid-rebase is still a skip; that is someone else's in-progress operation.
 Which PRs belong to a collection is **local**, not a forge label:
 
 ```bash
-wtc pr enlist <repo> <n> --branch <working-branch>
-wtc pr list
-wtc pr unlist <repo> <n>
+taba pr enlist <repo> <n> --branch <working-branch>
+taba pr list
+taba pr unlist <repo> <n>
 ```
 
-File: `<collection>/.wtc-prs` (dies with `wtc retire`). Catch-up's "has this
+File: `<collection>/.wtc-prs` (dies with `taba retire`). Catch-up's "has this
 PR merged?" check reads it first; `gh` only enriches state/title when asked,
 and is the fallback for a branch that was never enlisted.
 
-Procedure: skill `wtc-catch-up`. Command: `wtc catch-up`.
+Procedure: skill `taba-catch-up`. Command: `taba catch-up`.
 
 ## Ownership after push and merge
 
@@ -93,7 +93,7 @@ agreed delivery outcome. Catch-up integrates incoming changes; follow-through
 resumes on relevant status/review/check events, settles feedback and builds,
 prepares human checkpoints, and verifies main and required delivery after
 merge. Follow [pr-follow-through.md](pr-follow-through.md) for the lifecycle,
-cache freshness and actual notification requirements; use the `wtc-follow`
+cache freshness and actual notification requirements; use the `taba-follow`
 skill to execute it. A green table row or merged branch alone does not establish
 shipment, and none of this grants permission to merge or deploy.
 
@@ -172,7 +172,7 @@ one link away rather than woven through:
   without encoding vendor keys into git refs — which matters the day the
   vendor changes and the refs do not.
 
-`wtc new --tracker <KEY>` is a worked example of accepting a tracker
+`taba new --tracker <KEY>` is a worked example of accepting a tracker
 key at collection-creation time; adapt it to whichever tracker you run.
 
 ## Mirroring in product repos

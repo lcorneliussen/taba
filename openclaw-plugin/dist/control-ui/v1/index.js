@@ -188,8 +188,13 @@ const wtcMessage = (message) => String(message ?? "").trim().replace(/^wtc: /, "
 const noteNode = (text, failed, style) => css(el("span", { textContent: failed ? `⚠ ${text}` : text, title: text }),
   `color:${failed ? TONE.failure : "var(--muted, #888)"};font-size:12px;${style ?? ""}`);
 
+// The plugin installs its skills as taba-<name>. A collection pinned before
+// the rename still names them wtc-<name> in its next steps.
+const CATCH_UP = "taba-catch-up";
+const currentSkill = (skill) => typeof skill === "string" && skill.startsWith("wtc-") ? "taba-" + skill.slice(4) : skill;
+
 // Asks the conversation to run one of the agent's skills on what the card saw.
-const askSkill = (host, sessionKey, skill, input) => askConversation(host, sessionKey, `/skill ${skill} ${input}`);
+const askSkill = (host, sessionKey, skill, input) => askConversation(host, sessionKey, `/skill ${currentSkill(skill)} ${input}`);
 
 // These phrases are emitted by internal/openclaw/catch_up_changes.go and
 // catch_up_recovery.go (requireRecoveredChanges). Keep both emitters in sync.
@@ -410,7 +415,7 @@ const address = (url) => LOOPBACK.test(url)
   ? css(el("span", { textContent: `:${new URL(url).port || "80"}`, title: `${url} on the gateway: open a tunnel to reach it from here` }), "font-family:var(--mono, ui-monospace, monospace);color:var(--muted, #888)")
   : link(url.replace(/^https?:\/\//, ""), url);
 const TUNNEL_URL = /^https:\/\/[^/]*(trycloudflare\.com|\.ts\.net|ngrok[-a-z]*\.(app|io|dev)|devtunnels\.ms)(:\d+)?(\/|$)/;
-const consolidate = (g) => `The tunnel ${g.group} runs as a service of its own. Consolidate it as the wtc-svc skill says: remove it and open it again with wtc svc tunnel on the service it exposes.`;
+const consolidate = (g) => `The tunnel ${g.group} runs as a service of its own. Consolidate it as the taba-svc skill says: remove it and open it again with wtc svc tunnel on the service it exposes.`;
 const tunnelName = (t) => t.provider || (/trycloudflare\.com/.test(t.url ?? "") ? "cloudflare" : /\.ts\.net/.test(t.url ?? "") ? "tailscale" : "tunnel");
 // Things only the conversation can do (resolve a conflict, publish where the
 // gateway cannot) are asked of it, in the conversation, where it shows.
@@ -472,7 +477,7 @@ const unreachable = (url) => {
     return host !== here && PRIVATE_HOST.test(host) && !PRIVATE_HOST.test(here);
   } catch { return false; }
 };
-const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${g.group}. ${program} is not on the gateway's PATH: install it for this collection, then open the tunnel as the wtc-svc skill says.`;
+const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${g.group}. ${program} is not on the gateway's PATH: install it for this collection, then open the tunnel as the taba-svc skill says.`;
 const serviceStateIcon = glyph => {
   // Use a supported shell for the filled square, avoiding the unknown-glyph fallback.
   const icon = controlIcon(glyph === "■" ? "▶" : glyph, 12);
@@ -1136,7 +1141,7 @@ function collectionTables(v) {
       const fresh = out.repo;
       if (tracked && nextRoute(r.next) === "run" && !out.performed) delete request.dispatchedAt;
       if (out.performed) {
-        const outcome = await catchUpRepo(v.host, v.agent(), fresh, say, (input, recoveryRef) => dispatchRepoRequests([{repo:r,state:request}], conversationKey, logKey, "wtc-catch-up", input, recoveryRef), async () => out);
+        const outcome = await catchUpRepo(v.host, v.agent(), fresh, say, (input, recoveryRef) => dispatchRepoRequests([{repo:r,state:request}], conversationKey, logKey, CATCH_UP, input, recoveryRef), async () => out);
         log(outcome?.unconfirmed ? "Action handoff outcome unconfirmed; inspect the conversation" : outcome?.handedOff ? "Sent to conversation; completion pending" : out.code ? "Failed: " + (out.message ?? out.code) : "Completed");
         if (outcome?.recoveryRef && ownsRepoRequest(r, request, logKey)) recordActivity(logKey, logId, { recoveryRef:outcome.recoveryRef });
         if (!outcome?.handedOff && !outcome?.unconfirmed && ownsRepoRequest(r, request, logKey)) request.phase = "settled";
@@ -1293,7 +1298,7 @@ function collectionTables(v) {
           if (currentRun() && !run.cancelled) for (const r of conflicted) {
             const fresh = current.repos?.find((candidate) => candidate.sessionKey === r.sessionKey);
             const step = fresh?.next;
-            if (ownsRepoRequest(r,requestsForRun.get(r.sessionKey)?.state,logKey) && !fresh?.error && step?.by === "agent" && step.skill === "wtc-catch-up" && ["merge", "resolve"].includes(step.step)) { agents.push({ repo: fresh, step }); if(fresh.catchUpRecovery) recordActivity(logKey, `${runId}:${r.sessionKey}`, {recoveryRef:fresh.catchUpRecovery}); }
+            if (ownsRepoRequest(r,requestsForRun.get(r.sessionKey)?.state,logKey) && !fresh?.error && step?.by === "agent" && currentSkill(step.skill) === CATCH_UP && ["merge", "resolve"].includes(step.step)) { agents.push({ repo: fresh, step }); if(fresh.catchUpRecovery) recordActivity(logKey, `${runId}:${r.sessionKey}`, {recoveryRef:fresh.catchUpRecovery}); }
             else setResult(r.sessionKey, "Catch-up stopped; its current resolution step changed. Refresh before continuing.");
           } else for (const r of conflicted) setResult(r.sessionKey, "Cancelled before conflict handoff");
         } catch (err) { for (const r of conflicted) setResult(r.sessionKey, "Cannot recheck conflict resolution: " + String(err?.message ?? err)); }
@@ -1319,9 +1324,9 @@ function collectionTables(v) {
       });
       if (handoffs.length && !run.cancelled && currentRun()) {
         try {
-          const skills = [...new Set(handoffs.map(({ step }) => step.skill ?? "wtc-catch-up"))];
+          const skills = [...new Set(handoffs.map(({ step }) => currentSkill(step.skill ?? CATCH_UP)))];
           const skill = skills.length === 1 ? skills[0] : "wtc";
-          const tasks = handoffs.map(({ repo, step }) => `${nameOf(repo)}: ${skills.length > 1 ? `use ${step.skill ?? "wtc-catch-up"}. ` : ""}${step.reason}${recoveryHandoff(repo)}`).join("\n");
+          const tasks = handoffs.map(({ repo, step }) => `${nameOf(repo)}: ${skills.length > 1 ? `use ${currentSkill(step.skill ?? CATCH_UP)}. ` : ""}${step.reason}${recoveryHandoff(repo)}`).join("\n");
           const input = tasks + "\nOnly these selected steps; report follow-ups separately. Publication retains its personal confirmation.";
           const commits = handoffs.filter(t => requestsForRun.has(t.repo.sessionKey)).map(t => ({repo:t.repo,state:requestsForRun.get(t.repo.sessionKey).state}));
           if (commits.length !== handoffs.length) throw Error("The selected handoff has no current repository reservation; refresh before acting");
@@ -1818,7 +1823,7 @@ function collectionTables(v) {
     const requests = [...new Map(repos.map(repo => [repo.sessionKey,repo])).values()].map(repo => ({repo, state:beginRepoRequest(repo, collection, kind)}));
     if (!requests.length || requests.some(t => !t.state)) { cancelUnsentRequests(requests.filter(t => t.state), collection); return; }
     const current = () => active(conversation) && requests.every(t => ownsRepoRequest(t.repo,t.state,collection));
-    const send = (input, recoveryRef) => current() ? dispatchRepoRequests(requests,conversation,collection,"wtc-catch-up",input,recoveryRef) : {cancelled:true};
+    const send = (input, recoveryRef) => current() ? dispatchRepoRequests(requests,conversation,collection,CATCH_UP,input,recoveryRef) : {cancelled:true};
     const native = async operation => {
       if (!current()) return {cancelled:true};
       for (const {state} of requests) state.dispatchedAt = Date.now();

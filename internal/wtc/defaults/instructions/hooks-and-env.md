@@ -1,7 +1,7 @@
 # Lifecycle hooks and collection env
 
 Collections have a lifecycle git knows nothing about: worktrees get created
-(`wtc new`, `wtc add-repo`) and torn down (`wtc retire`). Repos can hook
+(`taba new`, `taba add-repo`) and torn down (`taba retire`). Repos can hook
 into that, and every collection carries a small shared environment (ports
 etc.) that all siblings inherit.
 
@@ -21,7 +21,7 @@ before it is removed, its **teardown** hook. Resolution order per repo:
 3. Neither → no-op.
 
 Because hooks are checked into each repo, a repo brought into a collection
-later (via `wtc add-repo`) carries its own setup with it. Hooks must be
+later (via `taba add-repo`) carries its own setup with it. Hooks must be
 idempotent and must not assume which siblings exist — check
 `../<repo>`/`$<REPO>_PORT` and degrade gracefully.
 
@@ -39,7 +39,7 @@ the collection env, link secrets from the machine's control root
 (`$WTC_CONFIG_ROOT` — see `secrets.md`). Typical teardown: stop
 containers, deregister local services. Keep hooks fast.
 
-For secrets, hooks **call `wtc secrets link --repo <name>`** rather than
+For secrets, hooks **call `taba secrets link --repo <name>`** rather than
 writing their own `ln` lines — one implementation, so the ignore-check and
 prod-path rules cannot drift per repo. The hook locates the harness worktree
 as a sibling and degrades to a printed note when there is none (a repo cloned
@@ -52,18 +52,18 @@ that already exist. Catch-up closes it by re-running the same tool
 
 `.env.collection` has the same gap for the same reason — it is generated at
 collection creation and never revisited, so a variable the generator learned
-afterwards reaches new collections only. `wtc env setup` is that file's
+afterwards reaches new collections only. `taba env setup` is that file's
 version of the same "run it again" tool, and catch-up runs it too.
 
 ## Collection env and ports
 
-`wtc new` allocates each collection a **port block** — the lowest free
+`taba new` allocates each collection a **port block** — the lowest free
 `42000 + 100·n` across existing collections — and writes two generated,
 uncommitted files at the collection root:
 
 - `.env.collection` — each `WTC_` variable also appears as `TABA_` with
   the same value. `WTC_COLLECTION`, `WTC_AGENT_NAME`
-  (`<herdr-session>--<collection>`, what `wtc-open` passes to
+  (`<herdr-session>--<collection>`, what `taba-open` passes to
   `herdr agent start`), `WTC_CONFIG_ROOT`, `COLLECTION_PORT_BASE`, and one
   `<REPO>_PORT` per registry repo with a `port_offset` (e.g. `api` offset 1 →
   `API_PORT=42001`). Ports are emitted for *all* such repos, present or not,
@@ -72,7 +72,7 @@ uncommitted files at the collection root:
   tool-identity variables (`GH_CONFIG_DIR` and friends) when the workspace has
   opted into them — `secrets.md` → Tool identity.
 - `mise.toml` — loads `.env.collection` via `[env] _.file` and, when the
-  harness commits `.wtc-cli-version`, pins that exact `wtc` GitHub release
+  harness commits a version pin (`.taba-version` or `.wtc-cli-version`), pins that exact taba GitHub release
   through `[tools]`. mise treats the
   collection root as a parent config, so **every sibling repo worktree
   inherits these variables automatically** in any mise-activated shell or
@@ -101,10 +101,10 @@ agent shell command sees repo-pinned tools on PATH, independent of cwd:
 
 | Surface | What it does |
 |---|---|
-| `wtc agent-env` | trusts sibling `mise.toml` files, caches bins as `.env.toolchain`, prints `export PATH=…` |
-| `hooks/agent-env.json` | SessionStart refreshes the cache; PreToolUse wraps `Bash` / `run_terminal_command` with inline exports from `wtc agent-env --wrap` |
+| `taba agent-env` | trusts sibling `mise.toml` files, caches bins as `.env.toolchain`, prints `export PATH=…` |
+| `hooks/agent-env.json` | SessionStart refreshes the cache; PreToolUse wraps `Bash` / `run_terminal_command` with inline exports from `taba agent-env --wrap` |
 | collection-root `.envrc` | Grok `load_envrc` (and direnv) prepend PATH without needing project hook trust |
-| `wtc open` | new herdr workspaces get `WTC_TOOLCHAIN_PATH` and `TABA_TOOLCHAIN_PATH` at create time |
+| `taba open` | new herdr workspaces get `WTC_TOOLCHAIN_PATH` and `TABA_TOOLCHAIN_PATH` at create time |
 
 ### Why the toolchain is applied after shell startup
 
@@ -127,7 +127,7 @@ Interactive human panes never needed this: a login shell that runs `mise
 activate` from `.zshrc` already resolves per-directory pins correctly. The
 problem was only ever the non-login shells agents spawn.
 
-`wtc skills render` installs the hook JSON at `.grok/hooks/`, `.claude/settings.json`,
+`taba skills render` installs the hook JSON at `.grok/hooks/`, `.claude/settings.json`,
 and `.cursor/hooks.json` (symlinks; a real file there is left as a local
 override) and regenerates `.envrc` / `.env.toolchain`. Catch-up re-runs it.
 Grok skips project hooks until `/hooks-trust`; `.envrc` still prepends PATH,
@@ -148,7 +148,7 @@ system interpreters once PATH is injected.
 
 | Event | Tool | Hooks run |
 |---|---|---|
-| Collection created | `wtc new` | `init` for every included repo (after env is written and skills are linked) |
-| Repo added later | `wtc add-repo` | `init` for the new repos only |
-| Collection retired | `wtc retire` | `teardown` for every repo, then worktrees removed (pre-flight refuses on dirty/unpushed work unless `--force`; branches are never deleted) |
-| Generator or registry changed | `wtc env setup` | none — regenerates `.env.collection`, preserving the port base |
+| Collection created | `taba new` | `init` for every included repo (after env is written and skills are linked) |
+| Repo added later | `taba add-repo` | `init` for the new repos only |
+| Collection retired | `taba retire` | `teardown` for every repo, then worktrees removed (pre-flight refuses on dirty/unpushed work unless `--force`; branches are never deleted) |
+| Generator or registry changed | `taba env setup` | none — regenerates `.env.collection`, preserving the port base |

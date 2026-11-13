@@ -82,7 +82,7 @@ func TestEjectRefusesOverwrite(t *testing.T) {
 
 func TestEjectSkillGlob(t *testing.T) {
 	c := fixture(t)
-	paths, err := Eject(c.Harness, []string{"skills/wtc-*"})
+	paths, err := Eject(c.Harness, []string{"skills/taba-*"})
 	if err != nil {
 		t.Fatal(err)
 	}

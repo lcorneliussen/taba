@@ -100,7 +100,7 @@ func (c *Context) runtimePlan(binary string) (*runtimeManifest, []byte, error) {
 		return nil, nil, err
 	}
 	if c.Config.Runtime.Backend != "dekit" {
-		return nil, nil, fmt.Errorf("enable [runtime] backend = \"dekit\" in harness/wtc.toml")
+		return nil, nil, fmt.Errorf("enable [runtime] backend = \"dekit\" in the harness config (taba.toml or wtc.toml)")
 	}
 	_, repos, err := c.CatchUpInventory(CatchUpOptions{DryRun: true})
 	if err != nil {

@@ -34,6 +34,11 @@ func InitHarness(opt HarnessInitOptions) (HarnessInitResult, error) {
 	if _, err := semver.StrictNewVersion(opt.CLIVersion); err != nil || !cliVersionPattern.MatchString(opt.CLIVersion) {
 		return result, fmt.Errorf("--cli-version must be an exact published version, without v")
 	}
+	// The scaffold uses the taba file names and command, which releases before
+	// 0.2.0 cannot read or install. The 0.2.0 release candidates can.
+	if v := semver.MustParse(opt.CLIVersion); v.Major() == 0 && v.Minor() < 2 {
+		return result, fmt.Errorf("--cli-version must be 0.2.0 or later: earlier releases cannot read .taba-version and taba.toml")
+	}
 	dir, err := filepath.Abs(opt.Dir)
 	if err != nil {
 		return result, err
@@ -70,13 +75,21 @@ func InitHarness(opt HarnessInitOptions) (HarnessInitResult, error) {
 	}
 	files := map[string][]byte{
 		".harness-repos.yml": registry,
-		".wtc-cli-version":   []byte(opt.CLIVersion + "\n"),
-		"wtc.toml":           []byte(configText.String()),
+		".taba-version":      []byte(opt.CLIVersion + "\n"),
+		"taba.toml":          []byte(configText.String()),
 		".gitignore":         []byte(".harness-repos\n.wtc-local.md\n.DS_Store\n"),
-		"AGENTS.md":          []byte("# Project harness\n\nKeep project policy and local integration here. Generic collection instructions\nand skills come from the pinned WTC CLI. Before changing policy, read the\ninstalled guide with `wtc docs instructions/customize.md`.\n\nNever commit credentials. Inspect the destination audience and outgoing content\nbefore publishing; private project identities belong in private records.\n"),
-		"README.md":          []byte("# Project harness\n\nThis repository owns the repository registry, the WTC version pin, and project\nconfiguration. Add project-specific hooks and policy overrides when needed.\nGeneric instructions and skills ship with the pinned CLI.\n\nStart with `wtc docs bootstrap.md`. Run `wtc docs instructions/customize.md`\nfor config and hooks, or `wtc eject <path>` for a default you want to own.\n\nCommit these files and publish this repository to the remote in\n`.harness-repos.yml` before creating its shared bare owner and first collection.\nWTC has not initialized Git, contacted that remote, or started services.\n"),
+		"AGENTS.md":          []byte("# Project harness\n\nKeep project policy and local integration here. Generic collection instructions\nand skills come from the pinned taba CLI. Before changing policy, read the\ninstalled guide with `taba docs instructions/customize.md`.\n\nNever commit credentials. Inspect the destination audience and outgoing content\nbefore publishing; private project identities belong in private records.\n"),
+		"README.md":          []byte("# Project harness\n\nThis repository owns the repository registry, the taba version pin, and project\nconfiguration. Add project-specific hooks and policy overrides when needed.\nGeneric instructions and skills ship with the pinned CLI.\n\nStart with `taba docs bootstrap.md`. Run `taba docs instructions/customize.md`\nfor config and hooks, or `taba eject <path>` for a default you want to own.\n\nCommit these files and publish this repository to the remote in\n`.harness-repos.yml` before creating its shared bare owner and first collection.\ntaba has not initialized Git, contacted that remote, or started services.\n"),
 	}
-	names := []string{".harness-repos.yml", ".wtc-cli-version", "wtc.toml", ".gitignore", "AGENTS.md", "README.md"}
+	names := []string{".harness-repos.yml", ".taba-version", "taba.toml", ".gitignore", "AGENTS.md", "README.md"}
+	// An existing harness under the old file names is a harness too.
+	for _, name := range []string{".wtc-cli-version", "wtc.toml"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); err == nil {
+			return result, fmt.Errorf("refusing to initialize over an existing harness: %s", filepath.Join(dir, name))
+		} else if !os.IsNotExist(err) {
+			return result, err
+		}
+	}
 	for _, name := range names {
 		path := filepath.Join(dir, name)
 		if _, err := os.Lstat(path); err == nil {

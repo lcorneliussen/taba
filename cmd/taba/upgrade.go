@@ -19,7 +19,7 @@ func addUpgradeCommand(root *cobra.Command, asJSON *bool) {
 	cmd := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Move the harness to a newer wtc release, or roll a merged upgrade out",
-		Long: "Without --rollout: bump the harness's .wtc-cli-version and wtc.toml compatibility range to the latest\n" +
+		Long: "Without --rollout: bump the harness's version pin (.taba-version or .wtc-cli-version) and taba.toml or wtc.toml compatibility range to the latest\n" +
 			"(or --version) release, refresh this collection's mise config, install the release, and print the\n" +
 			"release notes in between. Nothing is committed; review the notes and open the harness PR.\n\n" +
 			"With --rollout, after that PR merged: catch every collection's harness up, clean worktrees and idle\n" +

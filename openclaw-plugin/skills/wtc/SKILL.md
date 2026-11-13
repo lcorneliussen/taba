@@ -42,9 +42,9 @@ Read that before the first `wtc` command of a task and follow it. In short:
 - `wtc status <name>` shows the collection folder; edit, build, test and
   commit in `<folder>/<repo>`.
 - **Pushing is the person's.** When work is committed and ready for review,
-  get its pull request ready with the **wtc-pr** skill; the person pushes it
+  get its pull request ready with the **taba-pr** skill; the person pushes it
   with ↑ in the card. Never `git push`.
-- **A "wtc: pull request news" event**: act on it with the **wtc-follow**
+- **A "wtc: pull request news" event**: act on it with the **taba-follow**
   skill.
 - **One focus per collection**: per repository one branch and one pull
   request. Parallel work, or a second pull request in a repository, is a
@@ -54,5 +54,5 @@ Read that before the first `wtc` command of a task and follow it. In short:
   card under its repository; merge what you want of it
   (`wtc catch-up --from <branch>`) or tell the person what is left.
 - **Catching up** a repository, merging a sub-session's branch in, and resolving the
-  conflicts either brings: the **wtc-catch-up** skill. It never rebases and
+  conflicts either brings: the **taba-catch-up** skill. It never rebases and
   never pushes.

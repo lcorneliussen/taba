@@ -78,6 +78,10 @@ func (c *Context) DiffSkills() ([]SkillDiff, error) {
 		}
 		item := SkillDiff{Name: name, Source: filepath.ToSlash(strings.TrimPrefix(path, c.Harness+string(filepath.Separator)))}
 		base, exists := defaults[name]
+		if current, renamed := renamedSkill(name); !exists && renamed {
+			// An override under the old name is compared with the renamed default.
+			base, exists = defaults[current]
+		}
 		if !exists {
 			item.Status = "custom"
 			result = append(result, item)
@@ -138,12 +142,23 @@ func (c *Context) DiffSkills() ([]SkillDiff, error) {
 		if _, full := overrides[name]; full && strings.HasPrefix(overrides[name], filepath.Join(patchRoot, name)+string(filepath.Separator)) {
 			return nil, fmt.Errorf("skill %s has both a full overlay and section patches", name)
 		}
-		base, ok := defaults[name]
-		path := filepath.Join(c.Harness, "skills", name, "SKILL.md")
-		if local, err := os.ReadFile(path); err == nil {
-			base, ok = local, true
-		} else if !os.IsNotExist(err) {
-			return nil, err
+		// Patch the skill the renderer patches: under the old name, the
+		// renamed skill, including a harness override of it.
+		effective := name
+		if _, local := overrides[name]; !local {
+			if _, def := defaults[name]; !def {
+				if current, renamed := renamedSkill(name); renamed {
+					effective = current
+				}
+			}
+		}
+		base, ok := defaults[effective]
+		if path, local := overrides[effective]; local {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			base, ok = data, true
 		}
 		if !ok {
 			return nil, fmt.Errorf("section patches for unknown skill %s", name)

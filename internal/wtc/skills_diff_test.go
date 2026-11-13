@@ -9,12 +9,12 @@ import (
 
 func TestDiffSkillsReportsPrecedenceAndBaseDrift(t *testing.T) {
 	c := fixture(t)
-	base, err := ReadDefault("skills/wtc-customize/SKILL.md")
+	base, err := ReadDefault("skills/taba-customize/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	local := filepath.Join(c.Harness, "skills", "wtc-customize")
-	overlay := filepath.Join(c.Harness, "overlays", "skills", "wtc-customize")
+	local := filepath.Join(c.Harness, "skills", "taba-customize")
+	overlay := filepath.Join(c.Harness, "overlays", "skills", "taba-customize")
 	for _, dir := range []string{local, overlay} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
@@ -33,7 +33,7 @@ func TestDiffSkillsReportsPrecedenceAndBaseDrift(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(rows) != 1 || rows[0].Status != want || rows[0].Source != "overlays/skills/wtc-customize/SKILL.md" {
+		if len(rows) != 1 || rows[0].Status != want || rows[0].Source != "overlays/skills/taba-customize/SKILL.md" {
 			t.Fatalf("rows = %+v, want %s overlay", rows, want)
 		}
 		return rows[0]
@@ -61,11 +61,11 @@ func TestDiffSkillsReportsPrecedenceAndBaseDrift(t *testing.T) {
 
 func TestDiffSkillsCustomAndUnchanged(t *testing.T) {
 	c := fixture(t)
-	base, err := ReadDefault("skills/wtc-customize/SKILL.md")
+	base, err := ReadDefault("skills/taba-customize/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string][]byte{"wtc-customize": base, "wtc-extra": []byte("custom\n")} {
+	for name, body := range map[string][]byte{"taba-customize": base, "wtc-extra": []byte("custom\n")} {
 		dir := filepath.Join(c.Harness, "skills", name)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
@@ -78,7 +78,7 @@ func TestDiffSkillsCustomAndUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 || rows[0].Name != "wtc-customize" || rows[0].Status != "current" || rows[1].Name != "wtc-extra" || rows[1].Status != "custom" {
+	if len(rows) != 2 || rows[0].Name != "taba-customize" || rows[0].Status != "current" || rows[1].Name != "wtc-extra" || rows[1].Status != "custom" {
 		t.Fatalf("rows = %+v", rows)
 	}
 }
@@ -87,14 +87,14 @@ func TestTabaSkillDigestInputs(t *testing.T) {
 	for _, sections := range []bool{false, true} {
 		t.Run(map[bool]string{false: "full-overlay", true: "sections"}[sections], func(t *testing.T) {
 			c := fixture(t)
-			base, err := ReadDefault("skills/wtc-customize/SKILL.md")
+			base, err := ReadDefault("skills/taba-customize/SKILL.md")
 			if err != nil {
 				t.Fatal(err)
 			}
-			dir := filepath.Join(c.Harness, "overlays", "skills", "wtc-customize")
+			dir := filepath.Join(c.Harness, "overlays", "skills", "taba-customize")
 			if sections {
 				base = append(base, []byte("\n## Setup\n\nOriginal setup.\n")...)
-				fixtureFile(t, filepath.Join(c.Harness, "skills", "wtc-customize", "SKILL.md"), string(base), 0644)
+				fixtureFile(t, filepath.Join(c.Harness, "skills", "taba-customize", "SKILL.md"), string(base), 0644)
 				fixtureFile(t, filepath.Join(dir, "sections", "setup.md"), "## Setup\n\nNew setup.\n", 0644)
 			} else {
 				fixtureFile(t, filepath.Join(dir, "SKILL.md"), string(base)+"\nLocal details.\n", 0644)
@@ -130,17 +130,17 @@ func TestTabaSkillDigestInputs(t *testing.T) {
 
 func TestDiffSkillsSectionPatchDrift(t *testing.T) {
 	c := fixture(t)
-	dir := filepath.Join(c.Harness, "overlays", "skills", "wtc-customize")
+	dir := filepath.Join(c.Harness, "overlays", "skills", "taba-customize")
 	if err := os.MkdirAll(filepath.Join(dir, "sections"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	base, err := ReadDefault("skills/wtc-customize/SKILL.md")
+	base, err := ReadDefault("skills/taba-customize/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The default skill has no H2 headings, so use a harness full skill as
 	// the patch base and verify the patch is reported separately.
-	local := filepath.Join(c.Harness, "skills", "wtc-customize")
+	local := filepath.Join(c.Harness, "skills", "taba-customize")
 	if err := os.MkdirAll(local, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestDiffSkillsSectionPatchDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 || rows[0].Status != "reviewed" || rows[0].Source != "overlays/skills/wtc-customize/sections" || !strings.Contains(strings.Join(rows[0].Changes, "\n"), "-Old setup.\n+New setup.") {
+	if len(rows) != 2 || rows[0].Status != "reviewed" || rows[0].Source != "overlays/skills/taba-customize/sections" || !strings.Contains(strings.Join(rows[0].Changes, "\n"), "-Old setup.\n+New setup.") {
 		t.Fatalf("patch rows = %+v", rows)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".wtc-base.sha256"), []byte(strings.Repeat("0", 64)+"\n"), 0644); err != nil {

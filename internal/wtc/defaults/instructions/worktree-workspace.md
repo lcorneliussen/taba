@@ -31,7 +31,7 @@ clones. One layout, no modes. Standing this up in an empty folder:
 | **Repo siblings** | The repo worktrees inside one collection — the working set |
 | **Collection siblings** | The other collections under the workspace root — other tasks, off-limits unless the user names one ([collection-context.md](collection-context.md)) |
 | **Development tip** | Per-repo `default_ref` in `.harness-repos.yml` (`origin/main` / `origin/develop`) |
-| **Branch-off** | Create a new collection with selected repos (`wtc new`) |
+| **Branch-off** | Create a new collection with selected repos (`taba new`) |
 | **Catch-up** | Fetch/prune bares, fast-forward clean tip worktrees (rules in `AGENTS.md`) |
 
 ## Rules
@@ -56,7 +56,7 @@ git --git-dir=.bare/<repo>.git fetch --all --prune
 ```
 
 Then add the repo to `.harness-repos.yml` (tracked) and rerun
-`wtc registry refresh` to update the local `.harness-repos`.
+`taba registry refresh` to update the local `.harness-repos`.
 
 ## Renaming a repository
 
@@ -76,7 +76,7 @@ forge host and owner, the next catch-up or checkout points its `origin` at the
 new remote and reports it once; a transfer to another owner needs a manual
 `git remote set-url`. Port variables are
 emitted under both names (`TABA_PORT` and `WTC_CLI_PORT`). New collections
-check the repository out as `taba/`, and `wtc status` marks old folders
+check the repository out as `taba/`, and `taba status` marks old folders
 "renamed to taba". Remove an alias only when no collection uses the old folder
 any more.
 
@@ -103,11 +103,11 @@ a valid identifier.
 
 This works because the tools are worktree-driven, not registry-driven:
 
-- `wtc` resolves any worktree to its real owner via
+- `taba` resolves any worktree to its real owner via
   `git rev-parse --git-common-dir`, so fetching and teardown reach `ext.`
   siblings on the same path as registry repos — status refreshes them and
   retire prunes them, with no `.bare/` entry to look up.
-- `wtc status --no-watch` walks the collection's directories and only requires a
+- `taba status --no-watch` walks the collection's directories and only requires a
   `.git` entry, so the sibling appears in the table like any other.
 - `write_collection_env` iterates the registry, so an unmanaged repo simply
   gets no port — which is correct; it has no `port_offset` to claim.
@@ -122,15 +122,15 @@ sibling that develops on `develop` will read as behind when it is not.
 A wtc can start from a plain slug, an issue, a tracker ticket, or a PR:
 
 ```bash
-wtc new fix-login-flow api                   # slug
-wtc new --issue api-foh7 paging-clamp       # issue (owning repo auto-included)
-wtc new --tracker PROJ-123 rate-limits api
-wtc new --pr api#41                          # review wtc on the PR's head branch
-wtc review start api#41                      # review-only: someone else's PR, no writes
-wtc add-repo api console                     # bring repos into this collection later
+taba new fix-login-flow api                   # slug
+taba new --issue api-foh7 paging-clamp       # issue (owning repo auto-included)
+taba new --tracker PROJ-123 rate-limits api
+taba new --pr api#41                          # review wtc on the PR's head branch
+taba review start api#41                      # review-only: someone else's PR, no writes
+taba add-repo api console                     # bring repos into this collection later
 ```
 
-`wtc add-repo --collection <name> <repo>` explicitly
+`taba add-repo --collection <name> <repo>` explicitly
 targets another collection in the same workspace.
 
 Naming follows the source: `<slug>`, `<issue-id>-<slug>`, `<tracker-key>-<slug>`,
@@ -145,25 +145,25 @@ every collection sit on it at once, and the branch is created at the first
 commit, when its name is actually known
 (`development-workflows.md` → "The resting state is the tip"). `--pr` is the
 exception: review work pushes to the PR's head, so that one branch is checked
-out for real. Reviewing a PR you do not own is different: `wtc review start
-<repo>#<n>` (or `wtc new --pr … --review`) makes the collection review-only,
+out for real. Reviewing a PR you do not own is different: `taba review start
+<repo>#<n>` (or `taba new --pr … --review`) makes the collection review-only,
 with pushing disabled from the PR worktree and the author's review steps
 refused. `--tip` is accepted and ignored — it is the default now.
 
 Both tools clone missing bare owners on demand, write the collection env
-(ports), link the harness `wtc-*` skills into the collection root so the agent
+(ports), link the harness `taba-*` skills into the collection root so the agent
 CLIs discover them (`skills.md`), and run each repo's init hook — see
 `hooks-and-env.md`.
 
 ## Opening a collection
 
-- **Several collections at once**: `wtc open [<collection> …]` opens
+- **Several collections at once**: `taba open [<collection> …]` opens
   each as a workspace in the workspace root's herdr session — agent + shell at
   the collection root, collection env preloaded. This is the way to keep
   multiple wtcs in flight without a pile of terminal windows; see
   `instructions/herdr.md`. Optional, like mise.
-- **Whole collection**: `wtc browse` opens one LazyVim with a vim
-  tab per sibling in this window; `wtc open --add browse` puts it in the
+- **Whole collection**: `taba browse` opens one LazyVim with a vim
+  tab per sibling in this window; `taba open --add browse` puts it in the
   herdr `browse` pane. Or open the
   collection root in VS Code (or Cursor —
   currently not part of this tooling, but works the same) as a multi-root
@@ -184,8 +184,8 @@ files).
 ## Retiring a collection
 
 ```bash
-wtc retire <collection>             # from a different collection
-wtc retire .                        # from this collection's Herdr workspace
+taba retire <collection>             # from a different collection
+taba retire .                        # from this collection's Herdr workspace
 ```
 
 Runs teardown hooks, refuses if any sibling has uncommitted or unpushed work
