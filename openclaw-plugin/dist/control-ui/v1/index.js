@@ -2292,8 +2292,8 @@ function collectionTables(v) {
     ];
   }
 
-  // ▶/■ NAME REPO STATE URL, then a column per way in (gateway, cloudflare…)
-  // and the + that opens a new one.
+  // ▶/■ NAME REPO STATE URL, then ways as columns when space permits,
+  // or a Tunnels line below. The + opens a new way in.
   const slug = (url) => { try { return new URL(url).hostname.split(".")[0]; } catch { return url; } };
   function serviceControls(groups) {
     if (groups.length < 2) return null;
