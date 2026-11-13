@@ -327,8 +327,7 @@ func runtimeTaskPath(path string) bool {
 // credentials, accounts and daemon state are never probed by a read/status.
 func (c *Context) RuntimeStatus() []RuntimeItem {
 	items := runtimeTaskDiagnostics(c.runtimeStatusOnly())
-	// What people are shown is also looked at now: whether each ready
-	// address answers, and whether each tunnel's provider can serve.
+	// Ready non-tunnel application addresses can be checked for answering.
 	runtimeAnswering(items, runtimeAnswerCheck)
 	return c.runtimeWithDeclarations(items)
 }
@@ -425,6 +424,9 @@ func (c *Context) runtimeStatus(m *runtimeManifest) []RuntimeItem {
 	state, err := runtimeRunnerState(m)
 	for i, task := range m.Tasks {
 		items[i] = task.RuntimeItem
+		if items[i].Kind == "endpoint" && !items[i].ManagedTunnel && items[i].DefinitionID == "" {
+			items[i].DefinitionID = task.Definition
+		}
 		items[i].State = state
 		items[i].runnerStarting = err == nil && state == "starting"
 		if err != nil {

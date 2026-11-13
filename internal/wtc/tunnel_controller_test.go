@@ -191,6 +191,17 @@ func TestTunnelProductionTailscaleLifecycleUsesOnlyAuthorizedFakeSocket(t *testi
 	if len(daemon.journal) != count {
 		t.Fatal("pure status queried daemon")
 	}
+	if err := c.RetireRuntime(); err != nil {
+		t.Fatal("normal runtime teardown", err)
+	}
+	if err := c.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
+		t.Fatal("normal teardown permanently blocked desired policy", err)
+	}
+	for _, action := range []string{"register", "start", "stop", "unregister"} {
+		if err := c.runManagedTunnel(context.Background(), opt, action, p); err != nil {
+			t.Fatal("reuse after teardown", action, err)
+		}
+	}
 	// Native removal must never parse desired TOML as a YAML task fragment.
 	if _, err := c.RemoveService("web", true); err != nil {
 		t.Fatal(err)
@@ -312,5 +323,50 @@ func TestTunnelProductionDevAndCloudflareRegistrationCleanupFakeTransports(t *te
 				t.Fatal("provider token escaped into journal")
 			}
 		})
+	}
+}
+
+func TestTunnelDeclaredDefinitionCannotSelectOrConsentToNamedPolicy(t *testing.T) {
+	c := runtimeFixture(t)
+	fixtureFile(t, filepath.Join(c.Collection, "widget/.harness/dekit.tasks.yaml"), "tasks:\n web/server:\n  cmd: [echo, synthetic]\n  x-wtc: {url: 'http://127.0.0.1:3000'}\n web/tunnel:\n  cmd: [echo, synthetic]\n  deps: [web/server]\n  tags: [endpoint]\n", 0644)
+	entry := tunnelPolicyEntry{Provider: "cloudflare", Mode: "quick", Access: "public", Inputs: tunnelInputRefs{Executable: "/synthetic/not-executed"}}
+	if err := c.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
+		t.Fatal(err)
+	}
+	plan, _, err := c.runtimePlanWithTunnels(c.Config.Runtime.Binary, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definition := ""
+	for _, task := range plan.Tasks {
+		if task.Kind == "endpoint" {
+			definition = task.Definition
+		}
+	}
+	if !validTunnelDigest(definition) {
+		t.Fatal("explicit legacy endpoint definition missing")
+	}
+	// Even when a single named policy exists, a gateway-observed declaration
+	// targets only its own native task and cannot approve or allocate that policy.
+	result, err := c.Tunnel(TunnelOptions{Service: "web", Declared: true, ExpectedDefinition: definition, Public: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != "up" {
+		t.Fatal("declared task did not reach native action", result.Action)
+	}
+	state, err := c.readTunnelJournal()
+	if err != nil || len(state.Entries) != 0 {
+		t.Fatal("legacy action consented/allocated named policy", err)
+	}
+	calls, _ := os.ReadFile(filepath.Join(c.runtimeRoot(), "calls"))
+	if !strings.Contains(string(calls), "start widget/web/tunnel") || strings.Contains(string(calls), "tunnel-host") {
+		t.Fatal("declared action selected a named host", string(calls))
+	}
+	if _, err = c.Tunnel(TunnelOptions{Service: "web", Declared: true, ExpectedDefinition: tunnelDigest([]byte("stale")), Public: true}); err == nil {
+		t.Fatal("changed native declaration accepted")
+	}
+	if _, err = c.Tunnel(TunnelOptions{Service: "web", Name: "preview", Declared: true, ExpectedDefinition: definition, Public: true}); err == nil {
+		t.Fatal("declared selector accepted named entry")
 	}
 }

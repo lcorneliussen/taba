@@ -679,11 +679,30 @@ func runtimeURLReachable(url string, budget time.Duration) bool {
 
 // RetireRuntime uses the target's manifest even if runtime opt-in was removed.
 // An unconfirmed shutdown or failed teardown keeps the worktrees and record.
-func (c *Context) RetireRuntime() error {
+func (c *Context) RetireRuntime() (resultErr error) {
+	// A successful collection retirement has already disposed its journaled
+	// obligations and removed this directory. Repeated cleanup is a no-op,
+	// not permission to recreate it or to infer remote absence. An existing
+	// collection still reads the journal even when its manifest is missing.
+	info, pathErr := os.Lstat(c.Collection)
+	if os.IsNotExist(pathErr) {
+		return nil
+	}
+	if pathErr != nil {
+		return pathErr
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("runtime cleanup requires the actual collection directory")
+	}
 	defer c.signalServicesChanged()
 	if err := c.runtimeConflict(); err != nil {
 		return err
 	}
+	attempt, err := c.beginTunnelRetirement(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, c.endTunnelRetirement(context.Background(), attempt, true)) }()
 	if err := c.cleanupManagedTunnels(context.Background()); err != nil {
 		return err
 	}

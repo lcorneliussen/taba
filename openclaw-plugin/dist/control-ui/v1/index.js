@@ -593,12 +593,13 @@ function managedTunnelNode(g, t, svc) {
 function tunnelNode(g, t, svc, { label, opener } = {}) {
   if (t.managedTunnel || t.managed_tunnel) return managedTunnelNode(g,t,svc);
   const name = tunnelName(t);
+  const definition = t.definition_id ?? t.definitionId;
   const pub = TUNNEL_PROVIDERS.some((p) => p.name === name && p.public);
   if (svc.busy(`${g.group}:${name}`)) return css(el("span", { textContent: label ? "…" : `${name} …` }), "color:var(--muted, #888)");
   // A closed tunnel is an action: open it again.
   if (!isRunning(t)) {
     const title = `Open the ${name} tunnel again${pub ? ": anyone with the link can use it" : ""} (${serviceState(t)})${t.login ? `. First: ${t.login}` : ""}`;
-    const again = () => svc.run({ op: "tunnel", group: g.group, provider: name, public: pub }, `Opening the ${name} tunnel…`, `${g.group}:${name}`);
+    const again = () => svc.run(definition ? { op: "tunnel", group: g.group, provider: name, declared:true, expectedDefinition:definition, public: pub } : {op:"tunnel",group:g.group,provider:name,add:true}, `Opening the ${name} tunnel…`, `${g.group}:${name}`);
     return opener ? opener(title, again) : pill(`▶ ${name}`, title, again);
   }
   // Running, but not answering or not signed in: say so on it.
@@ -616,7 +617,7 @@ function tunnelNode(g, t, svc, { label, opener } = {}) {
     css(route, "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:inherit");
     route.title = `${t.url} — ${access[1]}`;
   }
-  const close = smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`));
+  const close = smallButton("✕", `Close the ${name} tunnel`, () => svc.run({ op: "tunnel", group: g.group, provider: name, declared:true, expectedDefinition:definition, stop: true }, `Closing the ${name} tunnel…`, `${g.group}:${name}`));
   close.style.flex = "none";
   const firstLine = css(el("span", {}, accessSlot, route, close), "display:inline-flex;align-items:baseline;gap:2px;min-width:0;max-width:100%;white-space:nowrap");
   return css(el("span", {}, firstLine, trouble),

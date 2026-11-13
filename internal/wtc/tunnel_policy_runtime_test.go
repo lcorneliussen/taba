@@ -4,72 +4,108 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestTunnelPolicyProductionWriterReplacementTombstoneAndIsolation(t *testing.T) {
-	c := runtimeFixture(t)
-	fixtureFile(t, filepath.Join(c.Collection, "widget/.harness/dekit.tasks.yaml"), "tasks:\n web/server:\n  cmd: [echo, synthetic]\n  x-wtc: {url: 'http://127.0.0.1:3000'}\n", 0644)
-	entry := testTunnelDefinition().Entry.Policy
-	if err := c.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
-		t.Fatal(err)
+	spellings := []string{"direct", "symlink-spelling"}
+	if runtime.GOOS == "darwin" {
+		spellings = append(spellings, "mac-var-spelling")
 	}
-	project, local, err := c.tunnelPolicyPaths()
-	if err != nil || local != filepath.Join(c.Collection, ".config", "tunnels.toml") {
-		t.Fatal(project, local, err)
-	}
-	state, err := c.readTunnelJournal()
-	if err != nil || state.Policy == nil || state.Policy.Path != local || tunnelJournalObligations(state) {
-		t.Fatal("policy-only ownership/obligations incorrect", err)
-	}
-	plan, _, err := c.runtimePlan(c.Config.Runtime.Binary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	entries, err := c.effectiveTunnels(plan)
-	if err != nil || len(entries) != 1 || !entries[0].Matched || entries[0].Scope != "collection" {
-		t.Fatal(entries, err)
-	}
-	no := false
-	if err = c.SetTunnelPolicy("widget", "web", "preview", tunnelPolicyEntry{Enabled: &no}, false); err != nil {
-		t.Fatal(err)
-	}
-	policy, err := readTunnelPolicyFile(local)
-	if err != nil || !policy.Entries[testTunnelKey()].disabled() {
-		t.Fatal("exact tombstone failed", err)
-	}
-	data, _ := os.ReadFile(local)
-	if strings.Contains(string(data), "provider =") {
-		t.Fatal("disabled entry retained provider fields")
-	}
-	if err = c.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
-		t.Fatal(err)
-	}
-	// Explicitly change the credential grant: defaults may normally share a
-	// physical root, but relocation must not relocate desired tunnel policy.
-	scope, err := c.ValidateControlRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreign := t.TempDir()
-	fixtureFile(t, scope.PolicySource, fmt.Sprintf("[secrets]\nroot = %q\nallow_external = true\n", foreign), 0600)
-	c, err = OpenCollection(c.Collection)
-	if err != nil {
-		t.Fatal(err)
-	}
-	newProject, newLocal, err := c.tunnelPolicyPaths()
-	if err != nil || newProject != project || newLocal != local || c.ConfigRoot != foreign {
-		t.Fatal("desired paths followed changed credential root", err)
-	}
-	if err = c.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = os.Stat(filepath.Join(foreign, "tunnels.toml")); !os.IsNotExist(err) {
-		t.Fatal("desired policy written into shared credential root")
-	}
-	if _, err = os.Stat(filepath.Join(c.ConfigRoot, "provider-store-created")); !os.IsNotExist(err) {
-		t.Fatal("policy touched provider data")
+	for _, spelling := range spellings {
+		t.Run(spelling, func(t *testing.T) {
+			c := runtimeFixture(t)
+			fixtureFile(t, filepath.Join(c.Collection, "widget/.harness/dekit.tasks.yaml"), "tasks:\n web/server:\n  cmd: [echo, synthetic]\n  x-wtc: {url: 'http://127.0.0.1:3000'}\n", 0644)
+			entry := testTunnelDefinition().Entry.Policy
+			if err := c.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
+				t.Fatal(err)
+			}
+			project, local, err := c.tunnelPolicyPaths()
+			if err != nil || local != filepath.Join(c.Collection, ".config", "tunnels.toml") {
+				t.Fatal(project, local, err)
+			}
+			state, err := c.readTunnelJournal()
+			if err != nil || state.Policy == nil || state.Policy.Path != local || tunnelJournalObligations(state) {
+				t.Fatal("policy-only ownership/obligations incorrect", err)
+			}
+			plan, _, err := c.runtimePlan(c.Config.Runtime.Binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, err := c.effectiveTunnels(plan)
+			if err != nil || len(entries) != 1 || !entries[0].Matched || entries[0].Scope != "collection" {
+				t.Fatal(entries, err)
+			}
+			no := false
+			if err = c.SetTunnelPolicy("widget", "web", "preview", tunnelPolicyEntry{Enabled: &no}, false); err != nil {
+				t.Fatal(err)
+			}
+			policy, err := readTunnelPolicyFile(local)
+			if err != nil || !policy.Entries[testTunnelKey()].disabled() {
+				t.Fatal("exact tombstone failed", err)
+			}
+			data, _ := os.ReadFile(local)
+			if strings.Contains(string(data), "provider =") {
+				t.Fatal("disabled entry retained provider fields")
+			}
+			if err = c.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
+				t.Fatal(err)
+			}
+			// Explicitly change the credential grant: defaults may normally share a
+			// physical root, but relocation must not relocate desired tunnel policy.
+			scope, err := c.ValidateControlRoot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			foreign := t.TempDir()
+			if spelling == "symlink-spelling" {
+				alias := filepath.Join(t.TempDir(), "approved-root-alias")
+				if err = os.Symlink(foreign, alias); err != nil {
+					t.Fatal(err)
+				}
+				foreign = alias
+			}
+			if spelling == "mac-var-spelling" {
+				foreign, err = os.MkdirTemp("/var/tmp", "taba-tunnel-canonical-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.RemoveAll(foreign) })
+			}
+			fixtureFile(t, scope.PolicySource, fmt.Sprintf("[secrets]\nroot = %q\nallow_external = true\n", foreign), 0600)
+			c, err = OpenCollection(c.Collection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			newProject, newLocal, err := c.tunnelPolicyPaths()
+			if err != nil {
+				t.Fatalf("resolve desired paths: %v", err)
+			}
+			if newProject != project {
+				t.Errorf("project desired policy path: expected %q; actual %q", project, newProject)
+			}
+			if newLocal != local {
+				t.Errorf("collection desired policy path: expected %q; actual %q", local, newLocal)
+			}
+			canonicalForeign, canonicalErr := canonicalPath(foreign)
+			if canonicalErr != nil {
+				t.Fatal(canonicalErr)
+			}
+			if c.ConfigRoot != canonicalForeign {
+				t.Errorf("canonical receiving credential root: expected %q from supplied %q; actual %q", canonicalForeign, foreign, c.ConfigRoot)
+			}
+			if err = c.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = os.Stat(filepath.Join(foreign, "tunnels.toml")); !os.IsNotExist(err) {
+				t.Fatal("desired policy written into shared credential root")
+			}
+			if _, err = os.Stat(filepath.Join(c.ConfigRoot, "provider-store-created")); !os.IsNotExist(err) {
+				t.Fatal("policy touched provider data")
+			}
+		})
 	}
 }
 

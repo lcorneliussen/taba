@@ -393,6 +393,9 @@ func (c *Context) runtimePlanWithTunnels(binary string, managed bool) (*runtimeM
 			return nil, nil, err
 		}
 		item.Definition = fmt.Sprintf("%x", sha256.Sum256(definition))
+		if item.Kind == "endpoint" {
+			item.DefinitionID = item.Definition
+		}
 		if intent, ok := m.TunnelIntents[item.Path]; ok && item.Kind == "endpoint" {
 			item.TunnelIntent = "off"
 			if intent.On {

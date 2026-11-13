@@ -412,6 +412,7 @@ func runtimeTunnelTemplate(provider, portEnv string, public bool) (cmd, ready st
 
 // TunnelOptions opens or closes a tunnel for a service.
 type TunnelOptions struct {
+	Declared           bool
 	Name               string
 	Action             string
 	DefinitionFile     string
@@ -424,9 +425,8 @@ type TunnelOptions struct {
 	Wait               time.Duration
 }
 
-// Tunnel starts a service's tunnel through a provider, adding one to this
-// collection's task file when the service has none. A tunnel reachable from
-// the internet opens only with Public.
+// Explicit receiving task declarations retain their native runtime route.
+// This route never generates a provider task or selects a named policy entry.
 func (c *Context) legacyTunnel(opt TunnelOptions) (RuntimeResult, error) {
 	repo, name, err := c.runtimeServiceRepo(opt.Service, true)
 	if err != nil {
@@ -437,7 +437,7 @@ func (c *Context) legacyTunnel(opt TunnelOptions) (RuntimeResult, error) {
 	if err != nil {
 		return RuntimeResult{}, err
 	}
-	plan, _, err := c.runtimePlan(binary)
+	plan, _, err := c.runtimePlanWithTunnels(binary, false)
 	if err != nil {
 		return RuntimeResult{}, err
 	}
@@ -457,6 +457,11 @@ func (c *Context) legacyTunnel(opt TunnelOptions) (RuntimeResult, error) {
 	}
 	if service == nil {
 		return RuntimeResult{}, fmt.Errorf(branding.Text("unknown service %s; {{command}} svc lists them"), group)
+	}
+	if opt.ExpectedDefinition != "" {
+		if len(tunnels) != 1 || tunnels[0].Definition != opt.ExpectedDefinition {
+			return RuntimeResult{}, fmt.Errorf("declared tunnel definition changed; refresh before acting")
+		}
 	}
 	if opt.Stop {
 		if len(tunnels) == 0 {

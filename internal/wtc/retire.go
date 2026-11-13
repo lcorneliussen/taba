@@ -3,6 +3,7 @@ package wtc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -40,7 +41,7 @@ type retireWorktree struct {
 
 // RetireCollection first inspects every worktree, then removes only the named
 // collection. Remote branches and bare owners are never changed.
-func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
+func (c *Context) RetireCollection(opt RetireOptions) (result RetireResult, resultErr error) {
 	if opt.Self {
 		if opt.Name != filepath.Base(c.Collection) {
 			return RetireResult{}, fmt.Errorf("self-retirement target must be the current collection")
@@ -63,6 +64,19 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 		return result, err
 	}
 	target := result.Collection
+	runtimeTarget, err := OpenCollection(target)
+	if err != nil {
+		return result, err
+	}
+	attempt, err := runtimeTarget.beginTunnelRetirement(context.Background())
+	if err != nil {
+		return result, err
+	}
+	destructiveRemoval := false
+	defer func() {
+		resultErr = errors.Join(resultErr, runtimeTarget.endTunnelRetirement(context.Background(), attempt, !destructiveRemoval))
+	}()
+
 	// Close the source workspace before hooks or worktree removal. Once closed,
 	// no new pane or agent turn can start against a collection being deleted.
 	if opt.Self && !opt.InPlace {
@@ -87,10 +101,6 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 	}
 	// Validate owned tunnel obligations while cleanup code and credentials
 	// still exist, before arbitrary destructive legacy retire.pre hooks.
-	runtimeTarget, err := OpenCollection(target)
-	if err != nil {
-		return result, err
-	}
 	if err := runtimeTarget.cleanupManagedTunnels(context.Background()); err != nil {
 		return result, err
 	}
@@ -117,6 +127,7 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 			return err
 		}
 		postRan := false
+		destructiveRemoval = true
 		for _, wt := range worktrees {
 			// A self-retire loses its harness hook source when that final worktree
 			// goes away. Run the post hook after product teardown, while it exists.
@@ -391,12 +402,12 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 	files := []string{
 		"HANDOFF.md", ".env.collection", ".env.collection.local", "mise.toml", ".DS_Store",
 		"WTC-SCOPE.md", "SCOPE.md", ".env.toolchain",
-		".wtc-runtime.lock", ".wtc-status-watchers.lock",
+		".wtc-status-watchers.lock",
 		".wtc-prs", ".wtc-prs.lock", ".last-wtc-status.yml", ".wtc-status.json", ".wtc-status.md",
 		".wtc-catch-up.json", ".wtc-catch-up.json.md", ReviewModeFile,
 		".taba-prs", ".last-taba-status.yml", ".taba-status.json", ".taba-status.md",
 		".taba-catch-up.json", ".taba-catch-up.json.md",
-		".taba-review-mode", ".taba-runtime.lock", ".taba-status-watchers.lock",
+		".taba-review-mode", ".taba-status-watchers.lock",
 		".wtc-dev-mode.json", ".wtc-dev-mode.lock", ".wtc-dev-build.lock",
 		".taba-dev-mode.json", ".taba-dev-mode.lock", ".taba-dev-build.lock",
 	}
@@ -419,6 +430,14 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 	}
 	if err := removeManagedCollectionEntry(target); err != nil {
 		return err
+	}
+	// Keep the existing admission lock until the receiving boundary is gone.
+	// A waiting writer must revalidate an invalid receiver, rather than open a
+	// new lock inode while retirement is still deleting its journal.
+	for _, name := range []string{".wtc-runtime.lock", ".taba-runtime.lock"} {
+		if err := os.Remove(filepath.Join(target, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
 	}
 	for _, name := range []string{".wtc", ".taba"} {
 		root := filepath.Join(target, name)

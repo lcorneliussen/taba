@@ -841,6 +841,9 @@ export default {
       const tunnelName = String(payload.name ?? "");
       const tunnelAction = String(payload.action ?? (payload.stop ? "stop" : "start"));
       const expectedDefinition = String(payload.expectedDefinition ?? "");
+      const declared = payload.declared === true;
+      if (op === "tunnel" && declared && (tunnelName || !["start","stop"].includes(tunnelAction))) return { ok:false,error:"declared endpoint actions cannot select named policy" };
+      if (op === "tunnel" && !payload.add && ["start","register"].includes(tunnelAction) && ((!declared && !tunnelName) || !/^[a-f0-9]{64}$/.test(expectedDefinition))) return {ok:false,error:"refresh and select the exact declared or named definition before approving exposure"};
       if (op === "tunnel" && (payload.project || payload.definition || payload.definitionFile)) return { ok: false, error: "collection controls cannot write project defaults or select definition files" };
       if (op === "tunnel" && tunnelName && (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(tunnelName))) return { ok: false, error: "invalid named tunnel" };
       if (op === "tunnel" && !["register", "start", "stop", "unregister", "reconcile"].includes(tunnelAction)) return { ok: false, error: "invalid tunnel lifecycle action" };
@@ -859,6 +862,7 @@ export default {
       if (op === "tunnel") {
         argv.push(provider);
         if (tunnelName) argv.push("--name", tunnelName);
+        if (declared) argv.push("--declared");
         argv.push("--action", tunnelAction);
         if (expectedDefinition) argv.push("--expected-definition", expectedDefinition);
         // This click approves potential public exposure for this exact

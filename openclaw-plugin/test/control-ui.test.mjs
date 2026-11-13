@@ -222,7 +222,7 @@ async function mount(kind, data, history, key, props = {}) {
 const collection = (repos, services = []) => ({
   collection: { label: "test collection", folder: "/state/wtc-collections/test" },
   repos,
-  services,
+  services:services.map(s=>s.kind==="endpoint" && !s.managed_tunnel && !s.managedTunnel ? {definition_id:"c".repeat(64),...s} : s),
 });
 const repo = (name, fields = {}) => ({
   repo: name, owner: "octo", forge: "github", sessionKey: `agent:main:owner:${name}`,
@@ -3639,8 +3639,11 @@ test("offered provider setup and named/declared controls reach the scoped gatewa
   }
   const legacy={group:"api/web",path:"api/web/temporary",repo:"api",kind:"endpoint",provider:"cloudflare",state:"idle"};
   const mounted=await mount("panel",collection([repo("api")],[web,legacy]),undefined,sessionKey);
-  try{await titled(mounted.host,"Open the cloudflare tunnel again: anyone with the link can use it (idle)").onclick(click());assert.deepEqual(commands.at(-1).argv,["wtc","svc","tunnel","api/web","cloudflare","--action","start","--public"])}finally{mounted.view.dispose()}
+  try{await titled(mounted.host,"Open the cloudflare tunnel again: anyone with the link can use it (idle)").onclick(click());assert.deepEqual(commands.at(-1).argv,["wtc","svc","tunnel","api/web","cloudflare","--declared","--action","start","--expected-definition","c".repeat(64),"--public"])}finally{mounted.view.dispose()}
+
   const count=commands.length;
+  const unnamed=await actions.get("svc").handler({sessionKey,agentId:"main",payload:{op:"tunnel",group:"api/web",provider:"ngrok",public:true}});
+  assert.equal(unnamed.ok,false);assert.equal(commands.length,count,"unnamed public approval cannot select current named policy");
   const forged=await actions.get("svc").handler({sessionKey,agentId:"main",payload:{op:"tunnel",group:"api/web",provider:"ngrok",name:"preview",action:"start",public:true,project:true,expectedDefinition:desired}});
   assert.equal(forged.ok,false);assert.equal(commands.length,count);
  }finally{svcResult=previous;rmSync(state,{recursive:true,force:true})}

@@ -103,6 +103,7 @@ Unregister cleans owned resources using retained definitions. Public exposure
 requires --public for the current definition. Status never logs into providers.`,
 		Args: cobra.RangeArgs(1, 2)}
 	tunnel.Flags().StringVar(&topt.Name, "name", "", "Named tunnel entry")
+	tunnel.Flags().BoolVar(&topt.Declared, "declared", false, "Act only on an explicit native endpoint declaration")
 	tunnel.Flags().StringVar(&topt.Action, "action", "start", "configure, disable, register, start, stop, unregister or reconcile")
 	tunnel.Flags().StringVar(&topt.DefinitionFile, "definition", "", "TOML file containing one complete named definition")
 	tunnel.Flags().BoolVar(&topt.Project, "project", false, "Write receiving project desired defaults explicitly")

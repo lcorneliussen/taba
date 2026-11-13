@@ -563,22 +563,23 @@ the task as a whole:
   rows omit empty fact bands. Action-log result markers also have a reserved glyph slot.
   Uncommitted-only rows offer **Commit changes** first.
 
-  An open tunnel shows the first part of its address, links to it and closes
-  with ✕; a closed one is a ▶ to open it again. **+** offers, in order, the
-  gateway's own OpenClaw portal, a public Cloudflare or ngrok link for when a
-  portal does not work, a dev tunnel for the person's account, and Tailscale
-  when the plugin's `teamTailnet` setting says the gateway's tailnet is the
-  team's rather than a person's; a Tailscale tunnel is never public, a public
-  link is Cloudflare's or ngrok's. Without portal ingress on the gateway
-  (`gateway.portals.ingress`, or Tailscale run by the gateway), a portal
-  answers at the gateway's own address, so it is offered last, marked "needs
-  ingress", and an open one is marked ⚠ when the browser cannot reach its
-  address. A provider whose client is not on the gateway's PATH says "install
-  first", and the conversation is asked to install it. A service's own address
-  is on the gateway, often inside a container, so it shows as its port only. A
-  tunnel started as a service of its own is marked, with **Consolidate** asking
-  the conversation to open it again with `wtc svc tunnel`. The card appears
-  only on sessions that have a collection. The plugin provides it as a
+  An open tunnel links to its address and closes with ✕. Configured named
+  entries distinguish registration from active serving and expose start,
+  register, stop, unregister and reconcile through the same CLI policy/journal.
+  Start/register approvals include the exact current desired-definition hash;
+  legacy declaration actions cannot silently select a named definition.
+  **+** offers the gateway's existing OpenClaw portal and provider setup guidance.
+  Setup explains how to configure this collection's `.config/tunnels.toml` with
+  explicit receiving credentials or an authorized socket; it does not install,
+  log in, allocate resources, send an agent task or grant project-default writes.
+  Provider names and HTTPS do not prove enforced private access.
+
+  Without portal ingress on the gateway (`gateway.portals.ingress`, or Tailscale
+  run by the gateway), a portal answers at the gateway's own address, so it is
+  offered last, marked "needs ingress". Its existing direct portal.open/close
+  route is independent of provider policy. A service's own address is on the
+  gateway, often inside a container, so it shows as its port only. The card
+  appears only on sessions that have a collection. The plugin provides it as a
   composer that wraps the built-in one, selected when the plugin loads;
   **Customize UI → Built-in** switches back.
 

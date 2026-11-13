@@ -46,6 +46,13 @@ func (c *Context) Tunnel(opt TunnelOptions) (result RuntimeResult, err error) {
 	if opt.Project && action != "configure" && action != "disable" {
 		return result, fmt.Errorf("project scope is available only for explicit desired-policy writes")
 	}
+	if opt.Declared {
+		if opt.Name != "" || opt.ExpectedDefinition == "" || !validTunnelDigest(opt.ExpectedDefinition) || action != "start" && action != "stop" {
+			return result, fmt.Errorf("declared tunnel action requires its exact observed definition")
+		}
+		opt.Stop = action == "stop"
+		return c.legacyTunnel(opt)
+	}
 	if opt.Name == "" && opt.ExpectedDefinition == "" && (action == "start" || action == "stop") {
 		if repo, service, e := c.runtimeServiceRepo(opt.Service, true); e == nil {
 			declarations := c.runtimeDeclarations()
@@ -177,6 +184,9 @@ func (c *Context) runManagedTunnel(ctx context.Context, opt TunnelOptions, actio
 			if old.Operation == nil {
 				return errTunnelReconcile
 			}
+			if lifecycleComplete(old.Operation) && old.Active != nil && !p.activeHostLive(old) {
+				return c.executeRetainedTunnel(ctx, old, "stop", p)
+			}
 			return c.managedTunnelLifecycle(p).Reconcile(ctx, old.Key, old.Operation.ID)
 		}
 		return c.executeRetainedTunnel(ctx, old, action, p)
@@ -235,6 +245,13 @@ func (c *Context) runManagedTunnel(ctx context.Context, opt TunnelOptions, actio
 		return err
 	}
 	if action == "start" {
+		if old := lifecycleEntry(&state, entry.Key); old != nil && old.Active != nil && !p.activeHostLive(*old) {
+			if err = c.executeRetainedTunnel(ctx, *old, "stop", p); err != nil {
+				return err
+			}
+		}
+	}
+	if action == "start" {
 		// Start the native application before allocating/hosting an endpoint.
 		// The generated host has no runner dependency that could later restart
 		// it behind the persisted lifecycle and consent checks.
@@ -279,9 +296,8 @@ func (c *Context) cleanupManagedTunnels(ctx context.Context) error {
 	if len(s.Entries) == 0 {
 		return nil
 	}
-	store := c.tunnelRuntimeStore()
-	if err = store.Update(ctx, func(s *tunnelState) error { s.Retiring = true; return nil }); err != nil {
-		return err
+	if !s.Retiring || s.Retirement == nil {
+		return fmt.Errorf("owned retirement admission required before cleanup")
 	}
 	p := c.tunnelProviders()
 	for _, old := range s.Entries {

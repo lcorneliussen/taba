@@ -131,6 +131,12 @@ func TestTunnelRetireCleansStoppedRegistrationBeforeLegacyPreHook(t *testing.T) 
 	if _, err = os.Stat(marker); err != nil {
 		t.Fatal("cleanup hook did not precede destructive boundary", err)
 	}
+	if err = target.RetireRuntime(); err != nil {
+		t.Errorf("repeated runtime cleanup after successful collection removal: %v", err)
+	}
+	if _, err = os.Lstat(target.Collection); !os.IsNotExist(err) {
+		t.Errorf("runtime cleanup resurrected removed collection: %v", err)
+	}
 	// Unregistering the stopped local reservation has no daemon mutation or
 	// account query; only the earlier explicit private registration used the fake.
 	for _, call := range daemon.journal {

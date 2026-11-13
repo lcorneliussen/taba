@@ -13,11 +13,12 @@ import (
 // effect. These pure codecs do not discover paths, run hooks or call providers.
 // A pending effect after interruption is uncertain, not permission to replay.
 type tunnelState struct {
-	Policy   *tunnelPolicyReceipt `json:"policy,omitempty"`
-	Retiring bool                 `json:"retiring,omitempty"`
-	Schema   int                  `json:"schema"`
-	Owner    string               `json:"owner"`
-	Entries  []tunnelEntryState   `json:"entries"`
+	Policy     *tunnelPolicyReceipt     `json:"policy,omitempty"`
+	Retirement *tunnelRetirementAttempt `json:"retirement,omitempty"`
+	Retiring   bool                     `json:"retiring,omitempty"`
+	Schema     int                      `json:"schema"`
+	Owner      string                   `json:"owner"`
+	Entries    []tunnelEntryState       `json:"entries"`
 }
 
 type tunnelEntryState struct {
@@ -65,6 +66,7 @@ func (op tunnelOperation) nextStep(name string) (bool, error) {
 }
 
 type tunnelResourceRef struct {
+	Instance          string `json:"instance,omitempty"`
 	CredentialContext string `json:"credential_context,omitempty"`
 	Provider          string `json:"provider"`
 	Scope             string `json:"scope"` // non-secret provider account/zone/cluster
@@ -82,6 +84,10 @@ func (r tunnelResourceRef) key() string {
 }
 
 func (r tunnelResourceRef) validate(owner string) error {
+	if r.Instance != "" && (!tunnelComponent.MatchString(r.Instance) || r.Kind != "host-task" || r.Lifetime != "session" || r.Ownership != "owned") {
+		return fmt.Errorf("invalid owned host start instance")
+	}
+
 	if r.CredentialContext != "" && !validTunnelDigest(r.CredentialContext) {
 		return fmt.Errorf("invalid provider credential context")
 	}
@@ -106,6 +112,10 @@ func (r tunnelResourceRef) validate(owner string) error {
 }
 
 func (s tunnelState) validate(owner string) error {
+	if s.Retirement != nil && (!s.Retiring || !tunnelComponent.MatchString(s.Retirement.ID) || s.Retirement.Process.validate() != nil) {
+		return fmt.Errorf("invalid retirement admission owner")
+	}
+
 	if s.Schema != 1 || !tunnelComponent.MatchString(owner) || s.Owner != owner {
 		return fmt.Errorf("unsupported tunnel state or receiving owner mismatch")
 	}

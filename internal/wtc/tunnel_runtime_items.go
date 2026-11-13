@@ -182,8 +182,13 @@ func (c *Context) recordedTunnelItems(observed []RuntimeItem) []RuntimeItem {
 				item.State = "registered"
 			}
 			if old.Active != nil {
-				item.State = "ready"
-				item.URL = old.Active.URL
+				if c.tunnelProviders().activeHostLive(old) {
+					item.State = "ready"
+					item.URL = old.Active.URL
+				} else {
+					item.State = "pending"
+					item.Lifecycle = "owned hosting session needs reconciliation"
+				}
 			}
 			if old.Operation != nil {
 				item.OperationID = old.Operation.ID
@@ -203,6 +208,10 @@ func (c *Context) recordedTunnelItems(observed []RuntimeItem) []RuntimeItem {
 					}
 				}
 			}
+		}
+		if exists && old.Active == nil && lifecycleSessionResources(old) {
+			item.State = "pending"
+			item.Lifecycle = "session cleanup receipts remain; reconcile retained effects"
 		}
 		if !wanted || !e.Matched {
 			item.Lifecycle = "unmatched/deleted definition; retained cleanup remains available"

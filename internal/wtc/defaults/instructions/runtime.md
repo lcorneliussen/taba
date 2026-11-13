@@ -314,6 +314,14 @@ Registered-but-stopped entries never appear in active host/origin publications.
 `pending` and `lifecycle` identify interrupted operations; reconcile queries supported
 exact evidence, never blindly repeats an unknown remote effect or arbitrary hook.
 Some ambiguous effects require manual restoration/confirmation and remain pending.
+A recorded active address is not perpetual host readiness. A crashed foreground
+host is shown as pending; explicit stop/reconcile verifies the exact recorded
+host and provider child instances before clearing their session receipt. A missing
+observation or interruption between child launch and identity recording retains
+the session for reconciliation. Process disposal does not prove arbitrary remote
+or callback cleanup; those receipts remain independent. Normal runtime teardown
+releases its retirement admission so an intact collection can be started again;
+unknown ownership and interrupted destructive retirement still refuse allocation.
 
 Optional `[tunnels.widget.web.preview.events.registered]` (and `started`, `stopped`,
 `unregistered`) tables use `command = ["relative/executable", "argument"]`, resolved
@@ -336,7 +344,7 @@ no provider/daemon/account queries, credential reads, hook runs, repair or alloc
 
 Managed obligations persist the existing runtime manifest as Schema2 before
 external allocation. New clients accept Schema1/2 and preserve the fence through
-stopped registrations, interruption and regeneration. Published0.2.4 refuses
+stopped registrations, interruption and regeneration. Published 0.2.4 refuses
 Schema2 before runtime teardown/worktree deletion, **but its earlier `retire.pre`
 hook may already have run**. Corrupted/deleted old manifests cannot be protected
 retroactively. New retirement consults the ownership journal even without a

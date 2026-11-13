@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -20,12 +21,15 @@ import (
 )
 
 type tunnelHostReady struct {
-	Schema      int           `json:"schema"`
-	Owner       string        `json:"owner"`
-	OperationID string        `json:"operation_id"`
-	Definition  string        `json:"definition"`
-	State       string        `json:"state"`
-	Address     tunnelAddress `json:"address"`
+	Schema      int                     `json:"schema"`
+	Owner       string                  `json:"owner"`
+	OperationID string                  `json:"operation_id"`
+	Definition  string                  `json:"definition"`
+	State       string                  `json:"state"`
+	Address     tunnelAddress           `json:"address"`
+	Parent      tunnelProcessIdentity   `json:"parent"`
+	ChildPhase  string                  `json:"child_phase"`
+	Children    []tunnelProcessIdentity `json:"children,omitempty"`
 }
 
 func (c *Context) tunnelHostDir(key tunnelKey) string {
@@ -47,7 +51,9 @@ func (p *tunnelProviderRuntime) hostTask(call tunnelEffectCall) (*runtimeManifes
 }
 
 func (p *tunnelProviderRuntime) hostReceipt(call tunnelEffectCall, task runtimeTask) tunnelResourceRef {
-	return providerReceipt(call, "host-task", call.Owner, task.Path, task.Spec, "session")
+	r := providerReceipt(call, "host-task", call.Owner, task.Path, task.Spec, "session")
+	r.Instance = call.OperationID
+	return r
 }
 
 func (p *tunnelProviderRuntime) readHostReady(call tunnelEffectCall) (tunnelHostReady, tunnelResourceRef, error) {
@@ -68,6 +74,9 @@ func (p *tunnelProviderRuntime) readHostReady(call tunnelEffectCall) (tunnelHost
 	d.DisallowUnknownFields()
 	if !tunnelUniqueJSONKeys(json.NewDecoder(bytes.NewReader(data))) || d.Decode(&ready) != nil || ready.Schema != 1 || ready.Owner != call.Owner || ready.OperationID != call.OperationID || ready.Definition != call.Entry.Definition || ready.State != "active" {
 		return ready, tunnelResourceRef{}, fmt.Errorf("managed host readiness is not for this operation")
+	}
+	if err = ready.validateProcesses(); err != nil || !ready.live() || call.Entry.Provider != "ngrok" && ready.ChildPhase != "owned" || call.Entry.Provider == "ngrok" && ready.ChildPhase != "none" {
+		return ready, tunnelResourceRef{}, fmt.Errorf("owned host process liveness unconfirmed")
 	}
 	address, err := parseTunnelAddress(ready.Address.URL)
 	if err != nil || address != ready.Address {
@@ -136,14 +145,19 @@ func (p *tunnelProviderRuntime) confirmHostStopped(call tunnelEffectCall) error 
 			return fmt.Errorf("owned host task shutdown not confirmed")
 		}
 	}
-	data, err := readTunnelBoundedFile(filepath.Join(p.c.tunnelHostDir(call.Entry.Key), "ready.json"), 4096)
-	if err != nil {
-		return fmt.Errorf("host cleanup observation missing; retain session receipt")
+	for _, receipt := range call.Entry.Resources {
+		if receipt.Kind != "host-task" {
+			continue
+		}
+		ready, err := p.ownedHostObservation(call, receipt)
+		if err != nil {
+			return err
+		}
+		if err = ready.disposed(); err != nil {
+			return err
+		}
 	}
-	var ready tunnelHostReady
-	if json.Unmarshal(data, &ready) != nil || ready.Schema != 1 || ready.Owner != call.Owner || ready.Definition != call.Entry.Definition || ready.State != "stopped" {
-		return fmt.Errorf("provider host cleanup unconfirmed; retain owned session")
-	}
+
 	return nil
 }
 
@@ -162,10 +176,28 @@ func (p *tunnelProviderRuntime) stopHostTask(ctx context.Context, call tunnelEff
 		if err = p.intent(ctx, call, "stop-host", receipt.Scope, receipt.ID, receipt); err != nil {
 			return err
 		}
-		if _, err = runtimeCommand(m, false, "veto", task.Path); err != nil {
-			return err
+		runner, runnerErr := runtimeRunnerState(m)
+		if runnerErr != nil {
+			return fmt.Errorf("owned runner state unknown; retain session")
 		}
-		if err = p.c.runtimeWaitStopped(m, map[string]bool{task.Path: true}); err != nil {
+		switch runner {
+		case "running":
+			if _, err = runtimeCommand(m, false, "veto", task.Path); err != nil {
+				return err
+			}
+			if err = p.c.runtimeWaitStopped(m, map[string]bool{task.Path: true}); err != nil {
+				return err
+			}
+		case "absent":
+			// Runner absence alone never proves provider-child disposal below.
+		default:
+			return fmt.Errorf("owned runner shutdown is pending")
+		}
+		ready, readErr := p.ownedHostObservation(call, receipt)
+		if readErr != nil {
+			return readErr
+		}
+		if err = ready.stopProcesses(ctx); err != nil {
 			return err
 		}
 		if err = p.confirmHostStopped(call); err != nil {
@@ -182,6 +214,8 @@ func (p *tunnelProviderRuntime) stopHostTask(ctx context.Context, call tunnelEff
 // ad-hoc daemon. Only a fenced, persisted pending start for this named entry
 // admits it. Supplied credentials are read at use and never written to disk.
 func (c *Context) ServeTunnelHost(ctx context.Context, repo, service, name string) error {
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
+	defer cancel()
 	key := tunnelKey{repo, service, name}
 	if err := key.validate(); err != nil {
 		return err
@@ -225,10 +259,30 @@ func (c *Context) ServeTunnelHost(ctx context.Context, repo, service, name strin
 	if err = os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
+	parent, err := currentTunnelProcess()
+	if err != nil {
+		return err
+	}
+	observation := tunnelHostReady{Schema: 1, Owner: call.Owner, OperationID: op.ID, Definition: e.Definition, Parent: parent, ChildPhase: "none"}
+	if e.Provider != "ngrok" {
+		observation.ChildPhase = "not-launched"
+	}
 	write := func(status string, address tunnelAddress) error {
-		data, _ := json.Marshal(tunnelHostReady{1, call.Owner, op.ID, e.Definition, status, address})
+		observation.State, observation.Address = status, address
+		data, _ := json.Marshal(observation)
 		return runtimeWrite(filepath.Join(dir, "ready.json"), data)
 	}
+	if err = write("starting", tunnelAddress{}); err != nil {
+		return err
+	}
+	observeChild := func(phase string, child tunnelProcessIdentity) error {
+		observation.ChildPhase = phase
+		if phase == "owned" {
+			observation.Children = []tunnelProcessIdentity{child}
+		}
+		return write(observation.State, observation.Address)
+	}
+
 	ready := func(raw string) error {
 		address, err := parseTunnelAddress(raw)
 		if err != nil {
@@ -240,8 +294,9 @@ func (c *Context) ServeTunnelHost(ctx context.Context, repo, service, name strin
 		fmt.Println("TUNNEL_READY")
 		return nil
 	}
-	address, err := p.runHost(ctx, call, dir, ready)
+	address, err := p.runHost(ctx, call, dir, ready, observeChild)
 	if err != nil {
+		_ = write("failed", address)
 		return fmt.Errorf("provider host cleanup/start unconfirmed; reconcile named operation")
 	}
 	return write("stopped", address)
@@ -259,7 +314,7 @@ func writeTunnelAsset(path string, data []byte) error {
 	return runtimeWrite(path, data)
 }
 
-func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCall, dir string, ready func(string) error) (tunnelAddress, error) {
+func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCall, dir string, ready func(string) error, observers ...func(string, tunnelProcessIdentity) error) (tunnelAddress, error) {
 	d := call.Definition
 	refs := d.Entry.Policy.Inputs
 	address := tunnelAddress{}
@@ -383,8 +438,28 @@ func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCa
 		return address, err
 	}
 	cmd.Stderr = cmd.Stdout
+	observe := func(phase string, child tunnelProcessIdentity) error {
+		if len(observers) == 0 {
+			return nil
+		}
+		return observers[0](phase, child)
+	}
+	if err = observe("launching", tunnelProcessIdentity{}); err != nil {
+		return address, err
+	}
 	if err = cmd.Start(); err != nil {
 		return address, fmt.Errorf("explicit provider host failed to start")
+	}
+	child, childState := readTunnelProcess(cmd.Process.Pid)
+	if childState != "alive" {
+		_ = cmd.Cancel()
+		_ = cmd.Wait()
+		return address, fmt.Errorf("owned child identity unavailable; retain launch intent")
+	}
+	if err = observe("owned", child); err != nil {
+		_ = cmd.Cancel()
+		_ = cmd.Wait()
+		return address, err
 	}
 	started, stopped := false, false
 	scanner := bufio.NewScanner(output)
