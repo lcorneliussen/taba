@@ -2,18 +2,7 @@
 
 wtc is now taba. A project still depends on names from the wtc days: harness and collection files, user directories, skill names, environment variables, and scripts that call `wtc`. This page lists each of these conventions, the taba name that replaces it, what the current release supports, and how to migrate.
 
-## Phases of a taba project
-
-A project moves through these stages at its own pace ([#375](https://github.com/lcorneliussen/taba/issues/375)):
-
-| Stage | Release | What holds |
-|---|---|---|
-| 1 | wtc `0.1.x` | Only the wtc conventions. |
-| 2 | taba `0.2.x`, with wtc conventions | Both names work. Nothing has to change. |
-| 3 | taba `0.2.x`, all wtc conventions migrated | `taba doctor` reports nothing left to migrate. |
-| 4 | taba `0.2.x`, with the project flag | The harness's `taba.toml` turns off wtc conventions for the project, and `taba doctor` fails while any remain (planned). |
-| 5 | taba `0.3.x` | wtc conventions are detected, and taba stops with upgrade instructions instead of using them (planned). |
-| 6 | taba `0.4.x` | No wtc logic is left; leftover wtc conventions are ignored (planned). |
+> **Future taba releases drop the wtc names.** 0.2.x still supports them; later releases are planned to stop with upgrade instructions and then ignore wtc names. See [the stages of the rename](https://taba.sh/wtc-is-now-taba/#the-timeline).
 
 Not every convention has a taba name yet. Those are marked "Old name only" below, and `taba doctor` reports them as *waiting* rather than asking you to migrate them.
 
