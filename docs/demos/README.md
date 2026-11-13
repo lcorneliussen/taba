@@ -80,6 +80,8 @@ python3 -m venv /tmp/wtc-demo-venv
   --source-revision 2191843cc2b3c28ac16fe7a09f731c992fabbc22 --agg /path/to/agg
 ```
 
+Future core recordings invoke the canonical `taba` command and keep its actual terminal output; no rename notice is suppressed. Existing collections and inventory media remain historical.
+
 The exact pin defaults to the supplied stable binary’s version; `--cli-version` verifies an explicit pin. `--only harness` leaves other clips unchanged; omit it to record all three core scenarios. `--source-revision` accepts the full public source commit verified for that binary. Omitting `--agg` records only casts and transcripts. The script uses fresh local
 fixture repos and an explicit environment, and removes its temporary workspace.
 Normal bootstrap clones your harness from its forge remote.

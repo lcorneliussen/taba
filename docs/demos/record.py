@@ -267,23 +267,23 @@ def main():
         main_dir = workspace / 'main'
         git(sandbox, '--git-dir=' + str(workspace / '.bare/agent-harness.git'),
             'worktree', 'add', '--detach', str(main_dir / 'harness'), 'origin/main')
-        run(['wtc', 'env', 'setup', '--skip-hooks'], main_dir)
-        run(['wtc', 'skills', 'render', '--seed-scope'], main_dir)
+        run(['taba', 'env', 'setup', '--skip-hooks'], main_dir)
+        run(['taba', 'skills', 'render', '--seed-scope'], main_dir)
 
-        rec = Recording('collections', 'WTC / one task, two repositories')
-        rec.command('wtc new add-search api web', main_dir)
+        rec = Recording('collections', 'Taba / one task, two repositories')
+        rec.command('taba new add-search api web', main_dir)
         task = workspace / 'add-search'
         rec.command('cd ../add-search', main_dir, pause=0.4)
-        rec.command('wtc status', task, keys=[(3.5, 'q')], pause=0.5)
+        rec.command('taba status', task, keys=[(3.5, 'q')], pause=0.5)
         rec.command('echo "Search in progress" >> web/README.md', task)
-        rec.command('wtc status', task, keys=[(3, 'r'), (5.5, 'q')], finish=True)
+        rec.command('taba status', task, keys=[(3, 'r'), (5.5, 'q')], finish=True)
         # Reset only the disposable recording fixture's edit.
         git(task / 'web', 'restore', 'README.md')
         rec.save()
 
-        rec = Recording('inventories', 'WTC / inspect environment and secret links')
-        rec.command('wtc env list', task, keys=[(2, 'j'), (3, 'G'), (5, 'q')], pause=0.5)
-        rec.command('wtc secrets list', task, keys=[(2, 'j'), (4.5, 'q')], finish=True)
+        rec = Recording('inventories', 'Taba / inspect environment and secret links')
+        rec.command('taba env list', task, keys=[(2, 'j'), (3, 'G'), (5, 'q')], pause=0.5)
+        rec.command('taba secrets list', task, keys=[(2, 'j'), (4.5, 'q')], finish=True)
         rec.save()
 
         print('Recorded harness scaffold, live status, and inventory TUIs.')
