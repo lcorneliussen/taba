@@ -557,15 +557,14 @@ function portalNode(g, p, svc, label = "gateway") {
     smallButton("✕", "Close the portal", () => svc.run({ op: "portal", stop: true, id: p.id }, "Closing the portal…", `${g.group}:gateway`))),
   `display:inline-flex;align-items:center;gap:2px;white-space:nowrap;${far ? `color:${TONE.pending}` : ""}`);
 }
-// A wtc tunnel: running, a link and ✕; closed, a button that opens it again.
-// label is what the link says, the provider by default; closed, opener is
-// what the button says.
 const TUNNEL_ACCESS = new Map([
   ["public", ["unlock", "Public access — anyone with the link"]],
   ["tailnet", ["lock", "Tailnet access"]],
   ["account", ["lock", "Account access"]],
   ["protected", ["lock", "Protected access"]],
 ]);
+// A running tunnel has an access glyph, link, close action and separate health error.
+// label names its link; opener renders the action for a closed tunnel.
 function tunnelNode(g, t, svc, { label, opener } = {}) {
   const name = tunnelName(t);
   const pub = TUNNEL_PROVIDERS.some((p) => p.name === name && p.public);
@@ -798,6 +797,16 @@ const sectionHeading = (text, ...extra) => css(el("div", {},
 // header toolbar, which remains available when the card is collapsed.
 // v supplies the view lifecycle, conversation and gateway operations.
 const NARROW_PX = 520;
+function serviceLayout(groups, data, width, narrow = width > 0 && width < NARROW_PX) {
+  const ways = [];
+  for (const g of groups) {
+    if (portalsOf(g, data).length && !ways.includes("gateway")) ways.push("gateway");
+    for (const t of g.tunnels) if (!ways.includes(tunnelName(t))) ways.push(tunnelName(t));
+  }
+  const foldWays = narrow && (ways.length > 1 || groups.some(g => g.loose)) ||
+    ways.length > 1 && width > 0 && width < 440 + ways.length * 120;
+  return { ways, foldWays };
+}
 const REPO_IDENTITY_INSET = 26;
 const pullRequestRows = (repos) => {
   const rows = new Map();
@@ -2297,13 +2306,7 @@ function collectionTables(v) {
     return css(el("span", {}, groups.some(g => !g.running) ? button("Start all", "up") : null, groups.some(g => g.running) ? button("Stop all", "down") : null), "display:inline-flex;align-items:baseline;gap:6px");
   }
   function serviceTable(groups, data, narrow = false) {
-    const ways = [];
-    for (const g of groups) {
-      if (portalsOf(g, data).length && !ways.includes("gateway")) ways.push("gateway");
-      for (const t of g.tunnels) if (!ways.includes(tunnelName(t))) ways.push(tunnelName(t));
-    }
-    const foldWays = narrow && (ways.length > 1 || groups.some(g => g.loose)) ||
-      ways.length > 1 && v.width?.() > 0 && v.width() < 440 + ways.length * 120;
+    const { ways, foldWays } = serviceLayout(groups, data, v.width?.() ?? 0, narrow);
     const visibleWays = foldWays ? [] : ways;
     const repair = (g) => count("Consolidate", "Ask the conversation to open it with wtc svc tunnel instead", "inherit", () => askConversation(v.host, v.key(), consolidate(g)));
     const wayNode = (g, w) => {
@@ -2476,7 +2479,7 @@ function collectionTables(v) {
     for (const s of sub.filter((s) => !repos.some((r) => r.repo && r.repo === s.r.repo))) rows.push(subRow(s.w, s.r));
     return rows;
   }
-  return { repositoryCompact, repositoryLayoutKey, table, checkAccount, notice, nextActions, actionToolbar, activityLog, publicationConfirmations, serviceLogs, clearServiceLogs, loadServiceLogs,
+  return { serviceLayoutKey: (width, data = {}) => serviceLayout(serviceGroups(data.services ?? []), data, width).foldWays, repositoryCompact, repositoryLayoutKey, table, checkAccount, notice, nextActions, actionToolbar, activityLog, publicationConfirmations, serviceLogs, clearServiceLogs, loadServiceLogs,
     dispose: () => { clearServiceLogs(); cancelPreparations("Preparation discarded when the view closed; nothing was pushed."); },
     repoTable: (repos, narrow, workers) => {
       syncConversation();
@@ -2615,7 +2618,7 @@ function mountComposer(container, context) {
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
     const now = e.contentRect.width > 0 && e.contentRect.width < NARROW_PX;
     const compactRepos = tables.repositoryCompact(Math.max(0,e.contentRect.width - 24));
-    const changed = tables.repositoryLayoutKey(Math.max(0,contentWidth - 24)) !== tables.repositoryLayoutKey(Math.max(0,e.contentRect.width - 24)) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
+    const changed = tables.repositoryLayoutKey(Math.max(0,contentWidth - 24)) !== tables.repositoryLayoutKey(Math.max(0,e.contentRect.width - 24)) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width) || tables.serviceLayoutKey(contentWidth, entry?.data) !== tables.serviceLayoutKey(e.contentRect.width, entry?.data);
     contentWidth = e.contentRect.width;
     if (now !== narrow || compactRepos !== repoNarrow || changed) { narrow = now; repoNarrow = compactRepos; if (entry) render(entry); }
   });
@@ -2950,7 +2953,7 @@ function mountCollection(container, context) {
   const sized = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(([e]) => {
     const now = e.contentRect.width > 0 && e.contentRect.width < NARROW_PX;
     const compactRepos = tables.repositoryCompact(e.contentRect.width);
-    const changed = tables.repositoryLayoutKey(contentWidth) !== tables.repositoryLayoutKey(e.contentRect.width) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width);
+    const changed = tables.repositoryLayoutKey(contentWidth) !== tables.repositoryLayoutKey(e.contentRect.width) || headerActionCapacity(contentWidth) !== headerActionCapacity(e.contentRect.width) || tables.serviceLayoutKey(contentWidth, entry?.data) !== tables.serviceLayoutKey(e.contentRect.width, entry?.data);
     contentWidth = e.contentRect.width;
     if (now !== narrow || compactRepos !== repoNarrow || changed) { narrow = now; repoNarrow = compactRepos; render(); }
   });

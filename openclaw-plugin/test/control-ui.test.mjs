@@ -3577,3 +3577,28 @@ for (const kind of ["composer", "panel"]) for (const [exposure, label] of [
     assert.ok(titled(host, `Close the ${services[1].provider} tunnel`), "access status does not replace the close action");
   } finally {view.dispose();}
 });
+
+for (const kind of ["composer", "panel"]) test(`${kind}: service tunnel columns refold on resize without a data refresh`, async () => {
+ const observers=[];globalThis.ResizeObserver=class {constructor(fn){this.fn=fn;observers.push(this);}observe(){}disconnect(){}};
+ let view;
+ try {
+  const services=[{group:"api/web",repo:"api",kind:"service",state:"ready",url:"http://127.0.0.1:42201"}, ...["cloudflare","ngrok","custom"].map(provider=>({group:"api/web",repo:"api",kind:"endpoint",provider,state:"ready",exposure:"public",url:`https://${provider}.example.invalid`}))];
+  const mounted=await mount(kind,collection([repo("api")],services));view=mounted.view;
+  const resize=width=>observers.forEach(o=>o.fn([{contentRect:{width}}]));
+  const folded=()=>[...mounted.host.all()].filter(n=>n.attributes["data-service-tunnels"]);
+  resize(801);assert.equal(folded().length,0);
+  calls.length=0;resize(799);assert.equal(folded().length,1,"crossing the provider threshold alone folds tunnels immediately");
+  resize(801);assert.equal(folded().length,0,"growing restores provider columns immediately");
+  assert.equal(calls.length,0,"resizing never dispatches an action or refresh");
+ } finally {view?.dispose();delete globalThis.ResizeObserver;}
+});
+
+for (const kind of ["composer", "panel"]) test(`${kind}: a running tunnel names an unanswered health probe separately from access`, async () => {
+ const services=[{group:"api/web",repo:"api",kind:"service",state:"ready"},{group:"api/web",repo:"api",kind:"endpoint",provider:"custom",state:"ready",url:"https://preview.example.invalid",exposure:"unknown",answering:"no",answer_detail:"synthetic probe failure"}];
+ const {host,view}=await mount(kind,collection([repo("api")],services));
+ try {
+  assert.ok([...host.all()].some(n=>n.textContent==="No response"&&/Tunnel health:.*synthetic probe failure/.test(n.title)));
+  assert.ok([...host.all()].some(n=>n.role==="img"&&n.ariaLabel==="Access unknown"));
+  assert.ok([...host.all()].some(n=>n.tagName==="A"&&n.href==="https://preview.example.invalid"));
+ } finally {view.dispose();}
+});
