@@ -7,7 +7,7 @@ each application repository. Generated collection-root files are disposable.
 ## Harness configuration
 
 The harness checks in `.harness-repos.yml`, a version pin and a config file:
-`.taba-version` and `taba.toml` from `taba harness init` 0.2.1, or
+`.taba-version` and `taba.toml` from `taba harness init`, or
 `.wtc-cli-version` and `wtc.toml` in older harnesses. Edit the ones the harness
 has; never add the other name beside them, because the old name wins.
 The registry names repos, remotes, default refs, and optional port offsets.

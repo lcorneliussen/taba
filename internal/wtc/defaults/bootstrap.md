@@ -9,7 +9,8 @@ https://github.com/lcorneliussen/taba/blob/main/docs/released-bootstrap.md .
 
 ## 1. Create your harness repo
 
-Install taba 0.2.1 or newer from a published release. Git is required;
+Install taba from a published release. This guide uses the new harness file
+names; older releases may scaffold the legacy names instead. Git is required;
 mise is useful for pins and environment. Herdr, Neovim, agents, and forge CLIs
 are optional interfaces. Your own Git remote must be available before the next
 step.
@@ -25,7 +26,7 @@ This creates six configuration and guidance files. It refuses to overwrite
 existing files and does not initialize Git, publish, install tools, or run hooks.
 Initialize, commit, and publish this as your own repository using your usual
 Git workflow. Configure project tool pins under `[mise.tools]` in `taba.toml` (`wtc.toml`
-in a harness created before 0.2.1).
+in an older harness).
 
 ## 2. First bare owner and collection
 

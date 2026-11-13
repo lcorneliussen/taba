@@ -431,7 +431,7 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 }
 
 // startSkill is the orientation skill this collection's pinned CLI rendered:
-// taba-start from 0.2.1, wtc-start before.
+// taba-start after the skill-name migration, wtc-start before.
 func startSkill(collection string) string {
 	for _, root := range []string{".claude", ".agents"} {
 		if _, err := os.Stat(filepath.Join(collection, root, "skills", "taba-start", "SKILL.md")); err == nil {
@@ -442,7 +442,7 @@ func startSkill(collection string) string {
 }
 
 // renderedSkill names a taba-* skill the way the collection has it rendered:
-// a collection last rendered by a release before 0.2.1 has only the wtc-*
+// a collection last rendered before the skill-name migration has only wtc-*
 // names, so a handoff to it uses the old name.
 func renderedSkill(collection, name string) string {
 	old, ok := strings.CutPrefix(name, "taba-")
