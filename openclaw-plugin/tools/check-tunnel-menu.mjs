@@ -15,21 +15,49 @@ const assets=await loadControlUIFixtureAssets();
 const original=await readFile(new URL("tunnel-menu-fixture.html",import.meta.url),"utf8");
 const browser=await chromium.launch({headless:true}),results=[];
 try{
-for(const topology of ['empty','existing','loose'])for(const theme of ['dark','light'])for(const width of [320,390,760,1100])for(const view of ['card','panel']){
+for(const topology of ['empty','existing','loose'])for(const theme of ['dark','light'])for(const width of [320,390,760,900,1100])for(const view of ['card','panel']){
  const height=width<500?740:850;
  let html=original.replace('plugin.activate(host);','window.demoCtx=ctx;plugin.activate(host);').replace("mounts.card(document.querySelector('#card'),ctx);","window.cardView=mounts.card(document.querySelector('#card'),ctx);").replace(" mounts.panel(document.querySelector('#panel'),ctx);"," window.panelView=mounts.panel(document.querySelector('#panel'),ctx);").replace('const request = async (method, params) => {',`window.calls=[];window.fixture=data;const request = async (method, params) => {
  if(method==='plugins.sessionAction'&&params.actionId==='svc'){window.calls.push(params.payload);return {ok:true,result:{message:'done'}};}
  if(method==='sessions.send'){window.calls.push({handoff:params.message});return {};}
  `);
- if(topology!=='empty')html=html.replace("url:'http://127.0.0.1:4321'}]", "url:'http://127.0.0.1:4321'},{group:'web/preview',path:'web/preview/cloudflare',repo:'web',kind:'endpoint',provider:'cloudflare',state:'idle'},{group:'web/preview',path:'web/preview/ngrok',repo:'web',kind:'endpoint',provider:'ngrok',state:'ready',url:'https://a-long-synthetic-preview-name.ngrok.app'}]");
- if(topology==='loose')html=html.replace("url:'https://a-long-synthetic-preview-name.ngrok.app'}]", "url:'https://a-long-synthetic-preview-name.ngrok.app'},{group:'web/standalone',path:'web/standalone',repo:'web',kind:'endpoint',provider:'cloudflare',state:'ready',url:'https://standalone-example.trycloudflare.com'}]");
+ if(topology!=='empty')html=html.replace("url:'http://127.0.0.1:4321'}]", "url:'http://127.0.0.1:4321'},{group:'web/preview',path:'web/preview/cloudflare',repo:'web',kind:'endpoint',provider:'cloudflare',state:'idle'},{group:'web/preview',path:'web/preview/ngrok',repo:'web',kind:'endpoint',provider:'ngrok',state:'ready',exposure:'public',url:'https://a-long-synthetic-preview-name.ngrok.app'},{group:'web/preview',path:'web/preview/custom',repo:'web',kind:'endpoint',provider:'custom',state:'ready',exposure:'unknown',url:'https://unknown-preview.example.invalid'}]");
+ if(topology==='loose')html=html.replace("exposure:'unknown',url:'https://unknown-preview.example.invalid'}]", "exposure:'unknown',answering:'no',answer_detail:'synthetic failure',url:'https://unknown-preview.example.invalid'},{group:'web/standalone',path:'web/standalone',repo:'web',kind:'endpoint',provider:'cloudflare',state:'ready',exposure:'protected',url:'https://restricted-preview.example.invalid'}]");
  const colors=theme==='dark'?'--bg:#0e1015;--card:#161920;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8b8b94;--border:#1e2028;--border-strong:#2e3040;--bg-hover:#242832':'--bg:#f4f1eb;--card:#fff;--text:#333;--text-strong:#222;--muted:#71717a;--border:#e4e4e7;--border-strong:#d4d4d8;--bg-hover:#efefef';
- html=html.replace('</style>',`:root{color-scheme:${theme};${colors}}body{padding:16px}#stage>h1,#stage>p,#stage>footer{display:none}${view==='card'?'#stage{position:fixed;bottom:16px;left:16px;right:16px}':''}</style>`);
+ html=html.replace('</style>',`:root{color-scheme:${theme};${colors}}body{padding:16px}a,a:hover{color:#ff5555}#stage>h1,#stage>p,#stage>footer{display:none}${view==='card'?'#stage{position:fixed;bottom:16px;left:16px;right:16px}':''}</style>`);
  const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:2});const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):serveControlUIFixtureAsset(r,assets));
  await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();await page.waitForTimeout(200);await page.locator('#card details').evaluate(n=>{n.open=true});
  if(view==='panel'){await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).click();await page.getByText('Repositories',{exact:true}).waitFor();}
  const root=view==='card'?page.locator('#card'):page.locator('#panel');
+ if(topology!=='empty') {
+  const access = root.getByRole('img',{name:'Public access — anyone with the link',exact:true});
+  await access.waitFor();
+  const route = root.locator('a[href="https://a-long-synthetic-preview-name.ngrok.app"]');
+  const geometry=await root.evaluate(root=>{const n=root.querySelector('a[href="https://a-long-synthetic-preview-name.ngrok.app"]');const icon=n.parentElement.querySelector('.wtc-tunnel-access');const a=n.getBoundingClientRect(),b=icon.getBoundingClientRect();const probe=document.createElement('span');probe.style.cssText='display:inline-block;width:0;height:1ex;vertical-align:baseline';n.append(probe);const ex=probe.getBoundingClientRect();probe.remove();const footer=n.closest('[data-service-tunnels]');const reference=footer?footer.children[0]:root.querySelector('[title^="http://127.0.0.1:4321 on the gateway"]');reference.append(probe);const portBaseline=probe.getBoundingClientRect().bottom;probe.remove();return {color:getComputedStyle(n).color,expected:getComputedStyle(document.body).color,center:Math.abs(ex.y+ex.height/2-b.y-b.height/2),baselineDifference:Math.abs(ex.bottom-portBaseline),iconWidth:b.width,iconHeight:b.height,title:n.title};});
+  assert.equal(geometry.color,geometry.expected,'healthy tunnel overrides a red host-link accent');
+  assert(geometry.center<1,'access icon is centered on the text x-height');
+  assert(geometry.baselineDifference<1,'tunnel links share the service row or folded label baseline');
+  assert.equal(geometry.iconWidth,14);assert.equal(geometry.iconHeight,14);
+  const controls = await root.evaluate(root=>[...root.querySelectorAll('a[href^="https://"]')].filter(n=>n.parentElement?.querySelector('.wtc-tunnel-access')).map(n=>{const close=n.parentElement.lastElementChild,a=n.getBoundingClientRect(),b=close.getBoundingClientRect();let visible=a.width>=24;for(let p=close.parentElement;p&&p!==root;p=p.parentElement){const s=getComputedStyle(p),r=p.getBoundingClientRect();if(/hidden|clip/.test(s.overflowX))visible&&=b.left>=r.left-.5&&b.right<=r.right+.5;}return {visible,gap:b.left-a.right};}));
+  assert(controls.every(c=>c.visible&&c.gap>=0&&c.gap<=3),'links retain readable width and adjacent fully visible close controls');
+  assert(geometry.title.includes('https://a-long-synthetic-preview-name.ngrok.app')&&geometry.title.includes('Public access'));
+  await route.hover();assert.equal(await root.evaluate(root=>getComputedStyle(root.querySelector('a[href="https://a-long-synthetic-preview-name.ngrok.app"]')).color),geometry.expected,'hover does not imply failure');
+  assert.equal(await root.getByRole('img',{name:'Access unknown',exact:true}).count(),1);
+  if(topology==='existing')assert.equal(await root.getByTitle('Tunnel health:',{exact:false}).count(),0,'healthy unknown access has no error');
+  if(topology==='loose') {
+   assert.equal(await root.getByRole('img',{name:'Protected access',exact:true}).count(),1);
+   assert.equal(await root.getByRole('img',{name:'Access unknown',exact:true}).count(),1);
+   const grouping=await root.evaluate(root=>{const unknown=root.querySelector('[aria-label="Access unknown"]');const health=root.querySelector('[title^="Tunnel health:"]');const row=unknown.closest('[data-service-tunnels]');return {separated:health.getBoundingClientRect().top>=unknown.getBoundingClientRect().bottom-.5,indented:!row||unknown.getBoundingClientRect().left>=row.children[1].getBoundingClientRect().left-.5};});
+   assert(grouping.separated,'the health error has its own line below the address');
+   assert(grouping.indented,'wrapped tunnel values retain their column indent');
+   assert.equal(await root.getByTitle('Tunnel health: ready, not answering now (synthetic failure)',{exact:true}).filter({hasText:/^No response$/}).evaluate(n=>getComputedStyle(n).color),'rgb(207, 34, 46)','actual failure keeps the error colour');
+  }
+  await page.mouse.move(1,1);
+  await root.screenshot({path:fileURLToPath(new URL(`${topology}-${theme}-${width}-${view}-access.png`,out))});
+ }
+ const headersClear=await root.evaluate(root=>[...root.querySelectorAll('.wtc-table')].every(grid=>{const headers=[...grid.children].slice(0,Number(grid.dataset.columns));const boxes=headers.filter(n=>n.textContent.trim()&&getComputedStyle(n).position!=='absolute').map(n=>{const r=document.createRange();r.selectNodeContents(n);return r.getBoundingClientRect();});return boxes.every((r,i)=>!i||r.left>=boxes[i-1].right-.5);}));
+ assert(headersClear,'table column headings do not overlap');
  const trigger=root.getByRole('button',{name:'Add a tunnel to preview',exact:true});await trigger.waitFor();await page.waitForTimeout(100);
  await trigger.scrollIntoViewIfNeeded();const stable=await root.boundingBox();
  await trigger.click();const menu=page.getByRole('menu',{name:'Tunnel for preview',exact:true});await menu.waitFor();
@@ -57,7 +85,7 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
   assert(repairBox.x+repairBox.width<=closeBox.x||closeBox.x+closeBox.width<=repairBox.x||repairBox.y+repairBox.height<=closeBox.y||closeBox.y+closeBox.height<=repairBox.y,'Consolidate must not cover close');
  }
  assert.equal(await page.locator('.wtc-tunnel-menu:popover-open').count(),0);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
- results.push({topology,theme,width,view,menu:box,padding:gap,colors:colorsActual,checks:{theme:true,viewport:true,stableLayout:true,paddedTrigger:true,toggle:true,arrowKeys:true,escapeFocus:true,tabDismiss:true,outsideDismiss:true,unchangedUpdateStable:true,sessionSwitchDismiss:true,resizeDismiss:true,explicitProvider:true,noOverflow:true,noErrors:true,looseControl:topology==='loose'?true:null},errors});await page.close();
+ results.push({topology,theme,width,view,menu:box,padding:gap,colors:colorsActual,checks:{theme:true,viewport:true,stableLayout:true,paddedTrigger:true,toggle:true,arrowKeys:true,escapeFocus:true,tabDismiss:true,outsideDismiss:true,unchangedUpdateStable:true,sessionSwitchDismiss:true,resizeDismiss:true,explicitProvider:true,noOverflow:true,noErrors:true,accessGlyphs:topology!=='empty'?true:null,neutralHealthyLinks:topology!=='empty'?true:null,accessAlignment:topology!=='empty'?true:null,looseControl:topology==='loose'?true:null},errors});await page.close();
 }
 await writeFile(new URL('browser-results.json',out),JSON.stringify(results,null,2));console.log(`${results.length} browser menu cases passed.`);
 }finally{await browser.close()}
