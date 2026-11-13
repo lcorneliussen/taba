@@ -7,9 +7,11 @@ const safeLink = value => {
 // Render a deliberately inert Markdown preview. The publisher receives the
 // original string, including HTML; previewing it must not execute or fetch it.
 export function renderPRPreview(source, el) {
+  const taskState=token=>el("span",{className:"wtc-preview-task",role:"img",ariaLabel:token.checked?"Completed task":"Incomplete task",textContent:token.checked?"☑":"☐"});
   const inline=tokens=>tokens.flatMap(token=>{
     const kids=()=>inline(token.tokens??[]);
     switch(token.type){
+      case "checkbox":return [taskState(token)];
       case "strong":return [el("strong",{},...kids())];
       case "em":return [el("em",{},...kids())];
       case "del":return [el("del",{},...kids())];
@@ -26,7 +28,7 @@ export function renderPRPreview(source, el) {
   const blocks=tokens=>tokens.flatMap(token=>{
     switch(token.type){
       case "space":return [];
-      case "checkbox":return [el("span",{className:"wtc-preview-task",role:"img",ariaLabel:token.checked?"Completed task":"Incomplete task",textContent:token.checked?"☑":"☐"})];
+      case "checkbox":return [taskState(token)];
       case "heading":return [el(`h${Math.min(6,Math.max(2,token.depth+1))}`,{},...inline(token.tokens))];
       case "paragraph":return [el("p",{},...inline(token.tokens))];
       case "text":return token.tokens?inline(token.tokens):[token.text];

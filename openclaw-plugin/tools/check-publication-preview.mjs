@@ -10,7 +10,7 @@ const {chromium}=await import(pathToFileURL(resolve(playwrightPath)).href),root=
 await mkdir(out,{recursive:true});
 const assets=await loadControlUIFixtureAssets();
 const template=await readFile(new URL("tools/tunnel-menu-fixture.html",root),"utf8");
-const body="# Summary\n\nKeep **confirmation controls** in place and make the proposal readable.\n\n- [x] Preserve the captured text\n- Format lists, `code` and headings\n\n## Validation\n\n```sh\nnode --test\n```\n\n| Check | Result |\n|---|---|\n| Unit tests | Passed |\n| Review | Pending |\n\n<img src='https://private.invalid/pixel' onerror='alert(1)'>\n\n![Explicit image link](https://example.invalid/diagram.png)\n";
+const body="# Summary\n\nKeep **confirmation controls** in place and make the proposal readable.\n\n- [x] Preserve the captured text\n\n- [ ] Format lists, `code` and headings\n\n## Validation\n\n```sh\nnode --test\n```\n\n| Check | Result |\n|---|---|\n| Unit tests | Passed |\n| Review | Pending |\n\n<img src='https://private.invalid/pixel' onerror='alert(1)'>\n\n![Explicit image link](https://example.invalid/diagram.png)\n";
 const repo={repo:"web",forge:"github",owner:"example-org",sessionKey:"demo:web",branch:"openclaw/add-search",base:"origin/main",ahead:2,unpublished:2,behind:0,proposal:{branch:"openclaw/add-search",title:"Keep publication clear",body}};
 const browser=await chromium.launch({headless:true}),results=[];
 const scenarios=[{count:1,height:1000},{count:3,height:640},{count:3,height:1000}];
@@ -31,6 +31,8 @@ try{for(const view of ["card","panel"])for(const width of [320,390,760,1100])for
  const group=host.locator(".wtc-publication-confirmations"),preview=host.locator(".wtc-pr-preview").first(),controls=host.locator(".wtc-publication-controls").first();
  assert.equal(await preview.evaluate(n=>n.open),true);assert.equal(await host.locator("img,script,iframe").count(),0);
  assert.equal(await preview.locator("h2").first().textContent(),"Summary");
+ assert.equal(await preview.getByRole("img",{name:"Completed task",exact:true}).count(),1);
+ assert.equal(await preview.getByRole("img",{name:"Incomplete task",exact:true}).count(),1);
  const p=await preview.boundingBox(),c=await controls.boundingBox();assert(view==="card"?p.y+p.height<=c.y:c.y+c.height<=p.y,"preview placement");
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,"no horizontal overflow");
  assert.equal(await host.evaluate(n=>n.scrollWidth>n.clientWidth+1),false,"host overflow");

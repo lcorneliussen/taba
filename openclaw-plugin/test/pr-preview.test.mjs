@@ -10,6 +10,19 @@ test("Markdown headings, lists, emphasis, code, quotes and tables render as DOM 
  assert.ok(!result.some(n=>n.children.some(c=>typeof c==="string"&&c.includes("[x]"))));
  for(const tag of ["h2","strong","code","ul","li","blockquote","pre","table","th","td"])assert.ok(result.some(n=>n.tag===tag),tag);
 });
+for(const [name,body] of [
+ ["tight","- [x] Done\n- [ ] Pending"],
+ ["loose","- [x] Done\n\n- [ ] Pending"],
+ ["ordered loose","1. [x] Done\n\n2. [ ] Pending"],
+ ["nested loose","- Parent\n  - [x] Done\n\n  - [ ] Pending"],
+ ["paragraph continuation","- [x] Done\n\n  More details\n\n- [ ] Pending"],
+ ["quoted loose","> - [x] Done\n>\n> - [ ] Pending"],
+])test(`${name} task lists render inert, labelled task states through the bundled lexer`,()=>{
+ const result=all(renderPRPreview(body,node)),tasks=result.filter(n=>n.className==="wtc-preview-task");
+ assert.deepEqual(tasks.map(n=>[n.role,n.ariaLabel,n.textContent]),[["img","Completed task","☑"],["img","Incomplete task","☐"]]);
+ assert.ok(!result.some(n=>n.children.some(c=>typeof c==="string"&&/\[(?:x| )\]/i.test(c))),"task markers are not leaked as raw text");
+ assert.ok(!result.some(n=>n.tag==="input"||n.onclick),"preview task states cannot be changed");
+});
 test("previewing arbitrary HTML, links and images cannot execute or fetch resources",()=>{
  const body='<script>alert(1)</script>\n\n<img src="https://private.invalid/pixel" onerror="alert(1)">\n\n[bad](javascript:alert(1)) [encoded](java&#x73;cript:alert(1)) ![photo](https://example.invalid/image.png) [safe](https://example.invalid/path)';
  const result=all(renderPRPreview(body,node));
