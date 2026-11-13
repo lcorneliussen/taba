@@ -40,6 +40,8 @@ func TestDevControlInvocationUsesCommandFlags(t *testing.T) {
 		{"--source", "selected", "dev", "mode", "on"},
 		{"--source=selected", "dev", "mode", "on"},
 		{"--dir", "bundle", "review", "bundle", "widget", "1"},
+		{"--json", "env", "setup", "--repair-generated-roots", "--dry-run"},
+		{"env", "--collection", "selected", "--repair-generated-roots=true"},
 	} {
 		if !devControlInvocation(args) {
 			t.Errorf("control command not recognized: %q", args)
@@ -48,6 +50,10 @@ func TestDevControlInvocationUsesCommandFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"status", "review"}, {"--json", "status"},
 		{"--collection", "review", "status"}, {"--source=dev", "status"},
+		{"env", "setup", "--dry-run"},
+		{"env", "setup", "--repair-generated-roots=false"},
+		{"env", "setup", "--collection", "--repair-generated-roots"},
+		{"env", "list", "--repair-generated-roots"},
 	} {
 		if devControlInvocation(args) {
 			t.Errorf("ordinary command bypassed following: %q", args)

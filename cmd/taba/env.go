@@ -25,6 +25,17 @@ type envSweepResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+// Startup uses the same flags to recognize repair before dev selection can
+// open a strict context. Parsing these definitions has no lifecycle effects.
+func envSetupFlags(cmd *cobra.Command, collection *string, dryRun, all, skipHooks, runHooks, repairRoots *bool) {
+	cmd.Flags().StringVar(collection, "collection", "", "Collection directory (default: current)")
+	cmd.Flags().BoolVar(dryRun, "dry-run", false, "Show generated environment without writing")
+	cmd.Flags().BoolVar(all, "all", false, "Refresh every collection in the workspace")
+	cmd.Flags().BoolVar(skipHooks, "skip-hooks", false, "Do not run environment lifecycle hooks or trust mise")
+	cmd.Flags().BoolVar(runHooks, "run-hooks", false, "Run each target's hooks and trust mise during --all (requires trusted collections)")
+	cmd.Flags().BoolVar(repairRoots, "repair-generated-roots", false, "Repair this generated env from receiving policy without hooks or secret access")
+}
+
 func repairGeneratedRoots(collection string, dryRun, asJSON bool) error {
 	if collection == "" {
 		var err error

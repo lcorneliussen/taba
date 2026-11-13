@@ -11,9 +11,7 @@ import (
 
 func TestGeneratedRootRepairCLI(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "taba")
-	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, out)
-	}
+	buildVersioned(t, bin, "9.0.0")
 	for _, external := range []bool{false, true} {
 		t.Run(map[bool]string{false: "owned", true: "external"}[external], func(t *testing.T) {
 			workspace, err := filepath.EvalSymlinks(t.TempDir())
@@ -52,7 +50,7 @@ func TestGeneratedRootRepairCLI(t *testing.T) {
 				t.Fatal(err)
 			}
 			write(filepath.Join(config, "repos.yml"), "repos: []\n")
-			policy := "[secrets]\nroot = '" + root + "'\n"
+			policy := "[dev]\nauto_source = 'cli'\n[secrets]\nroot = '" + root + "'\n"
 			write(filepath.Join(config, "wtc.toml"), policy)
 			generated := filepath.Join(collection, ".env.collection")
 			old := "# Generated environment\nWTC_CONFIG_ROOT='/old-control'\nTABA_CONFIG_ROOT='/old-control'\nCOLLECTION_PORT_BASE=42000\nGH_CONFIG_DIR='/old-control/gh'\nJIRA_CONFIG_FILE='/old-control/jira/config'\nTWG_SITE='old-site'\nAPP_SETTING='kept'\n"
@@ -90,7 +88,8 @@ func TestGeneratedRootRepairCLI(t *testing.T) {
 					args = append(args, "--skip-hooks")
 				}
 				cmd := exec.Command(bin, append(args, extra...)...)
-				cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + mockBin + ":/usr/bin:/bin", "TABA_DEV_BUILD=off", "WTC_DEV_BUILD=off"}
+				cmd.Dir = collection
+				cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=" + mockBin + ":/usr/bin:/bin"}
 				if repair {
 					cmd.Env = append(cmd.Env, "TABA_CONFIG_ROOT=/foreign-caller", "WTC_CONFIG_ROOT=/other-caller")
 				}
@@ -126,6 +125,12 @@ func TestGeneratedRootRepairCLI(t *testing.T) {
 			}
 			if read(generated) != old || read(local) != localData {
 				t.Fatal("preview mutated configuration")
+			}
+			legacy := exec.Command(bin, "--json", "env", "--collection", collection, "--repair-generated-roots", "--dry-run")
+			legacy.Dir = collection
+			legacy.Env = []string{"HOME=" + t.TempDir(), "PATH=" + mockBin + ":/usr/bin:/bin"}
+			if raw, err := legacy.CombinedOutput(); err != nil || json.Unmarshal(raw, &payload) != nil || payload.Data.Env != preview {
+				t.Fatalf("legacy repair required dev bypass: %v %s", err, raw)
 			}
 			for _, flags := range [][]string{{"--all"}, {"--run-hooks"}} {
 				if out, err := run(true, flags...); err == nil {
@@ -172,6 +177,10 @@ func TestGeneratedRootRepairCLI(t *testing.T) {
 			if err := os.Remove(filepath.Join(root, "gh")); err != nil {
 				t.Fatal(err)
 			}
+			// The recovery assertion above uses a released binary with automatic
+			// dev selection enabled. Ordinary setup can now open the collection;
+			// disable the synthetic missing dev source for this final preview.
+			write(filepath.Join(config, "wtc.toml"), strings.ReplaceAll(read(filepath.Join(config, "wtc.toml")), "auto_source = 'cli'", "auto_source = ''"))
 			if out, err := run(false, "--dry-run"); err != nil {
 				t.Fatalf("ordinary setup remains inaccessible after repair: %v %s", err, out)
 			}
