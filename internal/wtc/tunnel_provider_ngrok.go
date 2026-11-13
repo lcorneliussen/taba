@@ -13,7 +13,7 @@ import (
 type ngrokDomainRegistration struct {
 	ID               string `json:"id"`
 	Domain           string `json:"domain"`
-	IdentityVerified bool   `json:"identityVerified"`
+	IdentityVerified bool   `json:"-"`
 }
 
 // An existing domain is borrowed without calling this method. Only explicitly
@@ -24,6 +24,7 @@ func reserveNgrokDomain(ctx context.Context, client tunnelHTTP, domain, operatio
 	}
 	var result ngrokDomainRegistration
 	_, err := client.request(ctx, "POST", "https://api.ngrok.com/reserved_domains", map[string]string{"ngrok-version": "2"}, map[string]string{"domain": domain, "metadata": operation}, &result)
+	result.IdentityVerified = false
 	if err != nil {
 		return result, err
 	}

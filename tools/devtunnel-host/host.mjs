@@ -62,7 +62,7 @@ export async function runHost(raw, { signal, emit, factory = createSdkHost }) {
   } finally {
     signal.removeEventListener("abort", onAbort);
     // A failed/uncertain dispose must not announce successful shutdown. The
-    // owning journal retains the pending cleanup, including stopped entries.
+    // owning caller must retain pending cleanup; this helper writes no journal.
     await host.dispose();
   }
   if (started) emit({ schema: 1, event: "stopped" });

@@ -71,6 +71,18 @@ func TestTunnelDevMismatchedIdentityRetainedWithoutCleanupAuthority(t *testing.T
 	}
 }
 
+func TestTunnelDevProviderJSONCannotSetLocalEvidence(t *testing.T) {
+	var r devTunnelRegistration
+	if err := json.Unmarshal([]byte(`{"tunnelId":"synthetic-tunnel","identityVerified":true,"IdentityVerified":true}`), &r); err != nil || r.IdentityVerified {
+		t.Fatal("provider populated local evidence")
+	}
+	r.IdentityVerified = true
+	data, _ := json.Marshal(r)
+	if strings.Contains(string(data), "Verified") {
+		t.Fatal("local evidence entered provider wire format")
+	}
+}
+
 func TestTunnelProviderHTTPRefusesFallbackRedirectsAndSecretDiagnostics(t *testing.T) {
 	for _, status := range []int{302, 401, 403, 429, 500} {
 		calls := 0

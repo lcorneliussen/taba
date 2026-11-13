@@ -65,6 +65,18 @@ func TestTunnelNgrokMismatchedIdentityRetainedWithoutCleanupAuthority(t *testing
 	}
 }
 
+func TestTunnelNgrokProviderJSONCannotSetLocalEvidence(t *testing.T) {
+	var r ngrokDomainRegistration
+	if err := json.Unmarshal([]byte(`{"id":"rd_synthetic","identityVerified":true,"IdentityVerified":true}`), &r); err != nil || r.IdentityVerified {
+		t.Fatal("provider populated local evidence")
+	}
+	r.IdentityVerified = true
+	data, _ := json.Marshal(r)
+	if strings.Contains(string(data), "Verified") {
+		t.Fatal("local evidence entered provider wire format")
+	}
+}
+
 type ngrokFakeForwarder struct {
 	ngrok.Forwarder
 	address string

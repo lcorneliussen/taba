@@ -83,7 +83,7 @@ type devTunnelRegistration struct {
 	ClusterID        string `json:"clusterId"`
 	Port             int    `json:"port"`
 	URL              string `json:"url"`
-	IdentityVerified bool   `json:"identityVerified"`
+	IdentityVerified bool   `json:"-"`
 	hostToken        string
 }
 
