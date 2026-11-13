@@ -644,9 +644,10 @@ Control UI tabs. The technical ID/config migration remains a later step in
 
 On the gateway's host, as the user the gateway runs as. For a gateway built
 from an image by CI/CD, see [Gateway image and CI/CD](#gateway-image-and-cicd)
-instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
+instead. An agent asked to set Taba up starts with `taba docs setup.md`.
 
-1. **`wtc`** on the `PATH` of the gateway and of the agents' shells: a
+1. **The Taba CLI**, with both `taba` and its `wtc` compatibility command on
+   the `PATH` of the gateway and the agents' shells: a
    [release](https://github.com/lcorneliussen/taba/releases)'s
    `taba_<version>_linux_<arch>.tar.gz` (`wtc_…` before the taba releases)
    unpacked into `/usr/local/bin`, or
@@ -656,21 +657,22 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
    ships Git 2.39 and no `gh`, and publication fails there with "workspace
    attributes could not be verified".
 3. **The plugin**, which brings the collection card, the Collection panel and
-   the agent's skills: `wtc`, and the OpenClaw variants of `taba-catch-up`,
-   `taba-pr` and `taba-follow` (each `SKILL.openclaw.md` among wtc's skills):
+   the agent's main `taba` skill, its short `wtc` compatibility alias, and the
+   OpenClaw variants of `taba-catch-up`, `taba-pr` and `taba-follow` (each
+   `SKILL.openclaw.md` among Taba's skills):
 
    ```sh
-   wtc openclaw install
+   taba openclaw install
    ```
 
-   It is embedded in `wtc`, so it is always the plugin of that version. It
+   It is embedded in the Taba CLI, so it is always the plugin of that version. It
    turns on custom Control UI plugins
    (`gateway.controlUi.experimental.customPlugins`) and runs
    `openclaw plugins install … --force --accept-capabilities`, then
    `openclaw plugins reload wtc` so that a running gateway uses it without a
    restart. Running it consents to the capabilities the plugin declares: the
    Collection panel and its session actions. For a gateway on another host,
-   `wtc openclaw install --dir ./wtc-plugin` writes the plugin for
+   `taba openclaw install --dir ./wtc-plugin` writes the plugin for
    `openclaw plugins install ./wtc-plugin --force --accept-capabilities` there.
 4. **Bitbucket**, if repositories live there:
 
@@ -690,18 +692,18 @@ instead. An agent asked to set wtc up starts with `wtc docs setup.md`.
    Collection panel, or the gateway's own project settings. With a harness,
    add it the same way and configure it (see [wtc projects](#wtc-projects)).
 7. **Each agent's `AGENTS.md`** says that the gateway works in collections.
-   The plugin's `wtc` skill only comes up when an agent already thinks of
-   wtc; `AGENTS.md` is what it reads in every conversation. Append the
-   section this `wtc` ships, to the `AGENTS.md` in each agent's workspace
+   The plugin's `taba` skill covers both Taba and former wtc references;
+   `AGENTS.md` is what an agent reads in every conversation. Append the
+   section this Taba release ships, to the `AGENTS.md` in each agent's workspace
    (`openclaw agents list` shows where):
 
    ```sh
-   wtc docs openclaw-AGENTS.md >> <workspace>/AGENTS.md
+   taba docs openclaw-AGENTS.md >> <workspace>/AGENTS.md
    ```
 
-To check: `wtc doctor --openclaw` on the gateway host checks Git, `gh`, the
+To check: `taba doctor --openclaw` on the gateway host checks Git, `gh`, the
 plugin and its version, the Control UI setting and each agent's `AGENTS.md`.
-From an agent's command, plain `wtc doctor` does the same. A
+From an agent's command, plain `taba doctor` does the same. A
 conversation asked to "start the collection 1-try-wtc with <owner/repo>" then
 gets a card above its message box.
 
@@ -762,10 +764,10 @@ configuration and people's connected accounts; the plugin normally reloads
 without a gateway restart. A gateway built by CI/CD upgrades with a new
 image instead (above).
 
-1. **`wtc`**: replace the binary the way it was installed, with the new
-   release.
-2. **Its plugin**: `wtc openclaw install` again. It replaces the plugin with
-   the one embedded in the new `wtc` and normally reloads it in the running
+1. **The Taba CLI**: update both `taba` and `wtc` from the new release,
+   using the same installation method as before.
+2. **Its plugin**: `taba openclaw install` again. It replaces the plugin with
+   the one embedded in the new CLI and normally reloads it in the running
    gateway. If it reports that installation succeeded but the gateway did
    not reload the plugin, follow its instruction to restart the gateway.
    In either case, reload open Control UI tabs to get the new card. Until

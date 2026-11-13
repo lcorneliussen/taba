@@ -14,7 +14,9 @@ panel. Its instructions come with the binary, so they always match it:
 taba docs instructions/openclaw.md
 ```
 
-Read that before the first `taba` command of a task and follow it.
+Read that before the first `taba` command of a task and follow it. Prefer the
+`taba` spelling of CLI commands even where older bundled examples use `wtc`;
+both names run the same program.
 
 Taba is the tool's name (formerly wtc). For "what Taba projects do you see?",
 list all configured projects with `taba projects`. Treat an explicitly supplied
