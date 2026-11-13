@@ -263,7 +263,7 @@ func TestHarnessInitRefusesToShadowTabaInputs(t *testing.T) {
 			dir := t.TempDir()
 			fixtureFile(t, filepath.Join(dir, name), "keep\n", 0644)
 			for _, dryRun := range []bool{true, false} {
-				_, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "widget", Remote: "https://example.invalid/widget.git", CLIVersion: "0.1.54", DryRun: dryRun})
+				_, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "widget", Remote: "https://example.invalid/widget.git", CLIVersion: "0.2.0", DryRun: dryRun})
 				if err == nil || !strings.Contains(err.Error(), "shadow") {
 					t.Fatalf("existing alias was not protected (dry=%v): %v", dryRun, err)
 				}

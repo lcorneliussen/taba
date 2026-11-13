@@ -32,7 +32,7 @@ func TestDirtyGatewayOffersCatchUpAndCommit(t *testing.T) {
 func TestDirtyConflictingGatewayHandoffPreservesBeforeMerge(t *testing.T) {
 	c := ChoicesFor(Facts{Repo: "example", Host: HostOpenClaw, Branch: "openclaw/example", Dirty: 1, Behind: 2, MergeConflicts: []string{"notes.md"}})
 	p := c.Primary()
-	if p == nil || p.Step != "merge" || !strings.Contains(p.Reason, "Before git merge") || !strings.Contains(p.Reason, "verify the checkout is clean") || !strings.Contains(p.Reason, "unstaged and untracked") {
+	if p == nil || p.Step != "merge" || p.Skill != "taba-catch-up" || !strings.Contains(p.Reason, "Before git merge") || !strings.Contains(p.Reason, "verify the checkout is clean") || !strings.Contains(p.Reason, "unstaged and untracked") {
 		t.Fatalf("unsafe dirty merge handoff: %+v", p)
 	}
 }

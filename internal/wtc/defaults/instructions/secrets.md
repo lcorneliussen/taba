@@ -24,11 +24,11 @@ for the supported settings, empty-value behavior and remaining phase-0 work.
 
 | Variable | Default | Effect |
 |---|---|---|
-| `WTC_AGENT_KIND` | `claude` | agent kind `wtc open` starts |
+| `WTC_AGENT_KIND` | `claude` | agent kind `taba open` starts |
 | `WTC_AGENT_ARGS` | — | args passed to the agent, replacing the built-in defaults |
 | `WTC_LAYOUT` | `auto` | `wide` / `narrow` / `auto` — herdr workspace layout at create time |
 | `WTC_LAYOUT_NARROW_AT` | `140` | session width (cols) below which `auto` picks narrow |
-| `WTC_PANES` | `minimal` | `full` → `wtc open` also opens browse and shell panes |
+| `WTC_PANES` | `minimal` | `full` → `taba open` also opens browse and shell panes |
 | `WTC_STATUS_REPOS` | `no` | `yes` → status shows only the collection table |
 | `WTC_STATUS_WATCH` | `30` | redraw interval while the pane is focused; `0` prints once |
 | `WTC_STATUS_WATCH_BG` | `300` | redraw interval while it is not; `0` uses the focused one always |
@@ -66,7 +66,7 @@ fallback when configuring tool identities.
 
 Existing generated environments retain their old root until refreshed. To
 migrate, explicitly set `WTC_CONFIG_ROOT` to the intended workspace's `.config`
-and run `wtc env setup` in the target collection. Existing panes
+and run `taba env setup` in the target collection. Existing panes
 must reload the environment. Existing credentials are not moved or copied.
 
 ## Wiring a worktree
@@ -74,16 +74,16 @@ must reload the environment. Existing credentials are not moved or copied.
 Inspect names and scope without displaying values:
 
 ```sh
-wtc secrets list                 # control-root files and their state here
-wtc secrets list --repo api      # one repository
-wtc env list                     # variable names and override sources
+taba secrets list                 # control-root files and their state here
+taba secrets list --repo api      # one repository
+taba env list                     # variable names and override sources
 ```
 
-`wtc secrets list` labels control-root files as available to every collection
+`taba secrets list` labels control-root files as available to every collection
 containing that repository, then shows whether each target is linked, locally
 overridden, not ignored, or excluded as production-capable in this collection.
 Workspace control files are control-only. `.env.collection.local` is this
-collection's local secret-variable file; `wtc env list` shows its key names
+collection's local secret-variable file; `taba env list` shows its key names
 and which ones override generated keys. `wtc.env` holds workspace defaults for
 collections using that control root, while `.env.collection` is generated for
 this collection.
@@ -92,12 +92,12 @@ In an interactive terminal they open a scrollable view sized to the pane.
 Use arrow keys or `j`/`k` to inspect rows and `q` to exit. Pass `--no-tui`
 for a compact one-shot table or `--json` for complete metadata.
 
-`wtc secrets link` does it, for every checked-out repo in a collection:
+`taba secrets link` does it, for every checked-out repo in a collection:
 
 ```sh
-wtc secrets link                 # this harness worktree's collection
-wtc secrets link --collection ../billing --dry-run
-wtc secrets link --repo api     # what init hooks pass
+taba secrets link                 # this harness worktree's collection
+taba secrets link --collection ../billing --dry-run
+taba secrets link --repo api     # what init hooks pass
 ```
 
 Because files are stored at their repo-relative path, the tool needs no
@@ -132,7 +132,7 @@ neighbour `.env.collection`, which is regenerated wholesale on every
 `branch-off` — anything hand-added *there* is lost (and that file is not
 chmod'd; its mode follows the caller's umask). The collection root is not a
 git repo, so `.env.collection.local` cannot be committed by accident.
-`wtc retire` deletes it with the collection — secrets scoped to this wtc die
+`taba retire` deletes it with the collection — secrets scoped to this wtc die
 with it.
 
 `mise.toml` lists it second, so it composes with (and wins over) the generated
@@ -143,7 +143,7 @@ env:
 _.file = [".env.collection", ".env.collection.local"]
 ```
 
-Without mise (including `wtc open`, which injects both into herdr):
+Without mise (including `taba open`, which injects both into herdr):
 `set -a; . ./.env.collection; . ./.env.collection.local; set +a`.
 
 Two limits worth knowing before reaching for it:
@@ -153,7 +153,7 @@ Two limits worth knowing before reaching for it:
 - **It holds variables, not files.** A per-collection secret *file* — a
   certificate, or a config the app reads directly — has no tier yet; the shape
   would be a `collections/<name>/<repo>/<path>` overlay that
-  `wtc secrets link` walks after the shared tier. Deliberately unbuilt until
+  `taba secrets link` walks after the shared tier. Deliberately unbuilt until
   something needs it, because a whole-file override forces the collection copy
   to duplicate everything else in that file — the rotation problem the shared
   tier exists to avoid.
@@ -220,7 +220,7 @@ do that. Turning it on:
 ```sh
 cd <collection>                        # collection root, where .env.collection lives
 mkdir -p "$WTC_CONFIG_ROOT"/gh         # creating the store IS the opt-in
-wtc env setup           # regenerate — GH_CONFIG_DIR now appears
+taba env setup           # regenerate — GH_CONFIG_DIR now appears
 ```
 
 Then re-enter the collection (or reopen the herdr workspace) so the new
@@ -234,14 +234,14 @@ gh auth status                         # confirm the identity
 ```
 
 Turning it back off is `rm -rf "$WTC_CONFIG_ROOT"/gh` (the keychain entry
-survives) followed by `wtc env setup`.
+survives) followed by `taba env setup`.
 
 `twg` has no store to create — its lever is a site name rather than a config
 location, so setting it once in the control root is the opt-in:
 
 ```sh
 echo 'WTC_TWG_SITE=<your-site-prefix>' >> "$WTC_CONFIG_ROOT"/wtc.env
-wtc env setup --all     # TWG_SITE now appears in every collection
+taba env setup --all     # TWG_SITE now appears in every collection
 ```
 
 ### Where the variables actually reach
@@ -250,16 +250,16 @@ Not "everywhere", and the difference bites:
 
 | Context | Gets it? | How |
 |---|---|---|
-| herdr panes | yes | `wtc open` injects every line as `--env` **at workspace creation** |
+| herdr panes | yes | `taba open` injects every line as `--env` **at workspace creation** |
 | `mise run` / `mise exec` | yes | `mise.toml` lists `.env.collection` in `[env] _.file` |
 | A plain shell in a collection | **only with `mise activate`** in your shell rc | otherwise `cd` alone exports nothing |
-| A collection created before the variable existed | **no, until refreshed** | `wtc env setup` |
+| A collection created before the variable existed | **no, until refreshed** | `taba env setup` |
 
 - **An already-open herdr pane keeps the environment it started with.**
-  `wtc open` skips the env block when it reuses an existing workspace, so
+  `taba open` skips the env block when it reuses an existing workspace, so
   re-running it refreshes nothing. Close and reopen the workspace.
-- **Existing collections stay stale until refreshed.** `wtc new` generates
-  the file for new collections; `wtc env setup` applies generator changes to
+- **Existing collections stay stale until refreshed.** `taba new` generates
+  the file for new collections; `taba env setup` applies generator changes to
   an existing collection. Catch-up runs the same native environment action.
 
 Check where you actually stand with `echo "$GH_CONFIG_DIR"` — empty means
@@ -327,4 +327,4 @@ reviewable without listing a directory full of credentials. The shape:
 
 Two things earn their place in that table beyond the path: who consumes the
 file, and whether it is prod-capable. The second is what rule 3 keys off, and
-what `wtc secrets link` refuses to link without an explicit flag.
+what `taba secrets link` refuses to link without an explicit flag.

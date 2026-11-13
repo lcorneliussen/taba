@@ -57,8 +57,21 @@ func TestReviewReadyRefusesInReviewModeEvenWhenAuthorized(t *testing.T) {
 
 func TestFirstAgentPromptSaysReviewOnly(t *testing.T) {
 	collection := t.TempDir()
+	// A collection rendered by a release before the skill rename has only wtc-start.
 	if got := firstAgentPrompt(collection, "claude"); got != "/wtc-start" {
 		t.Fatalf("ordinary prompt = %q", got)
+	}
+	if err := os.MkdirAll(filepath.Join(collection, ".agents", "skills", "taba-start"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(collection, ".agents", "skills", "taba-start", "SKILL.md"), []byte("start\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got := firstAgentPrompt(collection, "claude"); got != "/taba-start" {
+		t.Fatalf("prompt with taba-start rendered = %q", got)
+	}
+	if got := firstAgentPrompt(collection, "codex"); !strings.Contains(got, "taba-start skill (.agents/skills/taba-start/SKILL.md)") {
+		t.Fatalf("codex prompt = %q", got)
 	}
 	if err := os.WriteFile(filepath.Join(collection, wtc.ReviewModeFile), []byte("{}\n"), 0644); err != nil {
 		t.Fatal(err)

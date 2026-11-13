@@ -20,8 +20,8 @@ func TestWriteOpenClawPluginStampsTheVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"index.js", "package.json", "openclaw.plugin.json", "dist/control-ui/v1/index.js", "skills/wtc/SKILL.md",
-		// The wtc skills' OpenClaw variants, under their own names.
-		"skills/wtc-catch-up/SKILL.md", "skills/wtc-pr/SKILL.md", "skills/wtc-follow/SKILL.md"} {
+		// The taba skills' OpenClaw variants, under their own names.
+		"skills/taba-catch-up/SKILL.md", "skills/taba-pr/SKILL.md", "skills/taba-follow/SKILL.md"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("%s was not written: %v", f, err)
 		}
@@ -219,9 +219,9 @@ func TestOpenClawSkillsAreTheOpenClawVariants(t *testing.T) {
 	}
 	// Each is its OpenClaw variant, not the local skill of that name.
 	for name, marker := range map[string]string{
-		"wtc-catch-up": "wtc catch-up --continue",
-		"wtc-pr":       "they push it\n   with ↑",
-		"wtc-follow":   "wtc: pull request news",
+		"taba-catch-up": "wtc catch-up --continue",
+		"taba-pr":       "they push it\n   with ↑",
+		"taba-follow":   "wtc: pull request news",
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, "skills", name, "SKILL.md"))
 		if err != nil {
@@ -235,7 +235,7 @@ func TestOpenClawSkillsAreTheOpenClawVariants(t *testing.T) {
 			t.Errorf("the local %s has %q too: pick a marker only its OpenClaw variant has", name, marker)
 		}
 	}
-	catchUp, err := os.ReadFile(filepath.Join(dir, "skills/wtc-catch-up/SKILL.md"))
+	catchUp, err := os.ReadFile(filepath.Join(dir, "skills/taba-catch-up/SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestOpenClawSkillsAreTheOpenClawVariants(t *testing.T) {
 		t.Fatalf("recovery reference is not embedded: %v", err)
 	}
 	// Skills without an OpenClaw variant stay local.
-	if _, err := os.Stat(filepath.Join(dir, "skills", "wtc-open")); err == nil {
-		t.Error("wtc-open has no OpenClaw variant but was installed")
+	if _, err := os.Stat(filepath.Join(dir, "skills", "taba-open")); err == nil {
+		t.Error("taba-open has no OpenClaw variant but was installed")
 	}
 }

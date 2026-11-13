@@ -52,7 +52,7 @@ when this collection turns to something else.
   checkout.
 - `wtc catch-up --from <branch>` in `<folder>/<repo>` merges such a branch,
   by its name, into yours. It never rebases; for a conflict, follow the
-  wtc-catch-up skill. `wtc status <name> --sub <worktree>` compares one.
+  taba-catch-up skill. `wtc status <name> --sub <worktree>` compares one.
 - When a sub-session ends, merge what you want of it, or tell the person
   what is left: none should be left behind.
 - `wtc add-repo --worker` still makes such a sub-session (collection
@@ -190,10 +190,10 @@ forge yourself.
 ## Skills
 
 The gateway's agents have the wtc skills for this host, installed with the
-plugin by `wtc openclaw install`: **wtc-catch-up** (catching up, merging a
-sub-session's branch, recovering preserved edits and resolving conflicts), **wtc-pr** (getting a pull
-request ready for the person's push) and **wtc-follow** (acting on pull
-request news). The card asks for them by name (`/skill wtc-catch-up …`), so a
+plugin by `wtc openclaw install`: **taba-catch-up** (catching up, merging a
+sub-session's branch, recovering preserved edits and resolving conflicts), **taba-pr** (getting a pull
+request ready for the person's push) and **taba-follow** (acting on pull
+request news). The card asks for them by name (`/skill taba-catch-up …`), so a
 click there and a request in the chat do the same.
 
 ## Catching up
@@ -205,7 +205,7 @@ is refused until they are on a branch. Native gateway catch-up preserves staged,
 requiring a commit first. If restoration stops, follow
 `wtc docs instructions/openclaw-recovery.md`; finish the verified operation
 with its exact ref and HEAD, retaining the backup. A conflict is the agent's to resolve
-in its own checkout: the wtc-catch-up skill. Rebasing a published branch
+in its own checkout: the taba-catch-up skill. Rebasing a published branch
 makes it unpublishable.
 
 Never run `git push` yourself, and never `git rebase` or `git commit --amend`

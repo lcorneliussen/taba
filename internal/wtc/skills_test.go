@@ -288,25 +288,29 @@ func TestInstructionDryRunMatchesReplacingDefaultWithOverride(t *testing.T) {
 
 func TestRenderSkillsOffersServicesOnlyWithTheBackend(t *testing.T) {
 	c := fixture(t)
-	skill := filepath.Join(c.Collection, ".claude", "skills", "wtc-svc")
-	if _, err := c.RenderSkills(SkillRenderOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(skill); !os.IsNotExist(err) {
-		t.Fatalf("wtc-svc offered without the dekit backend: %v", err)
-	}
-	c.Config.Runtime.Backend = "dekit"
-	if _, err := c.RenderSkills(SkillRenderOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(skill, "SKILL.md")); err != nil {
-		t.Fatalf("wtc-svc missing with the backend: %v", err)
-	}
-	c.Config.Runtime.Backend = ""
-	if _, err := c.RenderSkills(SkillRenderOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(skill); !os.IsNotExist(err) {
-		t.Fatalf("wtc-svc kept after the backend was turned off: %v", err)
+	// The skill and its old-name shim come and go together.
+	for _, name := range []string{"taba-svc", "wtc-svc"} {
+		skill := filepath.Join(c.Collection, ".claude", "skills", name)
+		c.Config.Runtime.Backend = ""
+		if _, err := c.RenderSkills(SkillRenderOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(skill); !os.IsNotExist(err) {
+			t.Fatalf("%s offered without the dekit backend: %v", name, err)
+		}
+		c.Config.Runtime.Backend = "dekit"
+		if _, err := c.RenderSkills(SkillRenderOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(skill, "SKILL.md")); err != nil {
+			t.Fatalf("%s missing with the backend: %v", name, err)
+		}
+		c.Config.Runtime.Backend = ""
+		if _, err := c.RenderSkills(SkillRenderOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(skill); !os.IsNotExist(err) {
+			t.Fatalf("%s kept after the backend was turned off: %v", name, err)
+		}
 	}
 }

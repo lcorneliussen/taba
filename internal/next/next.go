@@ -114,7 +114,7 @@ func For(f Facts) *Step {
 		if what == "" {
 			what = "a merge"
 		}
-		s.Step, s.By, s.Skill = "resolve", ByAgent, "wtc-catch-up"
+		s.Step, s.By, s.Skill = "resolve", ByAgent, "taba-catch-up"
 		s.Reason = fmt.Sprintf("%s is not finished in %s", what, f.Repo)
 		if f.Conflicted > 0 {
 			s.Reason += fmt.Sprintf(": %d conflicted files", f.Conflicted)
@@ -127,7 +127,7 @@ func For(f Facts) *Step {
 	// goes back to the tip, and the next change branches anew; commits made
 	// after the merge are such a change, on the wrong branch.
 	case pr != nil && pr.State == "merged" && (f.AfterMerge > 0 || f.NeedsBranch):
-		s.Step, s.By, s.Skill = "new-branch", ByAgent, "wtc-catch-up"
+		s.Step, s.By, s.Skill = "new-branch", ByAgent, "taba-catch-up"
 		s.Reason = fmt.Sprintf("#%d was merged, but %d commits came after it: put them on a new branch", pr.Number, f.AfterMerge)
 		if f.NeedsBranch {
 			s.Reason = fmt.Sprintf("#%d was merged, but the base does not carry this branch's work: put it on a new branch", pr.Number)
@@ -144,26 +144,26 @@ func For(f Facts) *Step {
 		// merged branch.
 		return nil
 	case f.Branch == "" && f.Ahead > 0:
-		s.Step, s.By, s.Skill = "new-branch", ByAgent, "wtc-catch-up"
+		s.Step, s.By, s.Skill = "new-branch", ByAgent, "taba-catch-up"
 		s.Reason = fmt.Sprintf("%d commits on no branch: put them on a branch before anything moves", f.Ahead)
 		s.Key = key(f.Head)
 	case open && pr.Mergeable == "conflicting":
-		s.Step, s.By, s.Skill = "merge", ByAgent, "wtc-catch-up"
+		s.Step, s.By, s.Skill = "merge", ByAgent, "taba-catch-up"
 		s.Reason = fmt.Sprintf("#%d conflicts with %s", pr.Number, baseName(f.Base))
 		s.Then = []string{"push"}
 		s.Key = key(f.Head, f.BaseHead)
 	case open && pr.Checks == "failure":
-		s.Step, s.By, s.Skill = "fix-checks", ByAgent, "wtc-follow"
+		s.Step, s.By, s.Skill = "fix-checks", ByAgent, "taba-follow"
 		s.Reason = fmt.Sprintf("checks failed on #%d", pr.Number)
 		s.Then = []string{"push"}
 		s.Key = key(f.Head)
 	case open && pr.Review == "changes_requested":
-		s.Step, s.By, s.Skill = "address-review", ByAgent, "wtc-follow"
+		s.Step, s.By, s.Skill = "address-review", ByAgent, "taba-follow"
 		s.Reason = fmt.Sprintf("changes were requested on #%d", pr.Number)
 		s.Then = []string{"push"}
 		s.Key = key(f.Head)
 	case f.Behind > 0 && len(f.MergeConflicts) > 0:
-		s.Step, s.By, s.Skill = "merge", ByAgent, "wtc-catch-up"
+		s.Step, s.By, s.Skill = "merge", ByAgent, "taba-catch-up"
 		s.Reason = fmt.Sprintf("%d new on %s; merging conflicts in %s", f.Behind, baseName(f.Base), strings.Join(f.MergeConflicts, ", "))
 		s.Then = []string{"push"}
 		s.Key = key(f.Head, f.BaseHead)
@@ -195,7 +195,7 @@ func For(f Facts) *Step {
 			// The gateway pushes with the person's account, after they confirm.
 			s.By, s.Approve, s.Gateway = ByWTC, ApprovePerson, "github_publish"
 		} else {
-			s.By, s.Skill = ByAgent, "wtc-draft-pr"
+			s.By, s.Skill = ByAgent, "taba-draft-pr"
 		}
 		s.Then = []string{"follow"}
 		s.Key = key(f.Head)

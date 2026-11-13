@@ -7,7 +7,7 @@ split the repo registry uses.
 
 ```text
 harness/.mcp-servers.yml          # tracked: WHAT servers exist
-      │  wtc mcp render
+      │  taba mcp render
       ├─> <collection>/.mcp.json              (Claude Code, project scope)
       ├─> <collection>/.cursor/mcp.json       (Cursor)
       └─> <collection>/.codex/config.toml     (Codex, trusted projects only)
@@ -20,7 +20,7 @@ its marked block in TOML; other agent settings and manually added servers stay
 in place. It validates every output before writing and replaces each changed
 file atomically. They sit at the **collection root** because it is not a git repo —
 the files are invisible to git and no repo needs an ignore rule for them
-(same reasoning as `wtc skills render`), and it is where `AGENTS.md` says
+(same reasoning as `taba skills render`), and it is where `AGENTS.md` says
 to start an agent.
 
 ## Credentials are named, never valued
@@ -45,7 +45,7 @@ two collections can point the same server at two different accounts, and
 neither can read the other's. A server configured in a machine-global agent
 config cannot do that, which is the reason this file exists at all.
 
-`wtc mcp render` prints a note for any named variable the
+`taba mcp render` prints a note for any named variable the
 environment lacks. Rendering config before creating the credential is a normal
 ordering — the note exists so the failure surfaces there rather than as an
 opaque auth error inside an agent later.
@@ -65,7 +65,7 @@ opaque auth error inside an agent later.
     role: one line, for humans reading the file
 ```
 
-Then run `wtc mcp render` in this collection. For an argument containing
+Then run `taba mcp render` in this collection. For an argument containing
 spaces, set `args` to a quoted JSON string array, for example
 `args: '["one argument", "--flag"]'`. The renderer validates the registry
 schema and arguments before writing any files.
@@ -75,10 +75,10 @@ schema and arguments before writing any files.
 **`gh` stays a CLI.** The GitHub MCP server was considered and rejected for
 this harness, for reasons worth not relitigating:
 
-1. `gh` is already a CLI that both humans and agents use alongside `wtc`.
+1. `gh` is already a CLI that both humans and agents use alongside `taba`.
    An MCP path would duplicate the same operations and credentials.
 2. Four `gh api graphql` calls have no MCP equivalent; the official server
-   exposes no arbitrary-GraphQL tool. `resolveReviewThread` (`wtc-pr` §6.4)
+   exposes no arbitrary-GraphQL tool. `resolveReviewThread` (`taba-pr` §6.4)
    is one of them.
 3. `gh pr checks | awk` filters outside the model. The MCP form puts every
    check into context and asks the model to filter, and its tool schemas are
@@ -96,7 +96,7 @@ rule above answers it directly, and a second Atlassian path would only have
 meant two credentials for one system. See `jira.md`.
 
 That leaves the registry empty, which is a working state rather than a gap:
-`wtc mcp render` renders empty configs from it, and that is how a server removed
+`taba mcp render` renders empty configs from it, and that is how a server removed
 from the registry gets pruned out of every collection.
 
 ## Per-agent caveats
@@ -114,9 +114,9 @@ from the registry gets pruned out of every collection.
 
 ## Where this is wired in
 
-Same lifecycle as `wtc skills render`, and for the same reason — a collection is
+Same lifecycle as `taba skills render`, and for the same reason — a collection is
 generated and disposable, so it is re-rendered rather than maintained:
 
-- `wtc new` and `wtc add-repo` call it at creation, before the init hooks
-- `wtc-catch-up` §4.1 re-renders, picking up registry changes since
+- `taba new` and `taba add-repo` call it at creation, before the init hooks
+- `taba-catch-up` §4.1 re-renders, picking up registry changes since
 - `--all` rolls a landed registry change across every caught-up collection
