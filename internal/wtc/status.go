@@ -54,8 +54,9 @@ type StatusRepo struct {
 	Conflict      bool           `json:"conflict,omitempty"`
 	Operation     string         `json:"operation,omitempty"`
 	PR            *StatusPRFacts `json:"pr"`
-	// PRUnconfirmed blocks branch actions and collection retirement for an enlisted
-	// PR with stale, deferred or unavailable state, without claiming it is open.
+	// PRUnconfirmed blocks branch actions and collection retirement for a matching
+	// local repository/branch when its enlisted PR state is stale, deferred or
+	// unavailable, or its PR URL is rejected. It does not claim the PR is open.
 	PRUnconfirmed bool         `json:"pr_unconfirmed,omitempty"`
 	Tip           *StatusBuild `json:"tip"`
 	Prod          *StatusBuild `json:"prod"`
