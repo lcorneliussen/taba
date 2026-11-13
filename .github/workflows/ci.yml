@@ -39,12 +39,25 @@ jobs:
           WTC_DECISIONS_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
   # Unit tests only: the pinned runtime and Docker trials run in the Linux job.
   test-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        git: [default, developer]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Select developer Git for comparison
+        if: matrix.git == 'developer'
+        run: |
+          git_dir="$RUNNER_TEMP/test-git"
+          mkdir -p "$git_dir"
+          ln -s "$(xcrun --find git)" "$git_dir/git"
+          echo "$git_dir" >> "$GITHUB_PATH"
+      - name: Record Git version
+        run: git --version
       # internal/wtc takes 5–8 minutes on macOS runners; the 10m default fails on slow runners.
       - name: Test timing helper
         run: python3 -B -m unittest discover -s tools/ci -p '*_test.py'
