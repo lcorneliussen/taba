@@ -1050,6 +1050,7 @@ func TestStatus319ProductionReleasedCacheWriter(t *testing.T) {
 				t.Setenv("TMPDIR", t.TempDir())
 				statusHideBitbucketLogin(t)
 				c, head, base := status319Collection(t, "widget")
+				fixtureFile(t, c.PRFile(), "widget 7 topic-open https://bitbucket.org/example/widget/pull-requests/7 Synthetic 7\n", 0600)
 				bin := t.TempDir()
 				fixtureFile(t, filepath.Join(bin, "bb"), "#!/bin/sh\nWTC_TEST_319_CHILD=bb exec \"$WTC_TEST_319_EXE\" -test.run=^TestStatus319RefreshProcess$ -- \"$@\"\n", 0700)
 				t.Setenv("BB_API_USER", "synthetic")

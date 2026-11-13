@@ -108,6 +108,9 @@ func statusCachedSettledMerge(record PRRecord, slug, forge string) (statusPRDeta
 
 func statusReadCachedDetail(record PRRecord, slug, forge string) (statusPRDetail, bool) {
 	detail, ok := statusReadObservedDetail(record, slug, forge, statusForgeCacheAge())
+	if ok && detail.Freshness == "stale" {
+		return statusPRDetail{}, false
+	}
 	if ok && forge == "bitbucket.org" {
 		detail = statusBBCompleteMergeTime(detail, slug)
 	}
@@ -134,6 +137,11 @@ func statusEnrichRecordMetadata(record PRRecord, slug, forge string) (result sta
 	if detail, ok := statusCachedSettledMerge(record, slug, forge); ok {
 		statusForgetConfirmation(forge, slug+"#"+record.Number)
 		return detail
+	}
+	if _, known := statusRetainedMerge(record, slug, forge); known {
+		// State confirmation is complete even if ancillary merge time/checks
+		// still need their own admitted refreshes.
+		statusForgetConfirmation(forge, slug+"#"+record.Number)
 	}
 	if listed, truncated, err := statusOpenPRs(forge, slug); err == nil {
 		if item, ok := listed[record.Number]; ok {

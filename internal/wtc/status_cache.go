@@ -126,8 +126,9 @@ func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []by
 		isMerge = parseErr == nil && candidate.State == "MERGED"
 		promotesMerge = isMerge && !known
 	}
-	// A confirmed merge supersedes any non-MERGED or absent observation.
-	// Otherwise request-start provenance selects the winner.
+	// A first confirmed merge supersedes non-MERGED or absent state regardless
+	// of request order. Later replies follow request-start provenance; retained
+	// merge state still controls readers.
 	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return false
 	}

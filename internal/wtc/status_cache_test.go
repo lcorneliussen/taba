@@ -44,8 +44,7 @@ func TestStatusMergedPRCacheOutlivesActiveCache(t *testing.T) {
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.Title != "Refreshed detail" {
 		t.Fatalf("merged detail did not refresh after a day: %+v", detail)
 	}
-	// Active-cache expiry is a separate PR identity: the preceding confirmed
-	// merge remains retained even if a released publisher replaces its detail.
+	// Use a separate PR identity for the unrelated active-cache expiry checks.
 	number = "8"
 	path = statusForgeCachePath(forge, slug, number)
 	t.Setenv("WTC_TEST_GH_DETAIL", "")
