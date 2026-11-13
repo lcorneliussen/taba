@@ -857,8 +857,7 @@ func TestStatus319RefreshCoexistsWithReleasedBudgetConsumer(t *testing.T) {
 	if !list || !build {
 		t.Fatal("released consumer did not exercise both list and build pressure")
 	}
-	// Cancel an actual collector while it owns the existing budget lock. No
-	// provider read or merge marker may escape, and a released client recovers.
+	// Stop the released consumer before starting the production collector.
 	_ = legacy.command.Process.Kill()
 	<-legacy.done
 	legacyStopped = true
@@ -896,6 +895,8 @@ func TestStatus319RefreshCoexistsWithReleasedBudgetConsumer(t *testing.T) {
 			t.Fatal("collector never held the admission lock")
 		}
 	}
+	// Cancel the production collector while it owns the existing budget lock.
+	// No provider read or merge marker may escape, and a released client recovers.
 	_ = cancelled.command.Process.Kill()
 	<-cancelled.done
 	survivor := status319StartMode(t, primary, server.URL, bin, false, "legacy")
