@@ -3,6 +3,7 @@ package wtc
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +14,8 @@ import (
 )
 
 type renameProviderFixture struct {
-	dir, forge string
+	dir, forge    string
+	beforePublish func(string)
 }
 
 func renameRepositoryJSON(forge, slug string, different bool) string {
@@ -144,10 +146,34 @@ cat "$RENAME_FIXTURE/$file"
 	return f
 }
 
+// publish replaces a complete response so shell and HTTP readers never see a
+// truncation window. Control markers use the same path without rebuilding data.
+func (f renameProviderFixture) publish(t *testing.T, name, body string) {
+	t.Helper()
+	file, err := os.CreateTemp(f.dir, ".response-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.WriteString(body); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if f.beforePublish != nil {
+		f.beforePublish(name)
+	}
+	if err := os.Rename(file.Name(), filepath.Join(f.dir, name)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (f renameProviderFixture) put(t *testing.T, name, body string) {
 	t.Helper()
-	fixtureFile(t, filepath.Join(f.dir, name), body, 0600)
-	if strings.HasPrefix(name, "graphql-") {
+	f.publish(t, name, body)
+	if name != "old" && name != "new" && name != "base" && !strings.HasPrefix(name, "base-") {
 		return
 	}
 	var old, current map[string]any
@@ -182,7 +208,92 @@ func (f renameProviderFixture) put(t *testing.T, name, body string) {
 		repository := convert(old)
 		repository["pullRequest"] = map[string]any{"number": pr.Number, "url": fmt.Sprintf("https://github.com/%v/pull/%d", current["full_name"], pr.Number), "baseRepository": convert(pr.Base.Repo)}
 		response, _ := json.Marshal(map[string]any{"data": map[string]any{"old": repository, "current": convert(current)}})
-		fixtureFile(t, filepath.Join(f.dir, "graphql-"+n), string(response), 0600)
+		f.publish(t, "graphql-"+n, string(response))
+	}
+}
+
+func TestRenameFixtureControlUpdatesPreserveResponses(t *testing.T) {
+	f := newRenameProviderFixture(t, "github.com")
+	// Explicit malformed responses must also survive unrelated control updates.
+	f.put(t, "graphql-42", "synthetic override")
+	path := filepath.Join(f.dir, "graphql-42")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"block", "continue", "continue-43", "fail-graphql-42", "token", "detail", "list"} {
+		f.put(t, name, "synthetic control")
+		after, err := os.Stat(path)
+		raw, readErr := os.ReadFile(path)
+		if err != nil || readErr != nil || !os.SameFile(before, after) || string(raw) != "synthetic override" {
+			t.Fatalf("%s republished response: %q %v %v", name, raw, err, readErr)
+		}
+	}
+}
+
+func TestRenameFixturePublishesCompleteResponses(t *testing.T) {
+	for _, name := range []string{"old", "new", "base", "base-43", "graphql-42", "detail", "list"} {
+		t.Run(name, func(t *testing.T) {
+			f := newRenameProviderFixture(t, "github.com")
+			repo := renameRepositoryJSON("github.com", "example/new-name", false)
+			f.put(t, "base-43", renameBaseJSON("github.com", repo, 43))
+			f.put(t, "detail", "old detail")
+			f.put(t, "list", "old list")
+			observed := 0
+			var readers []*os.File
+			var previous [][]byte
+			f.beforePublish = func(target string) {
+				path := filepath.Join(f.dir, target)
+				old, err := os.Open(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { old.Close() })
+				readers = append(readers, old)
+				raw, err := os.ReadFile(path)
+				if err != nil || len(raw) == 0 {
+					t.Fatalf("published response incomplete: %s %q %v", target, raw, err)
+				}
+				// The old inode remains readable while the complete replacement is staged.
+				info, err := old.Stat()
+				if err != nil || info.Size() != int64(len(raw)) {
+					t.Fatalf("reader changed during staging: %s %v", target, err)
+				}
+				previous = append(previous, raw)
+				observed++
+			}
+			body := "new synthetic response"
+			switch name {
+			case "old", "new":
+				body = renameRepositoryJSON("github.com", "example/renamed", false)
+			case "base", "base-43":
+				body = renameBaseJSON("github.com", repo, 43)
+			}
+			f.put(t, name, body)
+			for i, reader := range readers {
+				raw, err := io.ReadAll(reader)
+				if err != nil || string(raw) != string(previous[i]) {
+					t.Fatalf("open reader lost previous response: %q %v", raw, err)
+				}
+			}
+			for _, number := range []string{"42", "43"} {
+				raw, err := os.ReadFile(filepath.Join(f.dir, "graphql-"+number))
+				if name != "graphql-42" && (err != nil || !json.Valid(raw)) {
+					t.Fatalf("invalid generated response: %q %v", raw, err)
+				}
+			}
+			want := 1
+			if name == "old" || name == "new" || name == "base" || name == "base-43" {
+				want = 3
+			}
+			if observed != want {
+				t.Fatalf("publication barriers: got %d want %d", observed, want)
+			}
+			raw, err := os.ReadFile(filepath.Join(f.dir, name))
+			if err != nil || string(raw) != body {
+				t.Fatalf("replacement missing: %q %v", raw, err)
+			}
+		})
 	}
 }
 
