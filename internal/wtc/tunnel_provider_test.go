@@ -2,6 +2,18 @@ package wtc
 
 import "testing"
 
+func TestTunnelTemporaryDevtunnelStillNeedsManagement(t *testing.T) {
+	e := tunnelPolicyEntry{Provider: "devtunnel", Mode: "temporary", Access: "public"}
+	facts := tunnelExecutionFacts{SupportedBuild: true, Scoped: true, CanHost: true, CanCleanup: true}
+	if checkTunnelExecution(e, facts, false) == nil {
+		t.Fatal("temporary provider allocation accepted without management authority")
+	}
+	facts.CanManage = true
+	if err := checkTunnelExecution(e, facts, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTunnelDocumentedModeContracts(t *testing.T) {
 	// Fixtures express the primary contracts linked in tunnel_provider.go;
 	// these are not captured account responses or installed-version claims.
@@ -12,7 +24,7 @@ func TestTunnelDocumentedModeContracts(t *testing.T) {
 		{"cloudflare", "named", "provider", true, true},
 		{"cloudflare", "quick", "none", false, false},
 		{"devtunnel", "persistent", "provider", true, true},
-		{"devtunnel", "temporary", "none", false, false},
+		{"devtunnel", "temporary", "none", false, true},
 		{"ngrok", "domain", "provider", true, false},
 		{"tailscale", "serve", "local", true, false},
 	} {

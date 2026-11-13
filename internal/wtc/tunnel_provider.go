@@ -32,7 +32,11 @@ func tunnelContract(provider, mode string) (tunnelProviderContract, error) {
 		return tunnelProviderContract{"provider", true, false}, nil
 	case "tailscale/serve":
 		return tunnelProviderContract{"local", true, false}, nil
-	case "cloudflare/quick", "devtunnel/temporary":
+	case "devtunnel/temporary":
+		// Temporary lifetime still allocates a provider tunnel and port. It
+		// needs explicit management/deletion authority without registration events.
+		return tunnelProviderContract{"none", false, true}, nil
+	case "cloudflare/quick":
 		return tunnelProviderContract{"none", false, false}, nil
 	}
 	return tunnelProviderContract{}, fmt.Errorf("unsupported tunnel provider or mode")

@@ -7,7 +7,7 @@ import (
 )
 
 func testTunnelResource(kind, id string) tunnelResourceRef {
-	return tunnelResourceRef{"cloudflare", "synthetic-account/synthetic-zone", kind, id, "owned", "synthetic-owner", tunnelDigest([]byte(kind + ":" + id))}
+	return tunnelResourceRef{Provider: "cloudflare", Scope: "synthetic-account/synthetic-zone", Kind: kind, ID: id, Ownership: "owned", Owner: "synthetic-owner", Fingerprint: tunnelDigest([]byte(kind + ":" + id))}
 }
 
 func testTunnelState() tunnelState {

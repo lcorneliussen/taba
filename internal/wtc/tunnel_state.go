@@ -24,16 +24,18 @@ type tunnelEntryState struct {
 	Definition string              `json:"definition"`
 	Consent    *tunnelConsent      `json:"consent,omitempty"`
 	Registered bool                `json:"registered"`
+	Known      *tunnelAddress      `json:"known,omitempty"`
 	Active     *tunnelAddress      `json:"active,omitempty"`
 	Resources  []tunnelResourceRef `json:"resources"`
 	Operation  *tunnelOperation    `json:"operation,omitempty"`
 }
 
 type tunnelOperation struct {
-	ID         string             `json:"id"`
-	Action     string             `json:"action"`
-	Definition string             `json:"definition"`
-	Steps      []tunnelEffectStep `json:"steps"`
+	ID         string                    `json:"id"`
+	Action     string                    `json:"action"`
+	Definition string                    `json:"definition"`
+	Steps      []tunnelEffectStep        `json:"steps"`
+	Lifecycle  *tunnelLifecycleOperation `json:"lifecycle,omitempty"`
 }
 
 type tunnelEffectStep struct {
@@ -63,9 +65,10 @@ type tunnelResourceRef struct {
 	Scope       string `json:"scope"` // non-secret provider account/zone/cluster
 	Kind        string `json:"kind"`
 	ID          string `json:"id"`
-	Ownership   string `json:"ownership"` // owned or borrowed
+	Ownership   string `json:"ownership"` // owned, borrowed, or unverified (never deletion authority)
 	Owner       string `json:"owner,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+	Lifetime    string `json:"lifetime,omitempty"` // registration or session; absent legacy receipts are retained conservatively
 }
 
 func (r tunnelResourceRef) key() string {
@@ -74,13 +77,19 @@ func (r tunnelResourceRef) key() string {
 }
 
 func (r tunnelResourceRef) validate(owner string) error {
+	if r.Lifetime != "" && r.Lifetime != "registration" && r.Lifetime != "session" {
+		return fmt.Errorf("unknown tunnel resource lifetime")
+	}
 	for _, s := range []string{r.Provider, r.Scope, r.Kind, r.ID} {
 		if s == "" || len(s) > 512 || strings.ContainsAny(s, "\r\n\x00") {
 			return fmt.Errorf("invalid tunnel resource identity")
 		}
 	}
-	if r.Ownership != "owned" && r.Ownership != "borrowed" {
+	if r.Ownership != "owned" && r.Ownership != "borrowed" && r.Ownership != "unverified" {
 		return fmt.Errorf("unknown tunnel resource ownership")
+	}
+	if r.Ownership == "unverified" && (r.Owner != "" || r.Fingerprint != "") {
+		return fmt.Errorf("unverified tunnel identity cannot carry ownership evidence")
 	}
 	if r.Ownership == "owned" && (r.Owner != owner || !validTunnelDigest(r.Fingerprint)) {
 		return fmt.Errorf("tunnel resource lacks exact ownership receipt")
@@ -111,10 +120,12 @@ func (s tunnelState) validate(owner string) error {
 		if entry.Consent != nil && !validTunnelDigest(entry.Consent.Definition) {
 			return fmt.Errorf("invalid tunnel consent receipt")
 		}
-		if entry.Active != nil {
-			a, err := parseTunnelAddress(entry.Active.URL)
-			if err != nil || a != *entry.Active {
-				return fmt.Errorf("invalid active tunnel address")
+		for _, address := range []*tunnelAddress{entry.Active, entry.Known} {
+			if address != nil {
+				a, err := parseTunnelAddress(address.URL)
+				if err != nil || a != *address {
+					return fmt.Errorf("invalid tunnel state address")
+				}
 			}
 		}
 		for _, resource := range entry.Resources {
@@ -127,6 +138,11 @@ func (s tunnelState) validate(owner string) error {
 			resources[resource.key()] = true
 		}
 		if op := entry.Operation; op != nil {
+			if op.Lifecycle != nil {
+				if err := op.Lifecycle.validate(s.Owner, entry, *op); err != nil {
+					return err
+				}
+			}
 			if !tunnelComponent.MatchString(op.ID) || !validTunnelDigest(op.Definition) {
 				return fmt.Errorf("invalid tunnel operation identity")
 			}
@@ -159,11 +175,14 @@ func (e tunnelEntryState) needsCleanup() bool {
 		return true
 	}
 	for _, r := range e.Resources {
-		if r.Ownership == "owned" {
+		if r.Ownership == "owned" || r.Ownership == "unverified" {
 			return true
 		}
 	}
 	if e.Operation != nil {
+		if e.Operation.Lifecycle != nil {
+			return !lifecycleComplete(e.Operation)
+		}
 		if len(e.Operation.Steps) == 0 {
 			return true
 		}
@@ -277,6 +296,9 @@ func tunnelCleanupTargets(owner string, receipts []tunnelResourceRef, observatio
 			return nil, fmt.Errorf("duplicate tunnel resource receipt")
 		}
 		seen[receipt.key()] = true
+		if receipt.Ownership == "unverified" {
+			return nil, fmt.Errorf("unverified tunnel identity needs reconciliation")
+		}
 		if receipt.Ownership != "owned" {
 			continue
 		}
