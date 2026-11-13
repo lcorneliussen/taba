@@ -27,7 +27,13 @@ taba conventions       # this list, from the installed release
 
 `doctor` prints each convention it finds once, with its migration step, followed by the places it was found. *migrate* means you can move it now. *waiting* means taba has no new name for it yet, or taba moves it itself. During 0.2.x, findings never fail `doctor`. `--json` returns the same findings.
 
-## Migrate in this order
+## Migrate
+
+Ask an agent in one of your collections:
+
+> Run `taba doctor --all` and finish the migration to taba. Follow the step `doctor` gives for each finding, in the order below, and open a harness PR for the harness changes.
+
+`doctor` tells the agent what to change and where. The order matters, so the agent works through it like this:
 
 1. **Upgrade the harness to the latest 0.2.x** and roll it out, so every collection's pinned CLI reads both names.
 2. **Harness files:** rename `wtc.toml` and `.wtc-cli-version` together, plus `wtc-*` skill folders and their base digests, in one harness change. Review, commit and merge it as usual, then roll it out.

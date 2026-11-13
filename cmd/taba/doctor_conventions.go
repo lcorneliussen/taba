@@ -48,7 +48,12 @@ func printConventionSection(w io.Writer, findings []wtc.ConventionFinding) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "wtc conventions still in use (all of them: taba conventions):")
 	printConventionFindings(w, findings, "  ")
+	fmt.Fprintln(w, migrateHint)
 }
+
+// migrateHint tells the reader that an agent can do the migration from the
+// steps above.
+const migrateHint = "\nTo migrate, ask an agent: \"Run taba doctor --all and finish the migration to taba.\""
 
 type doctorAllCollection struct {
 	Collection string                  `json:"collection"`
@@ -166,6 +171,9 @@ func runDoctorAll(c *wtc.Context, discoverErr error, asJSON bool) error {
 		}
 	}
 	fmt.Fprintf(out, "\n%d collection(s): %d with nothing left to migrate by hand, %d with wtc conventions to migrate, %d not checked.\n", len(results), migrated, len(results)-migrated-unchecked, unchecked)
+	if len(results)-migrated-unchecked > 0 || actionableFindings(user) > 0 {
+		fmt.Fprintln(out, migrateHint)
+	}
 	return nil
 }
 
