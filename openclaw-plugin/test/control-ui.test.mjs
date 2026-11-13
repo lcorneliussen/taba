@@ -1327,7 +1327,7 @@ test("panel: a ready service that doesn't answer, and a tunnel whose provider ne
   const { host, view } = await mount("panel", { ...collection([repo("api")], [web, tunnel]), tunnelProviders: ["tailscale"] });
   const all = [...host.all()];
   assert.ok(all.some((n) => n.textContent !== "⚠" && /^ready, not answering now \(HTTP 502\)/.test(n.title ?? n.textContent ?? "")), "the service says it isn't answering");
-  assert.ok(all.some((n) => n.textContent === "⚠" && /Tailscale needs a login: tailscale up/.test(n.title)), "the tunnel says it needs a login");
+  assert.ok(all.some((n) => n.textContent === "Sign in" && /Tunnel health:.*Tailscale needs a login: tailscale up/.test(n.title)), "the tunnel names its login error separately from access");
   view.dispose();
   // A closed tunnel's provider login leaves a healthy service healthy; the
   // button that opens it again says what to do first.
@@ -1335,7 +1335,7 @@ test("panel: a ready service that doesn't answer, and a tunnel whose provider ne
   const closed = { ...tunnel, state: "idle" };
   const quiet = await mount("panel", { ...collection([repo("api")], [fine, closed]), tunnelProviders: ["tailscale"] });
   const nodes = [...quiet.host.all()];
-  assert.ok(!nodes.some((n) => /not answering|⚠/.test(n.textContent ?? "") || /^ready: /.test(n.title ?? "")), "nothing marked as failing");
+  assert.ok(!nodes.some((n) => /not answering|⚠|^Sign in$/.test(n.textContent ?? "") || /^ready: /.test(n.title ?? "")), "nothing marked as failing");
   assert.ok(nodes.some((n) => n.tagName === "BUTTON" && /Open the tailscale tunnel again .*First: Tailscale needs a login: tailscale up/.test(n.title)));
   quiet.view.dispose();
 });
@@ -3556,4 +3556,49 @@ for(const kind of ["composer","panel"]) test(`${kind} tracking pending preserves
   assert.equal(calls.filter(c=>c.method==="wtc.github.confirm").length,1);
   assert.ok(![...host.all()].some(n=>(n.role??n.attributes.role)==="alert"&&/Tracking pending/.test(n.textContent)),"tracking failure is not a failed publication");
  }finally{githubConfirmResult=undefined;personal=null;view.dispose();}
+});
+
+for (const kind of ["composer", "panel"]) for (const [exposure, label] of [
+  ["public", "Public access — anyone with the link"], ["tailnet", "Tailnet access"],
+  ["account", "Account access"], ["protected", "Protected access"],
+  ["unknown", "Access unknown"], [undefined, "Access unknown"], ["future", "Access unknown"], ["toString", "Access unknown"],
+]) test(`${kind}: tunnel access follows reported exposure (${exposure ?? "missing"})`, async () => {
+  const url = "https://synthetic-preview.example.invalid";
+  const services = [
+    {group:"api/web",repo:"api",kind:"service",state:"ready",url:"http://127.0.0.1:42201"},
+    {group:"api/web",repo:"api",kind:"endpoint",provider:exposure === "public" ? "tailscale" : "cloudflare",state:"ready",url,exposure},
+  ];
+  const {host, view} = await mount(kind, collection([repo("api")], services));
+  try {
+    const access = [...host.all()].find(n => n.className?.includes("wtc-tunnel-access"));
+    assert.ok(access); assert.equal(access.role, "img"); assert.equal(access.ariaLabel, label);
+    const route = [...host.all()].find(n => n.tagName === "A" && n.href === url);
+    assert.equal(route.title, `${url} — ${label}`, "hover retains the full address and access description");
+    assert.ok(titled(host, `Close the ${services[1].provider} tunnel`), "access status does not replace the close action");
+  } finally {view.dispose();}
+});
+
+for (const kind of ["composer", "panel"]) test(`${kind}: service tunnel columns refold on resize without a data refresh`, async () => {
+ const observers=[];globalThis.ResizeObserver=class {constructor(fn){this.fn=fn;observers.push(this);}observe(){}disconnect(){}};
+ let view;
+ try {
+  const services=[{group:"api/web",repo:"api",kind:"service",state:"ready",url:"http://127.0.0.1:42201"}, ...["cloudflare","ngrok","custom"].map(provider=>({group:"api/web",repo:"api",kind:"endpoint",provider,state:"ready",exposure:"public",url:`https://${provider}.example.invalid`}))];
+  const mounted=await mount(kind,collection([repo("api")],services));view=mounted.view;
+  const resize=width=>observers.forEach(o=>o.fn([{contentRect:{width}}]));
+  const folded=()=>[...mounted.host.all()].filter(n=>n.attributes["data-service-tunnels"]);
+  resize(801);assert.equal(folded().length,0);
+  calls.length=0;resize(799);assert.equal(folded().length,1,"crossing the provider threshold alone folds tunnels immediately");
+  resize(801);assert.equal(folded().length,0,"growing restores provider columns immediately");
+  assert.equal(calls.length,0,"resizing never dispatches an action or refresh");
+ } finally {view?.dispose();delete globalThis.ResizeObserver;}
+});
+
+for (const kind of ["composer", "panel"]) test(`${kind}: a running tunnel names an unanswered health probe separately from access`, async () => {
+ const services=[{group:"api/web",repo:"api",kind:"service",state:"ready"},{group:"api/web",repo:"api",kind:"endpoint",provider:"custom",state:"ready",url:"https://preview.example.invalid",exposure:"unknown",answering:"no",answer_detail:"synthetic probe failure"}];
+ const {host,view}=await mount(kind,collection([repo("api")],services));
+ try {
+  assert.ok([...host.all()].some(n=>n.textContent==="No response"&&/Tunnel health:.*synthetic probe failure/.test(n.title)));
+  assert.ok([...host.all()].some(n=>n.role==="img"&&n.ariaLabel==="Access unknown"));
+  assert.ok([...host.all()].some(n=>n.tagName==="A"&&n.href==="https://preview.example.invalid"));
+ } finally {view.dispose();}
 });
