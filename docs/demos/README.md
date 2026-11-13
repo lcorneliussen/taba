@@ -1,7 +1,7 @@
 # Recorded WTC demos
 
 These terminal recordings run real commands against fresh synthetic Git repos.
-The current minimal harness recording uses v0.2.4; its new filenames require a 0.2.0 or later pin. Other recordings below retain their historical source behavior. No
+The current minimal harness recording uses v0.2.4; its new filenames require a 0.2.0 or later pin. Other recordings below retain their historical source behavior and WTC branding. No
 service runner, forge account, desktop session, or agent is needed.
 
 ## One task, two repositories
@@ -91,8 +91,7 @@ recording; the script sends `q` and waits for the process to exit afterward.
 TUI transcripts contain the actual screen just before quitting, with repeated
 blank rows collapsed, rather than raw cursor-control sequences.
 
-The v0.1.39 pin is fixture metadata only: every command uses the supplied
-source-built binary. No pin is installed or changed in your projects. Captures
+The pin equals the supplied stable binary’s version and is fixture metadata only. Every core scenario uses that binary with development handover disabled; the version check and provenance header apply to all core scenarios. No pin is installed or changed in your projects. Captures
 replace only their own temporary sandbox path with `~/wtc-demo`; transcripts
 also normalize terminal whitespace. Inspect all captures before publishing.
 
@@ -102,7 +101,7 @@ The runtime and cleanup recordings need dekit 0.10.0 and use their own script:
 
 ```sh
 python3 docs/demos/record_runtime.py \
-  --wtc ./wtc --dekit /path/to/dekit --agg /path/to/agg
+  --wtc /path/to/taba --dekit /path/to/dekit --agg /path/to/agg
 ```
 
 It creates its own temporary repos and owners, launches only loopback services,
