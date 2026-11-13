@@ -62,6 +62,7 @@ func TestConventionFindingsInAnUnmigratedProject(t *testing.T) {
 	writeConventionFixture(t, filepath.Join(c.Harness, "overlays", "skills", "wtc-pr", ".wtc-base.sha256"), "x\n")
 	writeConventionFixture(t, filepath.Join(c.Harness, "hooks", "wtc", "env.post.sh"), "echo \"$WTC_COLLECTION\"\nwtc status --json\n# a wtc collection is a task; run /wtc-start; clone wtc-cli\n")
 	writeConventionFixture(t, filepath.Join(c.Harness, "release-notes", "old.md"), "wtc status\n")
+	writeConventionFixture(t, filepath.Join(c.Harness, "CHANGELOG.md"), "- wtc status gained --json\n")
 	writeConventionFixture(t, filepath.Join(c.Collection, "WTC-SCOPE.md"), "task\n")
 	writeConventionFixture(t, filepath.Join(c.Collection, ".env.collection.local"), "WTC_PANES=full\n")
 	writeConventionFixture(t, filepath.Join(c.Collection, ".wtc", "skills", "x"), "")

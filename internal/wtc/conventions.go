@@ -37,6 +37,9 @@ type Convention struct {
 	New  string `json:"new,omitempty"`
 	// Support is one of the Support* constants.
 	Support string `json:"support"`
+	// SupportNote replaces the Support label in the docs when one convention
+	// covers names that behave differently.
+	SupportNote string `json:"support_note,omitempty"`
 	// Owner is "you" when the project writes it, "taba" when taba generates
 	// or manages it.
 	Owner   string `json:"owner"`
@@ -59,8 +62,9 @@ var Conventions = []Convention{
 		Migrate: "No new name yet (#375). Keep `hooks/wtc/`."},
 	{ID: "browse-overlay", Area: "harness", Old: "`overlays/browse/wtc-browse.lua`", New: "`taba-browse.lua` (planned)", Support: SupportOldOnly, Owner: "you", Checked: true,
 		Migrate: "No new name yet (#375). Keep the old file name."},
-	{ID: "harness-references", Area: "harness", Old: "`WTC_*` variables, `wtc …` commands and `wtc-*` skill names in harness files", New: "`TABA_*` and `taba …`", Support: SupportBothNewWins, Owner: "you", Checked: true,
-		Migrate: "Replace `WTC_X` with `TABA_X`, `wtc` with `taba`, and old skill names such as `/wtc-start` with `/taba-start` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`)."},
+	{ID: "harness-references", Area: "harness", Old: "`WTC_*` variables, `wtc …` commands and `wtc-*` skill names in harness files", New: "`TABA_*`, `taba …` and `taba-*`", Support: SupportBothNewWins, Owner: "you", Checked: true,
+		SupportNote: "Variables: both, the new one wins. Commands: both ship. Skill names: the old ones are shims",
+		Migrate:     "Replace `WTC_X` with `TABA_X`, `wtc` with `taba`, and old skill names such as `/wtc-start` with `/taba-start` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`)."},
 	{ID: "scope-file", Area: "collection", Old: "`WTC-SCOPE.md`", New: "`SCOPE.md`", Support: SupportBoth, Owner: "you", Checked: true,
 		Migrate: "`mv WTC-SCOPE.md SCOPE.md` at the collection root. The file is local, so nothing to commit. Older harness tooling that reads `WTC-SCOPE.md` needs the same change."},
 	{ID: "local-references", Area: "collection", Old: "`WTC_*` in `.env.collection.local`", New: "`TABA_*`", Support: SupportBothNewWins, Owner: "you", Checked: true,
@@ -205,11 +209,15 @@ var (
 	wtcCommand = regexp.MustCompile("(?:^|[\\s;|&(`$\"'/])wtc\\s+(?:" + strings.Join(ConventionCommands, "|") + ")\\b")
 )
 
-// ConventionCommands are the subcommands `taba doctor` looks for after `wtc`.
+// ConventionCommands are the subcommands and flags `taba doctor` looks for
+// after `wtc`.
 var ConventionCommands = []string{"add-repo", "agent-env", "browse", "catch-up", "checkouts", "commands", "conventions", "customize", "dev", "docs", "doctor", "down", "eject", "env", "harness", "host", "init", "logs", "mcp", "new", "open", "openclaw", "pr", "projects", "publish", "registry", "release-notes", "restart", "retire", "review", "secrets", "skills", "status", "svc", "up", "upgrade", "version", "--version", "--help", "help"}
 
-// referenceRoots are the harness paths written for people and agents to run
-// or read. Release notes and vendored trees are history, not instructions.
+// The reference scan reads the harness's top-level *.md, *.sh, taba.toml,
+// wtc.toml and mise.toml, and every file under referenceRoots. It skips
+// history (release-notes folders and top-level CHANGELOG/HISTORY files),
+// .git and node_modules: those describe the past or are vendored, not
+// instructions anyone runs today.
 var referenceRoots = []string{"hooks", "skills", "overlays", "instructions", "scripts", "bin", "review"}
 
 func scanReferences(harness string, rel func(string) string) ([]ConventionFinding, error) {
@@ -220,6 +228,10 @@ func scanReferences(harness string, rel func(string) string) ([]ConventionFindin
 	}
 	for _, e := range entries {
 		name := e.Name()
+		upper := strings.ToUpper(name)
+		if strings.HasPrefix(upper, "CHANGELOG") || strings.HasPrefix(upper, "HISTORY") {
+			continue
+		}
 		if e.Type().IsRegular() && (strings.HasSuffix(name, ".md") || strings.HasSuffix(name, ".sh") || name == "taba.toml" || name == "wtc.toml" || name == "mise.toml") {
 			files = append(files, filepath.Join(harness, name))
 		}
@@ -394,8 +406,7 @@ func UserConventionFindings(configRoot string) []ConventionFinding {
 	return out
 }
 
-// ConventionsMarkdown renders the conventions list for docs/conventions.md
-// and the website.
+// ConventionsMarkdown renders the conventions list for docs/conventions.md.
 func ConventionsMarkdown() string {
 	var b strings.Builder
 	areas := []string{}
@@ -424,7 +435,11 @@ func ConventionsMarkdown() string {
 			if c.Checked {
 				checked = "yes"
 			}
-			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", c.Old, c.New, support[c.Support], c.Owner, checked, c.Migrate)
+			label := support[c.Support]
+			if c.SupportNote != "" {
+				label = c.SupportNote
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", c.Old, c.New, label, c.Owner, checked, c.Migrate)
 		}
 		b.WriteString("\n")
 	}
