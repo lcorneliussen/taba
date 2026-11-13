@@ -2303,7 +2303,7 @@ function collectionTables(v) {
       for (const t of g.tunnels) if (!ways.includes(tunnelName(t))) ways.push(tunnelName(t));
     }
     const foldWays = narrow && (ways.length > 1 || groups.some(g => g.loose)) ||
-      ways.length > 1 && v.width?.() > 0 && v.width() < 360 + ways.length * 100;
+      ways.length > 1 && v.width?.() > 0 && v.width() < 440 + ways.length * 120;
     const visibleWays = foldWays ? [] : ways;
     const repair = (g) => count("Consolidate", "Ask the conversation to open it with wtc svc tunnel instead", "inherit", () => askConversation(v.host, v.key(), consolidate(g)));
     const wayNode = (g, w) => {
@@ -2318,7 +2318,7 @@ function collectionTables(v) {
           if (!foldWays) return leadSlot(stateGlyph("▶", title, TONE.none, run));
           const icon = leadSlot(controlIcon("▶"), 16);
           icon.children[0].style.top = "-.5ex";
-          const b = css(el("button", {type:"button",className:"wtc-tunnel-existing",title,ariaLabel:title},icon,w), "display:inline-flex;align-items:baseline;gap:2px;min-height:24px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;cursor:pointer");
+          const b = css(el("button", {type:"button",className:"wtc-tunnel-existing",title,ariaLabel:title},icon,w), "display:inline-flex;align-items:baseline;gap:2px;min-height:20px;padding:0;border:0;border-radius:4px;background:transparent;color:var(--muted,#888);font:inherit;cursor:pointer");
           b.onclick = e => { e.preventDefault(); e.stopPropagation(); return run(); };
           return b;
         },
@@ -2326,12 +2326,12 @@ function collectionTables(v) {
     };
     const columns = [
       { head: "", width: "20px" },
-      { head: "Service", width: narrow ? `minmax(${visibleWays.length ? 48 : 64}px,1fr)` : "minmax(0,max-content)" },
-      { head: "Repo", width: "minmax(0,max-content)", under: true },
+      { head: "Service", width: narrow ? `minmax(${visibleWays.length ? 48 : 64}px,1fr)` : "minmax(72px,max-content)" },
+      { head: "Repo", width: "minmax(32px,max-content)", under: true },
       { head: "State", width: narrow ? "minmax(44px,56px)" : "78px" },
       { head: "URL", width: narrow ? "minmax(44px,56px)" : "80px", title: "Where it listens on the gateway" },
       ...visibleWays.map((w) => ({ head: css(el("span", { textContent: w }), "display:block;min-width:0;overflow:hidden;text-overflow:ellipsis"), width: narrow ? "minmax(24px,max-content)" : "minmax(96px,max-content)", title: w === "gateway" ? "OpenClaw portals" : `${w} tunnels` })),
-      { head: "", width: !narrow && groups.some(g => g.loose) ? "minmax(32px,max-content)" : "32px", align: "center", overflow: true },
+      { head: "", width: !narrow && !foldWays && groups.some(g => g.loose) ? "minmax(32px,max-content)" : "32px", align: "center", overflow: true },
     ];
     const rows = groups.map((g) => {
       const stateText = g.state === "absent" || g.state === "idle" ? "stopped" : g.state;
@@ -2347,7 +2347,7 @@ function collectionTables(v) {
           : toned(stateText, g.failed ? TONE.failure : g.running ? TONE.success : TONE.none, stateText),
         g.url && !g.loose ? address(g.url) : null,
         ...visibleWays.map(w => wayNode(g, w)),
-        g.loose && !narrow ? repair(g) : leadSlot(g.loose ? null : newTunnel(g, v.svc, data, { compact: true }), 32),
+        g.loose && !narrow && !foldWays ? repair(g) : leadSlot(g.loose ? null : newTunnel(g, v.svc, data, { compact: true }), 32),
     ];
     });
     const grid = table(columns, rows, narrow);

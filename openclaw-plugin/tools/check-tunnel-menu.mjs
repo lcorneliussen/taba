@@ -15,7 +15,7 @@ const assets=await loadControlUIFixtureAssets();
 const original=await readFile(new URL("tunnel-menu-fixture.html",import.meta.url),"utf8");
 const browser=await chromium.launch({headless:true}),results=[];
 try{
-for(const topology of ['empty','existing','loose'])for(const theme of ['dark','light'])for(const width of [320,390,760,1100])for(const view of ['card','panel']){
+for(const topology of ['empty','existing','loose'])for(const theme of ['dark','light'])for(const width of [320,390,760,900,1100])for(const view of ['card','panel']){
  const height=width<500?740:850;
  let html=original.replace('plugin.activate(host);','window.demoCtx=ctx;plugin.activate(host);').replace("mounts.card(document.querySelector('#card'),ctx);","window.cardView=mounts.card(document.querySelector('#card'),ctx);").replace(" mounts.panel(document.querySelector('#panel'),ctx);"," window.panelView=mounts.panel(document.querySelector('#panel'),ctx);").replace('const request = async (method, params) => {',`window.calls=[];window.fixture=data;const request = async (method, params) => {
  if(method==='plugins.sessionAction'&&params.actionId==='svc'){window.calls.push(params.payload);return {ok:true,result:{message:'done'}};}
@@ -34,10 +34,10 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
   const access = root.getByRole('img',{name:'Public access — anyone with the link',exact:true});
   await access.waitFor();
   const route = root.locator('a[href="https://a-long-synthetic-preview-name.ngrok.app"]');
-  const geometry=await root.evaluate(root=>{const n=root.querySelector('a[href="https://a-long-synthetic-preview-name.ngrok.app"]');const icon=n.parentElement.querySelector('.wtc-tunnel-access');const a=n.getBoundingClientRect(),b=icon.getBoundingClientRect();const probe=document.createElement('span');probe.style.cssText='display:inline-block;width:0;height:1ex;vertical-align:baseline';n.append(probe);const ex=probe.getBoundingClientRect();probe.remove();const port=root.querySelector('[title^="http://127.0.0.1:4321 on the gateway"]');port.append(probe);const portBaseline=probe.getBoundingClientRect().bottom;probe.remove();return {color:getComputedStyle(n).color,expected:getComputedStyle(document.body).color,center:Math.abs(ex.y+ex.height/2-b.y-b.height/2),baselineDifference:Math.abs(ex.bottom-portBaseline),iconWidth:b.width,iconHeight:b.height,title:n.title};});
+  const geometry=await root.evaluate(root=>{const n=root.querySelector('a[href="https://a-long-synthetic-preview-name.ngrok.app"]');const icon=n.parentElement.querySelector('.wtc-tunnel-access');const a=n.getBoundingClientRect(),b=icon.getBoundingClientRect();const probe=document.createElement('span');probe.style.cssText='display:inline-block;width:0;height:1ex;vertical-align:baseline';n.append(probe);const ex=probe.getBoundingClientRect();probe.remove();const footer=n.closest('[data-service-tunnels]');const reference=footer?footer.children[0]:root.querySelector('[title^="http://127.0.0.1:4321 on the gateway"]');reference.append(probe);const portBaseline=probe.getBoundingClientRect().bottom;probe.remove();return {color:getComputedStyle(n).color,expected:getComputedStyle(document.body).color,center:Math.abs(ex.y+ex.height/2-b.y-b.height/2),baselineDifference:Math.abs(ex.bottom-portBaseline),iconWidth:b.width,iconHeight:b.height,title:n.title};});
   assert.equal(geometry.color,geometry.expected,'healthy tunnel overrides a red host-link accent');
   assert(geometry.center<1,'access icon is centered on the text x-height');
-  if(width>=500)assert(geometry.baselineDifference<1,'tunnel and service address share the table baseline');
+  assert(geometry.baselineDifference<1,'tunnel links share the service row or folded label baseline');
   assert.equal(geometry.iconWidth,14);assert.equal(geometry.iconHeight,14);
   const controls = await root.evaluate(root=>[...root.querySelectorAll('a[href^="https://"]')].filter(n=>n.parentElement?.querySelector('.wtc-tunnel-access')).map(n=>{const close=n.parentElement.lastElementChild,a=n.getBoundingClientRect(),b=close.getBoundingClientRect();let visible=a.width>=24;for(let p=close.parentElement;p&&p!==root;p=p.parentElement){const s=getComputedStyle(p),r=p.getBoundingClientRect();if(/hidden|clip/.test(s.overflowX))visible&&=b.left>=r.left-.5&&b.right<=r.right+.5;}return {visible,gap:b.left-a.right};}));
   assert(controls.every(c=>c.visible&&c.gap>=0&&c.gap<=3),'links retain readable width and adjacent fully visible close controls');
@@ -56,6 +56,8 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
   await page.mouse.move(1,1);
   await root.screenshot({path:fileURLToPath(new URL(`${topology}-${theme}-${width}-${view}-access.png`,out))});
  }
+ const headersClear=await root.evaluate(root=>[...root.querySelectorAll('.wtc-table')].every(grid=>{const headers=[...grid.children].slice(0,Number(grid.dataset.columns));const boxes=headers.filter(n=>n.textContent.trim()&&getComputedStyle(n).position!=='absolute').map(n=>{const r=document.createRange();r.selectNodeContents(n);return r.getBoundingClientRect();});return boxes.every((r,i)=>!i||r.left>=boxes[i-1].right-.5);}));
+ assert(headersClear,'table column headings do not overlap');
  const trigger=root.getByRole('button',{name:'Add a tunnel to preview',exact:true});await trigger.waitFor();await page.waitForTimeout(100);
  await trigger.scrollIntoViewIfNeeded();const stable=await root.boundingBox();
  await trigger.click();const menu=page.getByRole('menu',{name:'Tunnel for preview',exact:true});await menu.waitFor();
