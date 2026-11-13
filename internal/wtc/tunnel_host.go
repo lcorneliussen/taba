@@ -450,11 +450,11 @@ func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCa
 	if err = cmd.Start(); err != nil {
 		return address, fmt.Errorf("explicit provider host failed to start")
 	}
-	child, childState := readTunnelProcess(cmd.Process.Pid)
-	if childState != "alive" {
+	child, childErr := observeTunnelStartedChild(ctx, cmd.Process.Pid)
+	if childErr != nil {
 		_ = cmd.Cancel()
 		_ = cmd.Wait()
-		return address, fmt.Errorf("owned child identity unavailable; retain launch intent")
+		return address, childErr
 	}
 	if err = observe("owned", child); err != nil {
 		_ = cmd.Cancel()

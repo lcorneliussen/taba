@@ -145,3 +145,74 @@ func TestTunnelRetireCleansStoppedRegistrationBeforeLegacyPreHook(t *testing.T) 
 		}
 	}
 }
+
+func TestTunnelRetirementJournalBearingLeftoversPreserveUserFiles(t *testing.T) {
+	for _, adHoc := range []bool{false, true} {
+		t.Run(map[bool]string{false: "managed", true: "ad-hoc"}[adHoc], func(t *testing.T) {
+			var caller, target *Context
+			if adHoc {
+				root := adHocFixture(t)
+				target = initAdHoc(t, filepath.Join(root, "journal-leftovers"))
+				caller = target
+			} else {
+				caller = newWorkspaceFixture(t)
+				made, err := caller.NewCollection(NewOptions{Slug: "journal-leftovers", Repos: []string{"widget"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				target, err = OpenCollection(made.Collection)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			entry := tunnelPolicyEntry{Provider: "tailscale", Mode: "serve", Access: "tailnet", Options: tunnelProviderOptions{ListenerPort: 8443}}
+			if err := target.SetTunnelPolicy("widget", "web", "preview", entry, false); err != nil {
+				t.Fatal(err)
+			}
+			state, err := target.readTunnelJournal()
+			if err != nil || state.Policy == nil {
+				t.Fatal("policy journal prerequisite", err)
+			}
+			keep := filepath.Join(target.Collection, "keep.txt")
+			fixtureFile(t, keep, "synthetic user-owned leftovers\n", 0600)
+			opt := RetireOptions{Name: filepath.Base(target.Collection), Force: true, Self: adHoc, InPlace: adHoc}
+			result, err := caller.RetireCollection(opt)
+			if err != nil || result.FolderRemoved || len(result.Leftovers) != 1 || result.Leftovers[0] != "keep.txt" {
+				t.Fatal("journal-bearing retirement with user leftovers", result, err)
+			}
+			if data, err := os.ReadFile(keep); err != nil || string(data) != "synthetic user-owned leftovers\n" {
+				t.Fatal("user leftover changed", err)
+			}
+			for _, path := range []string{target.tunnelJournalPath(), target.runtimeRoot(), filepath.Join(target.Collection, ".wtc-runtime.lock"), filepath.Join(target.Collection, ".config/tunnels.toml")} {
+				if _, err := os.Lstat(path); !os.IsNotExist(err) {
+					t.Errorf("retirement recreated or retained generated path %q: %v", path, err)
+				}
+			}
+			if RetiredFolder(target.Collection) == adHoc {
+				t.Fatal("established managed/ad-hoc leftover guard behavior changed")
+			}
+			if !adHoc {
+				if err := os.Remove(keep); err != nil {
+					t.Fatal(err)
+				}
+				finished, err := caller.RetireCollection(RetireOptions{Name: opt.Name})
+				if err != nil || !finished.FolderRemoved {
+					t.Fatal("guarded leftover finish failed", finished, err)
+				}
+			}
+		})
+	}
+}
+
+func TestTunnelRetireRuntimeWithoutServicesDoesNotCreateJournalOrSignal(t *testing.T) {
+	c := runtimeFixture(t)
+	if err := c.RetireRuntime(); err != nil {
+		t.Fatal(err)
+	}
+	if !c.ServicesChangedAt().IsZero() {
+		t.Fatal("empty runtime retirement published services signal")
+	}
+	if _, err := os.Lstat(c.runtimeRoot()); !os.IsNotExist(err) {
+		t.Fatal("empty runtime retirement created generated root", err)
+	}
+}

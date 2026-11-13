@@ -72,9 +72,11 @@ func (c *Context) RetireCollection(opt RetireOptions) (result RetireResult, resu
 	if err != nil {
 		return result, err
 	}
-	destructiveRemoval := false
+	admissionFinalized := false
 	defer func() {
-		resultErr = errors.Join(resultErr, runtimeTarget.endTunnelRetirement(context.Background(), attempt, !destructiveRemoval))
+		if !admissionFinalized {
+			resultErr = errors.Join(resultErr, runtimeTarget.endTunnelRetirement(context.Background(), attempt, true))
+		}
 	}()
 
 	// Close the source workspace before hooks or worktree removal. Once closed,
@@ -120,14 +122,25 @@ func (c *Context) RetireCollection(opt RetireOptions) (result RetireResult, resu
 		if err := runtimeTarget.retireRuntime(); err != nil {
 			return fmt.Errorf("runtime cleanup: %w", err)
 		}
-		if err := runtimeTarget.assessTunnelPrivateControl(true); err != nil {
-			return err
-		}
 		if err := stopRetiredStatusWatchers(target); err != nil {
 			return err
 		}
+		if err := runtimeTarget.assessTunnelPrivateControl(false); err != nil {
+			return err
+		}
+		// Finalize this attempt while the receiver/harness is intact, before any
+		// policy/worktree/metadata removal. Keep allocation fenced and make an
+		// interrupted destruction retryable. The same lock stays held throughout;
+		// no deferred writer may reopen the retired or partly removed receiver.
+		bound := context.WithValue(context.Background(), tunnelHeldRuntimeLock{}, runtimeTarget.runtimeRoot())
+		if err := runtimeTarget.endTunnelRetirement(bound, attempt, false); err != nil {
+			return err
+		}
+		admissionFinalized = true
+		if err := runtimeTarget.assessTunnelPrivateControl(true); err != nil {
+			return err
+		}
 		postRan := false
-		destructiveRemoval = true
 		for _, wt := range worktrees {
 			// A self-retire loses its harness hook source when that final worktree
 			// goes away. Run the post hook after product teardown, while it exists.
@@ -431,14 +444,6 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 	if err := removeManagedCollectionEntry(target); err != nil {
 		return err
 	}
-	// Keep the existing admission lock until the receiving boundary is gone.
-	// A waiting writer must revalidate an invalid receiver, rather than open a
-	// new lock inode while retirement is still deleting its journal.
-	for _, name := range []string{".wtc-runtime.lock", ".taba-runtime.lock"} {
-		if err := os.Remove(filepath.Join(target, name)); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-	}
 	for _, name := range []string{".wtc", ".taba"} {
 		root := filepath.Join(target, name)
 		info, err := os.Lstat(root)
@@ -473,6 +478,15 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 		}
 		_ = os.Remove(root) // Other namespaces and local files stay for inspection.
 	}
+	// Keep the existing admission lock through generated-root destruction.
+	// A waiting writer must revalidate an invalid receiver, rather than open a
+	// new lock inode after the receiving boundary and generated journal are removed.
+	for _, name := range []string{".wtc-runtime.lock", ".taba-runtime.lock"} {
+		if err := os.Remove(filepath.Join(target, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
 	return nil
 }
 

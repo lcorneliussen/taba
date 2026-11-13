@@ -92,7 +92,7 @@ func TestTunnelHostCrashRetainsLiveExternalChildAndStopsExactInstance(t *testing
 		t.Fatal(err)
 	}
 }
-func TestTunnelOwnedProcessNeverSignalsReplacementOrUncertainExecution(t *testing.T) {
+func TestTunnelOwnedProcessRefusesObservedReplacementOrUncertainExecution(t *testing.T) {
 	original := tunnelProcessIdentity{PID: 12345, Start: "original", Boot: "boot", Execution: tunnelDigest([]byte("owned"))}
 	for _, mode := range []string{"reused", "exec-changed", "unknown", "vanished-on-second-read"} {
 		t.Run(mode, func(t *testing.T) {
@@ -170,7 +170,13 @@ func TestTunnelProductionCrashedSessionStatusStopAndReconcile(t *testing.T) {
 			original := l.Effects.Provider
 			var hostReceipt tunnelResourceRef
 			var observation tunnelHostReady
-			l.Effects.Provider = func(ctx context.Context, call tunnelEffectCall) (tunnelEffectResult, error) {
+			var setupErr error
+			l.Effects.Provider = func(ctx context.Context, call tunnelEffectCall) (result tunnelEffectResult, effectErr error) {
+				defer func() {
+					if effectErr != nil {
+						setupErr = fmt.Errorf("%s: %w", call.Stage, effectErr)
+					}
+				}()
 				if call.Stage != "start" {
 					return original(ctx, call)
 				}
@@ -190,17 +196,22 @@ func TestTunnelProductionCrashedSessionStatusStopAndReconcile(t *testing.T) {
 				if err = childCmd.Start(); err != nil {
 					return tunnelEffectResult{}, err
 				}
-				child, childState := readTunnelProcess(childCmd.Process.Pid)
+				child, childErr := observeTunnelStartedChild(ctx, childCmd.Process.Pid)
 				go childCmd.Wait()
 				t.Cleanup(func() { _ = childCmd.Process.Kill() })
-				if childState != "alive" {
-					return tunnelEffectResult{}, fmt.Errorf("fake child identity unavailable")
+				if childErr != nil {
+					return tunnelEffectResult{}, childErr
 				}
 				observation = tunnelHostReady{Schema: 1, Owner: call.Owner, OperationID: call.OperationID, Definition: call.Entry.Definition, State: "active", Address: address, Parent: parent, ChildPhase: "owned", Children: []tunnelProcessIdentity{child}}
 				return tunnelEffectResult{Address: &address, Add: []tunnelResourceRef{hostReceipt}}, nil
 			}
 			if err = l.Execute(context.Background(), tunnelLifecycleRequest{ID: "synthetic-start", Action: "start", Definition: d, Consent: consent}); err != nil {
-				t.Fatal(err)
+				state, readErr := c.readTunnelJournal()
+				var steps []tunnelEffectStep
+				if len(state.Entries) > 0 && state.Entries[0].Operation != nil {
+					steps = state.Entries[0].Operation.Steps
+				}
+				t.Fatalf("synthetic lifecycle setup: %v; child/provider setup: %v; recorded steps: %+v; journal read: %v", err, setupErr, steps, readErr)
 			}
 			callback := tunnelResourceRef{Provider: "callback", Kind: "synthetic-hook", Scope: c.tunnelOwner(), ID: "retained-effect", Ownership: "owned", Owner: c.tunnelOwner(), Fingerprint: tunnelDigest([]byte("callback")), Lifetime: "session"}
 			if action == "callback-receipt" || action == "missing-observation" {
@@ -284,5 +295,40 @@ func TestTunnelOwnedProcessWaitsForPositiveExitAfterTransientUnknown(t *testing.
 	}, func() error { signals++; return nil })
 	if err != nil || signals != 1 || afterSignal != 2 {
 		t.Fatal("transient exit uncertainty changed signal/disposal contract", err, signals, afterSignal)
+	}
+}
+
+func TestTunnelStartedChildRequiresBoundedPositiveIdentity(t *testing.T) {
+	identity := tunnelProcessIdentity{PID: 12345, Start: "owned", Boot: "boot", Execution: tunnelDigest([]byte("owned"))}
+	reads := 0
+	observed, err := observeTunnelChildWith(context.Background(), identity.PID, func(int) (tunnelProcessIdentity, string) {
+		reads++
+		if reads == 1 {
+			return tunnelProcessIdentity{}, "unknown"
+		}
+		return identity, "alive"
+	})
+	if err != nil || observed != identity || reads != 2 {
+		t.Fatal("initial uncertainty was not followed by positive identity", err, reads)
+	}
+	for _, state := range []string{"unknown", "absent", "invalid-alive", "wrong-pid"} {
+		t.Run(state, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			observed, err := observeTunnelChildWith(ctx, identity.PID, func(int) (tunnelProcessIdentity, string) {
+				if state == "invalid-alive" {
+					return tunnelProcessIdentity{}, "alive"
+				}
+				if state == "wrong-pid" {
+					foreign := identity
+					foreign.PID++
+					return foreign, "alive"
+				}
+				return tunnelProcessIdentity{}, state
+			})
+			if err == nil || observed.PID != 0 {
+				t.Fatal("uncertain/exited child accepted as owned", state, err)
+			}
+		})
 	}
 }

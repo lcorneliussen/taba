@@ -319,7 +319,11 @@ host is shown as pending; explicit stop/reconcile verifies the exact recorded
 host and provider child instances before clearing their session receipt. A missing
 observation or interruption between child launch and identity recording retains
 the session for reconciliation. Process disposal does not prove arbitrary remote
-or callback cleanup; those receipts remain independent. Normal runtime teardown
+or callback cleanup; those receipts remain independent. Process identity is
+rechecked before signalling, but Darwin and Linux fallback may signal a numeric
+PID; the last identity read and signal are not atomic. This is bounded refusal
+of observed mismatches, not a guarantee against every PID-reuse race.
+Normal runtime teardown
 releases its retirement admission so an intact collection can be started again;
 unknown ownership and interrupted destructive retirement still refuse allocation.
 

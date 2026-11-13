@@ -694,10 +694,22 @@ func (c *Context) RetireRuntime() (resultErr error) {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("runtime cleanup requires the actual collection directory")
 	}
-	defer c.signalServicesChanged()
 	if err := c.runtimeConflict(); err != nil {
 		return err
 	}
+	state, err := c.readTunnelJournal()
+	if err != nil {
+		return err
+	}
+	manifest, err := c.runtimeManifest()
+	if err != nil {
+		return err
+	}
+	if manifest == nil && state.Policy == nil && len(state.Entries) == 0 && !state.Retiring {
+		// Nothing was enlisted. Do not create a journal/root just to retire it.
+		return nil
+	}
+	defer c.signalServicesChanged()
 	attempt, err := c.beginTunnelRetirement(context.Background())
 	if err != nil {
 		return err

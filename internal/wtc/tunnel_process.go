@@ -96,14 +96,14 @@ func tunnelProcessState(expected tunnelProcessIdentity, read func(int) (tunnelPr
 	return "alive"
 }
 
-// A stop targets only a recorded child of this owned foreground instance.
-// Revalidation follows the existing watcher pattern, with an OS process handle
-// opened before the final reads. A changed/reused PID is never signalled. This
-// is not an OS sandbox or a claim about arbitrary unrecorded descendants.
+// Stop refuses observed identity mismatch/uncertainty before signalling once.
+// os.FindProcess may use numeric PID signalling on Darwin and Linux fallback;
+// the final identity read and signal are not atomic. These bounded checks do
+// not guarantee instance-pinned signalling or arbitrary descendant supervision.
 func stopTunnelOwnedChild(ctx context.Context, expected tunnelProcessIdentity) error {
 	process, err := os.FindProcess(expected.PID)
 	if err != nil {
-		return fmt.Errorf("owned child handle unavailable")
+		return fmt.Errorf("owned child process reference unavailable")
 	}
 	defer process.Release()
 	return stopTunnelChildWith(ctx, expected, readTunnelProcess, func() error { return process.Signal(syscall.SIGTERM) })
@@ -135,6 +135,36 @@ func stopTunnelChildWith(ctx context.Context, expected tunnelProcessIdentity, re
 		case <-bound.Done():
 			return fmt.Errorf("owned child stop pending")
 		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+// Only call for a newly started child before Wait/reaping. Startup identity can
+// be temporarily unreadable; positive observation is required before recording
+// ownership/readiness. Timeout/early exit keeps the persisted launch uncertain.
+func observeTunnelStartedChild(ctx context.Context, pid int) (tunnelProcessIdentity, error) {
+	return observeTunnelChildWith(ctx, pid, readTunnelProcess)
+}
+func observeTunnelChildWith(ctx context.Context, pid int, read func(int) (tunnelProcessIdentity, string)) (tunnelProcessIdentity, error) {
+	bound, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	state, attempts := "unknown", 0
+	for {
+		observed, next := read(pid)
+		attempts++
+		state = "unknown"
+		if next == "alive" && observed.PID == pid && observed.validate() == nil {
+			return observed, nil
+		}
+		if next == "absent" {
+			return tunnelProcessIdentity{}, fmt.Errorf("owned child initialization unconfirmed (state absent, observations %d)", attempts)
+		}
+		select {
+		case <-bound.Done():
+			return tunnelProcessIdentity{}, fmt.Errorf("owned child initialization unconfirmed (state %s, observations %d)", state, attempts)
+		case <-ticker.C:
 		}
 	}
 }

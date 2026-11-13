@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// The eventual locked writer persists this one state before each external
+// tunnelRuntimeStore().Update persists this state under the runtime lock before each external
 // effect. These pure codecs do not discover paths, run hooks or call providers.
 // A pending effect after interruption is uncertain, not permission to replay.
 type tunnelState struct {
