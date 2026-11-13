@@ -54,10 +54,14 @@ type StatusRepo struct {
 	Conflict      bool           `json:"conflict,omitempty"`
 	Operation     string         `json:"operation,omitempty"`
 	PR            *StatusPRFacts `json:"pr"`
-	Tip           *StatusBuild   `json:"tip"`
-	Prod          *StatusBuild   `json:"prod"`
-	Runtime       string         `json:"runtime,omitempty"`
-	ReviewOnly    bool           `json:"review_only,omitempty"`
+	// PRUnconfirmed blocks branch actions and collection retirement for a matching
+	// local repository/branch when its enlisted PR state is stale, deferred or
+	// unavailable, or its PR URL is rejected. It does not claim the PR is open.
+	PRUnconfirmed bool         `json:"pr_unconfirmed,omitempty"`
+	Tip           *StatusBuild `json:"tip"`
+	Prod          *StatusBuild `json:"prod"`
+	Runtime       string       `json:"runtime,omitempty"`
+	ReviewOnly    bool         `json:"review_only,omitempty"`
 	// Next is the repository's next step, read from the facts above; nil
 	// when nothing waits on anyone.
 	Next    *next.Step    `json:"next,omitempty"`
@@ -68,6 +72,11 @@ type StatusRepo struct {
 }
 
 type StatusPRFacts struct {
+	// StateSource, Freshness and ObservedAt describe only PR state. They do not
+	// date checks, reviews or mergeability.
+	StateSource    string   `json:"observation_source,omitempty"`
+	Freshness      string   `json:"freshness,omitempty"`
+	ObservedAt     string   `json:"observed_at,omitempty"`
 	Number         string   `json:"number"`
 	Head           string   `json:"head,omitempty"`
 	URL            string   `json:"url,omitempty"`
@@ -105,6 +114,11 @@ type StatusFollow struct {
 }
 
 type StatusPRRow struct {
+	// StateSource, Freshness and ObservedAt describe only PR state, independently
+	// of snapshot age. They do not date checks, reviews or mergeability.
+	StateSource     string         `json:"observation_source,omitempty"`
+	Freshness       string         `json:"freshness,omitempty"`
+	ObservedAt      string         `json:"observed_at,omitempty"`
 	Repo            string         `json:"repo"`
 	Number          string         `json:"number"`
 	State           string         `json:"state,omitempty"`
@@ -287,13 +301,19 @@ func statusNext(snapshot *StatusSnapshot) {
 		r := &snapshot.Repos[i]
 		r.Next = nil
 		r.Choices = nil
-		if r.ReviewOnly {
+		blocked := r.PRUnconfirmed || (r.PR != nil && statusObservationUnavailable(r.PR.Freshness))
+		for _, pr := range snapshot.PRs {
+			if pr.OnBranch && statusPRMatchesRepo(pr, *r) && statusObservationUnavailable(pr.Freshness) {
+				blocked = true
+			}
+		}
+		if r.ReviewOnly || blocked {
 			continue
 		}
 		f := statusFacts(*r)
 		if r.PR == nil && r.BranchKind == "branch" {
 			for _, pr := range snapshot.PRs {
-				if !pr.OnBranch || pr.State != "MERGED" || !statusPRMatchesRepo(pr, *r) {
+				if !pr.OnBranch || statusObservationUnavailable(pr.Freshness) || pr.State != "MERGED" || !statusPRMatchesRepo(pr, *r) {
 					continue
 				}
 				number, _ := strconv.Atoi(pr.Number)

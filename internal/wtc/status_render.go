@@ -175,6 +175,9 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			} else if g := statusShownGlyph(row.PR.Review); g != "" {
 				bits = append(bits, g)
 			}
+			if label := statusFreshnessLabel(row.PR.Freshness, row.PR.ObservedAt); label != "" {
+				bits = append(bits, label)
+			}
 			parts = append(parts, "PR "+strings.Join(bits, " "))
 		}
 		builds := []string{}
@@ -232,6 +235,9 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 		}
 		for _, row := range active {
 			bits := []string{fmt.Sprintf("**%s**", row.Repo), "#" + row.Number}
+			if label := statusFreshnessLabel(row.Freshness, row.ObservedAt); label != "" {
+				bits = append(bits, label)
+			}
 			if row.OnBranch {
 				bits = append(bits, "⚠ MERGED — "+row.LandingLabel())
 			} else if row.Draft {
@@ -288,6 +294,9 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			b.WriteString("\n## Archived\n\n_Merged PRs past 48 weekday-hours (weekends excluded)._\n\n")
 			for _, row := range archived {
 				bits := []string{fmt.Sprintf("**%s**", row.Repo), "#" + row.Number}
+				if label := statusFreshnessLabel(row.Freshness, row.ObservedAt); label != "" {
+					bits = append(bits, label)
+				}
 				if row.URL != nil && row.Number != "" {
 					label := row.Title
 					if label == "" {
