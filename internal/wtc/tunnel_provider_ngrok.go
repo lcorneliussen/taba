@@ -11,8 +11,9 @@ import (
 )
 
 type ngrokDomainRegistration struct {
-	ID     string `json:"id"`
-	Domain string `json:"domain"`
+	ID               string `json:"id"`
+	Domain           string `json:"domain"`
+	IdentityVerified bool   `json:"identityVerified"`
 }
 
 // An existing domain is borrowed without calling this method. Only explicitly
@@ -27,8 +28,11 @@ func reserveNgrokDomain(ctx context.Context, client tunnelHTTP, domain, operatio
 		return result, err
 	}
 	if !tunnelComponent.MatchString(result.ID) || result.Domain != domain {
-		return ngrokDomainRegistration{}, errors.New("ngrok reservation identity mismatch; reconcile pending operation")
+		// Retain the provider assertion for reconciliation, without treating
+		// it as verified ownership or permission to delete a foreign resource.
+		return result, errors.New("ngrok reservation identity mismatch; reconcile pending operation")
 	}
+	result.IdentityVerified = true
 	return result, nil
 }
 

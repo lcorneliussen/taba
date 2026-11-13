@@ -53,8 +53,8 @@ for (const path of [...packages].sort()) {
   if (!texts.length) throw new Error("missing third-party license: " + pkg.name);
   notices += `${pkg.name}@${pkg.version} (${typeof pkg.license === "string" ? pkg.license : JSON.stringify(pkg.license)})\n${texts.join("\n").trim()}\n\n`;
 }
-// Normalize presentation whitespace before hashing so Git checkout preserves
-// the exact asset bytes, including notices published with mixed line endings.
+// Normalize notice presentation whitespace to LF before hashing so rebuilds
+// agree even when published notices contain mixed line endings.
 notices = notices.replace(/\r\n?/g, "\n").split("\n").map(line => line.trimEnd()).join("\n").trimEnd() + "\n";
 const files = { "devtunnel-host.cjs": bundle, "devtunnel-host.NOTICES.txt": Buffer.from(notices) };
 files["devtunnel-host.sha256"] = Buffer.from(Object.entries(files).map(([name, bytes]) => `${createHash("sha256").update(bytes).digest("hex")}  ${name}\n`).join(""));

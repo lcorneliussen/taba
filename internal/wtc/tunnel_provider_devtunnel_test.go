@@ -40,7 +40,7 @@ func TestTunnelDevRegistrationAndPartialCapabilities(t *testing.T) {
 			return tunnelProviderResponse(200, `{"tunnelId":"synthetic-tunnel","clusterId":"use2",`+tokens+`"ports":[{"portNumber":3000,"portForwardingUris":["https://synthetic-3000.use2.devtunnels.ms/path"]}]}`), nil
 		})}
 		registration, err := createDevTunnel(context.Background(), client, "synthetic-tunnel", 3000, true)
-		if calls != 1 || registration.TunnelID != "synthetic-tunnel" || registration.ClusterID != "use2" || (err != nil) != missing {
+		if calls != 1 || !registration.IdentityVerified || registration.TunnelID != "synthetic-tunnel" || registration.ClusterID != "use2" || (err != nil) != missing {
 			t.Fatalf("registration/partial receipt: calls=%d, error=%v", calls, err)
 		}
 		if !missing && (registration.hostToken == "" || registration.URL != "https://synthetic-3000.use2.devtunnels.ms/path") {
@@ -49,6 +49,24 @@ func TestTunnelDevRegistrationAndPartialCapabilities(t *testing.T) {
 		persisted, _ := json.Marshal(registration)
 		if strings.Contains(string(persisted), "synthetic-host-capability") {
 			t.Fatal("credential entered registration JSON")
+		}
+	}
+}
+
+func TestTunnelDevMismatchedIdentityRetainedWithoutCleanupAuthority(t *testing.T) {
+	for _, identity := range [][2]string{{"other-tunnel", "use2"}, {"synthetic-tunnel", ""}, {"synthetic-tunnel", "../unexpected"}} {
+		calls := 0
+		client := tunnelHTTP{Auth: "Bearer synthetic-capability", RoundTrip: tunnelProviderTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if r.Method != "PUT" {
+				t.Fatal("unverified provider assertion triggered cleanup")
+			}
+			body, _ := json.Marshal(map[string]any{"tunnelId": identity[0], "clusterId": identity[1], "accessTokens": map[string]string{"host": "synthetic-host-capability"}})
+			return tunnelProviderResponse(200, string(body)), nil
+		})}
+		receipt, err := createDevTunnel(context.Background(), client, "synthetic-tunnel", 3000, false)
+		if err == nil || receipt.TunnelID != identity[0] || receipt.ClusterID != identity[1] || receipt.IdentityVerified || receipt.hostToken != "" || calls != 1 {
+			t.Fatal("mismatched identity was discarded or trusted")
 		}
 	}
 }
@@ -97,10 +115,13 @@ func TestTunnelDevHelperInputsAndAsset(t *testing.T) {
 	if err := checkDevTunnelAssets(); err != nil {
 		t.Fatal(err)
 	}
-	for _, env := range [][]string{{"NODE_OPTIONS=--require=foreign"}, {"NODE_PATH=/foreign"}, {"DEVTUNNELS_PROTOCOL_VERSION=1"}, {"DEBUG=*"}} {
+	for _, env := range [][]string{{"NODE_OPTIONS=--require=foreign"}, {"NODE_PATH=/foreign"}, {"DEVTUNNELS_PROTOCOL_VERSION=1"}, {"DEBUG=*"}, {"NODE_TLS_REJECT_UNAUTHORIZED=0"}, {"NODE_REDIRECT_WARNINGS=output"}, {"HTTPS_PROXY=http://proxy.example.test"}, {"https_proxy=http://proxy.example.test"}, {"HTTP_PROXY=http://proxy.example.test"}, {"ALL_PROXY=http://proxy.example.test"}, {"NO_PROXY=*"}, {"npm_config_proxy=http://proxy.example.test"}, {"UNRECOGNIZED_SETTING=value"}} {
 		if devTunnelEnvironment(env) == nil {
 			t.Fatal("unsafe helper override permitted")
 		}
+	}
+	if err := devTunnelEnvironment([]string{"HOME=/synthetic/home", "PATH=/synthetic/bin", "TMPDIR=/synthetic/tmp", "LANG=C", "LC_ALL=C", "TZ=UTC"}); err != nil {
+		t.Fatal("basic scoped child environment rejected")
 	}
 	dir := t.TempDir()
 	old := filepath.Join(dir, "old-node")
@@ -121,6 +142,9 @@ func TestTunnelDevBundledCommandKeepsCredentialInStdin(t *testing.T) {
 	if node == "" {
 		t.Skip("set TABA_TEST_NODE for the Node22 embedded-helper subprocess check")
 	}
+	t.Setenv("NODE_OPTIONS", "--require=/synthetic/missing-module")
+	t.Setenv("NODE_TLS_REJECT_UNAUTHORIZED", "0")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example.test")
 	dir := t.TempDir()
 	helper := filepath.Join(dir, "host.cjs")
 	if err := os.WriteFile(helper, devTunnelHelper, 0600); err != nil {
@@ -134,6 +158,11 @@ func TestTunnelDevBundledCommandKeepsCredentialInStdin(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(append(cmd.Args, cmd.Env...), " "), input.HostToken) {
 		t.Fatal("credential entered argv/environment")
+	}
+	for _, assignment := range cmd.Env {
+		if strings.HasPrefix(assignment, "NODE_OPTIONS=") || strings.HasPrefix(assignment, "NODE_TLS_REJECT_UNAUTHORIZED=") || strings.HasPrefix(assignment, "HTTPS_PROXY=") {
+			t.Fatal("ambient child environment was inherited")
+		}
 	}
 	frame, _ := io.ReadAll(cmd.Stdin)
 	if !strings.Contains(string(frame), input.HostToken) {

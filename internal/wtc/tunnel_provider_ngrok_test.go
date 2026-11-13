@@ -36,7 +36,7 @@ func TestTunnelNgrokReservationUsesSeparateManagementTransport(t *testing.T) {
 		return tunnelProviderResponse(204, ""), nil
 	})}
 	r, err := reserveNgrokDomain(context.Background(), client, "preview.example.test", "synthetic-operation")
-	if err != nil || r.ID != "rd_synthetic" {
+	if err != nil || !r.IdentityVerified || r.ID != "rd_synthetic" {
 		t.Fatal("reservation failed")
 	}
 	if err := deleteNgrokDomain(context.Background(), client, r.ID); err != nil || calls != 2 {
@@ -44,6 +44,24 @@ func TestTunnelNgrokReservationUsesSeparateManagementTransport(t *testing.T) {
 	}
 	if err := deleteNgrokDomain(context.Background(), client, "../foreign"); err == nil || calls != 2 {
 		t.Fatal("unsafe cleanup target reached transport")
+	}
+}
+
+func TestTunnelNgrokMismatchedIdentityRetainedWithoutCleanupAuthority(t *testing.T) {
+	for _, identity := range [][2]string{{"rd_synthetic", "other.example.test"}, {"../unexpected", "preview.example.test"}} {
+		calls := 0
+		client := tunnelHTTP{Auth: "Bearer synthetic-capability", RoundTrip: tunnelProviderTransport(func(r *http.Request) (*http.Response, error) {
+			calls++
+			if r.Method != "POST" {
+				t.Fatal("unverified provider assertion triggered cleanup")
+			}
+			body, _ := json.Marshal(map[string]string{"id": identity[0], "domain": identity[1]})
+			return tunnelProviderResponse(201, string(body)), nil
+		})}
+		receipt, err := reserveNgrokDomain(context.Background(), client, "preview.example.test", "synthetic-operation")
+		if err == nil || receipt.ID != identity[0] || receipt.Domain != identity[1] || receipt.IdentityVerified || calls != 1 {
+			t.Fatal("mismatched reservation was discarded or trusted")
+		}
 	}
 }
 

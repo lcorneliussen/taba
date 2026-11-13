@@ -79,11 +79,12 @@ func (c tunnelHTTP) request(ctx context.Context, method, address string, headers
 }
 
 type devTunnelRegistration struct {
-	TunnelID  string `json:"tunnelId"`
-	ClusterID string `json:"clusterId"`
-	Port      int    `json:"port"`
-	URL       string `json:"url"`
-	hostToken string
+	TunnelID         string `json:"tunnelId"`
+	ClusterID        string `json:"clusterId"`
+	Port             int    `json:"port"`
+	URL              string `json:"url"`
+	IdentityVerified bool   `json:"identityVerified"`
+	hostToken        string
 }
 
 func devTunnelID(s string) bool {
@@ -110,8 +111,8 @@ func devTunnelCluster(s string) bool {
 	return true
 }
 
-// createDevTunnel returns the exact created identity even if a later capability
-// or URL check fails. The owning operation must preserve that partial receipt.
+// Preserve the reported identity on partial success for reconciliation. An
+// unverified provider assertion is not authority to clean up a foreign resource.
 func createDevTunnel(ctx context.Context, client tunnelHTTP, id string, port int, public bool) (devTunnelRegistration, error) {
 	if !devTunnelID(id) || port < 1 || port > 65535 {
 		return devTunnelRegistration{}, errors.New("invalid devtunnel registration input")
@@ -136,8 +137,9 @@ func createDevTunnel(ctx context.Context, client tunnelHTTP, id string, port int
 	}
 	r := devTunnelRegistration{TunnelID: response.TunnelID, ClusterID: response.ClusterID, Port: port}
 	if response.TunnelID != id || !devTunnelCluster(response.ClusterID) {
-		return devTunnelRegistration{}, errors.New("devtunnel identity mismatch; reconcile pending registration")
+		return r, errors.New("devtunnel identity mismatch; reconcile pending registration")
 	}
+	r.IdentityVerified = true
 	r.hostToken = response.AccessTokens["host"]
 	for _, p := range response.Ports {
 		if p.Number != port {
@@ -190,7 +192,14 @@ func checkDevTunnelAssets() error {
 func devTunnelEnvironment(env []string) error {
 	for _, assignment := range env {
 		key, _, ok := strings.Cut(assignment, "=")
-		if !ok || key == "NODE_OPTIONS" || key == "NODE_PATH" || key == "NODE_EXTRA_CA_CERTS" || key == "DEBUG" || strings.HasPrefix(key, "DEVTUNNELS_") {
+		if !ok {
+			return errors.New("unsupported devtunnel helper environment override")
+		}
+		// Do not pass code-loading, TLS/proxy, login or SDK controls through
+		// this secret-bearing child. The caller supplies this small subset.
+		switch key {
+		case "HOME", "PATH", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ":
+		default:
 			return errors.New("unsupported devtunnel helper environment override")
 		}
 	}

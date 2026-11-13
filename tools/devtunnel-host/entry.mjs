@@ -28,8 +28,8 @@ async function main() {
   }
 }
 
-// The bundle is also importable for fake-transport contract tests. No provider
-// connection is made by importing it or probing --check.
+// Requiring the generated CJS bundle does not run main; contract tests can use
+// its exports. This ESM entry runs main directly; host.mjs is the ESM library.
 if (typeof require === "undefined" || require.main === module) {
   main().catch(() => {
     // SDK/JSON errors may contain tokens, request headers or input data.
