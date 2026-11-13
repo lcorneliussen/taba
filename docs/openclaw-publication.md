@@ -14,11 +14,13 @@ Other PR rows are preserved; a later checkout branch change does not change the
 published branch recorded by the receipt.
 
 A failed metadata write does not turn a successful push into a failed push.
-The card reports **Tracking pending**. A private gateway receipt is retained
-under the plugin's state directory, and a later Collection refresh retries only
-that metadata write for the same verified session checkout. Do not push again
-to repair tracking. If linking or identity remains ambiguous, ask the owning
-conversation to inspect the collection's tracking. Local receipt retention
+The card reports **Tracking pending**. A saved private gateway receipt lets a
+later Collection refresh retry only that metadata write for the same verified
+session checkout. If gateway storage prevents saving the receipt, keep the
+returned PR URL and enlist it after storage is repaired; refresh cannot replay
+an unsaved receipt. Do not push again to repair tracking. If linking or identity
+remains ambiguous, ask the owning conversation to inspect collection tracking.
+Local receipt retention
 cannot recover a native publisher response that was never returned or persisted;
 inspect the native publication outcome before retrying an ambiguous operation.
 
@@ -28,7 +30,8 @@ the sidebar it follows them. Explicit collapse survives refresh. **Source**
 shows the unchanged body. Raw HTML stays literal and images become explicit
 links, so opening a preview does not execute HTML or load remote resources.
 Formatting does not change the title/body sent to the publisher. Existing PR
-text is retained by the native publisher.
+text is retained by the native publisher. Multiple prepared publications share
+a bounded, keyboard-scrollable chat region; the sidebar uses its panel scroll.
 
 ## Update and compatibility
 
@@ -67,8 +70,10 @@ node openclaw-plugin/tools/check-publication-preview.mjs /tmp/taba-preview-qa/no
 The successful run prints:
 
 ```text
-8 publication preview scenarios passed
+24 publication preview scenarios passed
 ```
 
+The cases cover single and multiple preparations, narrow and short viewports,
+and keyboard access to every Confirm/Cancel pair without confirming publication.
 The output directory contains synthetic screenshots and a JSON geometry report.
 The script contacts no account or gateway and never confirms publication.

@@ -39,6 +39,7 @@ export function registerPublicationBridge(api, {run,getSessionEntry,stateDir,dis
       const r=await run(["wtc","openclaw","enlist-publication","--collection",folder,"--worktree",receipt.worktree,"--url",receipt.url,"--branch",receipt.branch],{timeoutMs:10000});
       if(r.code!==0)throw Error("The PR was published, but collection tracking is awaiting repair. Refresh Collection or ask the conversation to inspect tracking; do not publish again.");
       unlinkSync(file);
+      retried.delete(file);
       return {state:"enlisted"};
     })().finally(()=>running.delete(file));
     running.set(file,result);return result;
@@ -47,15 +48,21 @@ export function registerPublicationBridge(api, {run,getSessionEntry,stateDir,dis
   // retry this local metadata write; it never retries a push or PR creation.
   const flush=async(children)=>{
     let files=[];try{files=readdirSync(queue).filter(f=>/^[a-f0-9]{64}\.json$/.test(f));}catch{return;}
-    await Promise.all(files.slice(0,100).map(async name=>{
+    const eligible=[],now=Date.now();
+    for(const name of files){
       const file=path.join(queue,name);
-      if(Date.now()-(retried.get(file)??0)<30000)return;
-      let receipt;try{receipt=JSON.parse(readFileSync(file,"utf8"));}catch{return;}
-      if(!receipt || typeof receipt!=="object" || ["sessionKey","worktree","collection","url","branch"].some(key=>typeof receipt[key]!=="string"||!receipt[key]))return;
+      const previous=retried.get(file);
+      if(running.has(file)||previous!==undefined&&now-previous<30000)continue;
+      let receipt;try{receipt=JSON.parse(readFileSync(file,"utf8"));}catch{continue;}
+      if(!receipt || typeof receipt!=="object" || ["sessionKey","worktree","collection","url","branch"].some(key=>typeof receipt[key]!=="string"||!receipt[key]))continue;
       const child=children.find(c=>c.sessionKey===receipt.sessionKey);
       const worktree=child?.entry?.workspaceDir||child?.entry?.spawnedCwd;
-      if(!child?.entry?.worktree||!samePath(worktree,receipt.worktree))return;
-      retried.set(file,Date.now());
+      if(!child?.entry?.worktree||!samePath(worktree,receipt.worktree))continue;
+      eligible.push({file,receipt,previous:previous??-Infinity});
+    }
+    eligible.sort((a,b)=>a.previous-b.previous||a.file.localeCompare(b.file));
+    await Promise.all(eligible.slice(0,100).map(async({file,receipt})=>{
+      retried.set(file,now);
       try{await enlist(file,receipt);}catch{/* Keep the receipt for a later verified refresh. */}
     }));
   };

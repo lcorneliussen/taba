@@ -1671,7 +1671,7 @@ function collectionTables(v) {
   function publicationConfirmations(repos, above = false) {
     const pending = repos.filter(r => confirming.has(r.sessionKey));
     if (!pending.length) return null;
-    return css(el("div", { className: "wtc-publication-confirmations" }, ...pending.map(r => {
+    const region = css(el("div", { className: "wtc-publication-confirmations", ...(above ? {tabIndex:0,role:"region",ariaLabel:`${pending.length} prepared publications`} : {}) }, ...pending.map(r => {
       const prepared = confirming.get(r.sessionKey), snapshot = prepared.repository ?? r;
       const c = prepared.preview ?? prepared.confirmation;
       const accountKnown = prepared.forge === BITBUCKET ? !!c.account : !!c.account?.login;
@@ -1704,7 +1704,9 @@ function collectionTables(v) {
       return css(el("section", { className:"wtc-publication-confirmation", ariaLabel: `Confirm publication of ${nameOf(r)}` },
         ...(above ? [preview,scrollCue,info,controls] : [info,controls,preview]).filter(Boolean)),
         `display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--border-strong,rgba(128,128,128,.35));border-radius:8px;background:var(--bg,transparent);min-width:0;${above ? "max-height:min(50dvh,420px)" : ""}`);
-    })), "display:grid;gap:8px;min-width:0");
+    })), `display:grid;gap:8px;min-width:0;${above ? "max-height:min(50dvh,420px);overflow:auto;overscroll-behavior:contain" : ""}`);
+    return above && pending.length > 1 ? css(el("div", {className:"wtc-prepared-publications"},
+      css(el("div", {textContent:`${pending.length} prepared pushes · scroll to review each`}),"font-size:11px;color:var(--muted,#888)"), region),"display:grid;gap:4px;min-width:0") : region;
   }
   function bulkActions(repos, narrow, columns) {
     if (!repos.length) return null;

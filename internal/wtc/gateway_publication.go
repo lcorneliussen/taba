@@ -9,7 +9,8 @@ import (
 
 // EnlistGatewayPublication records a native publisher's receipt without hooks,
 // fetching or changing Git state. The caller owns the authenticated publication;
-// this validates its local collection membership and exact forge destination.
+// this validates local collection membership and the forge destination, with
+// case-insensitive GitHub repository names and exact Bitbucket names.
 func (c *Context) EnlistGatewayPublication(worktree string, record PRRecord) (PRRecord, error) {
 	real, err := filepath.EvalSymlinks(worktree)
 	if err != nil {

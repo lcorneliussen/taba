@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-// Serve only this renderer's bundled modules at the synthetic fixture origin.
-// An optional entry file keeps the width checker's historical comparison mode.
+// Serve the repository's renderer, preview and lexer at the synthetic origin.
+// The width checker's optional renderer file replaces only the entry module.
 export async function loadControlUIFixtureAssets(renderer) {
   const files = [
     ["plugin.js", renderer ? resolve(renderer) : new URL("../dist/control-ui/v1/index.js", import.meta.url)],

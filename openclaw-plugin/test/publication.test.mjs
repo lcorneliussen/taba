@@ -5,13 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import {publicationFolder,registerPublicationBridge} from "../publication.js";
 
-function fixture(){
+function fixture({beforeEnlist=async()=>{}}={}){
  const stateDir=mkdtempSync(path.join(os.tmpdir(),"taba-publication-")),worktree=path.join(stateDir,"worktrees","widget","task");
  mkdirSync(path.join(worktree,".git"),{recursive:true});
  const folder=path.join(stateDir,"wtc","ad-hoc","task");mkdirSync(folder,{recursive:true});symlinkSync(worktree,path.join(folder,"widget"));
  const entry={workspaceDir:worktree,worktree:{branch:"openclaw/task"}},handlers=new Map(),calls=[];
  let code=0,result={status:"published",url:"https://github.com/example/widget/pull/7",branch:"feature"};
- const bridge=registerPublicationBridge({registerGatewayMethod:(name,handler,options)=>handlers.set(name,{handler,options})},{stateDir,getSessionEntry:async()=>entry,run:async argv=>{calls.push(argv);return {code};},dispatch:async(method,params)=>{calls.push({method,params});return {ok:true,payload:method==="plugins.sessionAction"?{ok:true,result}:result};}});
+ const bridge=registerPublicationBridge({registerGatewayMethod:(name,handler,options)=>handlers.set(name,{handler,options})},{stateDir,getSessionEntry:async()=>entry,run:async argv=>{calls.push(argv);await beforeEnlist(argv);return {code};},dispatch:async(method,params)=>{calls.push({method,params});return {ok:true,payload:method==="plugins.sessionAction"?{ok:true,result}:result};}});
  const invoke=async(route,params)=>{let response;await handlers.get("wtc."+route).handler({params,respond:(ok,payload,error)=>response={ok,payload,error}});return response;};
  return {stateDir,worktree,folder,entry,handlers,calls,bridge,invoke,setCode:n=>code=n,setResult:r=>result=r,dispose:()=>rmSync(stateDir,{recursive:true,force:true})};
 }
@@ -24,6 +24,53 @@ test("only fixed native publishers run under session write admission, then enlis
   assert.deepEqual(f.calls[1],["wtc","openclaw","enlist-publication","--collection",f.folder,"--worktree",f.worktree,"--url","https://github.com/example/widget/pull/7","--branch","feature"]);
   assert.equal(readdirSync(path.join(f.stateDir,"plugins/wtc/publication-receipts")).length,0);
  }finally{f.dispose();}
+});
+
+function queueReceipt(f,index,override={}){
+ const queue=path.join(f.stateDir,"plugins/wtc/publication-receipts");mkdirSync(queue,{recursive:true});
+ const file=path.join(queue,index.toString(16).padStart(64,"0")+".json");
+ writeFileSync(file,JSON.stringify({sessionKey:"owner:widget",worktree:f.worktree,collection:"task",url:`https://github.com/example/widget/pull/${index+1}`,branch:`topic/${index}`,...override}));
+ return file;
+}
+
+test("retry budget ignores corrupt, unrelated and changed-checkout receipts",async()=>{
+ const f=fixture();try{
+  for(let i=0;i<100;i++)writeFileSync(queueReceipt(f,i),"not-json");
+  for(let i=100;i<200;i++)queueReceipt(f,i,{sessionKey:"unrelated"});
+  for(let i=200;i<300;i++)queueReceipt(f,i,{worktree:path.join(f.stateDir,"missing-checkout")});
+  queueReceipt(f,300);
+  await f.bridge.flush([{sessionKey:"owner:widget",entry:f.entry}]);
+  assert.equal(f.calls.length,1,"ineligible receipts cannot consume the attempt budget");
+  assert.equal(f.calls[0].at(-1),"topic/300");
+  assert.ok(f.calls.every(Array.isArray),"refresh never invokes a native publisher");
+  assert.equal(readdirSync(path.join(f.stateDir,"plugins/wtc/publication-receipts")).length,300);
+ }finally{f.dispose();}
+});
+
+test("retry budget prioritizes never attempted receipts over persistent failures",async t=>{
+ let now=0;t.mock.method(Date,"now",()=>now);
+ const f=fixture();try{
+  f.setCode(1);for(let i=0;i<101;i++)queueReceipt(f,i);
+  const children=[{sessionKey:"owner:widget",entry:f.entry}];
+  await f.bridge.flush(children);assert.equal(f.calls.length,100);
+  now+=30001;await f.bridge.flush(children);
+  assert.equal(f.calls.length,200,"each refresh attempts at most 100 eligible receipts");
+  assert.equal(f.calls[100].at(-1),"topic/100","a new receipt takes priority over previously failed attempts");
+  assert.ok(f.calls.every(Array.isArray),"only local tracking is retried");
+  assert.equal(readdirSync(path.join(f.stateDir,"plugins/wtc/publication-receipts")).length,101);
+ }finally{f.dispose();}
+});
+
+test("concurrent refreshes share one tracking attempt and completed receipts stay removed",async()=>{
+ let enter,release;const entered=new Promise(r=>enter=r),released=new Promise(r=>release=r);
+ const f=fixture({beforeEnlist:()=>{enter();return released;}});let first;
+ try{
+  queueReceipt(f,1);const children=[{sessionKey:"owner:widget",entry:f.entry}];
+  first=f.bridge.flush(children);await entered;
+  await f.bridge.flush(children);assert.equal(f.calls.length,1);
+  release();await first;await f.bridge.flush(children);
+  assert.equal(f.calls.length,1);assert.deepEqual(readdirSync(path.join(f.stateDir,"plugins/wtc/publication-receipts")),[]);
+ }finally{release();await first;f.dispose();}
 });
 test("published success survives tracking failure; verified refresh retries only tracking",async()=>{
  const f=fixture();try{
