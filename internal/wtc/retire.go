@@ -222,16 +222,30 @@ func (c *Context) retirePreflight(opt RetireOptions) (RetireResult, []retireWork
 	if err != nil {
 		return result, nil, err
 	}
-	if info, err := os.Lstat(filepath.Join(target, ".config")); err == nil {
-		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-			return result, nil, fmt.Errorf("retirement blocked: collection private control path requires manual preservation")
+	scope, err := targetContext.ValidateControlRoot()
+	if err != nil {
+		return result, nil, err
+	}
+	privateRoots := []string{filepath.Join(target, ".config")}
+	canonicalTarget, err := canonicalPath(target)
+	if err != nil {
+		return result, nil, err
+	}
+	if withinPath(canonicalTarget, scope.Root) {
+		privateRoots = append(privateRoots, scope.Root)
+	}
+	for _, privateRoot := range privateRoots {
+		if info, err := os.Lstat(privateRoot); err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return result, nil, fmt.Errorf("retirement blocked: collection private control path requires manual preservation")
+			}
+			entries, err := os.ReadDir(privateRoot)
+			if err != nil || len(entries) != 0 {
+				return result, nil, fmt.Errorf("retirement blocked: preserve collection private control data before retiring; --force cannot discard credentials")
+			}
+		} else if !os.IsNotExist(err) {
+			return result, nil, fmt.Errorf("retirement blocked: cannot verify collection private control data")
 		}
-		entries, err := os.ReadDir(filepath.Join(target, ".config"))
-		if err != nil || len(entries) != 0 {
-			return result, nil, fmt.Errorf("retirement blocked: preserve collection private control data before retiring; --force cannot discard credentials")
-		}
-	} else if !os.IsNotExist(err) {
-		return result, nil, fmt.Errorf("retirement blocked: cannot verify collection private control data")
 	}
 	result.Collection = target
 	if _, err := preflightDevRetirement(target); err != nil {

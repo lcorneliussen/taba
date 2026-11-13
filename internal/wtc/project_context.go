@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -30,6 +31,22 @@ type ProjectSource struct {
 	Path  string `toml:"path" json:"path,omitempty"`
 	Owner string `toml:"owner" json:"owner,omitempty"`
 	Ref   string `toml:"ref" json:"ref,omitempty"`
+}
+
+// Snapshot reads never fetch missing objects or use ambient object directories.
+func projectSnapshotGit(owner string, args ...string) (string, error) {
+	argv := append([]string{"--no-replace-objects", "--git-dir=" + owner}, args...)
+	cmd := exec.Command("git", argv...)
+	for _, setting := range os.Environ() {
+		name, _, _ := strings.Cut(setting, "=")
+		if strings.HasPrefix(name, "GIT_") {
+			continue
+		}
+		cmd.Env = append(cmd.Env, setting)
+	}
+	cmd.Env = append(cmd.Env, "GIT_NO_LAZY_FETCH=1", "GIT_TERMINAL_PROMPT=0")
+	data, err := cmd.Output()
+	return strings.TrimSpace(string(data)), err
 }
 
 type LocationKind string
@@ -174,7 +191,10 @@ func OpenProject(dir string) (*ProjectContext, error) {
 		if strings.HasPrefix(p.Source.Ref, "-") || strings.ContainsAny(p.Source.Ref, ":\r\n\x00 ") {
 			return nil, fmt.Errorf("invalid harness snapshot ref")
 		}
-		sha, err := gitOutput("--git-dir="+owner, "rev-parse", "--verify", p.Source.Ref+"^{commit}")
+		if bare, err := projectSnapshotGit(owner, "rev-parse", "--is-bare-repository"); err != nil || bare != "true" {
+			return nil, fmt.Errorf("project snapshot requires an available local bare owner")
+		}
+		sha, err := projectSnapshotGit(owner, "rev-parse", "--verify", p.Source.Ref+"^{commit}")
 		if _, decodeErr := hex.DecodeString(sha); err != nil || decodeErr != nil || len(sha) != 40 {
 			return nil, fmt.Errorf("harness snapshot unavailable; initialize the selected project explicitly")
 		}
@@ -187,6 +207,12 @@ func OpenProject(dir string) (*ProjectContext, error) {
 		resolved, err := canonicalPath(p.ConfigDir)
 		if err != nil || !withinPath(root, resolved) {
 			return nil, fmt.Errorf("project config escapes receiving project")
+		}
+	}
+	if p.RegistryPath != "" {
+		resolved, err := canonicalPath(p.RegistryPath)
+		if err != nil || !withinPath(root, resolved) {
+			return nil, fmt.Errorf("project registry escapes receiving project")
 		}
 	}
 	return p, nil

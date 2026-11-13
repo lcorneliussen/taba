@@ -400,6 +400,21 @@ func TestTabaRetirementPreflightsLinkedRegistryParents(t *testing.T) {
 				if _, err := os.Stat(filepath.Join(c.Collection, "widget", ".git")); err != nil {
 					t.Fatalf("retirement removed worktrees before registry preflight: %v", err)
 				}
+				if target, err := os.Readlink(link); err != nil || target != outside {
+					t.Fatal("refusal changed registry parent")
+				}
+				if namespace == ".wtc" {
+					if _, err := OpenCollection(c.Collection); err == nil {
+						t.Fatal("unsafe active policy source accepted")
+					}
+					// Repair the synthetic pointer, then verify the untouched active collection.
+					if err := os.Remove(link); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Rename(outside, link); err != nil {
+						t.Fatal(err)
+					}
+				}
 				if active, err := OpenCollection(c.Collection); err != nil || len(active.Registry.Repos) != 1 {
 					t.Fatalf("refusal changed the active collection: %+v %v", active, err)
 				}

@@ -48,12 +48,13 @@ type EnvInventoryKey struct {
 var envKeyName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func (c *Context) ListEnv() (EnvInventory, error) {
-	if _, err := c.ValidateControlRoot(); err != nil {
+	scope, err := c.ValidateControlRoot()
+	if err != nil {
 		return EnvInventory{}, err
 	}
 	result := EnvInventory{Files: []EnvInventoryFile{}, Variables: []EnvInventoryKey{}}
 	seen := map[string]bool{}
-	machine, err := MachineEnvFile(c.ConfigRoot)
+	machine, err := MachineEnvFile(scope.Root)
 	if err != nil {
 		return result, err
 	}
@@ -136,10 +137,7 @@ func (c *Context) ListSecrets(repoFilter string) (SecretInventory, error) {
 	if err != nil {
 		return result, err
 	}
-	root, err := filepath.Abs(c.ConfigRoot)
-	if err != nil {
-		return result, err
-	}
+	root := scope.Root
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		entries = nil

@@ -43,10 +43,7 @@ func (c *Context) LinkSecrets(opt SecretLinkOptions) (SecretLinkResult, error) {
 	if opt.Repo != "" && !validRepoName.MatchString(opt.Repo) {
 		return result, fmt.Errorf("invalid repository name %q", opt.Repo)
 	}
-	root, err := filepath.Abs(c.ConfigRoot)
-	if err != nil {
-		return result, err
-	}
+	root := scope.Root
 	entries, err := os.ReadDir(root)
 	if os.IsNotExist(err) {
 		return result, nil

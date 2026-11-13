@@ -34,8 +34,8 @@ repos:
 
 var scpRemote = regexp.MustCompile(`^(?:[^@/]+@)?([^:/]+):(.+)$`)
 
-// UserConfigRoot is the per-user control root for secrets of ad-hoc
-// collections, used when WTC_CONFIG_ROOT is unset.
+// UserConfigRoot locates legacy per-user CLI configuration. Its presence
+// never grants a receiving collection permission to consume secrets.
 func UserConfigRoot() (string, error) {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
 		return legacyInput(dir, "wtc", "taba")
@@ -153,6 +153,9 @@ func initializeAdHoc(dir string, creating bool) (InitResult, error) {
 			}
 		}
 	} else if !os.IsNotExist(err) {
+		return result, err
+	}
+	if _, err := (ReceivingContext{Collection: abs}).resolve(!creating); err != nil {
 		return result, err
 	}
 	config := filepath.Join(abs, AdHocConfigDir)

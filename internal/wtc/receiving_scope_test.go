@@ -72,6 +72,84 @@ func TestReceivingPermissionIsExactAndLocal(t *testing.T) {
 	}
 }
 
+func TestReceivingContextCannotBorrowEnclosingProject(t *testing.T) {
+	for _, key := range rootAliases {
+		t.Setenv(key, "")
+	}
+	p := localProject(t)
+	nested := filepath.Join(p.Root, "nested")
+	fixtureFile(t, filepath.Join(nested, ProjectDescriptorFile), "schema_version=1\nmode='local'\n", 0644)
+	if _, err := ResolveReceivingScope(ReceivingContext{Project: p, Collection: filepath.Join(nested, "task")}); err == nil {
+		t.Fatal("outer project supplied nested receiver permission")
+	}
+	standalone := filepath.Join(p.Root, "standalone")
+	fixtureFile(t, filepath.Join(standalone, AdHocConfigDir, "repos.yml"), "repos: []\n", 0644)
+	if _, err := ResolveReceivingScope(ReceivingContext{Project: p, Collection: standalone}); err == nil {
+		t.Fatal("project overrode standalone receiver identity")
+	}
+	if _, err := ResolveReceivingScope(ReceivingContext{Collection: p.Root}); err == nil {
+		t.Fatal("project root accepted as a standalone receiver")
+	}
+}
+
+func TestReceivingConsumersUseResolvedScope(t *testing.T) {
+	c := fixture(t)
+	for _, key := range rootAliases {
+		t.Setenv(key, "")
+	}
+	approved := c.ConfigRoot
+	c.ConfigRoot = ""
+	data, err := c.RenderEnv()
+	if err != nil || !strings.Contains(string(data), "TABA_CONFIG_ROOT='"+approved+"'") {
+		t.Fatalf("empty context root fell back: %s %v", data, err)
+	}
+	if err := c.WriteEnv([]byte("TABA_CONFIG_ROOT=/foreign\n")); err == nil {
+		t.Fatal("write accepted unapproved generated root")
+	}
+	if _, err := os.Stat(filepath.Join(c.Collection, ".env.collection")); !os.IsNotExist(err) {
+		t.Fatal("refused env write changed files")
+	}
+	if _, err := c.ListSecrets(""); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(approved, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(approved, "gh")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RenderEnv(); err == nil {
+		t.Fatal("emitted configuration through an escaping source symlink")
+	}
+}
+
+func TestReceivingEnvironmentRejectsLinkedFilesBeforeReading(t *testing.T) {
+	c := fixture(t)
+	for _, key := range rootAliases {
+		t.Setenv(key, "")
+	}
+	outside := filepath.Join(t.TempDir(), "synthetic")
+	fixtureFile(t, outside, "FOREIGN_TOKEN=synthetic\n", 0600)
+	if err := os.Symlink(outside, filepath.Join(c.Collection, ".env.collection.local")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ReceivingEnvironment(nil); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("linked environment accepted: %v", err)
+	}
+}
+
+func TestAdHocForeignRootRefusesBeforeScaffolding(t *testing.T) {
+	root := adHocFixture(t)
+	t.Setenv("TABA_CONFIG_ROOT", filepath.Join(root, "foreign"))
+	target := filepath.Join(root, "new")
+	if _, err := InitAdHoc(target); err == nil {
+		t.Fatal("foreign root accepted")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatal("scope refusal wrote a partial scaffold")
+	}
+}
+
 func TestReceivingRootSymlinkAndUseTimeRevalidation(t *testing.T) {
 	c := fixture(t)
 	for _, key := range rootAliases {
@@ -171,6 +249,31 @@ func TestReceivingLaunchValidatesFinalRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(out); !os.IsNotExist(err) {
 		t.Fatal("child ran after root refusal")
+	}
+}
+
+func TestReceivingLaunchNormalizesApprovedAliases(t *testing.T) {
+	c := fixture(t)
+	for _, key := range rootAliases {
+		t.Setenv(key, "")
+	}
+	if err := os.MkdirAll(c.ConfigRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(c.Workspace, "control-alias")
+	if err := os.Symlink(c.ConfigRoot, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WriteEnv([]byte("TABA_CONFIG_ROOT='" + alias + "'\nWTC_CONFIG_ROOT='" + alias + "'\n")); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := c.ReceivingCommand("/bin/sh", "-c", `printf '%s|%s' "$TABA_CONFIG_ROOT" "$WTC_CONFIG_ROOT"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := cmd.Output()
+	if err != nil || string(data) != c.ConfigRoot+"|"+c.ConfigRoot {
+		t.Fatalf("approved aliases not normalized: %q %v", data, err)
 	}
 }
 

@@ -72,7 +72,7 @@ func TestEnvSweepUsesTargetRegistriesAndKeepsGoing(t *testing.T) {
 			args = append(args, "--run-hooks")
 		}
 		cmd := exec.Command(bin, args...)
-		cmd.Env = append(os.Environ(), "PATH="+mockBin+":/usr/bin:/bin", "WTC_CONFIG_ROOT="+filepath.Join(workspace, "control"))
+		cmd.Env = append(os.Environ(), "PATH="+mockBin+":/usr/bin:/bin", "WTC_CONFIG_ROOT="+filepath.Join(workspace, ".config"))
 		out, err := cmd.Output()
 		if err == nil {
 			t.Fatalf("sweep accepted broken target: %s", out)
@@ -156,7 +156,7 @@ func TestEnvSweepDryRunReservesFreshPortBlocks(t *testing.T) {
 	}
 	args := []string{"--json", "env", "--all", "--collection", filepath.Join(workspace, "alpha")}
 	cmd := exec.Command(bin, append(args, "--dry-run")...)
-	cmd.Env = append(os.Environ(), "PATH=/usr/bin:/bin", "WTC_CONFIG_ROOT="+filepath.Join(workspace, "control"))
+	cmd.Env = append(os.Environ(), "PATH=/usr/bin:/bin", "WTC_CONFIG_ROOT="+filepath.Join(workspace, ".config"))
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("preview failed: %v\n%s", err, out)
@@ -184,7 +184,7 @@ func TestEnvSweepDryRunReservesFreshPortBlocks(t *testing.T) {
 		t.Fatalf("preview reused a port block: %v", previews)
 	}
 	cmd = exec.Command(bin, args...)
-	cmd.Env = append(os.Environ(), "PATH=/usr/bin:/bin", "WTC_CONFIG_ROOT="+filepath.Join(workspace, "control"))
+	cmd.Env = append(os.Environ(), "PATH=/usr/bin:/bin", "WTC_CONFIG_ROOT="+filepath.Join(workspace, ".config"))
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("write failed: %v\n%s", err, out)
 	}

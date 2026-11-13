@@ -43,6 +43,11 @@ func (p *ProjectContext) configBytes() ([]byte, string, error) {
 	if err != nil || !withinPath(p.Root, resolved) {
 		return nil, "", fmt.Errorf("receiving policy escapes its owner")
 	}
+	if info, err := os.Stat(path); err == nil && !info.Mode().IsRegular() {
+		return nil, "", fmt.Errorf("receiving policy must be a regular file")
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, "", fmt.Errorf("cannot inspect receiving policy")
+	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, path, nil
@@ -75,11 +80,32 @@ func (r ReceivingContext) resolve(checkInherited bool) (ResolvedScope, error) {
 			if err != nil || collection == p.Root || !withinPath(p.Root, collection) {
 				return scope, fmt.Errorf("collection is outside receiving project")
 			}
+			for path := collection; path != p.Root; path = filepath.Dir(path) {
+				if descriptorPresent(path, ProjectDescriptorFile) {
+					return scope, fmt.Errorf("receiving collection crosses a nested project boundary")
+				}
+				if descriptorPresent(path, CollectionDescriptorFile) {
+					location, err := DiscoverLocation(path)
+					if err != nil || path != collection || location.Project == nil || location.Project.Root != p.Root {
+						return scope, fmt.Errorf("receiving collection association conflicts with selected project")
+					}
+				} else if present, err := legacyCollectionMarker(path); err != nil {
+					return scope, err
+				} else if present && (path != collection || p.Mode != "legacy") {
+					return scope, fmt.Errorf("receiving collection has a separate explicit boundary")
+				}
+			}
 		}
 		config, scope.PolicySource, err = p.configBytes()
+		if p.Source.Owner != "" {
+			scope.PolicySource = "snapshot:" + p.Source.Ref + ":" + scope.PolicySource
+		}
 	} else {
 		if r.Collection == "" {
 			return scope, fmt.Errorf("receiving project or collection is required")
+		}
+		if descriptorPresent(r.Collection, ProjectDescriptorFile) || descriptorPresent(r.Collection, CollectionDescriptorFile) {
+			return scope, fmt.Errorf("explicit project context is required for this receiver")
 		}
 		scope.OwnerRoot, err = canonicalPath(r.Collection)
 		if err != nil {
@@ -137,7 +163,13 @@ func (r ReceivingContext) resolve(checkInherited bool) (ResolvedScope, error) {
 	}
 	if r.Collection != "" {
 		for _, name := range []string{".env.collection", ".env.collection.local"} {
-			data, err := os.ReadFile(filepath.Join(r.Collection, name))
+			path := filepath.Join(r.Collection, name)
+			if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+				return scope, fmt.Errorf("receiving environment must be a regular file, not a symlink or special file")
+			} else if err != nil && !os.IsNotExist(err) {
+				return scope, fmt.Errorf("cannot inspect receiving environment")
+			}
+			data, err := os.ReadFile(path)
 			if err != nil && !os.IsNotExist(err) {
 				return scope, fmt.Errorf("cannot validate receiving environment")
 			}
@@ -200,6 +232,9 @@ func (c *Context) ValidateControlRoot() (ResolvedScope, error) {
 	if err != nil {
 		return s, err
 	}
+	if c.controlPolicySource != "" && c.controlPolicySource != s.PolicySource {
+		return s, fmt.Errorf("receiving policy source changed; reopen the collection; no files changed")
+	}
 	if c.ConfigRoot != "" && !sameCanonicalPath(c.ConfigRoot, s.Root) {
 		return s, fmt.Errorf("selected control root changed; reopen the receiving collection; no files changed")
 	}
@@ -215,17 +250,24 @@ func (s ResolvedScope) validateSecretSources() error {
 			return fmt.Errorf("cannot validate secret source paths")
 		}
 		if item.Type()&os.ModeSymlink != 0 {
-			target, err := canonicalPath(path)
-			if err != nil || !withinPath(s.Root, target) {
-				return fmt.Errorf("secret source symlink escapes approved root; no files changed")
+			if err := s.validateSourcePath(path); err != nil {
+				return err
 			}
 		}
 		return nil
 	})
 }
 
+func (s ResolvedScope) validateSourcePath(path string) error {
+	target, err := canonicalPath(path)
+	if err != nil || !withinPath(s.Root, target) {
+		return fmt.Errorf("secret source symlink escapes approved root; no files changed")
+	}
+	return nil
+}
+
 func (p *ProjectContext) snapshotFile(legacy, current string) ([]byte, string, error) {
-	listing, err := gitOutput("--git-dir="+p.Source.Owner, "ls-tree", "-z", p.Source.Ref, "--", legacy, current)
+	listing, err := projectSnapshotGit(p.Source.Owner, "ls-tree", "-z", p.Source.Ref, "--", legacy, current)
 	if err != nil {
 		return nil, "", fmt.Errorf("cannot inspect project snapshot policy")
 	}
@@ -252,7 +294,7 @@ func (p *ProjectContext) snapshotFile(legacy, current string) ([]byte, string, e
 	if mode != "100644 blob" && mode != "100755 blob" {
 		return nil, "", fmt.Errorf("snapshot policy must be a regular file")
 	}
-	data, err := gitOutput("--git-dir="+p.Source.Owner, "show", p.Source.Ref+":"+name)
+	data, err := projectSnapshotGit(p.Source.Owner, "show", p.Source.Ref+":"+name)
 	if err != nil {
 		return nil, "", fmt.Errorf("cannot read project snapshot policy")
 	}

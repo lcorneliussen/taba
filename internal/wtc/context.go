@@ -10,6 +10,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
+	"taba.sh/taba/internal/branding"
 )
 
 // Repo is one registry entry. Aliases are earlier names of a renamed
@@ -95,14 +96,15 @@ type Config struct {
 	} `toml:"openclaw"`
 }
 type Context struct {
-	Collection       string          `json:"collection"`
-	Harness          string          `json:"harness"`
-	Workspace        string          `json:"workspace"`
-	Registry         Registry        `json:"registry"`
-	Config           Config          `json:"-"`
-	ConfigRoot       string          `json:"config_root"`
-	Project          *ProjectContext `json:"project,omitempty"`
-	creatingReceiver bool
+	Collection          string          `json:"collection"`
+	Harness             string          `json:"harness"`
+	Workspace           string          `json:"workspace"`
+	Registry            Registry        `json:"registry"`
+	Config              Config          `json:"-"`
+	ConfigRoot          string          `json:"config_root"`
+	Project             *ProjectContext `json:"project,omitempty"`
+	creatingReceiver    bool
+	controlPolicySource string
 	// AdHoc marks a collection without a harness repository. Its Harness is the
 	// collection-local config directory and its registry is tracked nowhere.
 	AdHoc bool `json:"ad_hoc,omitempty"`
@@ -153,6 +155,9 @@ func Discover(start string) (*Context, error) {
 		return nil, err
 	}
 	if location.Collection == "" {
+		if location.Kind == LocationUninitialized {
+			return nil, fmt.Errorf(branding.Text("%w; run `{{command}} init` to make this folder an ad-hoc collection"), errNotInCollection)
+		}
 		return nil, fmt.Errorf("%w; select an explicit collection for this command", errNotInCollection)
 	}
 	abs, err := filepath.Abs(start)
@@ -244,8 +249,16 @@ func ParseRegistry(b []byte) (Registry, error) {
 }
 
 func (c *Context) load() error {
+	receiver, err := c.receivingContext()
+	if err != nil {
+		return err
+	}
+	scope, err := receiver.resolve(!c.creatingReceiver)
+	if err != nil {
+		return err
+	}
+	c.ConfigRoot, c.controlPolicySource = scope.Root, scope.PolicySource
 	var b []byte
-	var err error
 	if c.Project != nil && c.Project.Source.Owner != "" {
 		b, _, err = c.Project.snapshotFile(".harness-repos.yml", ".harness-repos.yml")
 		if err != nil {
@@ -256,6 +269,10 @@ func (c *Context) load() error {
 		}
 	} else {
 		registry := c.registryPath()
+		resolved, err := canonicalPath(registry)
+		if err != nil || !withinPath(scope.OwnerRoot, resolved) {
+			return fmt.Errorf("registry escapes receiving owner")
+		}
 		if info, err := os.Stat(registry); err != nil {
 			return err
 		} else if !info.Mode().IsRegular() {
@@ -325,7 +342,10 @@ func (c *Context) load() error {
 		if err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
-		if _, err := os.Stat(cfg); err == nil {
+		if info, err := os.Stat(cfg); err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("config must be a regular file")
+			}
 			if _, err := toml.DecodeFile(cfg, &c.Config); err != nil {
 				return fmt.Errorf("config: %w", err)
 			}
@@ -333,14 +353,5 @@ func (c *Context) load() error {
 			return fmt.Errorf("config: %w", err)
 		}
 	}
-	receiver, err := c.receivingContext()
-	if err != nil {
-		return err
-	}
-	scope, err := receiver.resolve(!c.creatingReceiver)
-	if err != nil {
-		return err
-	}
-	c.ConfigRoot = scope.Root
 	return nil
 }

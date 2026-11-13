@@ -34,14 +34,38 @@ func TestTabaEnvironmentConflictKeepsJSONOutputClean(t *testing.T) {
 	cmd.Env = append(cmd.Env, "WTC_CONFIG_ROOT="+legacy, "TABA_CONFIG_ROOT="+current)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("conflicting external roots were accepted")
+	}
+	for _, value := range []string{legacy, current} {
+		if strings.Contains(stdout.String(), value) || strings.Contains(stderr.String(), value) {
+			t.Fatal("root refusal disclosed values")
+		}
+	}
+	if !strings.Contains(stderr.String(), "receiving secrets policy") {
+		t.Fatalf("missing receiving diagnostic: %s", &stderr)
+	}
+	// Authorized aliases still produce clean machine-readable preview output.
+	owner, err := filepath.EvalSymlinks(filepath.Dir(collection))
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := filepath.Join(owner, ".config")
+	stdout.Reset()
+	stderr.Reset()
+	cmd = exec.Command("go", "run", ".", "env", "setup", "--collection", collection, "--dry-run", "--json")
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, "WTC_CONFIG_ROOT=") && !strings.HasPrefix(value, "TABA_CONFIG_ROOT=") {
+			cmd.Env = append(cmd.Env, value)
+		}
+	}
+	cmd.Env = append(cmd.Env, "WTC_CONFIG_ROOT="+approved, "TABA_CONFIG_ROOT="+approved)
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("env preview failed: %v, %s", err, &stderr)
+		t.Fatalf("authorized preview failed: %v %s", err, &stderr)
 	}
-	if !json.Valid(stdout.Bytes()) || !strings.Contains(stdout.String(), current) || !strings.Contains(stdout.String(), "WTC_CONFIG_ROOT='"+current+"'") || !strings.Contains(stdout.String(), "TABA_CONFIG_ROOT='"+current+"'") || strings.Contains(stdout.String(), legacy) {
-		t.Fatalf("JSON output should carry the selected root under both spellings: %s", &stdout)
-	}
-	if strings.Count(stderr.String(), "TABA_CONFIG_ROOT and WTC_CONFIG_ROOT differ; using TABA_CONFIG_ROOT") != 1 || strings.Contains(stderr.String(), legacy) || strings.Contains(stderr.String(), current) {
-		t.Fatalf("expected one value-free stderr warning: %s", &stderr)
+	if !json.Valid(stdout.Bytes()) || !strings.Contains(stdout.String(), "TABA_CONFIG_ROOT='"+approved+"'") || !strings.Contains(stdout.String(), "WTC_CONFIG_ROOT='"+approved+"'") {
+		t.Fatalf("invalid authorized JSON: %s", &stdout)
 	}
 	if _, err := os.Stat(filepath.Join(collection, ".env.collection")); !os.IsNotExist(err) {
 		t.Fatal("dry run wrote the generated environment")

@@ -41,8 +41,23 @@ func TestProjectLocationWithoutCollections(t *testing.T) {
 		}
 	}
 	// .taba/config belongs to the project; it is not an ad-hoc collection.
-	if present, err := collectionMarker(p.Root); err != nil || present {
+	if present, err := collectionMarker(p.Root); err == nil || present {
 		t.Fatalf("project misclassified as collection: %v %v", present, err)
+	}
+}
+
+func TestEarlyDiscoveryStopsAtProjectBoundary(t *testing.T) {
+	outer := fixture(t)
+	for _, descriptor := range []string{"schema_version=1\nmode='local'\n", "schema_version=99\n"} {
+		inner := filepath.Join(outer.Collection, "widget", "nested-project")
+		fixtureFile(t, filepath.Join(inner, ProjectDescriptorFile), descriptor, 0644)
+		nested := filepath.Join(inner, "subdir")
+		if err := os.MkdirAll(nested, 0755); err != nil {
+			t.Fatal(err)
+		}
+		if found := FindCollectionRoot(nested); found != "" {
+			t.Fatalf("early discovery crossed project boundary to %s", found)
+		}
 	}
 }
 

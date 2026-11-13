@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -42,10 +43,14 @@ func collectionDirectoryInput(collection, namespace string) (string, error) {
 // the missing registry instead of silently discovering a parent collection.
 func collectionMarker(collection string) (bool, error) {
 	if descriptorPresent(collection, ProjectDescriptorFile) {
-		return false, nil
+		if _, err := OpenProject(collection); err != nil {
+			return false, err
+		}
+		return false, fmt.Errorf("project boundary requires an explicit collection")
 	}
 	if descriptorPresent(collection, CollectionDescriptorFile) {
-		return true, nil
+		location, err := DiscoverLocation(collection)
+		return err == nil && location.Kind == LocationCollection, err
 	}
 	return legacyCollectionMarker(collection)
 }
