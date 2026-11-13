@@ -188,10 +188,11 @@ func statusEnrichListed(record PRRecord, slug, forge string, item statusOpenPR) 
 	}
 	detail = statusConfirmFullPRLocked(record, slug, forge, detail, source)
 	detail = statusObserveDetail(detail, slug, forge)
-	// A newer list dates only returned OPEN/DRAFT state here, not checks,
-	// reviews or mergeability. This override does not rewrite cached full detail.
+	// A newer list dates only matching OPEN/DRAFT state here, not checks,
+	// reviews or mergeability. Conflicting audit detail keeps its own age.
 	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
-	if (detail.State == "OPEN" || detail.State == "DRAFT") && item.Started.After(observed) {
+	listed, listErr := statusParseForgeDetail(forge, item.Raw, record)
+	if listErr == nil && listed.State == detail.State && (detail.State == "OPEN" || detail.State == "DRAFT") && item.Started.After(observed) {
 		detail.Freshness = ""
 		detail = statusObserveAt(detail, item.Started, "open-list")
 	}
@@ -446,22 +447,29 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 		slug, forge, refErr := c.statusReadOnlyPRForge(repos, record)
 		detail := statusPredictBBMerge(details[i], localForge, localSlug, snapshot.Repos)
 		mergeHead, mergeBase := statusMergeProvenance(detail)
-		worktreeDir := ""
-		if repo, err := repos.resolve(record.Repo); err == nil && refErr == nil {
-			worktreeDir = repo.dir()
+		worktreeDir, localDir := "", ""
+		if repo, err := repos.resolve(record.Repo); err == nil {
+			localDir = repo.dir()
+			if refErr == nil {
+				worktreeDir = localDir
+			}
 		}
-		if record.Branch != "" && worktreeDir != "" {
-			enlistedBranches[worktreeDir+"\x00"+record.Branch] = true
+		if record.Branch != "" && localDir != "" {
+			enlistedBranches[localDir+"\x00"+record.Branch] = true
 		}
 		branchRow := -1
 		for i, row := range snapshot.Repos {
-			if row.Dir == worktreeDir && row.BranchKind == "branch" && row.Branch == record.Branch {
-				branchRow = i
+			if row.Dir == localDir && localDir != "" && row.BranchKind == "branch" && row.Branch == record.Branch {
+				// Local uncertainty blocks actions without authorizing facts
+				// or checkout association from a rejected PR URL.
+				if refErr != nil || statusObservationUnavailable(detail.Freshness) {
+					snapshot.Repos[i].PRUnconfirmed = true
+				}
+				if refErr == nil {
+					branchRow = i
+				}
 				break
 			}
-		}
-		if branchRow >= 0 && statusObservationUnavailable(detail.Freshness) {
-			snapshot.Repos[branchRow].PRUnconfirmed = true
 		}
 		if detail.State == "OPEN" || detail.State == "DRAFT" {
 			statusPRBase(&snapshot, branchRow, detail.Base)

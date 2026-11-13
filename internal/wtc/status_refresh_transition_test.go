@@ -1160,3 +1160,67 @@ func TestStatus319ProductionReleasedCacheWriter(t *testing.T) {
 		}
 	}
 }
+
+func TestStatus319ProductionReleasedMergeMigration(t *testing.T) {
+	for _, cooling := range []bool{false, true} {
+		t.Run(fmt.Sprint(cooling), func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			statusHideBitbucketLogin(t)
+			c, head, base := status319Collection(t, "widget")
+			fixtureFile(t, c.PRFile(), "widget 7 topic-open https://bitbucket.org/example/widget/pull-requests/7 Synthetic 7\n", 0600)
+			bin := t.TempDir()
+			fixtureFile(t, filepath.Join(bin, "bb"), "#!/bin/sh\nWTC_TEST_319_CHILD=bb exec \"$WTC_TEST_319_EXE\" -test.run=^TestStatus319RefreshProcess$ -- \"$@\"\n", 0700)
+			t.Setenv("BB_API_USER", "synthetic")
+			t.Setenv("BB_API_PASS", "synthetic")
+			wire := &status319Wire{head: head, base: base}
+			server := httptest.NewServer(wire)
+			defer server.Close()
+			status319Refresh(t, c, server.URL, bin, false)
+			publish := func(raw []byte) {
+				t.Helper()
+				command := exec.Command(os.Args[0], "-test.run=^TestStatus319RefreshProcess$")
+				command.Env = append(os.Environ(), "WTC_TEST_319_CHILD=released-cache", "WTC_TEST_319_CACHE_RAW="+string(raw), "WTC_TEST_319_CACHE_START="+strconv.FormatInt(time.Now().UnixNano(), 10))
+				if out, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("released publication: %v %s", err, out)
+				}
+			}
+			merged, _ := json.Marshal(wire.item(7, true))
+			publish(merged)
+			old := time.Now().Add(-23 * time.Hour)
+			if err := os.Chtimes(statusForgeCachePath("bitbucket.org", "example/widget", "7"), old, old); err != nil {
+				t.Fatal(err)
+			}
+			if cooling {
+				statusForgeCool("bitbucket.org", time.Hour)
+			} else {
+				fixtureFile(t, statusForgeStatePath("budget", "bitbucket.org"), fmt.Sprintf("0 %d\n", time.Now().UnixNano()), 0600)
+			}
+			before := wire.count()
+			assertMerge := func(event status319Event) {
+				t.Helper()
+				if len(event.Snapshot.PRs) != 1 {
+					t.Fatal(event.Snapshot.PRs)
+				}
+				pr := event.Snapshot.PRs[0]
+				at, err := time.Parse(time.RFC3339Nano, pr.ObservedAt)
+				if pr.State != "MERGED" || pr.MergedOn != nil || err != nil || at.Sub(old).Abs() > time.Millisecond || !statusObservationUnavailable(pr.Freshness) {
+					t.Fatalf("legacy authority lost or renewed: %+v", pr)
+				}
+				if !strings.Contains(event.Markdown, "merged") {
+					t.Fatal("native merge missing")
+				}
+			}
+			assertMerge(status319Refresh(t, c, server.URL, bin, false))
+			active := wire.item(7, false)
+			active["draft"] = cooling
+			raw, _ := json.Marshal(active)
+			publish(raw)
+			for pass := 0; pass < 2; pass++ {
+				assertMerge(status319Refresh(t, c, server.URL, bin, false))
+			}
+			if wire.count() != before {
+				t.Fatal("denied migration dispatched provider I/O")
+			}
+		})
+	}
+}

@@ -71,12 +71,22 @@ func statusReadObservedDetailKind(kind string, record PRRecord, slug, forge stri
 }
 
 func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
-	detail, ok := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
-	current, found := statusReadObservedDetailKind("pr", record, slug, forge, statusMergedCacheAge())
-	currentAt, _ := time.Parse(time.RFC3339Nano, current.ObservedAt)
-	retainedAt, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
-	if found && current.State == "MERGED" && (!ok || currentAt.After(retainedAt)) {
-		return current, true
+	detail, known := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
+	known = known && detail.State == "MERGED"
+	raw, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusMergedCacheAge())
+	if ok {
+		current, err := statusParseForgeDetail(forge, raw, record)
+		retainedAt, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
+		if err == nil && current.State == "MERGED" && (!known || observed.After(retainedAt)) {
+			// Accept legacy authority only after preserving the same bytes and age
+			// independently of released writers' ordinary cache publications.
+			if statusRetainMergeObservation(forge, slug, record.Number, raw, observed) {
+				winner, found := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
+				if found && winner.State == "MERGED" {
+					return winner, true
+				}
+			}
+		}
 	}
-	return detail, ok && detail.State == "MERGED"
+	return detail, known
 }

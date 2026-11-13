@@ -904,3 +904,246 @@ func TestStatusRetainedMergeSurvivesReleasedCacheOverwrite(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusListStateMustMatchObservation(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		for _, draft := range []bool{false, true} {
+			for _, matches := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/draft=%v/matches=%v", forge, draft, matches), func(t *testing.T) {
+					c, worktree := enlistedIdentityFixture(t, true)
+					segment := "pull"
+					if forge == "bitbucket.org" {
+						segment = "pull-requests"
+						data, _ := os.ReadFile(c.registryPath())
+						fixtureFile(t, c.registryPath(), strings.ReplaceAll(string(data), "https://github.com/example/widget.git", "https://bitbucket.org/example/widget.git"), 0644)
+						fixtureGit(t, "-C", worktree, "remote", "set-url", "origin", "https://bitbucket.org/example/widget.git")
+						if err := c.load(); err != nil {
+							t.Fatal(err)
+						}
+						statusHideBitbucketLogin(t)
+					}
+					record := PRRecord{Repo: "widget", Number: "7", Branch: "topic", URL: "https://" + forge + "/example/widget/" + segment + "/7"}
+					if _, err := c.EnlistPR(record); err != nil {
+						t.Fatal(err)
+					}
+					t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
+					t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
+					listRaw, _ := json.Marshal(map[string]any{"number": 7, "id": 7, "state": "OPEN", "isDraft": draft, "draft": draft, "title": "Synthetic list"})
+					fullDraft := draft
+					if !matches {
+						fullDraft = !draft
+					}
+					fullRaw, _ := json.Marshal(map[string]any{"number": 7, "id": 7, "state": "OPEN", "isDraft": fullDraft, "draft": fullDraft, "title": "Synthetic full audit"})
+					bin := t.TempDir()
+					t.Setenv("WTC_TEST_319_FULL", string(fullRaw))
+					for _, name := range []string{"gh", "bb"} {
+						fixtureFile(t, filepath.Join(bin, name), "#!/bin/sh\nprintf '%s\\n' \"$WTC_TEST_319_FULL\"\n", 0700)
+					}
+					t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+					old := time.Now().Add(-3 * time.Minute)
+					item := statusOpenPR{Number: "7", Branch: "topic", Raw: listRaw, Fingerprint: "unchanged", Started: old}
+					audited := statusEnrichListed(record, "example/widget", forge, item)
+					want := "OPEN"
+					if fullDraft {
+						want = "DRAFT"
+					}
+					if audited.State != want || audited.Title != "Synthetic full audit" {
+						t.Fatalf("full audit did not publish conflicting detail: %+v", audited)
+					}
+					if err := os.Chtimes(statusForgeCachePath(forge, "example/widget", "7"), old, old); err != nil {
+						t.Fatal(err)
+					}
+					now := time.Now()
+					listed, err := statusEncodeOpenPRs([]statusOpenPR{item}, false, now)
+					if err != nil {
+						t.Fatal(err)
+					}
+					statusWriteForgeEntry("openprs", forge, "example/widget", "open", listed)
+					t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+					statusForgeCool(forge, time.Hour)
+					for pass := 0; pass < 2; pass++ {
+						snapshot, err := c.statusForgePreview(false, false)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if len(snapshot.PRs) != 1 || snapshot.PRs[0].State != want {
+							t.Fatalf("full audit state lost: %+v", snapshot.PRs)
+						}
+						pr := snapshot.PRs[0]
+						at, err := time.Parse(time.RFC3339Nano, pr.ObservedAt)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if statusObservationUnavailable(pr.Freshness) == matches {
+							t.Errorf("list blessed a state it did not observe: %+v", pr)
+						}
+						if !matches && at.Sub(old).Abs() > time.Millisecond {
+							t.Errorf("conflicting list replaced observation age: %+v", pr)
+						}
+						found := false
+						for _, row := range snapshot.Repos {
+							if row.Dir == "ext.widget" {
+								found = true
+								if row.PRUnconfirmed == matches || (!matches && (row.Next != nil || row.Choices != nil)) {
+									t.Errorf("producer action gate disagrees with state evidence: %+v", row)
+								}
+							}
+						}
+						if !found {
+							t.Fatal("missing local branch")
+						}
+						if !matches && !strings.Contains(snapshot.Markdown(), "stale forge observation") {
+							t.Error("native rendering hid conflicting state uncertainty")
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestStatusRejectedURLBlocksLocalBranchActions(t *testing.T) {
+	for _, tc := range []struct {
+		name, repo, branch, url string
+		blocked                 bool
+	}{
+		{"foreign-repository", "widget", "topic", "https://github.com/example/other-widget/pull/7", true},
+		{"number-mismatch", "ext.widget", "topic", "https://github.com/example/widget/pull/8", true},
+		{"unsupported-host", "widget", "topic", "https://example.invalid/example/widget/pull/7", true},
+		{"unrelated-branch", "widget", "other-topic", "https://github.com/example/other-widget/pull/7", false},
+		{"url-only", "reference", "topic", "https://github.com/example/other-widget/pull/7", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, worktree := enlistedIdentityFixture(t, true)
+			fixtureFile(t, filepath.Join(worktree, "pending.txt"), "Synthetic pending change.\n", 0644)
+			head := fixtureGit(t, "-C", worktree, "rev-parse", "HEAD")
+			before := fixtureGit(t, "-C", worktree, "status", "--porcelain")
+			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+			t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
+			statusForgeCool("github.com", time.Hour)
+			statusForgeCool("bitbucket.org", time.Hour)
+			bin := t.TempDir()
+			for _, name := range []string{"gh", "bb"} {
+				fixtureFile(t, filepath.Join(bin, name), "#!/bin/sh\nexit 97\n", 0700)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			record := PRRecord{Repo: tc.repo, Number: "7", Branch: tc.branch, URL: tc.url}
+			if _, err := c.EnlistPR(record); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := c.statusForgePreview(false, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, row := range snapshot.Repos {
+				if row.Dir == "ext.widget" {
+					found = true
+					if row.PRUnconfirmed != tc.blocked || (tc.blocked && (row.Next != nil || row.Choices != nil)) {
+						t.Errorf("rejected URL left local actions available: %+v", row)
+					}
+					if !tc.blocked && row.Next == nil {
+						t.Error("unrelated uncertainty blocked local action control")
+					}
+					if row.PR != nil {
+						t.Errorf("rejected/URL-only reference granted branch forge facts: %+v", row.PR)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("missing local branch")
+			}
+			for _, pr := range snapshot.PRs {
+				if pr.OnBranch || pr.worktreeDir != "" || (tc.blocked && (pr.URL != nil || pr.Slug != "")) {
+					t.Errorf("reference gained checkout/forge authority: %+v", pr)
+				}
+			}
+			if fixtureGit(t, "-C", worktree, "rev-parse", "HEAD") != head || fixtureGit(t, "-C", worktree, "status", "--porcelain") != before {
+				t.Fatal("uncertainty changed local checkout")
+			}
+			records, _ := c.ListPRs()
+			if len(records) != 1 || records[0].URL != tc.url {
+				t.Fatal("rejected URL was silently repaired")
+			}
+		})
+	}
+}
+
+func TestStatusLegacyMergeMigrationPreservesAgeAndOrdering(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		t.Run(forge, func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			t.Setenv("WTC_FORGE_CACHE_AGE", "")
+			record := PRRecord{Number: "7"}
+			slug := "example/widget"
+			old := time.Now().Add(-23 * time.Hour)
+			raw := []byte(`{"number":7,"id":7,"state":"MERGED","title":"Legacy synthetic merge"}`)
+			if !status319ReleasedWriteForgeEntrySince("pr", forge, slug, "7", raw, old) {
+				t.Fatal("released publication failed")
+			}
+			source := statusForgeCachePath(forge, slug, "7")
+			target := statusForgeEntryPath("merge", forge, slug, "7")
+			if err := os.Chtimes(source, old, old); err != nil {
+				t.Fatal(err)
+			}
+			sourceInfo, err := os.Stat(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			old = sourceInfo.ModTime()
+			for pass := 0; pass < 2; pass++ {
+				got, ok := statusRetainedMerge(record, slug, forge)
+				at, err := time.Parse(time.RFC3339Nano, got.ObservedAt)
+				if !ok || got.State != "MERGED" || got.MergedOn != "" || err != nil || !at.Equal(old) {
+					t.Fatalf("legacy evidence age changed: %+v", got)
+				}
+			}
+			info, err := os.Stat(target)
+			if err != nil || !info.ModTime().Equal(old) || info.Mode().Perm() != 0600 {
+				t.Fatalf("migration changed age/privacy: %v %v", info, err)
+			}
+			active := []byte(`{"number":7,"id":7,"state":"OPEN"}`)
+			if statusWriteForgeEntrySince("pr", forge, slug, "7", active, time.Now()) {
+				t.Fatal("active writer replaced retained merge")
+			}
+			if !statusRetainMergeObservation(forge, slug, "7", raw, old.Add(-time.Minute)) {
+				t.Fatal("older migration could not reuse retained evidence")
+			}
+			unchanged, _ := os.Stat(target)
+			if !unchanged.ModTime().Equal(old) {
+				t.Fatal("read/rejected write renewed authority")
+			}
+			newer := []byte(`{"number":7,"id":7,"state":"MERGED","title":"Newer synthetic merge"}`)
+			observed := old.Add(time.Minute)
+			if !statusWriteForgeEntrySinceObserved("pr", forge, slug, "7", newer, time.Now(), observed) {
+				t.Fatal("new merge publication failed")
+			}
+			if !statusRetainMergeObservation(forge, slug, "7", raw, old) {
+				t.Fatal("delayed migration failed")
+			}
+			got, ok := statusRetainedMerge(record, slug, forge)
+			at, err := time.Parse(time.RFC3339Nano, got.ObservedAt)
+			if !ok || got.Title != "Newer synthetic merge" || err != nil || at.Sub(observed).Abs() > time.Millisecond {
+				t.Fatalf("delayed migration replaced newer authority: %+v", got)
+			}
+			t.Setenv("WTC_FORGE_CACHE_AGE", "1")
+			if _, ok := statusRetainedMerge(record, slug, forge); ok {
+				t.Fatal("migration ignored explicit retention")
+			}
+			t.Setenv("WTC_FORGE_CACHE_AGE", "")
+			expired := time.Now().Add(-25 * time.Hour)
+			for _, path := range []string{source, target} {
+				if err := os.Chtimes(path, expired, expired); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, ok := statusRetainedMerge(record, slug, forge); ok {
+				t.Fatal("expired legacy evidence migrated or retained")
+			}
+			info, _ = os.Stat(target)
+			if info.ModTime().Sub(expired).Abs() > time.Millisecond {
+				t.Fatal("expired read renewed evidence")
+			}
+		})
+	}
+}

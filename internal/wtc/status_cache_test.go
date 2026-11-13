@@ -30,15 +30,19 @@ func TestStatusMergedPRCacheOutlivesActiveCache(t *testing.T) {
 		t.Fatalf("stale merged result was needlessly refetched: %+v", detail)
 	}
 	beforeDay := time.Now().Add(-23 * time.Hour)
-	if err := os.Chtimes(path, beforeDay, beforeDay); err != nil {
-		t.Fatal(err)
+	for _, kind := range []string{"pr", "merge"} {
+		if err := os.Chtimes(statusForgeEntryPath(kind, forge, slug, number), beforeDay, beforeDay); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "MERGED" {
 		t.Fatalf("merged result expired before a day: %+v", detail)
 	}
 	afterDay := time.Now().Add(-25 * time.Hour)
-	if err := os.Chtimes(path, afterDay, afterDay); err != nil {
-		t.Fatal(err)
+	for _, kind := range []string{"pr", "merge"} {
+		if err := os.Chtimes(statusForgeEntryPath(kind, forge, slug, number), afterDay, afterDay); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("WTC_TEST_GH_DETAIL", `{"number":7,"state":"MERGED","title":"Refreshed detail"}`)
 	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.Title != "Refreshed detail" {

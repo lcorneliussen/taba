@@ -139,7 +139,7 @@ func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []by
 		if observed.IsZero() {
 			observed = time.Now()
 		}
-		if !statusWriteForgeEntryObserved("merge", forge, slug, key, data, observed) {
+		if !statusRetainMergeObservation(forge, slug, key, data, observed) {
 			return false
 		}
 	}
@@ -148,6 +148,28 @@ func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []by
 	}
 	statusWriteForgeEntry("since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)))
 	return true
+}
+
+// Serialize new publications and legacy migrations on the independent record.
+// Observation time, not migration time, controls both ordering and expiry.
+// Callers may already hold the ordinary PR lock; this path never acquires it.
+func statusRetainMergeObservation(forge, slug, key string, data []byte, observed time.Time) bool {
+	if observed.IsZero() || time.Since(observed) >= statusMergedCacheAge() {
+		return false
+	}
+	unlock, err := statusLockCache(statusForgeEntryPath("merge", forge, slug, key))
+	if err != nil {
+		return false
+	}
+	defer unlock()
+	saved, at, ok := statusReadForgeEntryObserved("merge", forge, slug, key, statusMergedCacheAge())
+	if ok {
+		prior, err := statusParseForgeDetail(forge, saved, PRRecord{Number: key})
+		if err == nil && prior.State == "MERGED" && !observed.After(at) {
+			return true
+		}
+	}
+	return statusWriteForgeEntryObserved("merge", forge, slug, key, data, observed)
 }
 
 func statusForgeEntrySince(kind, forge, slug, key string) (time.Time, bool) {
