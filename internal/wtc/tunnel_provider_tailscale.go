@@ -226,6 +226,15 @@ func changeTailscaleServe(ctx context.Context, transport tailscaleLocalTransport
 			if err != nil {
 				return err
 			}
+			public, err := tailscaleObject(object["AllowFunnel"])
+			if err != nil || tailscaleCanonicalPorts(public, true) != nil {
+				return errors.New("unknown Tailscale session/service exposure")
+			}
+			for key, enabled := range public {
+				if strings.HasSuffix(key, ":"+port) && tailscaleCanonical(enabled) != "false" {
+					return errors.New("Tailscale listener has public session/service exposure")
+				}
+			}
 			ports, err := tailscaleObject(object["TCP"])
 			if err != nil {
 				return err
@@ -275,7 +284,10 @@ func changeTailscaleServe(ctx context.Context, transport tailscaleLocalTransport
 		return errors.New("Tailscale owned handler changed; cleanup refused")
 	}
 	if !stop && len(current) != 0 {
-		return nil
+		// A matching URL is not ownership proof for a new effect. Confirmed
+		// active operations are handled idempotently by the owning controller;
+		// an uncertain start must reconcile rather than adopt another handler.
+		return errors.New("Tailscale handler already exists; reconcile the owned effect")
 	}
 	if stop {
 		delete(handlers, target.Path)

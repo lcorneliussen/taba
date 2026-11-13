@@ -229,7 +229,8 @@ func checkDevTunnelNode(ctx context.Context, node string, env []string) error {
 }
 
 // The path and environment are already receiving-scoped inputs. This validates
-// the executable asset and prepares a command; it does not start a provider.
+// the executable asset, probes Node --version with a scoped environment and
+// three-second limit, and prepares a command; it does not start a provider.
 func devTunnelHostCommand(ctx context.Context, node, helper string, env []string, input devTunnelHostInput) (*exec.Cmd, error) {
 	if input.Schema != 1 || !devTunnelID(input.TunnelID) || !devTunnelCluster(input.ClusterID) || !tunnelComponent.MatchString(input.HostID) || input.PortNumber < 1 || input.PortNumber > 65535 || input.HostToken == "" || strings.ContainsAny(input.HostToken, "\r\n\x00") || len(input.HostToken) > 16384 {
 		return nil, errors.New("invalid devtunnel host input")

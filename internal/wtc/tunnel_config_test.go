@@ -107,7 +107,7 @@ func TestTunnelPolicyRejectsAmbiguousOrSensitiveInput(t *testing.T) {
 		"schema = 1\n[tunnels.widget.web.preview]\nprovider = 'cloudflare'\nmode = 'quick'\naccess = 'public'\ntoken = 'synthetic-secret-value'",
 		"schema = 1\n[tunnels.widget.web.preview]\nenabled = false\nprovider = 'ngrok'",
 		"schema = 1\n[tunnels.widget.web.preview]\nenabled = false\nstart_with_service = false",
-		"schema = 1\n[tunnels.widget.web.preview]\nprovider = 'cloudflare'\nmode = 'named'\naccess = 'public'", // replacement cannot borrow inherited options
+		"schema = 1\n[tunnels.widget.web.preview]\nprovider = 'cloudflare'\nmode = 'named'\naccess = 'public'", // requires hostname and zone_id
 		"schema = 1\n[tunnels.'..'.web.preview]\nenabled = false",
 		"schema = 1\n[tunnels.widget.'web/server'.preview]\nenabled = false",
 		"schema = 1\n[tunnels.widget.web.preview]\nenabled = false\nenabled = true",
