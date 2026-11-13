@@ -205,7 +205,7 @@ async function catchUpRepo(host, agentId, r, say, ask, request) {
   // HEAD may have moved; the local edits remain in the pinned recovery copy.
   if (out.code && (recoveryResult(out) || needsLocalRecovery(out.message))) {
     const recoveryRef = out.json?.data?.recoveryRef || r.catchUpRecovery;
-    const handoff = await ask(`${name}: catch-up recovery needs inspection.${recoveryHandoff({ catchUpRecovery: recoveryRef })} Do not reapply a recovery copy blindly or publish.`);
+    const handoff = await ask(`${name}: catch-up recovery needs inspection.${recoveryHandoff({ catchUpRecovery: recoveryRef })} Do not reapply a recovery copy blindly or publish.`, recoveryRef);
     if (handoff?.cancelled || handoff?.unconfirmed) return {...handoff,recoveryRef};
     say(`${name}: the conversation was asked to verify or recover local edits.`);
     return { handedOff: true, recoveryRef };
@@ -799,7 +799,10 @@ const feedbackStore = new Map();
 const serviceLogIntents = new Map(), serviceLogListeners = new Set();
 function recordActivity(collection, id, item) {
   const records = activityStore.get(collection) ?? new Map();
-  records.set(id, { ...records.get(id), ...item, at: Date.now() });
+  const previous = records.get(id);
+  // A late handoff response cannot undo a verified native recovery receipt.
+  const updated = previous?.completedRecovery ? { ...previous, ...item, state:previous.state, status:previous.status, detail:previous.detail, followUp:undefined, at:previous.at } : { ...previous, ...item, at: Date.now() };
+  records.set(id, updated);
   while (records.size > 100) {
     const removable = [...records.keys()].find(id => ![...requestFeedback.values()].some(state => state.id === id && ["running","pending","unconfirmed"].includes(state.phase)));
     if (!removable) break;
@@ -807,6 +810,7 @@ function recordActivity(collection, id, item) {
   }
   activityStore.set(collection, records);
   for (const [key, entry] of store) if (key === collection || entry.data?.collection?.sessionKey === collection) for (const notify of entry.listeners) notify(entry);
+  return updated;
 }
 // Native completion is durable evidence; the surrounding activity remains
 // browser-session feedback. Never infer success merely from a missing marker.
@@ -817,7 +821,10 @@ function reconcileRecoveryActivity(collection, repos) {
     const receipt = r.catchUpRecoveryCompleted;
     if (r.error || r.catchUpRecovery || r.catchUpRecoveryError || receipt?.kind !== "taba.catch-up-recovery-completed/v1" || !receipt.recoveryRef || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.head ?? "")) continue;
     for (const [id, item] of records) {
-      if (!item.recoveryRef || item.recoveryRef !== receipt.recoveryRef || item.repoSessionKey !== r.sessionKey || !item.repoPath || item.repoPath !== r.path || item.state === "completed") continue;
+      if (!item.recoveryRef || item.recoveryRef !== receipt.recoveryRef || item.repoSessionKey !== r.sessionKey || !item.repoPath || item.repoPath !== r.path) continue;
+      const request = requestFeedback.get(`${collection}|${r.sessionKey}`);
+      if (request?.id === id && request.path === r.path && ["catch-up", "resolve", "merge"].includes(request.kind) && ["running", "pending", "unconfirmed"].includes(request.phase)) request.phase = "completed";
+      if (item.completedRecovery) continue;
       const text = `${item.repo}: local edits recovered; backup retained.${r.dirty ? " Changes remain uncommitted." : ""}`;
       records.set(id, { ...item, state: "completed", status: "Completed", detail: text, completedRecovery: receipt, at: Date.now() });
       if (feedbackStore.get(collection)?.activityId === id) feedbackStore.set(collection, { text, failed: false, action: null, activityId: id, at: Date.now() });
@@ -1109,11 +1116,12 @@ function collectionTables(v) {
     const request = r.next.step === "commit" ? requestFeedback.get(requestKey(r, logKey)) : tracked ? beginRepoRequest(r, logKey, r.next.step, logId) : null;
     if (tracked && (!ownsRepoRequest(r, request, logKey) || request.id !== logId)) return;
     const say = (text, failed = false, action = null) => {
+      if (request?.phase === "completed") return;
       const previous = activityStore.get(logKey)?.get(logId);
-      recordActivity(logKey, logId, { repo: nameOf(r), action: r.next.step, status: previous?.status ?? text, ...(failed ? { state: "failed" } : {}), detail: text, followUp: action });
-      if (active(conversationKey)) v.say(text, failed, action, logId);
+      const item = recordActivity(logKey, logId, { repo: nameOf(r), action: r.next.step, status: previous?.status ?? text, ...(failed ? { state: "failed" } : {}), detail: text, followUp: action });
+      if (active(conversationKey) && !item.completedRecovery) v.say(text, failed, action, logId);
     };
-    const log = (status) => recordActivity(logKey, logId, { repo: nameOf(r), repoSessionKey:r.sessionKey, repoPath:r.path, recoveryRef:r.catchUpRecovery, action: r.next.step, status });
+    const log = (status) => request?.phase !== "completed" && recordActivity(logKey, logId, { repo: nameOf(r), repoSessionKey:r.sessionKey, repoPath:r.path, recoveryRef:r.catchUpRecovery, action: r.next.step, status });
     say(`${nameOf(r)}: ${r.next.step === "catch-up" ? "Catching up" : nextLabel(r.next)}…`);
     log("Rechecking…");
     v.rerender();
@@ -1125,9 +1133,9 @@ function collectionTables(v) {
       const fresh = out.repo;
       if (tracked && nextRoute(r.next) === "run" && !out.performed) delete request.dispatchedAt;
       if (out.performed) {
-        const outcome = await catchUpRepo(v.host, v.agent(), fresh, say, (input) => dispatchRepoRequests([{repo:r,state:request}], conversationKey, logKey, "wtc-catch-up", input), async () => out);
+        const outcome = await catchUpRepo(v.host, v.agent(), fresh, say, (input, recoveryRef) => dispatchRepoRequests([{repo:r,state:request}], conversationKey, logKey, "wtc-catch-up", input, recoveryRef), async () => out);
         log(outcome?.unconfirmed ? "Action handoff outcome unconfirmed; inspect the conversation" : outcome?.handedOff ? "Sent to conversation; completion pending" : out.code ? "Failed: " + (out.message ?? out.code) : "Completed");
-        if (outcome?.recoveryRef) recordActivity(logKey, logId, { recoveryRef:outcome.recoveryRef });
+        if (outcome?.recoveryRef && ownsRepoRequest(r, request, logKey)) recordActivity(logKey, logId, { recoveryRef:outcome.recoveryRef });
         if (!outcome?.handedOff && !outcome?.unconfirmed && ownsRepoRequest(r, request, logKey)) request.phase = "settled";
       } else if (fresh?.next) {
         const step = fresh.next;
@@ -1166,7 +1174,7 @@ function collectionTables(v) {
   let selection = new Map(), batchResults = new Map(), batchLabels = new Map(), batchKeys = new Map(), batchKinds = new Map(), batchActivityIds = new Map(), batchPreview = null;
   let batchKey = null, batchExecution = null;
   const batchIsRunning = () => !!batchExecution && active(batchExecution.conversation) &&
-    (!batchExecution.requests.size || [...batchExecution.requests.values()].some(({state}) => state.phase !== "acknowledged"));
+    (!batchExecution.requests.size || [...batchExecution.requests.values()].some(({state}) => !["acknowledged", "completed"].includes(state.phase)));
   const rawChoicesOf = r => r.choices?.actions ?? (r.next ? [{ ...r.next, available: true }] : []);
   const commitStep = r => rawChoicesOf(r).find(step => step.step === "commit");
   function commitBlocked(r) {
@@ -1807,7 +1815,7 @@ function collectionTables(v) {
     const requests = [...new Map(repos.map(repo => [repo.sessionKey,repo])).values()].map(repo => ({repo, state:beginRepoRequest(repo, collection, kind)}));
     if (!requests.length || requests.some(t => !t.state)) { cancelUnsentRequests(requests.filter(t => t.state), collection); return; }
     const current = () => active(conversation) && requests.every(t => ownsRepoRequest(t.repo,t.state,collection));
-    const send = input => current() ? dispatchRepoRequests(requests,conversation,collection,"wtc-catch-up",input) : {cancelled:true};
+    const send = (input, recoveryRef) => current() ? dispatchRepoRequests(requests,conversation,collection,"wtc-catch-up",input,recoveryRef) : {cancelled:true};
     const native = async operation => {
       if (!current()) return {cancelled:true};
       for (const {state} of requests) state.dispatchedAt = Date.now();
@@ -1845,12 +1853,13 @@ function collectionTables(v) {
       await withRepoRequests([r], "catch-up", async ({conversation,collection,requests,current,send,native}) => {
         const id = requests[0].state.id;
         const say = (text, failed = false, action = null) => {
-          recordActivity(collection,id,{detail:text,followUp:action});
-          if (active(conversation)) v.say(text,failed,action,id);
+          if (!current()) return;
+          const item = recordActivity(collection,id,{detail:text,followUp:action});
+          if (active(conversation) && !item.completedRecovery) v.say(text,failed,action,id);
         };
         try {
           const outcome = await catchUpRepo(v.host,v.agent(),r,say,send,() => native(() => call(v.host,"catch-up",r.sessionKey,v.agent())));
-          if (outcome?.recoveryRef) recordActivity(collection,id,{recoveryRef:outcome.recoveryRef});
+          if (outcome?.recoveryRef && current()) recordActivity(collection,id,{recoveryRef:outcome.recoveryRef});
         } catch (err) { if (current()) say(`${nameOf(r)}: ${String(err?.message ?? err)}`,true); }
       });
     }
@@ -1967,12 +1976,13 @@ function collectionTables(v) {
       recordActivity(collection,state.id,{state:"cancelled",status:"Cancelled before action handoff",detail});
     }
   }
-  async function dispatchRepoRequests(requests, conversation, collection, skill, input) {
+  async function dispatchRepoRequests(requests, conversation, collection, skill, input, recoveryRef) {
     if (!requests.length || !active(conversation) || !requests.every(({repo,state}) => ownsRepoRequest(repo, state, collection))) { cancelUnsentRequests(requests,collection); return {cancelled:true}; }
     const blocked = requests.map(({repo,state}) => repo.error || (repo.path !== state.path || repo.branch !== state.branch ? "The checkout changed before handoff; refresh before acting" : state.kind === "commit" ? commitBlocked(repo) : "")).find(Boolean);
     if (blocked) { cancelUnsentRequests(requests,collection,blocked); return {cancelled:true}; }
     if (requests.some(({state}) => state.handoffAt)) { cancelUnsentRequests(requests,collection); return {pending:true}; }
     for (const {state} of requests) state.handoffAt = state.dispatchedAt = Date.now();
+    if (recoveryRef) for (const {state} of requests) recordActivity(collection,state.id,{recoveryRef});
     try {
       await sendToAuthor(conversation, skill, input);
       for (const {repo,state} of requests) {

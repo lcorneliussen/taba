@@ -16,7 +16,9 @@
 - Ship local-edit recovery in the OpenClaw catch-up skill. A verified finish
   operation archives only its exact active marker and retains backups; matching
   native completion receipts settle pending recovery feedback without a retry,
-  commit or publication.
+  commit or publication. The matching request reservation also completes across
+  views; late handoff responses and timeouts cannot regress verified recovery
+  or release a newer request.
 
 - Catch-up now refuses incoming tracked paths that would replace ignored local
   data, on clean checkouts as well as dirty ones. Unfinished operations remain

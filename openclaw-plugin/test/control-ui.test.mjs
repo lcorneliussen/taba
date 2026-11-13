@@ -2981,16 +2981,19 @@ for (const message of [
   }finally{catchUpResult=old;view.dispose();}
 });
 
-for (const route of ["direct", "batch", "resolve"]) test(`${route} recovery settles only from its exact native receipt`, async () => {
+for (const route of ["direct", "batch", "resolve"]) for (const kind of ["composer", "panel"]) for (const phase of ["pending", "unconfirmed"]) test(`${route}/${kind}/${phase} recovery settles only from its exact native receipt`, async () => {
+  const nativeSet=globalThis.setTimeout,expirations=[];globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expirations.push(fn),{unref(){}}):nativeSet(fn,delay,...args);
   const original = catchUpResult;
   const ref = `refs/wtc-catch-up/${"a".repeat(40)}-123`;
   const step = {step:route === "resolve" ? "resolve" : "catch-up",by:route === "resolve" ? "agent" : "wtc",...(route === "resolve" ? {skill:"wtc-catch-up"} : {command:["wtc","catch-up"]}),key:"api:recovery:1",reason:"Recover local edits"};
   const r = repo("api",{path:"/state/worktrees/api/test",behind:1,...(route === "direct" ? {} : {next:step,choices:{actions:[{...step,available:true}]}}),...(route === "resolve" ? {catchUpRecovery:ref} : {})});
-  const {host,view,context}=await mount("panel",collection([r]),undefined,undefined,{focus:"activity"});
+  const {host,view,context}=await mount(kind,collection([r]),undefined,undefined,{focus:"activity"});
   const key=context.props.sessionKey;
+  const other=await mount(kind==="panel"?"composer":"panel",collection([r]),undefined,key,{focus:"activity"});
   const refresh=async()=>{await [...host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();};
-  const log=()=>[...host.all()].find(n=>n.className==="wtc-activity-log");
-  const expand=async()=>{const b=[...host.all()].find(n=>n.tagName==="BUTTON"&&/^Earlier activity/.test(n.textContent));if(b){await b.onclick();await settle();}};
+  const detailHost=kind==="panel"?host:other.host;
+  const log=()=>[...detailHost.all()].find(n=>n.className==="wtc-activity-log");
+  const expand=async()=>{const b=[...detailHost.all()].find(n=>n.tagName==="BUTTON"&&/^Earlier activity/.test(n.textContent));if(b){await b.onclick();await settle();}};
   try {
     calls.length=0;
     if(route==="direct") {
@@ -3009,10 +3012,14 @@ for (const route of ["direct", "batch", "resolve"]) test(`${route} recovery sett
       await [...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Resolve conflicts").onclick();await settle();
     }
     const sends=calls.filter(c=>c.method==="sessions.send");assert.equal(sends.length,1);assert.match(sends[0].message,/openclaw-recovery\.md/);assert.ok(sends[0].message.includes(ref));
+    if(phase==="unconfirmed")await expireRequests(expirations);
     assert.doesNotMatch(log().textContent,/· (Catch up|Resolve conflicts)Done/);
     const receipt={kind:"taba.catch-up-recovery-completed/v1",recoveryRef:ref,head:"b".repeat(40),indexTree:"c".repeat(40),completedAt:new Date().toISOString()};
     for(const changed of [
       {catchUpRecoveryCompleted:undefined},
+      {catchUpRecoveryCompleted:{...receipt,kind:"unverified"}},
+      {catchUpRecoveryCompleted:{...receipt,head:"not-a-head"}},
+      {error:"checkout unavailable"},
       {catchUpRecoveryCompleted:{...receipt,recoveryRef:ref+"9"}},
       {path:"/state/worktrees/api/other"},
       {sessionKey:"agent:main:owner:different"},
@@ -3022,12 +3029,18 @@ for (const route of ["direct", "batch", "resolve"]) test(`${route} recovery sett
       collections.set(key,collection([{...r,behind:0,catchUpRecovery:undefined,catchUpRecoveryCompleted:receipt,...changed}]));await refresh();await expand();
       assert.doesNotMatch(log().textContent,/· (Catch up|Resolve conflicts)Done/,"a different operation/copy or absent evidence must remain pending");
     }
-    collections.set(key,collection([{...r,behind:0,dirty:1,catchUpRecovery:undefined,catchUpRecoveryCompleted:receipt}]));await refresh();await expand();
+    const commit={step:"commit",by:"agent",skill:"wtc",key:"api:after-recovery",available:true};
+    collections.set(key,collection([{...r,behind:0,dirty:1,catchUpRecovery:undefined,catchUpRecoveryCompleted:receipt,next:commit,choices:{actions:[commit]}}]));await refresh();await expand();
     assert.match(log().textContent,/local edits recovered; backup retained/);
     assert.match(log().textContent,/Changes remain uncommitted/);
     assert.match(log().textContent,/· (Catch up|Resolve conflicts)Done/);
     assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"completion neither retries nor dispatches another step");
-  } finally {catchUpResult=original;nextResult=undefined;view.dispose();}
+    for(const surface of [host,other.host]) assert.equal(localChangeButton(surface).disabled,false,"exact receipt releases the matching reservation on both surfaces");
+    await expireRequests(expirations);await expand();
+    assert.match(log().textContent,/local edits recovered; backup retained/);
+    assert.doesNotMatch(log().textContent,/Action outcome unconfirmed/,"the old timer cannot regress verified completion");
+    for(const surface of [host,other.host]) assert.equal(localChangeButton(surface).disabled,false);
+  } finally {catchUpResult=original;nextResult=undefined;view.dispose();other.view.dispose();globalThis.setTimeout=nativeSet;}
 });
 
 for (const kind of ["composer","panel"]) test(`${kind} catch-up and group commit cannot race an unresolved local commit`,async()=>{
@@ -3455,4 +3468,31 @@ for(const route of ["direct","planned"])for(const reason of ["conflict","recover
   await settle();failing.delete("sessions.send");assert.ok(commitColumnButton(panel.host).disabled,"lost follow-up delivery is not a finished mutation");assert.match(readable(panel.host),/unconfirmed/i);
   calls.length=0;await localChangeButton(panel.host).onclick();await settle();assert.equal(calls.some(c=>c.method==="sessions.send"),false);
  }finally{failing.delete("sessions.send");card.view.dispose();panel.view.dispose();nextResult=undefined;catchUpResult=previous;}
+});
+
+for(const route of ["direct","batch","resolve"])for(const kind of ["composer","panel"])for(const response of ["accepted","lost"])test(`${route}/${kind}/${response} early recovery receipt survives late transport and preserves newer reservations`,async()=>{
+ const nativeSet=globalThis.setTimeout,expirations=[];globalThis.setTimeout=(fn,delay,...args)=>delay===90000?(expirations.push(fn),{unref(){}}):nativeSet(fn,delay,...args);
+ const ref=`refs/wtc-catch-up/${"d".repeat(40)}-456`,resolve={step:"resolve",by:"agent",skill:"wtc-catch-up",key:"early:resolve",available:true,reason:"Recover edits"},step=route==="resolve"?resolve:{step:"catch-up",by:"wtc",command:["wtc","catch-up"],key:"early:catch",available:true};
+ const r=repo("api",{path:"/state/worktrees/api/test",behind:1,...(route==="direct"?{}:{next:step,choices:{actions:[step]}}),...(route==="resolve"?{catchUpRecovery:ref}:{})}),data=collection([r]);
+ const first=await mount(kind,data),key=first.context.props.sessionKey,second=await mount(kind==="panel"?"composer":"panel",data,undefined,key,{focus:"activity"});
+ const details=kind==="panel"?first.host:second.host;let release,running;
+ const savedCatch=catchUpResult;
+ try{
+  calls.length=0;controlledSend=new Promise(done=>release=done);
+  const recovering={...r,catchUpRecovery:ref,next:resolve,choices:{actions:[resolve]}};
+  catchUpResult={ok:true,result:{code:1,message:"restoration stopped",json:{ok:false,data:{recoveryRequired:true,recoveryRef:ref}}}};
+  nextResult=({payload})=>payload.key===step.key&&route==="batch"?(collections.set(key,collection([recovering])),{ok:true,result:{performed:true,repo:r,...catchUpResult.result}}):{ok:true,result:{performed:false,repo:recovering}};
+  if(route==="batch"){await chooseSteps(first.host);await clickText(first.host,"Select suggested");running=[...first.host.all()].find(n=>n.tagName==="BUTTON"&&/^Run selected \(/.test(n.textContent)).onclick();}
+  else running=[...first.host.all()].find(n=>n.tagName==="BUTTON"&&(route==="resolve"?n.textContent==="Resolve conflicts":n.title?.startsWith("1 new on main. Catch up locally"))).onclick();
+  for(let i=0;i<10;i++)await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1);
+  const receipt={kind:"taba.catch-up-recovery-completed/v1",recoveryRef:ref,head:"e".repeat(40),indexTree:"f".repeat(40),completedAt:new Date().toISOString()},commit={step:"commit",by:"agent",skill:"wtc",key:"early:commit",available:true};
+  const recovered={...r,behind:0,dirty:1,catchUpRecovery:undefined,catchUpRecoveryCompleted:receipt,next:commit,choices:{actions:[commit]}};
+  collections.set(key,collection([recovered]));await refreshButton(second.host).onclick({preventDefault(){},stopPropagation(){}});await settle();
+  for(const surface of [first.host,second.host])assert.equal(localChangeButton(surface).disabled,false,"native completion releases admission even before the old send returns");
+  controlledSend=undefined;release(response==="lost"?Promise.reject(new Error("old response lost")):{runId:"old-accepted"});await running;for(let i=0;i<6;i++)await settle();
+  await expireRequests(expirations);assert.match(readable(details),/local edits recovered; backup retained/);assert.doesNotMatch(readable(details),/Action outcome unconfirmed/);
+  calls.length=0;nextResult={ok:true,result:{performed:false,repo:recovered}};await localChangeButton(first.host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,1,"a new explicit commit is now admitted");
+  await refreshButton(second.host).onclick({preventDefault(){},stopPropagation(){}});await settle();calls.length=0;await localChangeButton(second.host).onclick();await settle();assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"the old receipt must not release a newer commit request");
+  await expireRequests(expirations);const earlier=[...details.all()].find(n=>n.tagName==="BUTTON"&&/^Earlier activity/.test(n.textContent));if(earlier){await earlier.onclick();await settle();}assert.ok([...details.all()].some(n=>n.className==="wtc-activity-item"&&/local edits recovered; backup retained/.test(n.ariaLabel)),"old completion survives newer request timeout");
+ }finally{controlledSend=undefined;release?.({});await running;nextResult=undefined;catchUpResult=savedCatch;first.view.dispose();second.view.dispose();globalThis.setTimeout=nativeSet;}
 });
