@@ -100,8 +100,9 @@ func statusWriteForgeCache(forge, slug, number string, data []byte) {
 
 // statusWriteForgeEntrySince publishes data fetched by a request that started
 // at started, unless the record already holds a response from a later request.
-// Within statusMergedCacheAge, a retained MERGED record rejects active replies;
-// a first confirmed merge can supersede a later active response.
+// Within statusMergedCacheAge, a retained MERGED record rejects non-MERGED or
+// unparseable replies. A first confirmed merge supersedes any non-MERGED or
+// absent observation, regardless of request order.
 // Callers hold the record lock when it can be taken; without it two writers can
 // still interleave between the check and the write.
 func statusWriteForgeEntrySince(kind, forge, slug, key string, data []byte, started time.Time) bool {
@@ -123,8 +124,8 @@ func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []by
 		}
 		promotesMerge = parseErr == nil && candidate.State == "MERGED" && (!known || current.State != "MERGED")
 	}
-	// A first confirmed merge supersedes an active-list observation. Within
-	// the same state, request-start provenance still selects the winning facts.
+	// A confirmed merge supersedes any non-MERGED or absent observation.
+	// Otherwise request-start provenance selects the winner.
 	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return false
 	}

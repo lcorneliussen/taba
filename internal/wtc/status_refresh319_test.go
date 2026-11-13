@@ -800,7 +800,8 @@ func TestStatusUnconfirmedTerminalProducerRows(t *testing.T) {
 				if len(confirmed.PRs) != 0 || (len(confirmed.Orphans) != 0) != onBranch {
 					t.Errorf("confirmed terminal policy changed: PRs=%+v orphans=%+v", confirmed.PRs, confirmed.Orphans)
 				}
-				// Closed/declined/superseded observations are reversible; only MERGED is terminal.
+				// Closed/declined/superseded observations can reopen; cached MERGED
+				// protection remains bounded by statusMergedCacheAge.
 				reopened := []byte(`{"number":7,"id":7,"state":"OPEN","title":"Reopened synthetic"}`)
 				list, _ = statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: reopened, Fingerprint: "reopened"}}, false, time.Now())
 				statusWriteForgeEntry("openprs", tc.forge, "example/widget", "open", list)

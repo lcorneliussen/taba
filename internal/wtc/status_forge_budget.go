@@ -127,6 +127,8 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 		delay := updated.Add(every).Sub(now)
 		if delay > 0 && delay <= statusBitbucketEvery {
 			statusSavePendingConfirmations(forge, queue)
+			// Wait at most statusBitbucketEvery while holding the budget lock;
+			// provider I/O must stay outside this wait.
 			timer := time.NewTimer(delay)
 			<-timer.C
 			now = time.Now()
