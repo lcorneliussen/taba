@@ -3,8 +3,11 @@ package wtc
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 func TestCompatibilityRangeAndRewrite(t *testing.T) {
@@ -363,5 +366,43 @@ case "$*" in *releases/latest*) echo v0.1.12 ;; *) exit 1 ;; esac
 	fixtureGit(t, "-C", c.Harness, "checkout", "--", ".wtc-cli-version", "wtc.toml")
 	if _, err := c.Upgrade(UpgradeOptions{DryRun: true}); err == nil {
 		t.Fatal("a dry run without notes should fail: it has nothing else to show")
+	}
+}
+
+func TestPublishedReleaseNotesRangePrereleasePolicy(t *testing.T) {
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
+printf '%s\n' \
+'{"tag_name":"v0.2.1","body":"future","draft":false,"prerelease":false}' \
+'{"tag_name":"v0.2.0","body":"stable","draft":false,"prerelease":false}' \
+'{"tag_name":"v0.2.0-rc.2","body":"candidate","draft":false,"prerelease":true}' \
+'{"tag_name":"v0.2.0-rc.1","body":"unflagged candidate","draft":false,"prerelease":false}' \
+'{"tag_name":"v0.1.12","body":"flagged prerelease","draft":false,"prerelease":true}' \
+'{"tag_name":"v0.1.11","body":"draft","draft":true,"prerelease":false}' \
+'{"tag_name":"v0.1.10","body":"intermediate","draft":false,"prerelease":false}' \
+'{"tag_name":"v0.1.9","body":"baseline","draft":false,"prerelease":false}'
+`, 0755)
+	t.Setenv("PATH", bin+":/usr/bin:/bin")
+	for _, tt := range []struct {
+		target string
+		want   []string
+	}{
+		{"0.2.0", []string{"0.1.10", "0.2.0"}},
+		{"0.2.0-rc.2", []string{"0.1.10", "0.2.0-rc.2"}},
+		{"0.1.12", []string{"0.1.10", "0.1.12"}},
+	} {
+		t.Run(tt.target, func(t *testing.T) {
+			notes, err := publishedReleaseNotes(semver.MustParse("0.1.9"), semver.MustParse(tt.target))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var versions []string
+			for _, note := range notes {
+				versions = append(versions, note.Version)
+			}
+			if !reflect.DeepEqual(versions, tt.want) {
+				t.Fatalf("got %v, want %v", versions, tt.want)
+			}
+		})
 	}
 }

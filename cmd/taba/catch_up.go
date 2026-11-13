@@ -14,7 +14,7 @@ import (
 
 func addCatchUpCommand(root *cobra.Command, asJSON *bool) {
 	var opt wtc.CatchUpOptions
-	var repos, dest, from string
+	var repos, dest, from, finishRecovery, expectedHead string
 	var harnessOnly, cont bool
 	cmd := &cobra.Command{Use: "catch-up [collection ...]", Short: "Catch up selected worktree collections"}
 	cmd.Flags().BoolVar(&opt.All, "all", false, "Select every collection in the workspace (clean only)")
@@ -33,7 +33,24 @@ func addCatchUpCommand(root *cobra.Command, asJSON *bool) {
 	cmd.Flags().StringVar(&dest, "dest", "", "Under OpenClaw: branch to merge in (default: origin's default branch)")
 	cmd.Flags().StringVar(&from, "from", "", "Under OpenClaw: merge this branch of the same repository instead (a sub-session's, by its name), with no fetch")
 	cmd.Flags().BoolVar(&cont, "continue", false, "In an OpenClaw sandbox: finish a catch-up that stopped on conflicts, once they are resolved")
+	cmd.Flags().StringVar(&finishRecovery, "finish-recovery", "", "Under OpenClaw: acknowledge verified recovery of this exact saved ref; retain backups")
+	cmd.Flags().StringVar(&expectedHead, "expected-head", "", "Full HEAD verified before finishing recovery")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if cmd.Flags().Changed("finish-recovery") || cmd.Flags().Changed("expected-head") {
+			var other []string
+			cmd.Flags().Visit(func(f *pflag.Flag) {
+				if f.Name != "finish-recovery" && f.Name != "expected-head" && f.Name != "json" {
+					other = append(other, "--"+f.Name)
+				}
+			})
+			if len(other) > 0 || len(args) > 0 {
+				return fmt.Errorf("finishing recovery takes only --finish-recovery, --expected-head and --json")
+			}
+			if strings.TrimSpace(finishRecovery) == "" || strings.TrimSpace(expectedHead) == "" {
+				return fmt.Errorf("finishing recovery requires both --finish-recovery and --expected-head with non-empty values")
+			}
+			return finishCheckoutRecovery(finishRecovery, expectedHead, *asJSON)
+		}
 		if gw := openclaw.GatewayFromEnv(os.Getenv); gw != nil {
 			// In a sandbox, catch-up merges the session's base, and only that.
 			var other []string

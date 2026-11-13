@@ -1,5 +1,8 @@
 # Command reference
 
+For complete status representations, column meanings, provider coverage and
+examples of how Git, PR and build facts combine, see [Reading local terminal status](status.md).
+
 Use `wtc <command> --help` for flags, or `wtc commands --json` for the machine-readable surface. `harness init`, `docs`, and `release-notes` require v0.1.39 or newer.
 
 Status marks PR merge conflicts against the target branch with `✗ conflict` in

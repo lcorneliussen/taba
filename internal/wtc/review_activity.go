@@ -57,6 +57,16 @@ func hostedReviewCheck(name string) string {
 	return ""
 }
 
+type hostedActivityCheck struct{ Name, Status, Conclusion, State string }
+
+type hostedActivityPR struct {
+	Head     string `json:"headRefOid"`
+	Requests []struct {
+		Login string `json:"login"`
+	} `json:"reviewRequests"`
+	Checks []hostedActivityCheck `json:"statusCheckRollup"`
+}
+
 var hostedReviewFailure = regexp.MustCompile(`(?i)unable to review|failed to review|review failed|review limit|usage limit|rate limit|quota.{0,50}(exhausted|exceeded)|budget.{0,50}(exhausted|exceeded)|insufficient.{0,30}credits`)
 
 const hostedThreadsQuery = `query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$endCursor){pageInfo{hasNextPage endCursor} nodes{id isResolved isOutdated path line comments(first:1){nodes{body url author{login} originalCommit{oid}}}}}}}}`
@@ -84,6 +94,19 @@ func (c *Context) GetReviewActivity(repo, number string) (ReviewActivity, error)
 	if err != nil {
 		return ReviewActivity{}, err
 	}
+	var pr hostedActivityPR
+	if err := json.Unmarshal(meta, &pr); err != nil {
+		return ReviewActivity{}, err
+	}
+	if !validCheckHead(pr.Head) {
+		return ReviewActivity{}, fmt.Errorf("hosted activity has no full PR head")
+	}
+	// Rollups can omit hosted checks. Fetch the observed commit, never a moving
+	// branch name; the final thread pages verify that the PR still has this head.
+	checks, err := reviewForgeCommand(worktree, "gh", []string{"api", fmt.Sprintf("repos/%s/commits/%s/check-runs?per_page=100", slug, pr.Head), "--paginate", "--slurp"}, nil)
+	if err != nil {
+		return ReviewActivity{}, fmt.Errorf("hosted review check-runs unavailable: %w", err)
+	}
 	reviews, err := reviewForgeCommand(worktree, "gh", []string{"api", fmt.Sprintf("repos/%s/pulls/%s/reviews?per_page=100", slug, number), "--paginate", "--slurp"}, nil)
 	if err != nil {
 		return ReviewActivity{}, err
@@ -93,23 +116,63 @@ func (c *Context) GetReviewActivity(repo, number string) (ReviewActivity, error)
 	if err != nil {
 		return ReviewActivity{}, err
 	}
-	return parseReviewActivity(meta, reviews, threads)
+	return parseReviewActivity(meta, reviews, threads, checks)
 }
 
-func parseReviewActivity(meta, reviews, threads []byte) (ReviewActivity, error) {
-	var pr struct {
-		Head     string `json:"headRefOid"`
-		Requests []struct {
-			Login string `json:"login"`
-		} `json:"reviewRequests"`
-		Checks []struct{ Name, Status, Conclusion, State string } `json:"statusCheckRollup"`
+// Reject missing or partial REST evidence rather than mistaking it for no work.
+func parseHostedActivityChecks(raw []byte, head string) ([]hostedActivityCheck, error) {
+	var pages []struct {
+		Total *int `json:"total_count"`
+		Runs  []struct {
+			Name, Status, Conclusion string
+			Head                     string `json:"head_sha"`
+		} `json:"check_runs"`
 	}
+	if err := json.Unmarshal(raw, &pages); err != nil {
+		return nil, fmt.Errorf("hosted review check-runs: %w", err)
+	}
+	if len(pages) == 0 {
+		return nil, fmt.Errorf("hosted review check-runs unavailable")
+	}
+	checks := []hostedActivityCheck{}
+	total := -1
+	for _, page := range pages {
+		if page.Total == nil || *page.Total < 0 || page.Runs == nil {
+			return nil, fmt.Errorf("hosted review check-runs unavailable")
+		}
+		if total != -1 && *page.Total != total {
+			return nil, fmt.Errorf("hosted review check-runs changed while reading; retry")
+		}
+		total = *page.Total
+		for _, run := range page.Runs {
+			if run.Head != head {
+				return nil, fmt.Errorf("hosted review check-run does not match PR head")
+			}
+			if run.Name == "" || run.Status == "" {
+				return nil, fmt.Errorf("hosted review check-run is incomplete")
+			}
+			checks = append(checks, hostedActivityCheck{Name: run.Name, Status: run.Status, Conclusion: run.Conclusion})
+		}
+	}
+	if len(checks) != total {
+		return nil, fmt.Errorf("hosted review check-runs were truncated or changed; retry")
+	}
+	return checks, nil
+}
+
+func parseReviewActivity(meta, reviews, threads, checkRuns []byte) (ReviewActivity, error) {
+	var pr hostedActivityPR
 	if err := json.Unmarshal(meta, &pr); err != nil {
 		return ReviewActivity{}, err
 	}
-	if len(pr.Head) != 40 {
+	if !validCheckHead(pr.Head) {
 		return ReviewActivity{}, fmt.Errorf("hosted activity has no full PR head")
 	}
+	checks, err := parseHostedActivityChecks(checkRuns, pr.Head)
+	if err != nil {
+		return ReviewActivity{}, err
+	}
+	pr.Checks = append(pr.Checks, checks...)
 	activity := ReviewActivity{Head: pr.Head, Reports: []HostedReviewReport{}, Findings: []HostedReviewFinding{}, Waiting: []string{}}
 	latest := map[string]HostedReviewReport{}
 	var reviewPages [][]struct {
@@ -154,6 +217,9 @@ func parseReviewActivity(meta, reviews, threads []byte) (ReviewActivity, error) 
 	}
 	activeChecks := map[string]bool{}
 	for _, check := range pr.Checks {
+		check.Status = strings.ToUpper(check.Status)
+		check.Conclusion = strings.ToUpper(check.Conclusion)
+		check.State = strings.ToUpper(check.State)
 		provider := hostedReviewCheck(check.Name)
 		if provider == "" {
 			continue

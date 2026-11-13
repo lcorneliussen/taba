@@ -235,6 +235,17 @@ func TestOpenClawSkillsAreTheOpenClawVariants(t *testing.T) {
 			t.Errorf("the local %s has %q too: pick a marker only its OpenClaw variant has", name, marker)
 		}
 	}
+	catchUp, err := os.ReadFile(filepath.Join(dir, "skills/wtc-catch-up/SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(catchUp), "wtc docs instructions/openclaw-recovery.md") || !strings.Contains(string(catchUp), "--finish-recovery") {
+		t.Fatal("installed catch-up skill lacks bundled recovery routing")
+	}
+	reference, err := wtc.ReadDefault("instructions/openclaw-recovery.md")
+	if err != nil || !strings.Contains(string(reference), "--expected-head") {
+		t.Fatalf("recovery reference is not embedded: %v", err)
+	}
 	// Skills without an OpenClaw variant stay local.
 	if _, err := os.Stat(filepath.Join(dir, "skills", "taba-open")); err == nil {
 		t.Error("taba-open has no OpenClaw variant but was installed")
