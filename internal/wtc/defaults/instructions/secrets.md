@@ -87,6 +87,16 @@ For an existing global/external-root setup, first decide whether the receiver
 should keep using that exact source. If so, record the declaration above in its
 own configuration. Otherwise remove stale root assignments from generated/local
 environment and the invoking shell, then run `taba env setup` in the receiver.
+If the generated file still contains the previous root after an intentional
+policy change, preview `taba env setup --repair-generated-roots --dry-run`, then
+repeat without `--dry-run`. This explicit single-collection repair takes authority
+only from receiving policy. It ignores stale caller/generated root aliases,
+refuses conflicting user-local roots, and preserves `.env.collection.local`.
+It updates generated roots and removes generated provider identity hints without
+reading secret directories, running hooks, trusting mise or linking credentials.
+It refuses nonliteral generated shell code and cannot be combined with `--all`.
+Refresh or reopen the invoking shell, then run ordinary `taba env setup` to
+regenerate provider hints. Repair does not update live panes or user configuration.
 No credentials are copied, moved, deleted or relinked by this migration decision.
 Existing panes must reload their environment after regeneration.
 

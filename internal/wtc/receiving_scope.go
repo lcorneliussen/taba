@@ -59,6 +59,12 @@ func (p *ProjectContext) configBytes() ([]byte, string, error) {
 }
 
 func (r ReceivingContext) resolve(checkInherited bool) (ResolvedScope, error) {
+	return r.resolveEnvironment(checkInherited, true)
+}
+
+// Repair may ignore stale generated/caller roots, but never receiver policy or
+// user-local overrides. Ordinary operations always validate generated roots.
+func (r ReceivingContext) resolveEnvironment(checkInherited, checkGenerated bool) (ResolvedScope, error) {
 	var scope ResolvedScope
 	var config []byte
 	var err error
@@ -173,6 +179,9 @@ func (r ReceivingContext) resolve(checkInherited bool) (ResolvedScope, error) {
 			if err != nil && !os.IsNotExist(err) {
 				return scope, fmt.Errorf("cannot validate receiving environment")
 			}
+			if !checkGenerated && name == ".env.collection" {
+				continue
+			}
 			if err := scope.checkAliases(envcompat.Assignments(data), name); err != nil {
 				return scope, err
 			}
@@ -192,6 +201,9 @@ func (s ResolvedScope) checkAliases(values map[string]string, source string) err
 		// Relative ambient paths change meaning with cwd and cannot establish ownership.
 		resolved, err := canonicalPath(value)
 		if !filepath.IsAbs(value) || err != nil || resolved != s.Root {
+			if source == ".env.collection" {
+				return fmt.Errorf("%s in .env.collection conflicts with receiving secrets policy; preview `env setup --repair-generated-roots --dry-run` after reviewing receiving policy; no files changed", name)
+			}
 			return fmt.Errorf("%s in %s conflicts with receiving secrets policy; remove stale root assignments or declare the exact root and allow_external in receiving config, then regenerate env; no files changed", name, source)
 		}
 	}

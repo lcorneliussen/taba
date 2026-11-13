@@ -25,6 +25,28 @@ type envSweepResult struct {
 	Error string `json:"error,omitempty"`
 }
 
+func repairGeneratedRoots(collection string, dryRun, asJSON bool) error {
+	if collection == "" {
+		var err error
+		collection, err = os.Getwd()
+		if err != nil {
+			return err
+		}
+	}
+	result, err := wtc.RepairGeneratedEnvironment(collection, dryRun)
+	if err != nil {
+		return err
+	}
+	if dryRun && !asJSON {
+		fmt.Print(result.Env)
+	}
+	state := "Generated-root repair"
+	if dryRun {
+		state += " preview"
+	}
+	return emit(envelope{OK: true, Data: result, Summary: state + ": provider identity hints omitted from repaired output; refresh or reopen the shell, then run env setup to regenerate them. User-local configuration is preserved."}, asJSON)
+}
+
 func refreshEnvCollection(c *wtc.Context, dryRun, invokeHooks bool) (envResult, error) {
 	data, err := c.RenderEnv()
 	if err != nil {
