@@ -191,7 +191,7 @@ forge yourself.
 
 The gateway's agents have the wtc skills for this host, installed with the
 plugin by `wtc openclaw install`: **wtc-catch-up** (catching up, merging a
-sub-session's branch, resolving the conflicts), **wtc-pr** (getting a pull
+sub-session's branch, recovering preserved edits and resolving conflicts), **wtc-pr** (getting a pull
 request ready for the person's push) and **wtc-follow** (acting on pull
 request news). The card asks for them by name (`/skill wtc-catch-up …`), so a
 click there and a request in the chat do the same.
@@ -201,7 +201,10 @@ click there and a request in the chat do the same.
 `wtc catch-up` merges the destination branch into the child's worktree. It
 never rebases and never pushes. A worktree resting detached at its base, with
 no work yet, just moves to the base's new tip; one with commits on no branch
-is refused until they are on a branch. A conflict is the agent's to resolve
+is refused until they are on a branch. Native gateway catch-up preserves staged, unstaged and untracked edits without
+requiring a commit first. If restoration stops, follow
+`wtc docs instructions/openclaw-recovery.md`; finish the verified operation
+with its exact ref and HEAD, retaining the backup. A conflict is the agent's to resolve
 in its own checkout: the wtc-catch-up skill. Rebasing a published branch
 makes it unpublishable.
 
