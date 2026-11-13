@@ -138,9 +138,11 @@ func TestTunnelDevHelperInputsAndAsset(t *testing.T) {
 }
 
 func TestTunnelDevBundledCommandKeepsCredentialInStdin(t *testing.T) {
-	node := os.Getenv("TABA_TEST_NODE")
+	// TestMain clears TABA_* collection variables. Use the established native
+	// integration-test namespace so CI's explicit tool input survives it.
+	node := os.Getenv("WTC_TEST_NODE")
 	if node == "" {
-		t.Skip("set TABA_TEST_NODE for the Node22 embedded-helper subprocess check")
+		t.Skip("set WTC_TEST_NODE for the Node22 embedded-helper subprocess check")
 	}
 	t.Setenv("NODE_OPTIONS", "--require=/synthetic/missing-module")
 	t.Setenv("NODE_TLS_REJECT_UNAUTHORIZED", "0")
