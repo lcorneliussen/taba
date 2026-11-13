@@ -99,6 +99,10 @@ func statusForgeCool(forge string, retry time.Duration) {
 }
 
 func statusTakeForgeToken(forge string) bool {
+	return statusTakeForgeTokenFor(forge, "")
+}
+
+func statusTakeForgeTokenFor(forge, confirmation string) bool {
 	burst, every := statusForgeAllowance(forge)
 	if burst >= 1<<30 {
 		return true
@@ -110,6 +114,50 @@ func statusTakeForgeToken(forge string) bool {
 	}
 	defer unlock()
 	now := time.Now()
+	queue := statusReadPendingConfirmations(forge, now)
+	admitted := len(queue) == 0 || queue[0].Key == confirmation
+	if confirmation != "" {
+		queue = statusQueueConfirmation(queue, confirmation, now)
+	}
+	tokens, updated := statusReadForgeBudget(path, burst, every, now)
+	// Released clients honor this existing lock but do not know the FIFO.
+	// Keep its next refill for the head confirmation, bounded by the standard
+	// Bitbucket interval. Provider I/O starts only after this lock is released.
+	if forge == "bitbucket.org" && confirmation != "" && admitted && tokens == 0 && !statusForgeCooling(forge) {
+		delay := updated.Add(every).Sub(now)
+		if delay > 0 && delay <= statusBitbucketEvery {
+			statusSavePendingConfirmations(forge, queue)
+			// Wait at most statusBitbucketEvery while holding the budget lock;
+			// provider I/O must stay outside this wait.
+			timer := time.NewTimer(delay)
+			<-timer.C
+			now = time.Now()
+			tokens, updated = statusReadForgeBudget(path, burst, every, now)
+			if statusForgeCooling(forge) {
+				return false
+			}
+		}
+	}
+	// Keep one token per queued confirmation; spare burst capacity remains
+	// available to ordinary reads while confirmations retain FIFO order.
+	if confirmation == "" && tokens > len(queue) {
+		admitted = true
+	}
+	if tokens < 1 || !admitted {
+		statusSavePendingConfirmations(forge, queue)
+		return false
+	}
+	if confirmation != "" && len(queue) > 0 && queue[0].Key == confirmation {
+		queue = queue[1:]
+	}
+	statusSavePendingConfirmations(forge, queue)
+	tokens--
+	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil
+}
+
+// Caller holds the existing budget lock; re-reading after a wait retains the
+// released two-field protocol and revalidates capacity before admission.
+func statusReadForgeBudget(path string, burst int, every time.Duration, now time.Time) (int, time.Time) {
 	tokens, updated := burst, now
 	if raw, err := os.ReadFile(path); err == nil {
 		fields := strings.Fields(string(raw))
@@ -133,11 +181,7 @@ func statusTakeForgeToken(forge string) bool {
 		tokens = burst
 		updated = now
 	}
-	if tokens < 1 {
-		return false
-	}
-	tokens--
-	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil
+	return tokens, updated
 }
 
 func statusLockCache(path string) (func(), error) {
@@ -159,13 +203,22 @@ func statusLockCache(path string) (func(), error) {
 }
 
 func statusWithForgeBudget(forge string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
+	return statusWithForgeBudgetKey(forge, "", stale, fetch)
+}
+
+func statusWithForgeBudgetKey(forge, confirmation string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
+	// GitHub identity recovery already schedules its ordinary and repair reads.
+	// Reserve admission only for Bitbucket omission confirmations.
+	if forge != "bitbucket.org" {
+		confirmation = ""
+	}
 	if statusForgeCooling(forge) {
 		if len(stale) > 0 {
 			return stale, false, nil
 		}
 		return nil, false, errForgeCooling
 	}
-	if !statusTakeForgeToken(forge) {
+	if !statusTakeForgeTokenFor(forge, statusConfirmationKey(confirmation)) {
 		if len(stale) > 0 {
 			return stale, false, nil
 		}
@@ -206,8 +259,11 @@ func statusFetchShared(kind, forge, slug, key string, fetch func() ([]byte, erro
 	if err != nil {
 		return nil, false, err
 	}
-	if live {
-		statusWriteForgeEntrySince(kind, forge, slug, key, raw, started)
+	if live && !statusWriteForgeEntrySince(kind, forge, slug, key, raw, started) {
+		if winner, ok := statusReadForgeEntryAny(kind, forge, slug, key); ok {
+			return winner, false, nil
+		}
+		return nil, false, errors.New("superseding forge observation is unavailable")
 	}
 	return raw, live, nil
 }

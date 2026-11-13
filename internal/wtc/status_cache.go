@@ -3,11 +3,13 @@ package wtc
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"taba.sh/taba/internal/envcompat"
 )
 
@@ -58,10 +60,6 @@ func statusReadForgeCache(forge, slug, number string) ([]byte, bool) {
 	return statusReadForgeEntry("pr", forge, slug, number)
 }
 
-func statusReadMergedForgeCache(forge, slug, number string) ([]byte, bool) {
-	return statusReadForgeEntryWithAge("pr", forge, slug, number, statusMergedCacheAge())
-}
-
 func statusReadForgeEntry(kind, forge, slug, key string) ([]byte, bool) {
 	return statusReadForgeEntryWithAge(kind, forge, slug, key, statusForgeCacheAge())
 }
@@ -71,16 +69,29 @@ func statusReadForgeEntryAny(kind, forge, slug, key string) ([]byte, bool) {
 }
 
 func statusReadForgeEntryWithAge(kind, forge, slug, key string, age time.Duration) ([]byte, bool) {
+	data, _, ok := statusReadForgeEntryObserved(kind, forge, slug, key, age)
+	return data, ok
+}
+
+// Read bytes and observation time from the same opened regular file, even
+// while another pane atomically publishes a newer observation.
+func statusReadForgeEntryObserved(kind, forge, slug, key string, age time.Duration) ([]byte, time.Time, bool) {
 	path := statusForgeEntryPath(kind, forge, slug, key)
 	if !statusSecureCacheDir(filepath.Dir(path)) {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	info, err := os.Lstat(path)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
 	if err != nil || !info.Mode().IsRegular() || time.Since(info.ModTime()) >= age {
-		return nil, false
+		return nil, time.Time{}, false
 	}
-	data, err := os.ReadFile(path)
-	return data, err == nil && len(data) != 0
+	data, err := io.ReadAll(file)
+	return data, info.ModTime(), err == nil && len(data) != 0
 }
 
 func statusWriteForgeCache(forge, slug, number string, data []byte) {
@@ -89,18 +100,76 @@ func statusWriteForgeCache(forge, slug, number string, data []byte) {
 
 // statusWriteForgeEntrySince publishes data fetched by a request that started
 // at started, unless the record already holds a response from a later request.
+// Within statusMergedCacheAge, a retained MERGED record rejects non-MERGED or
+// unparseable replies. A first confirmed merge supersedes any non-MERGED or
+// absent observation, regardless of request order.
 // Callers hold the record lock when it can be taken; without it two writers can
 // still interleave between the check and the write.
 func statusWriteForgeEntrySince(kind, forge, slug, key string, data []byte, started time.Time) bool {
+	return statusWriteForgeEntrySinceObserved(kind, forge, slug, key, data, started, time.Time{})
+}
+
+// List-backed detail carries the list's observation time through atomic
+// publication, so later cache reads cannot mistake publication for a new read.
+func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []byte, started, observed time.Time) bool {
 	if len(data) == 0 {
 		return false
 	}
-	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) {
+	promotesMerge := false
+	isMerge := false
+	if kind == "pr" {
+		candidate, parseErr := statusParseForgeDetail(forge, data, PRRecord{Number: key})
+		current, known := statusRetainedMerge(PRRecord{Number: key}, slug, forge)
+		if known && current.State == "MERGED" && (parseErr != nil || candidate.State != "MERGED") {
+			return false
+		}
+		isMerge = parseErr == nil && candidate.State == "MERGED"
+		promotesMerge = isMerge && !known
+	}
+	// A first confirmed merge supersedes non-MERGED or absent state regardless
+	// of request order. Later replies follow request-start provenance; retained
+	// merge state still controls readers.
+	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return false
 	}
-	statusWriteForgeEntry(kind, forge, slug, key, data)
+	// Released publishers can overwrite the ordinary detail without this guard.
+	// Retain confirmed merge evidence independently, with its actual observation
+	// time and the same retention policy; reading it never renews authority.
+	if isMerge {
+		if observed.IsZero() {
+			observed = time.Now()
+		}
+		if !statusRetainMergeObservation(forge, slug, key, data, observed) {
+			return false
+		}
+	}
+	if !statusWriteForgeEntryObserved(kind, forge, slug, key, data, observed) {
+		return false
+	}
 	statusWriteForgeEntry("since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)))
 	return true
+}
+
+// Serialize new publications and legacy migrations on the independent record.
+// Observation time, not migration time, controls both ordering and expiry.
+// Callers may already hold the ordinary PR lock; this path never acquires it.
+func statusRetainMergeObservation(forge, slug, key string, data []byte, observed time.Time) bool {
+	if observed.IsZero() || time.Since(observed) >= statusMergedCacheAge() {
+		return false
+	}
+	unlock, err := statusLockCache(statusForgeEntryPath("merge", forge, slug, key))
+	if err != nil {
+		return false
+	}
+	defer unlock()
+	saved, at, ok := statusReadForgeEntryObserved("merge", forge, slug, key, statusMergedCacheAge())
+	if ok {
+		prior, err := statusParseForgeDetail(forge, saved, PRRecord{Number: key})
+		if err == nil && prior.State == "MERGED" && !observed.After(at) {
+			return true
+		}
+	}
+	return statusWriteForgeEntryObserved("merge", forge, slug, key, data, observed)
 }
 
 func statusForgeEntrySince(kind, forge, slug, key string) (time.Time, bool) {
@@ -116,28 +185,36 @@ func statusForgeEntrySince(kind, forge, slug, key string) (time.Time, bool) {
 }
 
 func statusWriteForgeEntry(kind, forge, slug, key string, data []byte) {
+	statusWriteForgeEntryObserved(kind, forge, slug, key, data, time.Time{})
+}
+
+func statusWriteForgeEntryObserved(kind, forge, slug, key string, data []byte, observed time.Time) bool {
 	if len(data) == 0 {
-		return
+		return false
 	}
 	path := statusForgeEntryPath(kind, forge, slug, key)
 	if !statusSecureCacheDir(filepath.Dir(path)) {
-		return
+		return false
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".pr-")
 	if err != nil {
-		return
+		return false
 	}
 	defer os.Remove(tmp.Name())
 	if tmp.Chmod(0600) != nil {
 		tmp.Close()
-		return
+		return false
 	}
 	if _, err = tmp.Write(data); err != nil {
 		tmp.Close()
-		return
+		return false
+	}
+	if !observed.IsZero() && os.Chtimes(tmp.Name(), observed, observed) != nil {
+		tmp.Close()
+		return false
 	}
 	if tmp.Close() != nil {
-		return
+		return false
 	}
-	_ = os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path) == nil
 }
