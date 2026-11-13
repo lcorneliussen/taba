@@ -92,6 +92,25 @@ func TestReceivingContextCannotBorrowEnclosingProject(t *testing.T) {
 	}
 }
 
+func TestReceivingPolicyAliasTransitionRevalidatesPermission(t *testing.T) {
+	c := fixture(t)
+	for _, key := range rootAliases {
+		t.Setenv(key, "")
+	}
+	// Introducing a supported config spelling does not change an owned root.
+	fixtureFile(t, filepath.Join(c.Harness, "taba.toml"), "[herdr]\nsession='synthetic'\n", 0644)
+	scope, err := c.ValidateControlRoot()
+	if err != nil || scope.Root != c.ConfigRoot || filepath.Base(scope.PolicySource) != "taba.toml" {
+		t.Fatalf("config alias transition refused: %+v %v", scope, err)
+	}
+	// The newly selected policy is still checked; filename changes grant nothing.
+	foreign := realPath(t, t.TempDir())
+	fixtureFile(t, filepath.Join(c.Harness, "wtc.toml"), "[secrets]\nroot='"+foreign+"'\nallow_external=true\n", 0644)
+	if _, err := c.ValidateControlRoot(); err == nil {
+		t.Fatal("config alias transition silently redirected a selected root")
+	}
+}
+
 func TestReceivingConsumersUseResolvedScope(t *testing.T) {
 	c := fixture(t)
 	for _, key := range rootAliases {

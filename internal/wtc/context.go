@@ -96,15 +96,14 @@ type Config struct {
 	} `toml:"openclaw"`
 }
 type Context struct {
-	Collection          string          `json:"collection"`
-	Harness             string          `json:"harness"`
-	Workspace           string          `json:"workspace"`
-	Registry            Registry        `json:"registry"`
-	Config              Config          `json:"-"`
-	ConfigRoot          string          `json:"config_root"`
-	Project             *ProjectContext `json:"project,omitempty"`
-	creatingReceiver    bool
-	controlPolicySource string
+	Collection       string          `json:"collection"`
+	Harness          string          `json:"harness"`
+	Workspace        string          `json:"workspace"`
+	Registry         Registry        `json:"registry"`
+	Config           Config          `json:"-"`
+	ConfigRoot       string          `json:"config_root"`
+	Project          *ProjectContext `json:"project,omitempty"`
+	creatingReceiver bool
 	// AdHoc marks a collection without a harness repository. Its Harness is the
 	// collection-local config directory and its registry is tracked nowhere.
 	AdHoc bool `json:"ad_hoc,omitempty"`
@@ -257,7 +256,7 @@ func (c *Context) load() error {
 	if err != nil {
 		return err
 	}
-	c.ConfigRoot, c.controlPolicySource = scope.Root, scope.PolicySource
+	c.ConfigRoot = scope.Root
 	var b []byte
 	if c.Project != nil && c.Project.Source.Owner != "" {
 		b, _, err = c.Project.snapshotFile(".harness-repos.yml", ".harness-repos.yml")

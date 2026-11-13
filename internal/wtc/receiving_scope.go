@@ -232,9 +232,6 @@ func (c *Context) ValidateControlRoot() (ResolvedScope, error) {
 	if err != nil {
 		return s, err
 	}
-	if c.controlPolicySource != "" && c.controlPolicySource != s.PolicySource {
-		return s, fmt.Errorf("receiving policy source changed; reopen the collection; no files changed")
-	}
 	if c.ConfigRoot != "" && !sameCanonicalPath(c.ConfigRoot, s.Root) {
 		return s, fmt.Errorf("selected control root changed; reopen the receiving collection; no files changed")
 	}
