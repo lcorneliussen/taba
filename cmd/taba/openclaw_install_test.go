@@ -235,7 +235,7 @@ func TestOpenClawSkillsAreTheOpenClawVariants(t *testing.T) {
 			t.Errorf("the local %s has %q too: pick a marker only its OpenClaw variant has", name, marker)
 		}
 	}
-	catchUp, err := os.ReadFile(filepath.Join(dir, "skills/wtc-catch-up/SKILL.md"))
+	catchUp, err := os.ReadFile(filepath.Join(dir, "skills/taba-catch-up/SKILL.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
