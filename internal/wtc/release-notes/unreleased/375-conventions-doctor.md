@@ -1,4 +1,4 @@
 ## Rename
 
-- **`taba doctor` reports the wtc conventions a project still uses**, such as `wtc.toml`, `.wtc-cli-version`, `WTC-SCOPE.md`, `WTC_*` variables and `wtc` commands in harness files, or `~/.config/wtc`. Each finding comes with its migration step. Items that have no taba name yet, or that taba moves itself, are shown as *waiting*. During 0.2.x these findings never fail `doctor`. `taba doctor --all` checks every collection in the workspace and also works from the workspace root. `taba conventions` lists every convention with its taba name, what this release supports and how to migrate; [docs/conventions.md](https://github.com/lcorneliussen/taba/blob/main/docs/conventions.md) has the same list together with the phases of a taba project
+- **`taba doctor` reports the wtc names a project still uses, with a migration step for each.** `taba doctor --all` checks the whole workspace, also from its root, and `taba conventions` lists every name; findings don't fail `doctor` during 0.2.x
   ([#375](https://github.com/lcorneliussen/taba/issues/375)).
