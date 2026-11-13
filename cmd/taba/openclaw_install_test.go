@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/Masterminds/semver/v3"
 	"taba.sh/taba/internal/wtc"
 )
@@ -19,7 +21,7 @@ func TestWriteOpenClawPluginStampsTheVersion(t *testing.T) {
 	if err := writeOpenClawPlugin(dir, "v1.2.3"); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"index.js", "package.json", "openclaw.plugin.json", "dist/control-ui/v1/index.js", "skills/wtc/SKILL.md",
+	for _, f := range []string{"index.js", "package.json", "openclaw.plugin.json", "dist/control-ui/v1/index.js", "skills/taba/SKILL.md", "skills/wtc/SKILL.md",
 		// The taba skills' OpenClaw variants, under their own names.
 		"skills/taba-catch-up/SKILL.md", "skills/taba-pr/SKILL.md", "skills/taba-follow/SKILL.md"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
@@ -54,8 +56,8 @@ func TestWriteOpenClawPluginStampsTheVersion(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(devDir, "package.json")); !regexp.MustCompile(`"version": "\d+\.\d+\.\d+-dev[+"]`).Match(data) {
 		t.Errorf("a dev build is not stamped with a -dev version:\n%s", data)
 	}
-	skill, _ := os.ReadFile(filepath.Join(dir, "skills/wtc/SKILL.md"))
-	if !strings.Contains(string(skill), "wtc docs instructions/openclaw.md") {
+	skill, _ := os.ReadFile(filepath.Join(dir, "skills/taba/SKILL.md"))
+	if !strings.Contains(string(skill), "taba docs instructions/openclaw.md") {
 		t.Error("the skill does not point the agent at the embedded instructions")
 	}
 }
@@ -249,5 +251,61 @@ func TestOpenClawSkillsAreTheOpenClawVariants(t *testing.T) {
 	// Skills without an OpenClaw variant stay local.
 	if _, err := os.Stat(filepath.Join(dir, "skills", "taba-open")); err == nil {
 		t.Error("taba-open has no OpenClaw variant but was installed")
+	}
+}
+
+func TestOpenClawRootSkillUpgradePreservesCanonicalAndLegacyDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "skills", "wtc", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(old), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(old, []byte("legacy full procedure before upgrade"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeOpenClawPlugin(dir, "v1.2.3"); err != nil {
+		t.Fatal(err)
+	}
+	type skill struct {
+		Name         string `yaml:"name"`
+		DisableModel bool   `yaml:"disable-model-invocation"`
+		Metadata     struct {
+			OpenClaw struct {
+				SkillKey string `yaml:"skillKey"`
+				Requires struct {
+					Bins []string `yaml:"bins"`
+				} `yaml:"requires"`
+			} `yaml:"openclaw"`
+		} `yaml:"metadata"`
+	}
+	for _, name := range []string{"taba", "wtc"} {
+		raw, err := os.ReadFile(filepath.Join(dir, "skills", name, "SKILL.md"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		parts := strings.SplitN(string(raw), "---", 3)
+		if len(parts) != 3 {
+			t.Fatalf("%s has no valid skill frontmatter", name)
+		}
+		var got skill
+		if err := yaml.Unmarshal([]byte(parts[1]), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Name != name {
+			t.Fatalf("%s installed as %q", name, got.Name)
+		}
+		if got.DisableModel {
+			t.Fatalf("%s was hidden from existing name-based agent allowlists", name)
+		}
+		bins := got.Metadata.OpenClaw.Requires.Bins
+		if len(bins) != 2 || bins[0] != name || bins[1] != "git" {
+			t.Fatalf("%s eligibility requires %v", name, bins)
+		}
+		if name == "taba" && got.Metadata.OpenClaw.SkillKey != "wtc" {
+			t.Fatal("canonical skill lost the legacy settings/session-toggle identity")
+		}
+		if strings.Contains(string(raw), "legacy full procedure before upgrade") {
+			t.Fatal("upgrade retained the stale procedure")
+		}
 	}
 }
