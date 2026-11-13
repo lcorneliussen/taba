@@ -385,15 +385,30 @@ func RunRepoTeardown(worktree string) {
 }
 
 func runRepoLifecycle(worktree, hook string) {
+	c, err := OpenCollection(filepath.Dir(worktree))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "lifecycle hook refused:", err)
+		return
+	}
+	c.runRepoLifecycle(worktree, hook)
+}
+
+func (c *Context) runRepoLifecycle(worktree, hook string) {
+	env, err := c.ReceivingEnvironment(os.Environ())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "lifecycle hook refused:", err)
+		return
+	}
 	if mise, err := exec.LookPath("mise"); err == nil {
 		if _, err := os.Stat(filepath.Join(worktree, "mise.toml")); err == nil {
 			cmd := exec.Command(mise, "tasks", "ls")
+			cmd.Env = env
 			cmd.Dir = worktree
 			if output, err := cmd.Output(); err == nil {
 				scanner := bufio.NewScanner(strings.NewReader(string(output)))
 				for scanner.Scan() {
 					if fields := strings.Fields(scanner.Text()); len(fields) > 0 && fields[0] == "harness:"+hook {
-						runRepoCommand(worktree, hook, mise, "run", "harness:"+hook)
+						c.runRepoCommand(worktree, hook, mise, "run", "harness:"+hook)
 						return
 					}
 				}
@@ -402,17 +417,16 @@ func runRepoLifecycle(worktree, hook string) {
 	}
 	path := filepath.Join(worktree, ".harness", hook+".sh")
 	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode()&0111 != 0 {
-		runRepoCommand(worktree, hook, path)
+		c.runRepoCommand(worktree, hook, path)
 	}
 }
 
-func runRepoCommand(worktree, hook, program string, args ...string) {
-	collection := filepath.Dir(worktree)
-	// mise loads the parent config itself, but direct script hooks need the same
-	// generated and local collection env when mise is absent. Source the files
-	// as data in a child shell, then replace it with the actual hook process.
-	argv := append([]string{"-c", `set -a; [ ! -f "$1" ] || . "$1"; [ ! -f "$2" ] || . "$2"; shift 2; exec "$@"`, "wtc-" + hook, filepath.Join(collection, ".env.collection"), filepath.Join(collection, ".env.collection.local"), program}, args...)
-	cmd := exec.Command("/bin/sh", argv...)
+func (c *Context) runRepoCommand(worktree, hook, program string, args ...string) {
+	cmd, err := c.ReceivingCommand(program, args...)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "lifecycle hook refused:", err)
+		return
+	}
 	cmd.Dir = worktree
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Run(); err != nil {

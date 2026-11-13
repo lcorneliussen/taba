@@ -24,7 +24,6 @@ func fixture(t *testing.T) *Context {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.ConfigRoot = filepath.Join(root, "config")
 	return c
 }
 func TestRenderEnvPreservesPortBase(t *testing.T) {
@@ -211,7 +210,8 @@ func TestInvalidMisePinDoesNotRewrite(t *testing.T) {
 
 func TestRenderedEnvCanBeSourcedWithSpaces(t *testing.T) {
 	c := fixture(t)
-	c.ConfigRoot = filepath.Join(t.TempDir(), "control root")
+	c.ConfigRoot = filepath.Join(c.Workspace, "control root")
+	fixtureFile(t, filepath.Join(c.Harness, "wtc.toml"), "[secrets]\nroot = '"+c.ConfigRoot+"'\n", 0644)
 	data, err := c.RenderEnv()
 	if err != nil {
 		t.Fatal(err)

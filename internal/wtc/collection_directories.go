@@ -41,6 +41,16 @@ func collectionDirectoryInput(collection, namespace string) (string, error) {
 // An incomplete config directory still marks a boundary: opening it reports
 // the missing registry instead of silently discovering a parent collection.
 func collectionMarker(collection string) (bool, error) {
+	if descriptorPresent(collection, ProjectDescriptorFile) {
+		return false, nil
+	}
+	if descriptorPresent(collection, CollectionDescriptorFile) {
+		return true, nil
+	}
+	return legacyCollectionMarker(collection)
+}
+
+func legacyCollectionMarker(collection string) (bool, error) {
 	config, err := collectionDirectoryInput(collection, "config")
 	if err != nil {
 		return false, err

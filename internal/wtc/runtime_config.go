@@ -46,7 +46,16 @@ func runtimeURLFromEnv(collection, name string) (string, error) {
 func runtimeEnvValue(collection, name string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", `set -ea; [ ! -f "$1" ] || . "$1"; [ ! -f "$2" ] || . "$2"; printenv "$3"`, "wtc-runtime-url", filepath.Join(collection, ".env.collection"), filepath.Join(collection, ".env.collection.local"), name)
+	receiver, err := OpenCollection(collection)
+	if err != nil {
+		return "", err
+	}
+	prepared, err := receiver.ReceivingCommand("printenv", name)
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.CommandContext(ctx, prepared.Args[0], prepared.Args[1:]...)
+	cmd.Env = prepared.Env
 	cmd.Dir = collection
 	var out statusLimitedBuffer
 	out.limit = 4096

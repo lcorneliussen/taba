@@ -222,6 +222,17 @@ func (c *Context) retirePreflight(opt RetireOptions) (RetireResult, []retireWork
 	if err != nil {
 		return result, nil, err
 	}
+	if info, err := os.Lstat(filepath.Join(target, ".config")); err == nil {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return result, nil, fmt.Errorf("retirement blocked: collection private control path requires manual preservation")
+		}
+		entries, err := os.ReadDir(filepath.Join(target, ".config"))
+		if err != nil || len(entries) != 0 {
+			return result, nil, fmt.Errorf("retirement blocked: preserve collection private control data before retiring; --force cannot discard credentials")
+		}
+	} else if !os.IsNotExist(err) {
+		return result, nil, fmt.Errorf("retirement blocked: cannot verify collection private control data")
+	}
 	result.Collection = target
 	if _, err := preflightDevRetirement(target); err != nil {
 		return result, nil, err

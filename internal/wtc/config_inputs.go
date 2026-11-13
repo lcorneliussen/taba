@@ -9,24 +9,37 @@ import (
 // Legacy inputs stay authoritative during phase 0: older clients still write
 // them. Only an absent legacy path permits the new spelling; invalid paths
 // must not silently select a different configuration. No path is created here.
-func legacyInput(dir, legacy, current string) (string, error) {
+func preferredInput(legacy, current string, present func(string) (bool, error)) (string, error) {
 	for _, name := range []string{legacy, current} {
+		exists, err := present(name)
+		if err != nil {
+			return name, err
+		}
+		if exists {
+			return name, nil
+		}
+	}
+	return legacy, nil
+}
+
+func legacyInput(dir, legacy, current string) (string, error) {
+	name, err := preferredInput(legacy, current, func(name string) (bool, error) {
 		path := filepath.Join(dir, name)
 		info, err := os.Lstat(path)
 		if os.IsNotExist(err) {
-			continue
+			return false, nil
 		}
 		if err != nil {
-			return path, err
+			return false, err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			if _, err := os.Stat(path); err != nil {
-				return path, err
+				return false, err
 			}
 		}
-		return path, nil
-	}
-	return filepath.Join(dir, legacy), nil
+		return true, nil
+	})
+	return filepath.Join(dir, name), err
 }
 
 func configInput(harness string) (string, error) {

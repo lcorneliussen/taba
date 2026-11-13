@@ -143,6 +143,9 @@ func machineTWGSite(root string) (string, error) {
 	return value, nil
 }
 func (c *Context) RenderEnv() ([]byte, error) {
+	if _, err := c.ValidateControlRoot(); err != nil {
+		return nil, err
+	}
 	base, err := c.portBase()
 	if err != nil {
 		return nil, err

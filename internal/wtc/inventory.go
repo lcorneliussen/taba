@@ -48,6 +48,9 @@ type EnvInventoryKey struct {
 var envKeyName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func (c *Context) ListEnv() (EnvInventory, error) {
+	if _, err := c.ValidateControlRoot(); err != nil {
+		return EnvInventory{}, err
+	}
 	result := EnvInventory{Files: []EnvInventoryFile{}, Variables: []EnvInventoryKey{}}
 	seen := map[string]bool{}
 	machine, err := MachineEnvFile(c.ConfigRoot)
@@ -114,6 +117,13 @@ func readEnvKeyNames(path string) ([]string, bool, error) {
 }
 
 func (c *Context) ListSecrets(repoFilter string) (SecretInventory, error) {
+	scope, err := c.ValidateControlRoot()
+	if err != nil {
+		return SecretInventory{}, err
+	}
+	if err := scope.validateSecretSources(); err != nil {
+		return SecretInventory{}, err
+	}
 	result := SecretInventory{Files: []SecretInventoryFile{}}
 	harnessRepo, _ := c.HarnessRepoName()
 	if repoFilter == "harness" && harnessRepo != "" {
