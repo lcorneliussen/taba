@@ -1,6 +1,7 @@
 # Scope — {{COLLECTION}}
 
-<!-- Template: harness/collection-SCOPE.md, seeded into <collection>/WTC-SCOPE.md.
+<!-- Template: harness/collection-SCOPE.md, seeded into <collection>/SCOPE.md
+     (WTC-SCOPE.md in harnesses that still pin with .wtc-cli-version).
      Local and ephemeral: this file dies with the collection (retire.sh).
      Durable task state — decisions, PR links — belongs in the issue and the
      PR. Keep this short enough that an agent reads all of it before starting
@@ -10,7 +11,7 @@
 ## Task
 
 (One paragraph: what this collection exists to do, and what "done" looks like.
- Seeded from HANDOFF.md by /wtc-start.)
+ Seeded from HANDOFF.md by /taba-start.)
 
 ## Tracking
 

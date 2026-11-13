@@ -82,7 +82,7 @@ func ChoicesFor(f Facts) Choices {
 		return c
 	}
 	if f.Dirty > 0 && f.PR != nil && f.PR.State == "merged" {
-		add(Step{Step: "new-branch", By: ByAgent, Skill: "wtc-catch-up", Reason: "Preserve intended uncommitted work on a new branch; the merged branch is finished."}, "", true)
+		add(Step{Step: "new-branch", By: ByAgent, Skill: "taba-catch-up", Reason: "Preserve intended uncommitted work on a new branch; the merged branch is finished."}, "", true)
 		return c
 	}
 	if f.Dirty > 0 {
@@ -91,7 +91,7 @@ func ChoicesFor(f Facts) Choices {
 			conflicts := len(f.MergeConflicts) > 0 || f.PR != nil && f.PR.Mergeable == "conflicting"
 			add(Step{Step: "catch-up", By: ByWTC, Approve: ApproveAgent, Command: []string{"wtc", "catch-up"}, Reason: "Catch up with the base, preserving local changes and their staging in a recovery copy. Restore them after the merge; conflicts need the owning conversation."}, "", !conflicts)
 			if conflicts {
-				add(Step{Step: "merge", By: ByAgent, Skill: "wtc-catch-up", Reason: "The base merge conflicts. Before git merge, preserve restored local edits and their staging in a separately pinned Git stash, verify the checkout is clean, then merge and resolve the base. Reconcile the saved staged, unstaged and untracked edits afterwards; do not publish or discard the backup. Follow the bundled recovery procedure in the owning environment."}, "", true)
+				add(Step{Step: "merge", By: ByAgent, Skill: "taba-catch-up", Reason: "The base merge conflicts. Before git merge, preserve restored local edits and their staging in a separately pinned Git stash, verify the checkout is clean, then merge and resolve the base. Reconcile the saved staged, unstaged and untracked edits afterwards; do not publish or discard the backup. Follow the bundled recovery procedure in the owning environment."}, "", true)
 			}
 		}
 		return c
@@ -102,7 +102,7 @@ func ChoicesFor(f Facts) Choices {
 	}
 	// A forge approval is not evidence of a current independent review. The
 	// follow skill rechecks reviews, requirements and ownership before acting.
-	follow := Step{Step: "follow-pr", By: ByAgent, Skill: "wtc-follow", Reason: fmt.Sprintf("Check #%d's current reviews, requirements and next blocker. Independent review execution is a separate action.", pr.Number)}
+	follow := Step{Step: "follow-pr", By: ByAgent, Skill: "taba-follow", Reason: fmt.Sprintf("Check #%d's current reviews, requirements and next blocker. Independent review execution is a separate action.", pr.Number)}
 	add(follow, "", c.Recommended == "")
 	reviewBlocked := ""
 	if f.ToPush > 0 {
@@ -114,7 +114,7 @@ func ChoicesFor(f Facts) Choices {
 	if f.Host == HostOpenClaw {
 		reviewBlocked = "Independent review jobs on this host require the shared review adapter. Use Check PR progress for a handoff."
 	}
-	add(Step{Step: "review", By: ByAgent, Skill: "wtc-local-review", Reason: fmt.Sprintf("Review #%d independently; check existing review activity and ownership before starting.", pr.Number)}, reviewBlocked, false)
+	add(Step{Step: "review", By: ByAgent, Skill: "taba-local-review", Reason: fmt.Sprintf("Review #%d independently; check existing review activity and ownership before starting.", pr.Number)}, reviewBlocked, false)
 	mergeBlocked := ""
 	switch {
 	case pr.Head != "" && pr.Head != f.Head:

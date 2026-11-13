@@ -74,7 +74,7 @@ func TestHarnessCommandsWorkOutsideCollection(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "harness")); !os.IsNotExist(err) {
 		t.Fatal("invalid command wrote scaffold")
 	}
-	if out, err := run("harness", "init", "harness", "--remote", "https://example.invalid/harness.git", "--cli-version", "0.1.38"); err != nil || !strings.Contains(out, "created harness") {
+	if out, err := run("harness", "init", "harness", "--remote", "https://example.invalid/harness.git", "--cli-version", "0.2.0"); err != nil || !strings.Contains(out, "created harness") {
 		t.Fatal(out, err)
 	}
 }

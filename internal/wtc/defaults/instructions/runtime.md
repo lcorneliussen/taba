@@ -2,7 +2,7 @@
 
 This integration is available from WTC **v0.1.40** and remains experimental.
 Test it in a disposable collection before updating a harness's release pin.
-Read `wtc release-notes --since <old-pin>` using the target binary first.
+Read `taba release-notes --since <old-pin>` using the target binary first.
 
 WTC owns collection identity, repository association, generated configuration,
 logs and retirement. [dekit 0.10](https://dekit.run/docs/start/runners) owns an
@@ -12,7 +12,7 @@ repository's toolchain and task runner.
 
 ## Enable a downstream harness
 
-Add to its committed `wtc.toml`:
+Add to its committed `taba.toml` (`wtc.toml` in older harnesses):
 
 ```toml
 [runtime]
@@ -23,23 +23,24 @@ backend = "dekit"
 ```
 
 Merge these tables with existing ones; TOML cannot repeat a table. Regenerate the
-collection environment using `wtc env setup`, then install
+collection environment using `taba env setup`, then install
 the pinned tool with mise. The adapter accepts dekit 0.10.x; test a newer release
 before changing that constraint. A legacy mprocs binary named `dekit` is rejected.
 An optional `[runtime] binary = "/absolute/path/to/dekit"` selects an isolated
 trial binary. Relative binary paths resolve from the harness directory.
 
-An ad-hoc collection (`wtc init`) has no harness repository: put the same
+An ad-hoc collection (`taba init`) has no harness repository: put the same
 `[runtime]` table in its `.wtc/config/wtc.toml`, where relative binary paths
 resolve from `.wtc/config`. Services, tunnels, status and logs then work as in a
-harness collection, and `wtc retire .` stops the runner and removes the
+harness collection, and `taba retire .` stops the runner and removes the
 collection's task files with it.
 
 Use the v0.1.40 or newer target binary explicitly during the trial, before
-changing the harness's `.wtc-cli-version`. Keep the pin and compatibility range
+changing the harness version pin (`.taba-version`, or `.wtc-cli-version` in
+older harnesses). Keep the pin and compatibility range
 in sync when adopting it.
-Enabling the backend alone starts nothing. Neither `wtc new`, env generation,
-`wtc status` nor repository initialization starts this runtime.
+Enabling the backend alone starts nothing. Neither `taba new`, env generation,
+`taba status` nor repository initialization starts this runtime.
 
 ## Onboard an application repository
 
@@ -97,7 +98,7 @@ in the manifest for read-only status. `x-wtc.url` can instead hold a literal
 address. `x-wtc` also takes `port_env` (the variable holding a service's port:
 status shows `http://127.0.0.1:<port>`, readiness defaults to that port
 accepting connections, the resolved value is put in the env of the service and
-its tunnels, and `wtc svc tunnel` builds tunnels from it), `url_log` (a
+its tunnels, and `taba svc tunnel` builds tunnels from it), `url_log` (a
 pattern finding an address in the task's output), `tunnel`
 (`tailscale|cloudflare|ngrok|devtunnel`; usually recognised from the command),
 `public` (`true` or `false`, overriding what WTC infers), and `mark` (one
@@ -105,7 +106,7 @@ letter for status). WTC strips that metadata before passing the task to dekit;
 dekit does not expand shell variables in argv or a literal `ready.http` string.
 
 A collection can add its own services and tunnels without changing the
-repository: `wtc svc add` and `wtc svc tunnel` write `svc/<repo>.yaml` in the
+repository: `taba svc add` and `taba svc tunnel` write `svc/<repo>.yaml` in the
 collection's runtime home (`.wtc`, or `.taba` where it already holds this
 state), read together with the committed file and never
 committed. `--shared` writes the committed file instead.
@@ -134,7 +135,7 @@ For Node or .NET, use the existing `npm run dev`, `npx` build-and-serve wrapper,
 ## Preserve standalone development
 
 The new fragment and hooks are consumed only by WTC. Do not replace the repo's
-README quick start, make its default task call `wtc up`, require dekit in its
+README quick start, make its default task call `taba up`, require dekit in its
 ordinary dependency install, or assume `WTC_COLLECTION` is always set.
 
 Accept a port/data-path override while retaining the current local default:
@@ -204,26 +205,26 @@ and hook logs until cleanup succeeds; never store credentials in the receipt.
 From the collection root:
 
 ```sh
-wtc svc                        # services, tunnels, resources and their state
-wtc svc add web --port-env WIDGET_PORT -- npm run dev   # enlist and start
-wtc svc up [web]               # provision, then start all (or one service)
-wtc svc restart web
-wtc svc logs web [--tail 100] [-f]
-wtc svc tunnel web tailscale   # private tunnel; --public for one on the internet
-wtc svc tunnel web --stop
-wtc svc down [web]             # stop one service, or the runner (logs, data kept)
-wtc svc rm web                 # stop and remove, others keep running
-wtc svc render --dry-run       # ownership preview; no tool required or writes
-wtc svc provision              # provision only, no service startup
-wtc svc --json                 # machine-readable state; never starts a runner
-wtc svc teardown               # stop runner, discard saved tasks, strict cleanup
-wtc svc dekit -- why widget/web/server   # anything else, with the pinned dekit
+taba svc                        # services, tunnels, resources and their state
+taba svc add web --port-env WIDGET_PORT -- npm run dev   # enlist and start
+taba svc up [web]               # provision, then start all (or one service)
+taba svc restart web
+taba svc logs web [--tail 100] [-f]
+taba svc tunnel web tailscale   # private tunnel; --public for one on the internet
+taba svc tunnel web --stop
+taba svc down [web]             # stop one service, or the runner (logs, data kept)
+taba svc rm web                 # stop and remove, others keep running
+taba svc render --dry-run       # ownership preview; no tool required or writes
+taba svc provision              # provision only, no service startup
+taba svc --json                 # machine-readable state; never starts a runner
+taba svc teardown               # stop runner, discard saved tasks, strict cleanup
+taba svc dekit -- why widget/web/server   # anything else, with the pinned dekit
 ```
 
-`wtc up`, `wtc down`, `wtc restart` and `wtc logs` are shortcuts for the same
+`taba up`, `taba down`, `taba restart` and `taba logs` are shortcuts for the same
 commands. A name without its repository works when only one repository has it.
 
-`wtc svc tunnel` records an explicit on/off choice for that collection and
+`taba svc tunnel` records an explicit on/off choice for that collection and
 service endpoint. `--stop` records off, including when stopping fails; retry the
 stop to confirm shutdown. Ordinary `down` keeps the choice. Service `up` and
 `restart` restore enabled tunnels after checking the provider login, including
@@ -234,7 +235,7 @@ keep their existing behavior.
 
 Approval belongs to the current tunnel definition. Changing its command,
 provider, destination or exposure, or removing and later reusing its task path,
-requires a fresh `wtc svc tunnel` choice (and `--public` when applicable).
+requires a fresh `taba svc tunnel` choice (and `--public` when applicable).
 Changed or explicitly disabled tunnels do not autostart. Choices live in this
 collection's runtime manifest and never change another collection's settings.
 An intended tunnel that is not running reports a lifecycle problem separately
@@ -248,12 +249,12 @@ wait for all its selected tasks. `restart`
 requires a running runner. A readiness failure remains visible in status and
 logs, and the failed command's output includes the last lines of each failed
 or unready task's log, so a build error is in the failure itself. **Ready
-means a startup probe passed**, not continuous health checking. So `wtc svc`
-and `wtc status` also look at each ready task's address as they report: one
+means a startup probe passed**, not continuous health checking. So `taba svc`
+and `taba status` also look at each ready task's address as they report: one
 that gives no answer, or a 5xx such as a tunnel's 502 while the service
 behind it restarts, shows `not answering now`. A tunnel whose provider's
 client is not signed in (Tailscale, devtunnel) shows how to sign it in, and
-`wtc svc tunnel` refuses to open one until it is.
+`taba svc tunnel` refuses to open one until it is.
 
 The detailed terminal status table labels internet-reachable tunnels with
 `[public]`. A healthy public tunnel uses the same health color as a healthy
@@ -270,7 +271,7 @@ Service logs are append files under `runtime/logs/<repo>/<task>.log` in the
 runtime home, available after `down`. Hook logs live under
 `runtime/hook-logs/<repo>/provision.log` and `teardown.log` there; agents can read
 those files directly. They can contain application secrets, so keep them local.
-For the native interactive console, run `wtc svc dekit -- attach`; it uses
+For the native interactive console, run `taba svc dekit -- attach`; it uses
 the pinned binary, this collection's runner and its environment. Native `why`
 and `screen --json` work the same way. The screen is a bounded terminal buffer,
 not the persistent log. Tasks dynamically added through native dekit commands
@@ -278,13 +279,13 @@ are controlled by the runner but are not yet represented in WTC's configured
 task list.
 
 Edit task files rather than generated `dekit.yaml`. A changed file applies on
-the next `wtc svc up` without stopping the runner: removed tasks are removed,
+the next `taba svc up` without stopping the runner: removed tasks are removed,
 the runner reloads its config, and running tasks whose definition changed
 restart; the others keep running. An existing runner keeps its launch
 environment apart from `port_env` values; use a full `down`/`up` after
 changing other variables or credentials.
 
-`wtc retire` verifies the target runner stopped, clears its saved definitions,
+`taba retire` verifies the target runner stopped, clears its saved definitions,
 and runs strict resource teardown **before removing any worktree**. An
 unconfirmed stop or failed teardown keeps the collection and ownership record,
 even with `--force`. Fix the hook and retry. Removing the harness opt-in does not

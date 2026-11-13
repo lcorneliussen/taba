@@ -167,7 +167,7 @@ func TestOpenCreatesWideWorkspaceWithoutStartingDisabledProcesses(t *testing.T) 
 		t.Fatalf("normal start failed: %+v", first)
 	}
 	before, _ := os.ReadFile(log)
-	if !strings.Contains(string(before), "wtc browse --here") || !strings.Contains(string(before), "wtc status --tui") {
+	if !strings.Contains(string(before), "taba browse --here") || !strings.Contains(string(before), "taba status --tui") {
 		t.Fatalf("browse and status panes did not launch native commands: %s", before)
 	}
 	second := openCollection(c, "sample", enabled, "narrow", true, true)
@@ -443,6 +443,37 @@ else:
 		t.Fatal(err)
 	}
 	return c, root, bin, log, collection
+}
+
+func TestOpenPaneCommandsFollowTheTargetPin(t *testing.T) {
+	for _, tc := range []struct{ pin, command string }{
+		{"0.1.64", "wtc"},
+		{"0.2.0-rc.1", "taba"},
+		{"0.2.0", "taba"},
+	} {
+		t.Run(tc.pin, func(t *testing.T) {
+			c, _, bin, log, collection := openTestFixture(t)
+			if err := os.WriteFile(filepath.Join(collection, "harness", ".wtc-cli-version"), []byte(tc.pin+"\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "nvim"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			opened := openCollection(c, "sample", openOptions{Session: "test", NoAgent: true, Tools: []string{"browse"}}, "wide", true, true)
+			if opened.Error != "" {
+				t.Fatal(opened.Error)
+			}
+			calls, err := os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, suffix := range []string{" status --tui", " browse --here"} {
+				if !strings.Contains(string(calls), tc.command+suffix) {
+					t.Fatalf("pin %s did not launch %s%s:\n%s", tc.pin, tc.command, suffix, calls)
+				}
+			}
+		})
+	}
 }
 
 func TestOpenAgentNamesFitHerdrLimit(t *testing.T) {

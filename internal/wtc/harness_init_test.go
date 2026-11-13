@@ -10,7 +10,7 @@ import (
 func TestHarnessInitPreflightDryRunAndNoOverwrite(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "project-harness")
-	opt := HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.1.38", DryRun: true}
+	opt := HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.2.0", DryRun: true}
 	result, err := InitHarness(opt)
 	if err != nil || len(result.Files) != 6 {
 		t.Fatal(result, err)
@@ -43,11 +43,11 @@ func TestHarnessInitPreflightDryRunAndNoOverwrite(t *testing.T) {
 func TestMinimalHarnessRendersCompleteAgentGuidance(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "task/harness")
-	result, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.1.38"})
+	result, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.2.0"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Files) != 6 {
+	if len(result.Files) != 6 || !strings.Contains(strings.Join(result.Files, ","), ".taba-version,taba.toml") {
 		t.Fatal(result)
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
@@ -61,9 +61,16 @@ func TestMinimalHarnessRendersCompleteAgentGuidance(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Resolve the relative canon link used by the embedded draft skill.
-	canon := filepath.Join(c.Collection, ".wtc/skills/wtc-draft-pr/../../instructions/publication-privacy.md")
+	canon := filepath.Join(c.Collection, ".wtc/skills/taba-draft-pr/../../instructions/publication-privacy.md")
 	if data, err := os.ReadFile(canon); err != nil || !strings.Contains(string(data), "Publication privacy") {
 		t.Fatal("default skill has missing canon", err)
+	}
+	// A harness created with the new file names gets the new scope file name.
+	if _, err := os.Stat(filepath.Join(c.Collection, "SCOPE.md")); err != nil {
+		t.Fatal("new harness collection was not seeded with SCOPE.md", err)
+	}
+	if _, err := os.Lstat(filepath.Join(c.Collection, "WTC-SCOPE.md")); !os.IsNotExist(err) {
+		t.Fatal("new harness collection was seeded with WTC-SCOPE.md")
 	}
 	entry, err := os.ReadFile(filepath.Join(c.Collection, "AGENTS.md"))
 	if err != nil || !strings.Contains(string(entry), "`.wtc/instructions/`") {
@@ -92,5 +99,29 @@ func TestMinimalHarnessRendersCompleteAgentGuidance(t *testing.T) {
 	}
 	if data, err := os.ReadFile(canon); err != nil || !strings.Contains(string(data), "Publication privacy") {
 		t.Fatal("default was not restored", err)
+	}
+}
+
+func TestHarnessInitRefusesAnExistingHarnessUnderTheOldNames(t *testing.T) {
+	dir := t.TempDir()
+	fixtureFile(t, filepath.Join(dir, ".wtc-cli-version"), "0.1.64\n", 0644)
+	if _, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: "0.2.1"}); err == nil || !strings.Contains(err.Error(), "existing harness") {
+		t.Fatalf("init over an old-name harness: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, ".taba-version")); !os.IsNotExist(err) {
+		t.Fatal("refused init still wrote .taba-version")
+	}
+}
+
+func TestHarnessInitRejectsPinsThatCannotReadTheScaffold(t *testing.T) {
+	for _, pin := range []string{"0.1.59", "0.1.64"} {
+		dir := filepath.Join(t.TempDir(), "harness")
+		_, err := InitHarness(HarnessInitOptions{Dir: dir, Name: "agent-harness", Remote: "https://example.invalid/agent-harness.git", CLIVersion: pin})
+		if err == nil || !strings.Contains(err.Error(), "0.2.0 or later") {
+			t.Fatalf("pin %s: %v", pin, err)
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("pin %s: refused init wrote the target", pin)
+		}
 	}
 }
