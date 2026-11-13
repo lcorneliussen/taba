@@ -48,14 +48,17 @@ func repairGeneratedRoots(collection string, dryRun, asJSON bool) error {
 	if err != nil {
 		return err
 	}
-	if dryRun && !asJSON {
-		fmt.Print(result.Env)
-	}
 	state := "Generated-root repair"
 	if dryRun {
 		state += " preview"
 	}
-	return emit(envelope{OK: true, Data: result, Summary: state + ": provider identity hints omitted from repaired output; refresh or reopen the shell, then run env setup to regenerate them. User-local configuration is preserved."}, asJSON)
+	summary := state + ": provider identity hints omitted from repaired output; refresh or reopen the shell, then run env setup to regenerate them. User-local configuration is preserved."
+	if dryRun && !asJSON {
+		fmt.Print(result.Env)
+		fmt.Fprintln(os.Stderr, summary)
+		return nil
+	}
+	return emit(envelope{OK: true, Data: result, Summary: summary}, asJSON)
 }
 
 func refreshEnvCollection(c *wtc.Context, dryRun, invokeHooks bool) (envResult, error) {

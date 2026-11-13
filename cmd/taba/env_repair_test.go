@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -125,6 +126,18 @@ func TestGeneratedRootRepairCLI(t *testing.T) {
 			}
 			if read(generated) != old || read(local) != localData {
 				t.Fatal("preview mutated configuration")
+			}
+			for _, form := range [][]string{{"env", "setup"}, {"env"}} {
+				args := append(append([]string{}, form...), "--collection", collection, "--repair-generated-roots", "--dry-run")
+				plain := exec.Command(bin, args...)
+				plain.Dir = collection
+				plain.Env = []string{"HOME=" + t.TempDir(), "PATH=" + mockBin + ":/usr/bin:/bin"}
+				var guidance bytes.Buffer
+				plain.Stderr = &guidance
+				raw, err := plain.Output()
+				if err != nil || string(raw) != preview || !strings.Contains(guidance.String(), "refresh or reopen") {
+					t.Fatalf("plain preview is not env-only with separate guidance: %v\nstdout: %s\nstderr: %s", err, raw, guidance.String())
+				}
 			}
 			legacy := exec.Command(bin, "--json", "env", "--collection", collection, "--repair-generated-roots", "--dry-run")
 			legacy.Dir = collection
