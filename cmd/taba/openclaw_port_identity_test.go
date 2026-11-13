@@ -61,7 +61,7 @@ func TestGatewayProjectPortsSupportedSCPOnStatus(t *testing.T) {
 			for _, location := range []string{"configured-project", "recorded-project", "project-registry", "linked-repository"} {
 				t.Run(host+"/"+user+"/"+location, func(t *testing.T) {
 					state, git := harnessGateway(t)
-					configRoot := t.TempDir()
+					configRoot := filepath.Join(openclaw.NewCollectionFolder(state, "ports", "platform"), ".config")
 					t.Setenv("WTC_CONFIG_ROOT", configRoot)
 					t.Setenv("TABA_CONFIG_ROOT", configRoot)
 					project := "https://" + host + "/example-org/platform-harness.git"

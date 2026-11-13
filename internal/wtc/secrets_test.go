@@ -12,7 +12,7 @@ func TestSecretLinksRespectIgnoreBackupProdAndDryRun(t *testing.T) {
 	collection := filepath.Join(t.TempDir(), "sample")
 	harness := filepath.Join(collection, "harness")
 	repo := filepath.Join(collection, "app")
-	control := filepath.Join(t.TempDir(), "control")
+	control := filepath.Join(realPath(t, filepath.Dir(collection)), ".config")
 	for _, dir := range []string{harness, repo, filepath.Join(control, "app", "config")} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
@@ -86,7 +86,7 @@ func TestSecretLinksRejectParentSymlink(t *testing.T) {
 	collection := filepath.Join(t.TempDir(), "sample")
 	harness := filepath.Join(collection, "harness")
 	repo := filepath.Join(collection, "app")
-	control := filepath.Join(t.TempDir(), "control")
+	control := filepath.Join(realPath(t, filepath.Dir(collection)), ".config")
 	for _, dir := range []string{harness, repo, filepath.Join(control, "app", "config")} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)

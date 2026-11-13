@@ -192,9 +192,21 @@ func devControlInvocation(args []string) bool {
 	root.InitDefaultHelpFlag()
 	addDevCommands(root, &asJSON)
 	addReviewCommands(root, &asJSON)
+	var collection string
+	var dryRun, all, skipHooks, runHooks, repairRoots bool
+	env := &cobra.Command{Use: "env"}
+	setup := &cobra.Command{Use: "setup"}
+	for _, command := range []*cobra.Command{env, setup} {
+		envSetupFlags(command, &collection, &dryRun, &all, &skipHooks, &runHooks, &repairRoots)
+	}
+	env.AddCommand(setup)
+	root.AddCommand(env)
 	// Find uses the actual command/flag definitions, including values and
 	// aliases, without parsing into a context or executing any callback.
-	command, _, _ := root.Find(args)
+	command, remaining, _ := root.Find(args)
+	if command == env || command == setup {
+		return command.ParseFlags(remaining) == nil && len(command.Flags().Args()) == 0 && repairRoots
+	}
 	for command != nil && command != root {
 		if command.Name() == "dev" || command.Name() == "review" {
 			return true

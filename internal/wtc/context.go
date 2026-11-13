@@ -11,7 +11,6 @@ import (
 	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
 	"taba.sh/taba/internal/branding"
-	"taba.sh/taba/internal/envcompat"
 )
 
 // Repo is one registry entry. Aliases are earlier names of a renamed
@@ -78,9 +77,7 @@ type Config struct {
 	AgentEnv struct {
 		PrependPaths []string `toml:"prepend_paths"`
 	} `toml:"agent_env"`
-	Secrets struct {
-		ProdPaths []string `toml:"prod_paths"`
-	} `toml:"secrets"`
+	Secrets SecretPolicy `toml:"secrets"`
 	Runtime struct {
 		Backend string `toml:"backend"`
 		Binary  string `toml:"binary"`
@@ -99,12 +96,14 @@ type Config struct {
 	} `toml:"openclaw"`
 }
 type Context struct {
-	Collection string   `json:"collection"`
-	Harness    string   `json:"harness"`
-	Workspace  string   `json:"workspace"`
-	Registry   Registry `json:"registry"`
-	Config     Config   `json:"-"`
-	ConfigRoot string   `json:"config_root"`
+	Collection       string          `json:"collection"`
+	Harness          string          `json:"harness"`
+	Workspace        string          `json:"workspace"`
+	Registry         Registry        `json:"registry"`
+	Config           Config          `json:"-"`
+	ConfigRoot       string          `json:"config_root"`
+	Project          *ProjectContext `json:"project,omitempty"`
+	creatingReceiver bool
 	// AdHoc marks a collection without a harness repository. Its Harness is the
 	// collection-local config directory and its registry is tracked nowhere.
 	AdHoc bool `json:"ad_hoc,omitempty"`
@@ -150,30 +149,34 @@ func devAutoSource(collection string) (string, error) {
 }
 
 func Discover(start string) (*Context, error) {
+	location, err := DiscoverLocation(start)
+	if err != nil {
+		return nil, err
+	}
+	if location.Collection == "" {
+		if location.Kind == LocationUninitialized {
+			return nil, fmt.Errorf(branding.Text("%w; run `{{command}} init` to make this folder an ad-hoc collection"), errNotInCollection)
+		}
+		return nil, fmt.Errorf("%w; select an explicit collection for this command", errNotInCollection)
+	}
 	abs, err := filepath.Abs(start)
 	if err != nil {
 		return nil, err
 	}
-	dir := abs
-	for {
-		if RetiredFolder(dir) {
-			return nil, retiredFolderError(dir)
+	for candidate := abs; ; candidate = filepath.Dir(candidate) {
+		if sameCanonicalPath(candidate, location.Collection) {
+			return OpenCollection(candidate)
 		}
-		if present, err := collectionMarker(dir); err != nil {
-			return nil, err
-		} else if present {
-			return OpenCollection(dir)
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
+		if candidate == filepath.Dir(candidate) {
 			break
 		}
-		dir = parent
 	}
-	return nil, fmt.Errorf(branding.Text("%w; run `{{command}} init` to make this folder an ad-hoc collection"), errNotInCollection)
+	return OpenCollection(location.Collection)
 }
 
-func OpenCollection(dir string) (*Context, error) {
+func OpenCollection(dir string) (*Context, error) { return openCollection(dir, false) }
+
+func openCollection(dir string, creating bool) (*Context, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -181,21 +184,26 @@ func OpenCollection(dir string) (*Context, error) {
 	if RetiredFolder(abs) {
 		return nil, retiredFolderError(abs)
 	}
-	c := &Context{Collection: abs, Harness: filepath.Join(abs, "harness"), Workspace: filepath.Dir(abs)}
-	// A collection's own config decides what it is, not the name of one of
-	// its repositories: a gateway's folder may link a repository called
-	// harness and stays ad hoc. wtc init never makes that config inside a
-	// harness collection.
-	config, err := collectionDirectoryInput(abs, "config")
+	location, err := DiscoverLocation(abs)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(config); err == nil {
-		c.Harness, c.AdHoc = config, true
-	} else if !os.IsNotExist(err) {
-		return nil, err
-	} else if info, err := os.Stat(filepath.Join(c.Harness, ".harness-repos.yml")); err != nil || info.IsDir() {
-		return nil, fmt.Errorf("not a collection: %s", abs)
+	if location.Collection == "" || !sameCanonicalPath(location.Collection, abs) {
+		return nil, fmt.Errorf("not a collection")
+	}
+	c := &Context{Collection: abs, Workspace: filepath.Dir(abs), Project: location.Project, creatingReceiver: creating}
+	if location.Project != nil {
+		if location.Project.Mode == "legacy" {
+			c.Harness = filepath.Join(abs, "harness")
+		} else {
+			c.Workspace, c.Harness = location.Project.Root, location.Project.ConfigDir
+		}
+	} else {
+		c.AdHoc = true
+		c.Harness, err = collectionDirectoryInput(abs, "config")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := c.load(); err != nil {
 		return nil, err
@@ -206,6 +214,9 @@ func OpenCollection(dir string) (*Context, error) {
 // registryPath is the tracked registry of a harness or the local registry of
 // an ad-hoc collection.
 func (c *Context) registryPath() string {
+	if c.Project != nil && c.Project.Mode != "legacy" && c.Project.RegistryPath != "" {
+		return c.Project.RegistryPath
+	}
 	if c.AdHoc {
 		return filepath.Join(c.Harness, adHocRegistryFile)
 	}
@@ -237,15 +248,39 @@ func ParseRegistry(b []byte) (Registry, error) {
 }
 
 func (c *Context) load() error {
-	registry := c.registryPath()
-	if info, err := os.Stat(registry); err != nil {
-		return err
-	} else if !info.Mode().IsRegular() {
-		return fmt.Errorf("registry must be a regular file: %s", registry)
-	}
-	b, err := os.ReadFile(registry)
+	receiver, err := c.receivingContext()
 	if err != nil {
 		return err
+	}
+	scope, err := receiver.resolve(!c.creatingReceiver)
+	if err != nil {
+		return err
+	}
+	c.ConfigRoot = scope.Root
+	var b []byte
+	if c.Project != nil && c.Project.Source.Owner != "" {
+		b, _, err = c.Project.snapshotFile(".harness-repos.yml", ".harness-repos.yml")
+		if err != nil {
+			return err
+		}
+		if b == nil {
+			return fmt.Errorf("project snapshot registry is missing")
+		}
+	} else {
+		registry := c.registryPath()
+		resolved, err := canonicalPath(registry)
+		if err != nil || !withinPath(scope.OwnerRoot, resolved) {
+			return fmt.Errorf("registry escapes receiving owner")
+		}
+		if info, err := os.Stat(registry); err != nil {
+			return err
+		} else if !info.Mode().IsRegular() {
+			return fmt.Errorf("registry must be a regular file")
+		}
+		b, err = os.ReadFile(registry)
+		if err != nil {
+			return err
+		}
 	}
 	if c.Registry, err = ParseRegistry(b); err != nil {
 		return err
@@ -262,7 +297,7 @@ func (c *Context) load() error {
 			}
 		}
 	}
-	if len(c.Registry.Repos) == 0 && !c.AdHoc {
+	if len(c.Registry.Repos) == 0 && !c.AdHoc && (c.Project == nil || c.Project.Mode != "local") {
 		return errors.New("registry contains no repositories")
 	}
 	seen := map[string]bool{}
@@ -293,36 +328,29 @@ func (c *Context) load() error {
 		// Preserve harness-specific metadata for commands that understand it.
 		// Unrecognized fields do not make basic env/doctor operations unusable.
 	}
-	cfg, err := configInput(c.Harness)
-	if err != nil {
-		return fmt.Errorf("config: %w", err)
-	}
-	if _, err := os.Stat(cfg); err == nil {
-		if _, err := toml.DecodeFile(cfg, &c.Config); err != nil {
-			return fmt.Errorf("config: %w", err)
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("config: %w", err)
-	}
-	c.ConfigRoot = envcompat.Getenv("WTC_CONFIG_ROOT")
-	if c.ConfigRoot == "" {
-		data, err := os.ReadFile(filepath.Join(c.Collection, ".env.collection"))
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		c.ConfigRoot, _ = envcompat.LookupMap("WTC_CONFIG_ROOT", envcompat.Assignments(data))
-	}
-	if c.ConfigRoot == "" && c.AdHoc {
-		// An ad-hoc collection has no workspace; its secrets are per user.
-		c.ConfigRoot, err = UserConfigRoot()
+	if c.Project != nil && c.Project.Source.Owner != "" {
+		data, _, err := c.Project.configBytes()
 		if err != nil {
 			return err
 		}
-	}
-	if c.ConfigRoot == "" {
-		// The control root is workspace-shared: it sits beside .bare/ and the
-		// collections, so each workspace keeps its own secrets and gh identity.
-		c.ConfigRoot = filepath.Join(c.Workspace, ".config")
+		if _, err := toml.Decode(string(data), &c.Config); err != nil {
+			return fmt.Errorf("invalid project snapshot config")
+		}
+	} else {
+		cfg, err := configInput(c.Harness)
+		if err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		if info, err := os.Stat(cfg); err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("config must be a regular file")
+			}
+			if _, err := toml.DecodeFile(cfg, &c.Config); err != nil {
+				return fmt.Errorf("config: %w", err)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("config: %w", err)
+		}
 	}
 	return nil
 }

@@ -8,6 +8,31 @@ import (
 	"testing"
 )
 
+func TestRetirePreservesStandalonePrivateControl(t *testing.T) {
+	for _, custom := range []bool{false, true} {
+		root := adHocFixture(t)
+		c := initAdHoc(t, filepath.Join(root, "task"))
+		control := c.ConfigRoot
+		if custom {
+			control = filepath.Join(c.Harness, "private-control")
+			fixtureFile(t, filepath.Join(c.Harness, "wtc.toml"), "[secrets]\nroot='private-control'\n", 0644)
+			if err := os.Remove(filepath.Join(c.Collection, ".env.collection")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		private := filepath.Join(control, "synthetic-token")
+		fixtureFile(t, private, "synthetic credential", 0600)
+		for _, force := range []bool{false, true} {
+			if _, err := c.RetirePreflight(RetireOptions{Name: filepath.Base(c.Collection), Self: true, Force: force}); err == nil || !strings.Contains(err.Error(), "private control") {
+				t.Fatalf("private data not preserved (force=%v): %v", force, err)
+			}
+		}
+		if body, err := os.ReadFile(private); err != nil || string(body) != "synthetic credential" {
+			t.Fatal("retirement changed private data")
+		}
+	}
+}
+
 func TestRetireCollectionRunsTeardownAndKeepsRemoteRefs(t *testing.T) {
 	c := newWorkspaceFixture(t)
 	result, err := c.NewCollection(NewOptions{Slug: "finished", Repos: []string{"widget"}})

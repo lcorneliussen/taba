@@ -64,7 +64,11 @@ func TestRuntimeReloadConfigLegacyFallback(t *testing.T) {
 		{name: "invalid configuration", message: "invalid task configuration", fails: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			c := fixture(t)
+			root := c.runtimeRoot()
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
+			}
 			binary := filepath.Join(root, "dekit")
 			t.Setenv("RUNTIME_TEST_RELOAD_ERROR", tc.message)
 			fixtureFile(t, binary, `#!/bin/sh
@@ -411,7 +415,11 @@ func TestRuntimeReadinessProbeURLIsShownOnlyWhenPlain(t *testing.T) {
 func TestRuntimeCommandTruncatesNoisyStderr(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "dekit")
 	fixtureFile(t, binary, "#!/bin/sh\nhead -c 20000 /dev/zero | tr '\\0' x >&2\n[ \"$4\" = fail ] && exit 3\necho '{}'\n", 0755)
-	m := &runtimeManifest{Root: t.TempDir(), Binary: binary}
+	c := fixture(t)
+	m := &runtimeManifest{Root: c.runtimeRoot(), Binary: binary}
+	if err := os.MkdirAll(m.Root, 0700); err != nil {
+		t.Fatal(err)
+	}
 	if out, err := runtimeCommand(m, false, "ls"); err != nil || strings.TrimSpace(string(out)) != "{}" {
 		t.Fatalf("noisy success failed: %q %v", out, err)
 	}

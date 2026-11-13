@@ -10,30 +10,26 @@ import (
 
 func TestTabaConfigRootEnvironmentAndGeneratedFile(t *testing.T) {
 	c := fixture(t)
-	oldRoot, newRoot := filepath.Join(t.TempDir(), "old"), filepath.Join(t.TempDir(), "new")
-	t.Setenv("WTC_CONFIG_ROOT", oldRoot)
-	t.Setenv("TABA_CONFIG_ROOT", newRoot)
+	t.Setenv("WTC_CONFIG_ROOT", c.ConfigRoot)
+	t.Setenv("TABA_CONFIG_ROOT", filepath.Join(t.TempDir(), "foreign"))
+	if _, err := OpenCollection(c.Collection); err == nil {
+		t.Fatal("conflicting root aliases accepted")
+	}
+	t.Setenv("TABA_CONFIG_ROOT", c.ConfigRoot)
 	opened, err := OpenCollection(c.Collection)
-	if err != nil || opened.ConfigRoot != newRoot {
-		t.Fatalf("new prefix should override legacy environment: %v %v", opened, err)
-	}
-	for _, key := range []string{"WTC_CONFIG_ROOT", "TABA_CONFIG_ROOT"} {
-		if err := os.Unsetenv(key); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// The later legacy assignment must not shadow the new spelling.
-	fixtureFile(t, filepath.Join(c.Collection, ".env.collection"), "TABA_CONFIG_ROOT='"+newRoot+"'\nWTC_CONFIG_ROOT='"+oldRoot+"'\n", 0644)
-	opened, err = OpenCollection(c.Collection)
-	if err != nil || opened.ConfigRoot != newRoot {
-		t.Fatalf("new prefix should override legacy file assignment: %v %v", opened, err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	data, err := opened.RenderEnv()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "WTC_CONFIG_ROOT='"+newRoot+"'\nTABA_CONFIG_ROOT='"+newRoot+"'\n") {
-		t.Fatalf("generated environment should carry the selected root under both spellings: %s", data)
+	if !strings.Contains(string(data), "WTC_CONFIG_ROOT='"+c.ConfigRoot+"'\nTABA_CONFIG_ROOT='"+c.ConfigRoot+"'\n") {
+		t.Fatal("approved root aliases missing")
+	}
+	fixtureFile(t, filepath.Join(c.Collection, ".env.collection"), "TABA_CONFIG_ROOT='"+c.ConfigRoot+"'\nWTC_CONFIG_ROOT=/foreign\n", 0644)
+	if _, err := OpenCollection(c.Collection); err == nil {
+		t.Fatal("conflicting generated roots accepted")
 	}
 }
 

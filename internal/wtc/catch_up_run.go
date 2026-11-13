@@ -593,6 +593,9 @@ func (c *Context) catchUpReconcile(t catchUpTarget, ref, target string, pr catch
 // target fails, so callers can emit the full result before a nonzero exit.
 func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 	report := CatchUpReport{SchemaVersion: 1, Initiator: c.Collection, ExitStatus: 1, Outcomes: []CatchUpRow{}}
+	if _, err := c.ValidateControlRoot(); err != nil {
+		return report, err
+	}
 	if opt.Report == "" && !opt.DryRun {
 		opt.Report = filepath.Join(c.Collection, ".wtc-catch-up.json")
 	}
@@ -858,6 +861,9 @@ func (c *Context) catchUpHooks(report *CatchUpReport, t catchUpTarget, opt Catch
 // refreshEnv regenerates the collection env and mise config between the env
 // hooks, writing .env.collection only when its content changed.
 func (c *Context) refreshEnv() error {
+	if _, err := c.ValidateControlRoot(); err != nil {
+		return err
+	}
 	data, err := c.RenderEnv()
 	if err != nil {
 		return err

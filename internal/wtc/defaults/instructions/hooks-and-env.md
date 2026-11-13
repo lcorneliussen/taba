@@ -152,3 +152,33 @@ system interpreters once PATH is injected.
 | Repo added later | `taba add-repo` | `init` for the new repos only |
 | Collection retired | `taba retire` | `teardown` for every repo, then worktrees removed (pre-flight refuses on dirty/unpushed work unless `--force`; branches are never deleted) |
 | Generator or registry changed | `taba env setup` | none — regenerates `.env.collection`, preserving the port base |
+
+## Receiving project and collection boundaries
+
+Read-only project discovery uses `.taba/project.toml`; an explicit member
+association uses `.taba/collection.toml`. New project metadata uses these canonical
+names only. Existing `.wtc` collection/runtime formats retain their compatibility
+rules. A local project's `.taba/config` is project configuration, not a standalone
+ad-hoc collection. Discovery never initializes files or selects the first task.
+
+Project descriptors use `schema_version = 1` and `mode = "local"` or `"harness"`.
+Local project config/registry lives in `.taba/config`. Harness mode declares one
+project-relative `[harness].path`, or `[harness].owner` and `ref` naming a local
+bare-owner snapshot. Snapshot reads do not fetch; an unavailable source is an
+error. Config selection matches filesystem rules: `wtc.toml` remains authoritative
+when present, otherwise `taba.toml`; invalid sources do not silently fall back.
+Descriptors cannot contain credential roots, auth grants, shell commands, a task
+selection or a version pin. Receiving secrets policy stays in the selected config.
+
+A collection descriptor contains `schema_version = 1` and a `project` path
+relative to the collection. It must point to an enclosing explicit project;
+malformed or intervening boundaries prevent parent fallback. Commands requiring
+an actual collection do not accept a project root as an implicit task. Project
+initialization and later adoption are separate explicit operations.
+
+Lifecycle and runtime process boundaries validate receiving roots and replace
+both root aliases together. When shell env layers are used, roots are checked
+again after evaluation and before the child program starts. Local shell files
+remain trusted executable configuration; this is not a shell sandbox. Provider
+credential isolation is separate from receiving-root validation. See
+[secrets.md](secrets.md) for scope, opt-in and migration.

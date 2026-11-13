@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 	"taba.sh/taba/internal/branding"
@@ -33,8 +34,8 @@ repos:
 
 var scpRemote = regexp.MustCompile(`^(?:[^@/]+@)?([^:/]+):(.+)$`)
 
-// UserConfigRoot is the per-user control root for secrets of ad-hoc
-// collections, used when WTC_CONFIG_ROOT is unset.
+// UserConfigRoot locates legacy per-user CLI configuration. Its presence
+// never grants a receiving collection permission to consume secrets.
 func UserConfigRoot() (string, error) {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
 		return legacyInput(dir, "wtc", "taba")
@@ -123,7 +124,9 @@ type InitResult struct {
 
 // InitAdHoc turns an empty folder into a collection without a harness
 // repository. It never contacts a remote; repositories join with add-repo.
-func InitAdHoc(dir string) (InitResult, error) {
+func InitAdHoc(dir string) (InitResult, error) { return initializeAdHoc(dir, false) }
+
+func initializeAdHoc(dir string, creating bool) (InitResult, error) {
 	result := InitResult{}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -152,6 +155,9 @@ func InitAdHoc(dir string) (InitResult, error) {
 	} else if !os.IsNotExist(err) {
 		return result, err
 	}
+	if _, err := (ReceivingContext{Collection: abs}).resolve(!creating); err != nil {
+		return result, err
+	}
 	config := filepath.Join(abs, AdHocConfigDir)
 	if err := os.MkdirAll(config, 0755); err != nil {
 		return result, err
@@ -160,7 +166,7 @@ func InitAdHoc(dir string) (InitResult, error) {
 	if err := os.WriteFile(result.Registry, []byte(adHocRegistryHeader), 0644); err != nil {
 		return result, err
 	}
-	c, err := OpenCollection(abs)
+	c, err := openCollection(abs, creating)
 	if err != nil {
 		return result, err
 	}
@@ -608,7 +614,7 @@ func (c *Context) newAdHoc(opt NewOptions) (NewResult, error) {
 	if err := c.RunHook("new.pre", values); err != nil {
 		return result, err
 	}
-	if _, err := InitAdHoc(result.Collection); err != nil {
+	if _, err := initializeAdHoc(result.Collection, true); err != nil {
 		return result, err
 	}
 	// Until worktrees exist, a failure removes the folder InitAdHoc created,
@@ -626,19 +632,34 @@ func (c *Context) newAdHoc(opt NewOptions) (NewResult, error) {
 		return result, err
 	}
 	if data, err := os.ReadFile(config); err == nil {
+		var settings map[string]any
+		if _, err := toml.Decode(string(data), &settings); err != nil {
+			return result, err
+		}
+		if secrets, ok := settings["secrets"].(map[string]any); ok {
+			delete(secrets, "root")
+			delete(secrets, "allow_external")
+		}
+		var encoded bytes.Buffer
+		if err := toml.NewEncoder(&encoded).Encode(settings); err != nil {
+			return result, err
+		}
+		data = encoded.Bytes()
+
 		if err := os.WriteFile(filepath.Join(result.Collection, AdHocConfigDir, "wtc.toml"), data, 0644); err != nil {
 			return result, err
 		}
 	} else if !os.IsNotExist(err) {
 		return result, err
 	}
-	target, err := OpenCollection(result.Collection)
+	target, err := openCollection(result.Collection, true)
 	if err != nil {
 		return result, err
 	}
-	// Inherit the creating collection's control root, as a harness `new`
-	// does, before any secret is linked from it.
-	target.ConfigRoot = c.ConfigRoot
+	// The new standalone collection owns its own control root.
+	if _, err := target.ValidateControlRoot(); err != nil {
+		return result, err
+	}
 	env, err := target.RenderEnv()
 	if err != nil {
 		return result, err

@@ -508,9 +508,10 @@ func (c *Context) DekitCommand(args []string) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	collection := filepath.Dir(filepath.Dir(m.Root))
-	argv := append([]string{"-c", `set -ea; [ ! -f "$1" ] || . "$1"; [ ! -f "$2" ] || . "$2"; shift 2; exec "$@"`, "wtc-dekit", filepath.Join(collection, ".env.collection"), filepath.Join(collection, ".env.collection.local"), binary, "-C", m.Root}, args...)
-	cmd := exec.Command("/bin/sh", argv...)
+	cmd, err := c.ReceivingCommand(binary, append([]string{"-C", m.Root}, args...)...)
+	if err != nil {
+		return nil, err
+	}
 	cmd.Dir = m.Root
 	return cmd, nil
 }

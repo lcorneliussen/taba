@@ -44,6 +44,13 @@ func TestHooksOverrideBothPrefixes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hooks, "env.post.sh"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.RunHook("env.post", nil); err == nil {
+		t.Fatal("hook accepted a foreign inherited root")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatal("refused hook executed")
+	}
+	t.Setenv("TABA_CONFIG_ROOT", c.ConfigRoot)
 	if err := c.RunHook("env.post", nil); err != nil {
 		t.Fatal(err)
 	}

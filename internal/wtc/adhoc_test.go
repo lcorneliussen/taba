@@ -84,8 +84,8 @@ func TestInitAdHocCreatesCollectionInAnEmptyFolder(t *testing.T) {
 	if c.Collection != dir || c.Harness != filepath.Join(dir, ".wtc", "config") {
 		t.Fatalf("unexpected geometry: %+v", c)
 	}
-	if c.ConfigRoot != filepath.Join(root, "config", "wtc") {
-		t.Fatalf("ad-hoc control root should be per user, got %s", c.ConfigRoot)
+	if c.ConfigRoot != filepath.Join(realPath(t, dir), ".config") {
+		t.Fatalf("ad-hoc control root should be collection-local, got %s", c.ConfigRoot)
 	}
 	for _, path := range []string{"AGENTS.md", "WTC-SCOPE.md", ".env.collection", "mise.toml", ".wtc/skills/wtc-start/SKILL.md"} {
 		if _, err := os.Stat(filepath.Join(dir, path)); err != nil {
@@ -528,7 +528,7 @@ func TestAdHocNewOptionsHooksAndControlRoot(t *testing.T) {
 	if _, err := other.RegisterAdHocRepo(AdHocRepoOptions{Spec: "file://" + gadget}); err != nil {
 		t.Fatal(err)
 	}
-	c.ConfigRoot = filepath.Join(root, "control")
+
 	fixtureFile(t, filepath.Join(c.ConfigRoot, "widget", "secret.txt"), "synthetic\n", 0600)
 	fixtureFile(t, filepath.Join(widget, ".gitignore"), "secret.txt\n", 0644)
 	fixtureGit(t, "-C", widget, "add", "-A")
@@ -560,8 +560,8 @@ func TestAdHocNewOptionsHooksAndControlRoot(t *testing.T) {
 			t.Fatalf("%s is on %q, want feature-x", name, branch)
 		}
 	}
-	if info, err := os.Lstat(filepath.Join(result.Collection, "widget", "secret.txt")); err != nil || info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("secret not linked from the inherited control root: %v", err)
+	if _, err := os.Lstat(filepath.Join(result.Collection, "widget", "secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("source collection secret propagated: %v", err)
 	}
 	if data, err := os.ReadFile(log); err != nil || string(data) != "new.pre\nnew.post\n" {
 		t.Fatalf("source hooks did not run in order: %q %v", data, err)
@@ -573,12 +573,13 @@ func TestRegistryEntryKeepsEveryRepoField(t *testing.T) {
 	repo := Repo{Name: "widget", Remote: "git@example.invalid:x/widget.git", DefaultRef: "origin/develop", Owner: "/srv/widget/.git",
 		PortOffset: &offset, Role: "role", IssuesPrefix: "wid-", ProductionRef: "origin/prod", ReleaseRef: "origin/release",
 		ProdPaths: []string{"config/prod"}, IDE: "idea", MergeStrategy: "squash", Extra: map[string]any{"custom": "kept"}}
-	path := filepath.Join(t.TempDir(), "repos.yml")
+	collection := t.TempDir()
+	path := filepath.Join(collection, AdHocConfigDir, "repos.yml")
 	fixtureFile(t, path, adHocRegistryHeader, 0644)
 	if err := appendRegistryEntry(path, repo); err != nil {
 		t.Fatal(err)
 	}
-	c := &Context{Collection: filepath.Dir(path), Harness: filepath.Dir(path), AdHoc: true, ConfigRoot: t.TempDir()}
+	c := &Context{Collection: collection, Harness: filepath.Dir(path), Workspace: filepath.Dir(collection), AdHoc: true}
 	if err := c.load(); err != nil {
 		t.Fatal(err)
 	}

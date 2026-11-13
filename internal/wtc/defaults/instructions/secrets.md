@@ -14,13 +14,11 @@ root** inside the workspace, outside every repo and collection:
 `wtc.env` holds machine-local command defaults so bare `wtc` calls use
 this workspace's preferred behavior. CLI flags still win.
 
-The phase-0 rename groundwork accepts `TABA_` aliases for the product settings
-read by the CLI, including the launch/status defaults below, control-root and
-data-root overrides, and the TWG-site setting. Within a source the new prefix
-wins; environment values still override file defaults. Conflicting values warn
-once per setting on stderr without printing either value. Generated names stay
-as `WTC_` in this increment. See the [environment compatibility guide](https://github.com/lcorneliussen/taba/blob/main/docs/rename-compatibility.md)
-for the supported settings, empty-value behavior and remaining phase-0 work.
+Product settings accept both `TABA_` and legacy `WTC_` names. Ordinary
+settings retain their documented precedence. Control-root aliases are checked
+independently against receiving policy: a conflicting nonempty value is refused,
+not selected by prefix precedence. Generated environments emit both root names
+with the same validated value.
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -59,15 +57,59 @@ path, so linking is mechanical.
 
 ## Workspace boundary
 
-The default is `$ROOT/.config`, beside `.bare/` and the collections. All
-collections in that workspace share it; other workspaces get their own root.
-An explicitly set `WTC_CONFIG_ROOT` still wins. Do not hardcode a home-directory
-fallback when configuring tool identities.
+The default is `<project-root>/.config` for project members and
+`<standalone-collection>/.config` for standalone ad-hoc collections. Ad-hoc
+collections do not implicitly consume a user-wide secret directory. Non-secret
+user preferences and owner caches are separate from permission to share secrets.
 
-Existing generated environments retain their old root until refreshed. To
-migrate, explicitly set `WTC_CONFIG_ROOT` to the intended workspace's `.config`
-and run `taba env setup` in the target collection. Existing panes
-must reload the environment. Existing credentials are not moved or copied.
+A selected root is validated before secret inventory, linking, environment
+generation, and collection process launch. Root and source-file symlinks cannot
+escape the approved source. Environment variables, generated files and a foreign
+project marker do not grant receiving permission.
+
+A different root must be declared in the receiving configuration (`wtc.toml`, or
+`taba.toml` when the legacy file is absent). Relative roots are relative to that
+configuration directory. A source outside the receiving project or standalone
+collection additionally requires explicit opt-in:
+
+```toml
+[secrets]
+root = "/path/to/intentionally-shared/control"
+allow_external = true
+```
+
+This grant belongs to the receiver; a user-wide preference or another project's
+configuration cannot grant it. A new standalone collection does not copy the
+creating collection's root or external grant. Both root aliases in generated,
+local and inherited environment must agree with the approved receiving root.
+
+For an existing global/external-root setup, first decide whether the receiver
+should keep using that exact source. If so, record the declaration above in its
+own configuration. Otherwise remove stale root assignments from generated/local
+environment and the invoking shell, then run `taba env setup` in the receiver.
+If the generated file still contains the previous root after an intentional
+policy change, preview `taba env setup --repair-generated-roots --dry-run`, then
+repeat without `--dry-run`. This explicit single-collection repair takes authority
+only from receiving policy. It ignores stale caller/generated root aliases,
+refuses conflicting user-local roots, and preserves `.env.collection.local`.
+It updates generated roots and removes generated provider identity hints without
+reading secret directories, running hooks, trusting mise or linking credentials.
+It refuses nonliteral generated shell code and cannot be combined with `--all`.
+Refresh or reopen the invoking shell, then run ordinary `taba env setup` to
+regenerate provider hints. Repair does not update live panes or user configuration.
+No credentials are copied, moved, deleted or relinked by this migration decision.
+Existing panes must reload their environment after regeneration.
+
+A nonempty collection-local `.config` is private data, not disposable generated
+state. Retirement refuses it, including with `--force`; preserve it explicitly
+before retiring. Retiring a project member does not remove project-level
+configuration, control data or owners.
+
+These checks prevent ambient root redirection. They are not an OS access-control
+boundary between processes running as the same user. Provider configuration
+paths alone also do not prove credential isolation: keychains, netrc, SSO caches,
+brokers and explicit tokens can have independent resolution rules. No global
+credential-store locking or provider login is performed by this policy.
 
 ## Wiring a worktree
 
@@ -192,7 +234,7 @@ TWG_SITE=<your-site-prefix>
 |---|---|---|
 | `gh` | `GH_CONFIG_DIR` — whole config dir | **keychain**; `hosts.yml` names the accounts |
 | `twg` | `TWG_SITE` pins the site; `TWG_TOKEN` for a different *account* | OAuth tokens in `~/.config/twg/auth.conf`, 600 |
-| `jira-cli` | `JIRA_CONFIG_FILE` — the config file | **plaintext `api_token:`** in that file, 600 |
+| `jira-cli` | `JIRA_CONFIG_FILE` — the config file | Provider-dependent; config selection does not relocate netrc or keychain |
 
 `twg`'s config dir does move with `XDG_CONFIG_HOME` (relocating it makes `twg
 auth refresh` answer "No TWG credentials are configured"). Do not use that as
@@ -275,10 +317,9 @@ either you have not opted in or one of the rows above is not satisfied, and
 
   That is a statement about the *variables*, not about the stores they point
   at, and the two are easy to conflate. `gh` keeps its token in the keychain
-  and `twg` holds OAuth tokens under 600; **`jira-cli` writes `api_token:` in
-  cleartext** into the file `JIRA_CONFIG_FILE` names. Scoping it stops that
-  token being shared with unrelated projects; it does not stop it being
-  plaintext on disk. So create that one restricted and keep it that way —
+  and `twg` holds OAuth tokens under 600; **`JIRA_CONFIG_FILE` selects configuration, not every credential source.**
+  Jira CLI can resolve credentials separately from environment, netrc or keychain.
+  A scoped config file does not establish token isolation. So create that one restricted and keep it that way —
   `mkdir -m 700 -p "$WTC_CONFIG_ROOT"/jira`. Nothing in the tools enforces
   the mode; the directory is the opt-in, and how you create it is the only
   moment you get to set it.

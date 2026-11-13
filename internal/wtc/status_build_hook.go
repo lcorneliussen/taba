@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"taba.sh/taba/internal/envcompat"
 	"time"
 )
 
@@ -71,7 +70,10 @@ func (c *Context) statusBuildFromHook(path string, request statusBuildRequest) (
 	command := exec.CommandContext(ctx, path)
 	command.WaitDelay = 200 * time.Millisecond
 	command.Dir = c.Collection
-	command.Env = append(append(os.Environ(), envcompat.Both("WTC_COLLECTION", filepath.Base(c.Collection))...), envcompat.Both("WTC_CONFIG_ROOT", c.ConfigRoot)...)
+	command.Env, err = c.ReceivingEnvironment(os.Environ())
+	if err != nil {
+		return nil, err
+	}
 	command.Stdin = bytes.NewReader(payload)
 	stdout := statusLimitedBuffer{limit: 1 << 20}
 	command.Stdout = &stdout

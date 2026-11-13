@@ -12,7 +12,7 @@ import (
 func TestInventoriesExposeNamesScopesAndLinkStateWithoutValues(t *testing.T) {
 	root := t.TempDir()
 	collection := filepath.Join(root, "sample")
-	control := filepath.Join(root, "control")
+	control := filepath.Join(root, ".config")
 	harness := filepath.Join(collection, "harness")
 	app := filepath.Join(collection, "app")
 	for _, dir := range []string{harness, app, filepath.Join(control, "app"), filepath.Join(control, "gh")} {

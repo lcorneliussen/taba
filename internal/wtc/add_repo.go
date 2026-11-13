@@ -43,13 +43,15 @@ func (c *Context) AddRepositories(opt AddRepoOptions) (AddRepoResult, error) {
 		}
 		path = filepath.Join(c.Workspace, opt.Collection)
 	}
-	target, err := OpenCollection(path)
+	target, err := openCollection(path, c.creatingReceiver && sameCanonicalPath(path, c.Collection))
 	if err != nil {
 		return result, err
 	}
 	result.Collection = target.Collection
 	if _, err := os.Stat(filepath.Join(target.Collection, ".env.collection")); os.IsNotExist(err) {
-		target.ConfigRoot = c.ConfigRoot
+		if _, err := target.ValidateControlRoot(); err != nil {
+			return result, err
+		}
 	} else if err != nil {
 		return result, err
 	}
@@ -170,7 +172,7 @@ func (c *Context) AddRepositories(opt AddRepoOptions) (AddRepoResult, error) {
 		return result, err
 	}
 	for _, name := range result.Added {
-		RunRepoInit(filepath.Join(target.Collection, name))
+		target.runRepoLifecycle(filepath.Join(target.Collection, name), "init")
 	}
 	_, _ = target.AgentToolchainPath(true)
 	if err := target.RunHook("add-repo.post", values); err != nil {
