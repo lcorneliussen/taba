@@ -65,8 +65,8 @@ type tunnelConsent struct {
 	Public bool `json:"public"`
 }
 
-// Access observations must be current and bound to this effective definition.
-// Neither a policy declaration nor the provider's name is verification.
+// The caller must supply an observation taken for this definition at use time;
+// this type does not track freshness. A declaration or provider name is not proof.
 type tunnelAccessEvidence struct {
 	Definition string
 	Exposure   string
