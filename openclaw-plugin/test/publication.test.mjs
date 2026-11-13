@@ -10,7 +10,7 @@ function fixture({beforeEnlist=async()=>{}}={}){
  mkdirSync(path.join(worktree,".git"),{recursive:true});
  const folder=path.join(stateDir,"wtc","ad-hoc","task");mkdirSync(folder,{recursive:true});symlinkSync(worktree,path.join(folder,"widget"));
  const entry={workspaceDir:worktree,worktree:{branch:"openclaw/task"}},handlers=new Map(),calls=[];
- let code=0,result={status:"published",url:"https://github.com/example/widget/pull/7",branch:"feature"};
+ let code=0,result={requestId:"request",status:"published",url:"https://github.com/example/widget/pull/7",repository:"example/widget",branch:"feature",headCommit:"1".repeat(40)};
  const bridge=registerPublicationBridge({registerGatewayMethod:(name,handler,options)=>handlers.set(name,{handler,options})},{stateDir,getSessionEntry:async()=>entry,run:async argv=>{calls.push(argv);await beforeEnlist(argv);return {code};},dispatch:async(method,params)=>{calls.push({method,params});return {ok:true,payload:method==="plugins.sessionAction"?{ok:true,result}:result};}});
  const invoke=async(route,params)=>{let response;await handlers.get("wtc."+route).handler({params,respond:(ok,payload,error)=>response={ok,payload,error}});return response;};
  return {stateDir,worktree,folder,entry,handlers,calls,bridge,invoke,setCode:n=>code=n,setResult:r=>result=r,dispose:()=>rmSync(stateDir,{recursive:true,force:true})};
@@ -61,16 +61,34 @@ test("retry budget prioritizes never attempted receipts over persistent failures
  }finally{f.dispose();}
 });
 
-test("concurrent refreshes share one tracking attempt and completed receipts stay removed",async()=>{
+test("concurrent refreshes share one tracking attempt and completed receipts stay removed",{timeout:5000},async()=>{
  let enter,release;const entered=new Promise(r=>enter=r),released=new Promise(r=>release=r);
- const f=fixture({beforeEnlist:()=>{enter();return released;}});let first;
+ const f=fixture({beforeEnlist:()=>{enter();return released;}});let first,second;
  try{
   queueReceipt(f,1);const children=[{sessionKey:"owner:widget",entry:f.entry}];
   first=f.bridge.flush(children);await entered;
-  await f.bridge.flush(children);assert.equal(f.calls.length,1);
-  release();await first;await f.bridge.flush(children);
+  await f.bridge.flush([{sessionKey:"unrelated",entry:f.entry}]);
+  let secondDone=false;second=f.bridge.flush(children).then(()=>secondDone=true);
+  await new Promise(setImmediate);assert.equal(secondDone,false,"an overlapping reader joins relevant in-flight metadata");
+  assert.equal(f.calls.length,1);
+  release();await Promise.all([first,second]);await f.bridge.flush(children);
   assert.equal(f.calls.length,1);assert.deepEqual(readdirSync(path.join(f.stateDir,"plugins/wtc/publication-receipts")),[]);
- }finally{release();await first;f.dispose();}
+ }finally{release();await Promise.allSettled([first,second]);f.dispose();}
+});
+test("refresh joins a native publication's in-flight enlist without publishing again",{timeout:5000},async()=>{
+ let enter,release;const entered=new Promise(r=>enter=r),released=new Promise(r=>release=r);
+ const f=fixture({beforeEnlist:()=>{enter();return released;}});let publication,refresh;
+ try{
+  const native={requestId:"request",status:"published",url:"https://github.com/example/widget/pull/7",repository:"example/widget",branch:"captured/topic",headCommit:"1".repeat(40)};
+  f.setResult(native);publication=f.invoke("github.confirm",{sessionKey:"owner:widget",requestId:"request",requestDigest:"digest"});await entered;
+  let refreshed=false;refresh=f.bridge.flush([{sessionKey:"owner:widget",entry:f.entry}]).then(()=>refreshed=true);
+  await new Promise(setImmediate);assert.equal(refreshed,false,"refresh cannot finish before the captured receipt is recorded");
+  release();const out=await publication;await refresh;
+  assert.deepEqual(out.payload,{...native,tracking:{state:"enlisted"}});
+  assert.equal(f.calls.filter(c=>!Array.isArray(c)).length,1,"only the original native publication runs");
+  assert.equal(f.calls.filter(Array.isArray).length,1,"the same metadata attempt is shared");
+  assert.equal(f.calls.find(Array.isArray).at(-1),"captured/topic","branch comes from the native result, not the current checkout");
+ }finally{release();await Promise.allSettled([publication,refresh]);f.dispose();}
 });
 test("published success survives tracking failure; verified refresh retries only tracking",async()=>{
  const f=fixture();try{

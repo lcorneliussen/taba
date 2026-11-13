@@ -657,7 +657,7 @@ export default {
     // The collection a session is in, with what wtc status says about it.
     const loadCollection = async (agentId, sessionKey) => {
       const { parentKey, parent, children } = await collectionOf(agentId, sessionKey);
-      void publications.flush(children);
+      await publications.flush(children);
       const result = {
         schema: "wtc.collection/v1",
         collection: { sessionKey: parentKey, label: parent?.label ?? parent?.displayName ?? null },

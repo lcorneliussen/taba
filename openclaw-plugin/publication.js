@@ -48,23 +48,25 @@ export function registerPublicationBridge(api, {run,getSessionEntry,stateDir,dis
   // retry this local metadata write; it never retries a push or PR creation.
   const flush=async(children)=>{
     let files=[];try{files=readdirSync(queue).filter(f=>/^[a-f0-9]{64}\.json$/.test(f));}catch{return;}
-    const eligible=[],now=Date.now();
+    const eligible=[],inflight=[],now=Date.now();
     for(const name of files){
       const file=path.join(queue,name);
-      const previous=retried.get(file);
-      if(running.has(file)||previous!==undefined&&now-previous<30000)continue;
       let receipt;try{receipt=JSON.parse(readFileSync(file,"utf8"));}catch{continue;}
       if(!receipt || typeof receipt!=="object" || ["sessionKey","worktree","collection","url","branch"].some(key=>typeof receipt[key]!=="string"||!receipt[key]))continue;
       const child=children.find(c=>c.sessionKey===receipt.sessionKey);
       const worktree=child?.entry?.workspaceDir||child?.entry?.spawnedCwd;
       if(!child?.entry?.worktree||!samePath(worktree,receipt.worktree))continue;
+      const pending=running.get(file);
+      if(pending){inflight.push(pending);continue;}
+      const previous=retried.get(file);
+      if(previous!==undefined&&now-previous<30000)continue;
       eligible.push({file,receipt,previous:previous??-Infinity});
     }
     eligible.sort((a,b)=>a.previous-b.previous||a.file.localeCompare(b.file));
-    await Promise.all(eligible.slice(0,100).map(async({file,receipt})=>{
+    await Promise.all([...inflight.map(p=>p.catch(()=>{})),...eligible.slice(0,100).map(async({file,receipt})=>{
       retried.set(file,now);
       try{await enlist(file,receipt);}catch{/* Keep the receipt for a later verified refresh. */}
-    }));
+    })]);
   };
   if(typeof api.registerGatewayMethod!=="function")return {flush};
   for(const route of ["github.publish","github.confirm","bitbucket.confirm"]){
