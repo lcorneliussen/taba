@@ -1105,8 +1105,12 @@ func TestStatus319ProductionReleasedCacheWriter(t *testing.T) {
 				list, _ := statusEncodeOpenPRs(items, false, time.Now())
 				publish := func() {
 					t.Helper()
+					// Prior refreshes have finished, and CombinedOutput below finishes
+					// this publisher before the next refresh starts. Do not order these
+					// processes with a future request timestamp.
+					started := time.Now()
 					command := exec.Command(os.Args[0], "-test.run=^TestStatus319RefreshProcess$")
-					command.Env = append(os.Environ(), "WTC_TEST_319_CHILD=released-cache", "WTC_TEST_319_CACHE_RAW="+string(raw), "WTC_TEST_319_CACHE_LIST="+string(list), "WTC_TEST_319_CACHE_START="+strconv.FormatInt(time.Now().Add(time.Second).UnixNano(), 10))
+					command.Env = append(os.Environ(), "WTC_TEST_319_CHILD=released-cache", "WTC_TEST_319_CACHE_RAW="+string(raw), "WTC_TEST_319_CACHE_LIST="+string(list), "WTC_TEST_319_CACHE_START="+strconv.FormatInt(started.UnixNano(), 10))
 					if out, err := command.CombinedOutput(); err != nil {
 						t.Fatalf("released publisher: %v %s", err, out)
 					}
