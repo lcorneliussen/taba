@@ -1,0 +1,428 @@
+package wtc
+
+import (
+	"bufio"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// Support says what this release does with a convention's old and new names.
+const (
+	// SupportBoth: both names are read; when both exist the old one wins.
+	SupportBoth = "both"
+	// SupportBothNewWins: both names are read; the new one wins.
+	SupportBothNewWins = "both, new wins"
+	// SupportOldOnly: only the old name exists so far.
+	SupportOldOnly = "old only"
+	// SupportNew: taba already writes the new name.
+	SupportNew = "new"
+)
+
+// Convention is one name a project, harness, script or agent depends on that
+// carries the old wtc name. The list is the source for `taba doctor`, `taba
+// conventions` and docs/conventions.md.
+type Convention struct {
+	ID   string `json:"id"`
+	Area string `json:"area"`
+	Old  string `json:"old"`
+	New  string `json:"new,omitempty"`
+	// Support is one of the Support* constants.
+	Support string `json:"support"`
+	// Owner is "you" when the project writes it, "taba" when taba generates
+	// or manages it.
+	Owner   string `json:"owner"`
+	Migrate string `json:"migrate"`
+	// Checked marks conventions `taba doctor` looks for.
+	Checked bool `json:"checked"`
+}
+
+// Conventions lists the wtc conventions in the order they are documented.
+var Conventions = []Convention{
+	{ID: "harness-config", Area: "harness", Old: "`wtc.toml`", New: "`taba.toml`", Support: SupportBoth, Owner: "you", Checked: true,
+		Migrate: "`git mv wtc.toml taba.toml` in the harness, then commit and merge it as usual."},
+	{ID: "harness-pin", Area: "harness", Old: "`.wtc-cli-version`", New: "`.taba-version`", Support: SupportBoth, Owner: "you", Checked: true,
+		Migrate: "`git mv .wtc-cli-version .taba-version` in the harness, together with `taba.toml`."},
+	{ID: "skill-base-digest", Area: "harness", Old: "`overlays/skills/<name>/.wtc-base.sha256`", New: "`.taba-base.sha256`", Support: SupportBoth, Owner: "you", Checked: true,
+		Migrate: "`git mv` each digest file to `.taba-base.sha256` in the same folder."},
+	{ID: "harness-skills", Area: "harness", Old: "`skills/wtc-<name>`, `overlays/skills/wtc-<name>`", New: "`taba-<name>`", Support: SupportOldOnly, Owner: "you", Checked: true,
+		Migrate: "Once the release names skills `taba-*` (#351), rename each folder to `taba-<name>` and update its `name:`. Until then, keep the old names."},
+	{ID: "harness-hooks", Area: "harness", Old: "`hooks/wtc/`", New: "`hooks/taba/` (planned)", Support: SupportOldOnly, Owner: "you", Checked: true,
+		Migrate: "No new name yet (#375). Keep `hooks/wtc/`."},
+	{ID: "browse-overlay", Area: "harness", Old: "`overlays/browse/wtc-browse.lua`", New: "`taba-browse.lua` (planned)", Support: SupportOldOnly, Owner: "you", Checked: true,
+		Migrate: "No new name yet (#375). Keep the old file name."},
+	{ID: "harness-references", Area: "harness", Old: "`WTC_*` variables and `wtc …` commands in harness files", New: "`TABA_*` and `taba …`", Support: SupportBothNewWins, Owner: "you", Checked: true,
+		Migrate: "Replace `WTC_X` with `TABA_X` and `wtc` with `taba` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`)."},
+	{ID: "scope-file", Area: "collection", Old: "`WTC-SCOPE.md`", New: "`SCOPE.md`", Support: SupportBoth, Owner: "you", Checked: true,
+		Migrate: "`mv WTC-SCOPE.md SCOPE.md` at the collection root. The file is local, so nothing to commit."},
+	{ID: "local-references", Area: "collection", Old: "`WTC_*` in `.env.collection.local`", New: "`TABA_*`", Support: SupportBothNewWins, Owner: "you", Checked: true,
+		Migrate: "Rename the variables in `.env.collection.local`."},
+	{ID: "mise-tool-key", Area: "collection", Old: "`github:lcorneliussen/wtc-cli` in mise configuration", New: "`github:lcorneliussen/taba`", Support: SupportNew, Owner: "taba", Checked: true,
+		Migrate: "Run `taba env setup` to regenerate `mise.toml`. In `taba.toml` `[mise.tools]`, rename the key by hand."},
+	{ID: "generated-state", Area: "collection", Old: "`.wtc/`, `.wtc-prs`, `.wtc-status.*`, `.wtc-catch-up.*`, `.wtc-reviews/`, `.wtc-review-posted/`, `.wtc-status-watchers/`, `.wtc-review-mode`, `.wtc-dev-mode.json`, `.last-wtc-status.yml`", New: "`.taba…` spellings", Support: SupportBoth, Owner: "taba", Checked: true,
+		Migrate: "Nothing to do by hand: taba still writes these names and moves them itself once writes follow the harness (#375)."},
+	{ID: "rendered-skills", Area: "collection", Old: "rendered `wtc-*` skills in `.claude/skills` and `.agents/skills`", New: "`taba-*`", Support: SupportOldOnly, Owner: "taba", Checked: false,
+		Migrate: "Rendered by `taba skills render` under the old names. Renaming them to `taba-*` is planned in #351; nothing to do by hand."},
+	{ID: "control-root-env", Area: "user", Old: "`$WTC_CONFIG_ROOT/wtc.env`", New: "`taba.env`", Support: SupportBoth, Owner: "you", Checked: true,
+		Migrate: "`mv wtc.env taba.env` in the control root. Every 0.2.x release reads it."},
+	{ID: "user-config-dir", Area: "user", Old: "`$XDG_CONFIG_HOME/wtc`", New: "`$XDG_CONFIG_HOME/taba`", Support: SupportBoth, Owner: "you", Checked: true,
+		Migrate: "`mv ~/.config/wtc ~/.config/taba` (or under `$XDG_CONFIG_HOME`) once no wtc 0.1.x client uses it."},
+	{ID: "user-data-dir", Area: "user", Old: "`$XDG_DATA_HOME/wtc`", New: "`$XDG_DATA_HOME/taba`", Support: SupportBoth, Owner: "you", Checked: true,
+		Migrate: "`mv ~/.local/share/wtc ~/.local/share/taba` (or under `$XDG_DATA_HOME`) once no wtc 0.1.x client uses it."},
+	{ID: "task-metadata", Area: "repository", Old: "`x-wtc` in `.harness/dekit.tasks.yaml`", New: "`x-taba` (planned)", Support: SupportOldOnly, Owner: "you", Checked: true,
+		Migrate: "No new name yet (#375). Keep `x-wtc`."},
+	{ID: "command", Area: "tooling", Old: "`wtc` command", New: "`taba`", Support: SupportBoth, Owner: "taba", Checked: false,
+		Migrate: "Both commands ship in 0.2.x. Call `taba` in scripts; harness files are covered by the harness-references check."},
+	{ID: "openclaw-plugin", Area: "OpenClaw", Old: "plugin id `wtc`, package `openclaw-plugin-wtc`, config `plugins.entries.wtc`, gateway state under `wtc/`", New: "`taba`", Support: SupportOldOnly, Owner: "taba", Checked: false,
+		Migrate: "Nothing to do yet; `taba doctor --openclaw` will move the gateway config when the plugin is renamed (#375)."},
+	{ID: "internal-names", Area: "internal", Old: "git refs `refs/wtc-catch-up/…`, `wtc-pr-<n>` remotes, review markers `wtc-review v1`, locks `.wtc-runtime.lock`, `.wtc-status-watchers.lock`, `.wtc-prs.lock`, MCP and generated-file markers, temporary files", New: "taba spellings", Support: SupportOldOnly, Owner: "taba", Checked: false,
+		Migrate: "Nothing to do: taba reads and moves these itself. Locks keep their names while any supported client uses them."},
+}
+
+// ConventionFinding is one place a checked convention still uses its old name.
+type ConventionFinding struct {
+	ID      string `json:"id"`
+	Area    string `json:"area"`
+	Path    string `json:"path"`
+	Detail  string `json:"detail,omitempty"`
+	Migrate string `json:"migrate"`
+	// Blocked findings have no supported new name yet, or are taba's to move.
+	Blocked bool `json:"blocked,omitempty"`
+}
+
+func conventionByID(id string) Convention {
+	for _, c := range Conventions {
+		if c.ID == id {
+			return c
+		}
+	}
+	panic("unknown convention " + id)
+}
+
+func conventionFinding(id, path, detail string) ConventionFinding {
+	c := conventionByID(id)
+	return ConventionFinding{ID: id, Area: c.Area, Path: path, Detail: detail, Migrate: c.Migrate,
+		Blocked: c.Support == SupportOldOnly || c.Owner == "taba"}
+}
+
+func conventionPathExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+// tabaSkillNames reports whether this release's embedded skills use the taba
+// names; until then harness skills keep the old prefix.
+func tabaSkillNames() bool {
+	_, err := ReadDefault("skills/taba-start/SKILL.md")
+	return err == nil
+}
+
+// ConventionFindings checks this collection, its harness and its repository
+// siblings for wtc conventions. User-level names are checked separately by
+// UserConventionFindings, once per machine.
+func (c *Context) ConventionFindings() ([]ConventionFinding, error) {
+	var out []ConventionFinding
+	if !c.AdHoc && c.Harness != "" {
+		found, err := harnessConventionFindings(c.Harness)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, found...)
+	}
+	if c.Collection != "" {
+		out = append(out, collectionConventionFindings(c)...)
+	}
+	return out, nil
+}
+
+func harnessConventionFindings(harness string) ([]ConventionFinding, error) {
+	var out []ConventionFinding
+	rel := func(path string) string {
+		if r, err := filepath.Rel(filepath.Dir(harness), path); err == nil {
+			return filepath.ToSlash(r)
+		}
+		return path
+	}
+	if p := filepath.Join(harness, "wtc.toml"); conventionPathExists(p) {
+		out = append(out, conventionFinding("harness-config", rel(p), ""))
+	}
+	if p := filepath.Join(harness, ".wtc-cli-version"); conventionPathExists(p) {
+		out = append(out, conventionFinding("harness-pin", rel(p), ""))
+	}
+	for _, layer := range []string{"skills", filepath.Join("overlays", "skills")} {
+		entries, err := os.ReadDir(filepath.Join(harness, layer))
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		for _, e := range entries {
+			dir := filepath.Join(harness, layer, e.Name())
+			if layer != "skills" {
+				if p := filepath.Join(dir, ".wtc-base.sha256"); conventionPathExists(p) {
+					out = append(out, conventionFinding("skill-base-digest", rel(p), ""))
+				}
+			}
+			if strings.HasPrefix(e.Name(), "wtc-") {
+				f := conventionFinding("harness-skills", rel(dir), "")
+				f.Blocked = !tabaSkillNames()
+				out = append(out, f)
+			}
+		}
+	}
+	if p := filepath.Join(harness, "hooks", "wtc"); conventionPathExists(p) {
+		out = append(out, conventionFinding("harness-hooks", rel(p), ""))
+	}
+	if p := filepath.Join(harness, "overlays", "browse", "wtc-browse.lua"); conventionPathExists(p) {
+		out = append(out, conventionFinding("browse-overlay", rel(p), ""))
+	}
+	refs, err := scanReferences(harness, rel)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, refs...)
+	for _, name := range []string{"taba.toml", "wtc.toml"} {
+		data, err := os.ReadFile(filepath.Join(harness, name))
+		if err == nil && strings.Contains(string(data), legacyCLIMiseTool) {
+			out = append(out, conventionFinding("mise-tool-key", rel(filepath.Join(harness, name)), "[mise.tools] names "+legacyCLIMiseTool))
+			break
+		}
+	}
+	return out, nil
+}
+
+var (
+	wtcVariable = regexp.MustCompile(`\bWTC_[A-Z0-9_]+`)
+	// wtcCommand matches `wtc <subcommand>`, not "wtc" as the noun for a
+	// worktree collection, which stays. TestConventionCommandsAreCurrent keeps
+	// the list in step with the CLI.
+	wtcCommand = regexp.MustCompile("(?:^|[\\s;|&(`$\"'/])wtc\\s+(?:" + strings.Join(ConventionCommands, "|") + ")\\b")
+)
+
+// ConventionCommands are the subcommands `taba doctor` looks for after `wtc`.
+var ConventionCommands = []string{"add-repo", "agent-env", "browse", "catch-up", "checkouts", "commands", "conventions", "customize", "dev", "docs", "doctor", "down", "eject", "env", "harness", "host", "init", "logs", "mcp", "new", "open", "openclaw", "pr", "projects", "publish", "registry", "release-notes", "restart", "retire", "review", "secrets", "skills", "status", "svc", "up", "upgrade", "version", "--version", "--help", "help"}
+
+// referenceRoots are the harness paths written for people and agents to run
+// or read. Release notes and vendored trees are history, not instructions.
+var referenceRoots = []string{"hooks", "skills", "overlays", "instructions", "scripts", "bin", "review"}
+
+func scanReferences(harness string, rel func(string) string) ([]ConventionFinding, error) {
+	var files []string
+	entries, err := os.ReadDir(harness)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.Type().IsRegular() && (strings.HasSuffix(name, ".md") || strings.HasSuffix(name, ".sh") || name == "taba.toml" || name == "wtc.toml" || name == "mise.toml") {
+			files = append(files, filepath.Join(harness, name))
+		}
+	}
+	for _, root := range referenceRoots {
+		err := filepath.WalkDir(filepath.Join(harness, root), func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				if os.IsNotExist(err) {
+					return filepath.SkipDir
+				}
+				return err
+			}
+			if d.IsDir() {
+				if n := d.Name(); n == ".git" || n == "node_modules" || n == "release-notes" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if d.Type().IsRegular() {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+	var out []ConventionFinding
+	for _, path := range files {
+		vars, cmds, err := countReferences(path)
+		if err != nil {
+			return nil, err
+		}
+		if vars+cmds == 0 {
+			continue
+		}
+		var parts []string
+		if vars > 0 {
+			parts = append(parts, fmt.Sprintf("%d WTC_ variable(s)", vars))
+		}
+		if cmds > 0 {
+			parts = append(parts, fmt.Sprintf("%d wtc command(s)", cmds))
+		}
+		out = append(out, conventionFinding("harness-references", rel(path), strings.Join(parts, ", ")))
+	}
+	return out, nil
+}
+
+func countReferences(path string) (vars, cmds int, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() > 1<<20 {
+		return 0, 0, err
+	}
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.IndexByte(line, 0) >= 0 {
+			return 0, 0, nil
+		}
+		vars += len(wtcVariable.FindAllString(line, -1))
+		cmds += len(wtcCommand.FindAllString(line, -1))
+	}
+	return vars, cmds, scanner.Err()
+}
+
+var generatedStateNames = []string{".wtc", ".wtc-prs", ".wtc-status.json", ".wtc-status.md", ".last-wtc-status.yml", ".wtc-catch-up.json", ".wtc-catch-up.md", ".wtc-reviews", ".wtc-review-posted", ".wtc-status-watchers", ".wtc-review-mode", ".wtc-dev-mode.json"}
+
+func collectionConventionFindings(c *Context) []ConventionFinding {
+	var out []ConventionFinding
+	root := c.Collection
+	base := filepath.Base(root)
+	if conventionPathExists(filepath.Join(root, "WTC-SCOPE.md")) {
+		out = append(out, conventionFinding("scope-file", base+"/WTC-SCOPE.md", ""))
+	}
+	if n := countFileReferences(filepath.Join(root, ".env.collection.local")); n > 0 {
+		out = append(out, conventionFinding("local-references", base+"/.env.collection.local", fmt.Sprintf("%d WTC_ variable(s)", n)))
+	}
+	if data, err := os.ReadFile(filepath.Join(root, "mise.toml")); err == nil && strings.Contains(string(data), legacyCLIMiseTool) {
+		out = append(out, conventionFinding("mise-tool-key", base+"/mise.toml", ""))
+	}
+	var state []string
+	for _, name := range generatedStateNames {
+		if conventionPathExists(filepath.Join(root, name)) {
+			state = append(state, name)
+		}
+	}
+	if len(state) > 0 {
+		out = append(out, conventionFinding("generated-state", base, strings.Join(state, ", ")))
+	}
+	for _, repo := range c.Registry.Repos {
+		p := filepath.Join(root, repo.Name, ".harness", "dekit.tasks.yaml")
+		if data, err := os.ReadFile(p); err == nil && strings.Contains(string(data), "x-wtc") {
+			out = append(out, conventionFinding("task-metadata", base+"/"+repo.Name+"/.harness/dekit.tasks.yaml", ""))
+		}
+	}
+	return out
+}
+
+func countFileReferences(path string) int {
+	vars, _, err := countReferences(path)
+	if err != nil {
+		return 0
+	}
+	return vars
+}
+
+// UserConventionFindings checks the control root and the per-user
+// directories. Explicit XDG settings are honoured; unset ones use the
+// defaults the CLI itself uses.
+func UserConventionFindings(configRoot string) []ConventionFinding {
+	var out []ConventionFinding
+	if configRoot != "" {
+		if p := filepath.Join(configRoot, "wtc.env"); conventionPathExists(p) {
+			out = append(out, conventionFinding("control-root-env", p, ""))
+		}
+	}
+	home, _ := os.UserHomeDir()
+	base := func(env, fallback string) string {
+		if dir := os.Getenv(env); dir != "" {
+			return dir
+		}
+		if home == "" {
+			return ""
+		}
+		return filepath.Join(home, fallback)
+	}
+	if dir := base("XDG_CONFIG_HOME", ".config"); dir != "" && conventionPathExists(filepath.Join(dir, "wtc")) {
+		out = append(out, conventionFinding("user-config-dir", filepath.Join(dir, "wtc"), ""))
+	}
+	if dir := base("XDG_DATA_HOME", filepath.Join(".local", "share")); dir != "" && conventionPathExists(filepath.Join(dir, "wtc")) {
+		out = append(out, conventionFinding("user-data-dir", filepath.Join(dir, "wtc"), ""))
+	}
+	return out
+}
+
+// ConventionsMarkdown renders the conventions list for docs/conventions.md
+// and the website.
+func ConventionsMarkdown() string {
+	var b strings.Builder
+	areas := []string{}
+	seen := map[string]bool{}
+	for _, c := range Conventions {
+		if !seen[c.Area] {
+			seen[c.Area] = true
+			areas = append(areas, c.Area)
+		}
+	}
+	support := map[string]string{
+		SupportBoth:        "Both names; the old one wins if both exist",
+		SupportBothNewWins: "Both names; the new one wins",
+		SupportOldOnly:     "Old name only",
+		SupportNew:         "New name written",
+	}
+	for _, area := range areas {
+		fmt.Fprintf(&b, "### %s\n\n", conventionAreaTitle(area))
+		b.WriteString("| Old | New | In 0.2.x | Written by | `doctor` | Migrate |\n|---|---|---|---|---|---|\n")
+		for _, c := range Conventions {
+			if c.Area != area {
+				continue
+			}
+			checked := "no"
+			if c.Checked {
+				checked = "yes"
+			}
+			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s |\n", c.Old, c.New, support[c.Support], c.Owner, checked, c.Migrate)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func conventionAreaTitle(area string) string {
+	switch area {
+	case "harness":
+		return "Harness"
+	case "collection":
+		return "Collection"
+	case "user":
+		return "User and control root"
+	case "repository":
+		return "Repositories"
+	case "tooling":
+		return "Command"
+	case "internal":
+		return "Internal names"
+	}
+	return area
+}
+
+// SortConventionFindings orders findings by area as documented, then path.
+func SortConventionFindings(findings []ConventionFinding) {
+	order := map[string]int{}
+	for i, c := range Conventions {
+		if _, ok := order[c.ID]; !ok {
+			order[c.ID] = i
+		}
+	}
+	sort.SliceStable(findings, func(i, j int) bool {
+		if order[findings[i].ID] != order[findings[j].ID] {
+			return order[findings[i].ID] < order[findings[j].ID]
+		}
+		return findings[i].Path < findings[j].Path
+	})
+}
