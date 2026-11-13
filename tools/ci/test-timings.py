@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Run the Go suite with live output and bounded test/Git timing summaries.
 
-Arguments are forwarded to `go test`. Git traces are temporary and only aggregate
-command names, counts and elapsed seconds are printed, never argv or paths.
+Arguments are forwarded to `go test`. An optional first `--git-trace` argument
+collects temporary Git traces and prints only aggregate command names, counts
+and elapsed seconds, never argv or paths.
 """
 import collections
 import json
@@ -41,18 +42,24 @@ def report(timings, git, wall):
         print(f"\nSlowest {label} (elapsed seconds; overlapping rows are not additive):")
         for elapsed, name in sorted(rows, reverse=True)[:20]:
             print(f"{elapsed:9.3f}  {name}")
-    print("\nGit root commands (count, aggregate elapsed seconds; nested commands excluded):")
-    for command, (count, elapsed) in sorted(git.items(), key=lambda row: row[1][1], reverse=True):
-        print(f"{count:6d} {elapsed:9.3f}  {command}")
+    if git is not None:
+        print("\nGit root commands (count, aggregate elapsed seconds; nested commands excluded):")
+        for command, (count, elapsed) in sorted(git.items(), key=lambda row: row[1][1], reverse=True):
+            print(f"{count:6d} {elapsed:9.3f}  {command}")
 
 
 def main(args):
+    trace_git = bool(args and args[0] == "--git-trace")
+    if trace_git:
+        args = args[1:]
     timings = {"packages": [], "tests": [], "subtests": []}
     malformed = False
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="go-test-timings-") as directory:
         trace = Path(directory) / "git.jsonl"
-        env = dict(os.environ, GIT_TRACE2_EVENT=str(trace))
+        env = dict(os.environ)
+        if trace_git:
+            env["GIT_TRACE2_EVENT"] = str(trace)
         with subprocess.Popen(["go", "test", "-json", *args], env=env,
                               stdout=subprocess.PIPE, text=True) as process:
             for line in process.stdout:
@@ -63,7 +70,7 @@ def main(args):
                     malformed = True
                     print(line, end="", flush=True)
                     continue
-                if event.get("Action") == "output":
+                if "Output" in event:
                     print(event.get("Output", ""), end="", flush=True)
                 if event.get("Action") in ("pass", "fail", "skip") and "Elapsed" in event:
                     package = event.get("Package", "")
@@ -72,7 +79,7 @@ def main(args):
                     name = package if test is None else f"{package}.{test}"
                     timings[category].append((event["Elapsed"], name))
             status = process.wait()
-        report(timings, git_timings(trace), time.monotonic() - started)
+        report(timings, git_timings(trace) if trace_git else None, time.monotonic() - started)
     return status if status > 0 else 128 - status if status < 0 else int(malformed)
 
 

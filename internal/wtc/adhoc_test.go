@@ -13,7 +13,7 @@ import (
 // and returns a directory holding synthetic source repositories.
 func adHocFixture(t *testing.T) string {
 	t.Helper()
-	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("PATH", fixtureSystemPath(t))
 	t.Setenv("WTC_HARNESS_REPO", "")
 	t.Setenv("WTC_CONFIG_ROOT", "")
 	root := t.TempDir()

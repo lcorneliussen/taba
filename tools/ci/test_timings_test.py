@@ -30,6 +30,11 @@ class TimingsTest(unittest.TestCase):
         self.assertIn("failure detail", result.stdout)
         self.assertIn("Go test wall time", result.stdout)
 
+    def test_preserves_build_failure_diagnostic(self):
+        result = self.run_fixture(1, json.dumps({"Action": "build-output", "Output": "compile error\n"}))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("compile error", result.stdout)
+
     def test_valid_success(self):
         result = self.run_fixture(0, json.dumps({"Action": "pass", "Package": "example/test", "Elapsed": 1.25}))
         self.assertEqual(result.returncode, 0, result.stderr)
