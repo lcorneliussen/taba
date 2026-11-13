@@ -30,7 +30,7 @@ func newWorkspaceFixture(t *testing.T) *Context {
 	t.Helper()
 	// The fixture has the same shared-bare geometry as an actual workspace but
 	// all remotes are local, so a fetch never reaches the network.
-	t.Setenv("PATH", "/usr/bin:/bin")
+	t.Setenv("PATH", fixtureSystemPath(t))
 	t.Setenv("WTC_HARNESS_REPO", "agent-harness")
 	root := t.TempDir()
 	if err := os.Mkdir(filepath.Join(root, ".bare"), 0755); err != nil {
