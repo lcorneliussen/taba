@@ -196,7 +196,8 @@ collection, links skills into
 `.claude/skills` and `.agents/skills`, and wires `AGENTS.md`, agent hooks,
 `.envrc`, and `.env.toolchain`. `--seed-scope` creates a scope file from the
 harness template only when neither `WTC-SCOPE.md` nor `SCOPE.md` exists: `SCOPE.md`
-for a harness on the new file names (`.taba-version`), else `WTC-SCOPE.md`. Existing legacy
+for a harness on the new pin (`.taba-version` and no `.wtc-cli-version`),
+else `WTC-SCOPE.md`. Existing legacy
 scope takes precedence; otherwise read and edit `SCOPE.md` without creating
 a second file. `--dry-run` previews changes, and
 `--all` explicitly applies them to every collection in the workspace.

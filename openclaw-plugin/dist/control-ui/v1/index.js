@@ -415,7 +415,7 @@ const address = (url) => LOOPBACK.test(url)
   ? css(el("span", { textContent: `:${new URL(url).port || "80"}`, title: `${url} on the gateway: open a tunnel to reach it from here` }), "font-family:var(--mono, ui-monospace, monospace);color:var(--muted, #888)")
   : link(url.replace(/^https?:\/\//, ""), url);
 const TUNNEL_URL = /^https:\/\/[^/]*(trycloudflare\.com|\.ts\.net|ngrok[-a-z]*\.(app|io|dev)|devtunnels\.ms)(:\d+)?(\/|$)/;
-const consolidate = (g) => `The tunnel ${g.group} runs as a service of its own. Consolidate it as the wtc-svc skill says: remove it and open it again with wtc svc tunnel on the service it exposes.`;
+const consolidate = (g) => `The tunnel ${g.group} runs as a service of its own. Consolidate it as the taba-svc skill says: remove it and open it again with wtc svc tunnel on the service it exposes.`;
 const tunnelName = (t) => t.provider || (/trycloudflare\.com/.test(t.url ?? "") ? "cloudflare" : /\.ts\.net/.test(t.url ?? "") ? "tailscale" : "tunnel");
 // Things only the conversation can do (resolve a conflict, publish where the
 // gateway cannot) are asked of it, in the conversation, where it shows.
@@ -477,7 +477,7 @@ const unreachable = (url) => {
     return host !== here && PRIVATE_HOST.test(host) && !PRIVATE_HOST.test(here);
   } catch { return false; }
 };
-const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${g.group}. ${program} is not on the gateway's PATH: install it for this collection, then open the tunnel as the wtc-svc skill says.`;
+const installTunnel = (g, provider, program) => `Open a ${provider} tunnel to ${g.group}. ${program} is not on the gateway's PATH: install it for this collection, then open the tunnel as the taba-svc skill says.`;
 const serviceStateIcon = glyph => {
   // Use a supported shell for the filled square, avoiding the unknown-glyph fallback.
   const icon = controlIcon(glyph === "■" ? "▶" : glyph, 12);

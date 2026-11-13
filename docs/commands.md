@@ -28,7 +28,7 @@ the view does not run them on every refresh.
 - `wtc env setup [--collection DIR] [--dry-run]` regenerates `.env.collection`, preserving its port base. It leaves `.env.collection.local` intact, writes the collection's mise environment file, and trusts the generated mise config when mise is installed. Existing flagged `wtc env` invocations remain supported.
 - `wtc doctor` checks the collection registry and local tool availability. Under [OpenClaw](openclaw.md), or with `--openclaw`, it checks the gateway instead: Git 2.42+, `gh`, the wtc plugin and its version, custom Control UI plugins, and that each agent's `AGENTS.md` mentions wtc (`wtc docs openclaw-AGENTS.md` is the section to add). It fails when a required check does.
 - `wtc commands --json` lists the command surface for agents.
-- `wtc eject 'skills/wtc-*'` copies selected embedded defaults into the harness so they can be customized. Existing files are never overwritten.
+- `taba eject 'skills/taba-*'` copies selected embedded defaults into the harness so they can be customized. Existing files are never overwritten.
 - `wtc pr path|list|enlist|unlist` manages the collection-local `.wtc-prs` file used by status and catch-up.
 - `wtc registry refresh` regenerates the local bare-owner map and reports registry mismatches.
 - `wtc mcp render [--dry-run]` renders the harness MCP registry into Claude, Cursor, and Codex config files for this collection.

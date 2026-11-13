@@ -965,7 +965,7 @@ index. Commit controls respect recovery and the repository's current action
 plan, rechecking the checkout before asking for commits. The owning conversation
 must inspect both copies and restore or
 resolve the intended edits, including partial staging and untracked content.
-The bundled **wtc-catch-up** skill routes this through
+The bundled **taba-catch-up** skill routes this through
 `wtc docs instructions/openclaw-recovery.md`; no separately learned skill is
 required. After verification, run in the owning gateway checkout:
 

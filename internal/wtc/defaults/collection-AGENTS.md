@@ -38,7 +38,8 @@ also applies to delegated agents and to explanations of a privacy cleanup.
 1. **Task scope** — read and edit `WTC-SCOPE.md` when present, otherwise
    `SCOPE.md`. It states the task, the repos that belong to it, and what is
    deliberately out. If neither exists, run `/taba-start`; it seeds
-   `SCOPE.md` when the harness has `.taba-version`, else `WTC-SCOPE.md`. Do not create a legacy file beside existing `SCOPE.md`.
+   `SCOPE.md` when the harness has `.taba-version` and no `.wtc-cli-version`,
+   else `WTC-SCOPE.md`. Do not create a legacy file beside existing `SCOPE.md`.
 2. **`harness/AGENTS.md`** if this harness has one — the domain rules for your
    project. Then each sibling's own `AGENTS.md`: branch policy and commit
    restrictions are per repo.

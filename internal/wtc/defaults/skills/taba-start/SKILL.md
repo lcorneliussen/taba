@@ -27,7 +27,7 @@ not guess at `../` paths, and stop following this skill.
 Select the task scope: use `WTC-SCOPE.md` when present, otherwise existing
 `SCOPE.md`. Read and edit that file throughout this session. If neither exists,
 `taba skills render --seed-scope` seeds the right name (`SCOPE.md` when the harness has
-`.taba-version`, else `WTC-SCOPE.md`); never create a second scope file.
+`.taba-version` and no `.wtc-cli-version`, else `WTC-SCOPE.md`); never create a second scope file.
 
 ## 2. Consume the launch note — first action, before anything else
 
