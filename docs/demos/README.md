@@ -1,7 +1,7 @@
 # Recorded WTC demos
 
 These terminal recordings run real commands against fresh synthetic Git repos.
-The small harness scaffold requires v0.1.39 or newer. No
+The current minimal harness recording uses v0.2.4; its new filenames require a 0.2.0 or later pin. Other recordings below retain their historical source behavior. No
 service runner, forge account, desktop session, or agent is needed.
 
 ## One task, two repositories
@@ -25,6 +25,8 @@ credential contents are never shown; the fixture files contain synthetic data.
 [Transcript](inventories.txt) · [Asciicast](inventories.cast)
 
 ## Small harness scaffold
+
+Recorded with the published v0.2.4 native CLI. The cast header records its version, binary SHA256 and public source revision. New harnesses write `.taba-version` and `taba.toml`.
 
 Create six project-owned files without initializing Git, contacting a remote,
 installing tools, or running hooks. The harness owns its registry and pins;
@@ -67,18 +69,18 @@ are removed, while a synthetic shared resource marker remains.
 
 ## Reproduce
 
-Build the CLI, then supply Python 3, Git, and `pyte` 0.8.2 for capturing
+Supply a published CLI binary, Python 3, Git, and `pyte` 0.8.2 for capturing
 readable TUI screen transcripts. The optional
 [agg](https://github.com/asciinema/agg) 1.9.0 executable converts casts to GIFs:
 
 ```sh
-go build -o ./wtc ./cmd/taba
 python3 -m venv /tmp/wtc-demo-venv
 /tmp/wtc-demo-venv/bin/pip install pyte==0.8.2
-/tmp/wtc-demo-venv/bin/python docs/demos/record.py --wtc ./wtc --agg /path/to/agg
+/tmp/wtc-demo-venv/bin/python docs/demos/record.py --wtc /path/to/taba --only harness --cli-version 0.2.4 \
+  --source-revision 2191843cc2b3c28ac16fe7a09f731c992fabbc22 --agg /path/to/agg
 ```
 
-Omitting `--agg` records only casts and transcripts. The script uses fresh local
+The exact pin defaults to the supplied stable binary’s version; `--cli-version` verifies an explicit pin. `--only harness` leaves other clips unchanged; omit it to record all three core scenarios. `--source-revision` accepts the full public source commit verified for that binary. Omitting `--agg` records only casts and transcripts. The script uses fresh local
 fixture repos and an explicit environment, and removes its temporary workspace.
 Normal bootstrap clones your harness from its forge remote.
 
