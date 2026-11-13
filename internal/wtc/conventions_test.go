@@ -21,7 +21,7 @@ func TestConventionsDocMatchesTheList(t *testing.T) {
 	}
 	start += strings.Index(doc[start:], "\n") + 1
 	if got, want := strings.TrimSpace(doc[start:end]), strings.TrimSpace(ConventionsMarkdown()); got != want {
-		t.Fatal("docs/conventions.md is out of date; regenerate its section with `go run ./cmd/taba conventions`")
+		t.Fatal("docs/conventions.md is out of date; replace the text between its markers with the output of `go run ./cmd/taba conventions`")
 	}
 }
 
@@ -33,7 +33,7 @@ func TestConventionsAreWellFormed(t *testing.T) {
 		}
 		seen[c.ID] = true
 		switch c.Support {
-		case SupportBoth, SupportBothNewWins, SupportOldOnly, SupportNew:
+		case SupportBoth, SupportBothNewWins, SupportOldOnly, SupportNew, SupportBothShip:
 		default:
 			t.Fatalf("%s: unknown support %q", c.ID, c.Support)
 		}
@@ -85,7 +85,7 @@ func TestConventionFindingsInAnUnmigratedProject(t *testing.T) {
 			if !f.Blocked {
 				t.Fatalf("%s has no taba name yet and should be waiting", f.ID)
 			}
-		case "harness-config", "harness-pin", "scope-file", "skill-base-digest":
+		case "harness-config", "harness-pin", "scope-file", "skill-base-digest", "mise-tool-key":
 			if f.Blocked {
 				t.Fatalf("%s can be migrated now", f.ID)
 			}
@@ -129,6 +129,11 @@ func TestUserConventionFindings(t *testing.T) {
 	got := UserConventionFindings(control)
 	if ids := strings.Join(findingIDs(got), ","); ids != "control-root-env,user-config-dir,user-data-dir" {
 		t.Fatalf("findings = %s", ids)
+	}
+	// An explicit data home replaces the wtc-named default.
+	t.Setenv("TABA_DATA_HOME", filepath.Join(root, "elsewhere"))
+	if ids := strings.Join(findingIDs(UserConventionFindings(control)), ","); ids != "control-root-env,user-config-dir" {
+		t.Fatalf("with a data home override: %s", ids)
 	}
 }
 

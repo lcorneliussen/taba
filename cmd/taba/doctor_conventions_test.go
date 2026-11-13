@@ -69,6 +69,32 @@ func TestDoctorAllReportsConventionsFromTheWorkspaceRoot(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &result); err != nil || len(result.Data.Collections) != 2 {
 		t.Fatalf("json: %v\n%s", err, out)
 	}
+	// Plain doctor in one collection lists its findings and still passes:
+	// during 0.2.x wtc conventions never fail it.
+	out, err = run(filepath.Join(workspace, "old"), "doctor")
+	if err != nil || !strings.Contains(out, "conventions     migrate") || !strings.Contains(out, "harness-config:") || !strings.Contains(out, "old/WTC-SCOPE.md") {
+		t.Fatalf("doctor in a collection: %v\n%s", err, out)
+	}
+	out, err = run(filepath.Join(workspace, "old"), "doctor", "--json")
+	if err != nil {
+		t.Fatalf("doctor --json: %v\n%s", err, out)
+	}
+	var checks struct {
+		OK   bool             `json:"ok"`
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &checks); err != nil || !checks.OK {
+		t.Fatalf("doctor --json: %v\n%s", err, out)
+	}
+	var conventions map[string]any
+	for _, check := range checks.Data {
+		if check["name"] == "conventions" {
+			conventions = check
+		}
+	}
+	if conventions == nil || conventions["ok"] != false || len(conventions["findings"].([]any)) == 0 {
+		t.Fatalf("doctor --json has no failing conventions row: %v", checks.Data)
+	}
 	if out, err := run(root, "doctor", "--all"); err == nil {
 		t.Fatalf("outside a workspace doctor --all should fail:\n%s", out)
 	}

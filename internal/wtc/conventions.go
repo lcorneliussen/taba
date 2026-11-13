@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"taba.sh/taba/internal/envcompat"
 )
 
 // Support says what this release does with a convention's old and new names.
@@ -21,6 +23,8 @@ const (
 	SupportOldOnly = "old only"
 	// SupportNew: taba already writes the new name.
 	SupportNew = "new"
+	// SupportBothShip: both commands ship side by side.
+	SupportBothShip = "both ship"
 )
 
 // Convention is one name a project, harness, script or agent depends on that
@@ -61,7 +65,7 @@ var Conventions = []Convention{
 		Migrate: "`mv WTC-SCOPE.md SCOPE.md` at the collection root. The file is local, so nothing to commit. Older harness tooling that reads `WTC-SCOPE.md` needs the same change."},
 	{ID: "local-references", Area: "collection", Old: "`WTC_*` in `.env.collection.local`", New: "`TABA_*`", Support: SupportBothNewWins, Owner: "you", Checked: true,
 		Migrate: "Rename the variables in `.env.collection.local`."},
-	{ID: "mise-tool-key", Area: "collection", Old: "`github:lcorneliussen/wtc-cli` in mise configuration", New: "`github:lcorneliussen/taba`", Support: SupportNew, Owner: "taba", Checked: true,
+	{ID: "mise-tool-key", Area: "collection", Old: "`github:lcorneliussen/wtc-cli` in mise configuration", New: "`github:lcorneliussen/taba`", Support: SupportNew, Owner: "you", Checked: true,
 		Migrate: "Run `taba env setup` to regenerate `mise.toml`. In `taba.toml` `[mise.tools]`, rename the key by hand."},
 	{ID: "generated-state", Area: "collection", Old: "`.wtc/`, `.wtc-prs`, `.wtc-status.*`, `.wtc-catch-up.*`, `.wtc-reviews/`, `.wtc-review-posted/`, `.wtc-status-watchers/`, `.wtc-review-mode`, `.wtc-dev-mode.json`, `.last-wtc-status.yml`", New: "`.taba…` spellings", Support: SupportBoth, Owner: "taba", Checked: true,
 		Migrate: "Nothing to do by hand: taba still writes these names and moves them itself once writes follow the harness (#375)."},
@@ -75,7 +79,7 @@ var Conventions = []Convention{
 		Migrate: "`mv ~/.local/share/wtc ~/.local/share/taba` (or under `$XDG_DATA_HOME`) once no wtc 0.1.x client uses it."},
 	{ID: "task-metadata", Area: "repository", Old: "`x-wtc` in `.harness/dekit.tasks.yaml`", New: "`x-taba` (planned)", Support: SupportOldOnly, Owner: "you", Checked: true,
 		Migrate: "No new name yet (#375). Keep `x-wtc`."},
-	{ID: "command", Area: "tooling", Old: "`wtc` command", New: "`taba`", Support: SupportBoth, Owner: "taba", Checked: false,
+	{ID: "command", Area: "tooling", Old: "`wtc` command", New: "`taba`", Support: SupportBothShip, Owner: "taba", Checked: false,
 		Migrate: "Both commands ship in 0.2.x. Call `taba` in scripts; harness files are covered by the harness-references check."},
 	{ID: "openclaw-plugin", Area: "OpenClaw", Old: "plugin id `wtc`, package `openclaw-plugin-wtc`, config `plugins.entries.wtc`, gateway state under `wtc/`", New: "`taba`", Support: SupportOldOnly, Owner: "taba", Checked: false,
 		Migrate: "Nothing to do yet; `taba doctor --openclaw` will move the gateway config when the plugin is renamed (#375)."},
@@ -196,8 +200,8 @@ func harnessConventionFindings(harness string) ([]ConventionFinding, error) {
 var (
 	wtcVariable = regexp.MustCompile(`\bWTC_[A-Z0-9_]+`)
 	// wtcCommand matches `wtc <subcommand>`, not "wtc" as the noun for a
-	// worktree collection, which stays. TestConventionCommandsAreCurrent keeps
-	// the list in step with the CLI.
+	// worktree collection, which stays. TestDoctorAllReportsConventionsFromTheWorkspaceRoot
+	// checks that every CLI subcommand is in the list.
 	wtcCommand = regexp.MustCompile("(?:^|[\\s;|&(`$\"'/])wtc\\s+(?:" + strings.Join(ConventionCommands, "|") + ")\\b")
 )
 
@@ -358,8 +362,9 @@ func countFileReferences(path string) int {
 }
 
 // UserConventionFindings checks the control root and the per-user
-// directories. Explicit XDG settings are honoured; unset ones use the
-// defaults the CLI itself uses.
+// directories under XDG settings or their defaults. An explicit
+// WTC_DATA_HOME/TABA_DATA_HOME replaces the data directory outright, so a
+// wtc-named default is not checked then.
 func UserConventionFindings(configRoot string) []ConventionFinding {
 	var out []ConventionFinding
 	if configRoot != "" {
@@ -379,6 +384,9 @@ func UserConventionFindings(configRoot string) []ConventionFinding {
 	}
 	if dir := base("XDG_CONFIG_HOME", ".config"); dir != "" && conventionPathExists(filepath.Join(dir, "wtc")) {
 		out = append(out, conventionFinding("user-config-dir", filepath.Join(dir, "wtc"), ""))
+	}
+	if envcompat.Getenv("WTC_DATA_HOME") != "" {
+		return out
 	}
 	if dir := base("XDG_DATA_HOME", filepath.Join(".local", "share")); dir != "" && conventionPathExists(filepath.Join(dir, "wtc")) {
 		out = append(out, conventionFinding("user-data-dir", filepath.Join(dir, "wtc"), ""))
@@ -403,6 +411,7 @@ func ConventionsMarkdown() string {
 		SupportBothNewWins: "Both names; the new one wins",
 		SupportOldOnly:     "Old name only",
 		SupportNew:         "New name written",
+		SupportBothShip:    "Both ship",
 	}
 	for _, area := range areas {
 		fmt.Fprintf(&b, "### %s\n\n", conventionAreaTitle(area))
