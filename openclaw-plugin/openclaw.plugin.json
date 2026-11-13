@@ -113,6 +113,7 @@
     },
     "additionalProperties": false
   },
+  "contracts": { "gatewayMethodDispatch": ["authenticated-request"] },
   "controlUi": {
     "entry": "dist/control-ui/v1/index.js"
   }

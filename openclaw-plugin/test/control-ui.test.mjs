@@ -145,6 +145,10 @@ const hostRequest = async (method, params) => {
     }
     if (params.actionId === "publish-confirm") return { ok: true, result: bitbucketConfirmResult ?? { status: "published", created: true, url: "https://bitbucket.org/ws/hooks/pull-requests/3" } };
   }
+  if (method === "wtc.bitbucket.confirm") {
+    calls.push({method,...params});
+    return bitbucketRefusedAction === "publish-confirm" ? {status:"blocked",message:"The requested publication is no longer valid."} : bitbucketConfirmResult ?? {status:"published",created:true,url:"https://bitbucket.org/ws/hooks/pull-requests/3"};
+  }
   if (method === "sessions.github.options" && controlledOptions) return controlledOptions;
   if (method === "sessions.github.options") return { personal, shared: { source: "system-detected", login: "octo-bot" } };
   if (method === "sessions.github.status") return githubStatusResult ?? { confirmation: { generation: personal?.generation, account: personal?.account, requestDigest: "d1" } };
@@ -169,8 +173,8 @@ const hostRequest = async (method, params) => {
   if (method === "plugins.sessionAction" && params.actionId === "restore-checkout") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
   if (method === "sessions.delete" && controlledDelete) return controlledDelete;
   if (method === "sessions.delete") return { ok: true, key: params.key, deleted: true, archived: [], ...(preserved[params.key] ? { worktreePreserved: preserved[params.key] } : {}) };
-  if (method === "sessions.github.publish") return typeof githubPublishResult === "function" ? githubPublishResult(params) : githubPublishResult;
-  if (method === "sessions.github.confirm") return typeof githubConfirmResult === "function" ? githubConfirmResult(params) : githubConfirmResult ?? { status: "published", url: "https://github.com/octo/api/pull/7" };
+  if (method === "wtc.github.publish") return typeof githubPublishResult === "function" ? githubPublishResult(params) : githubPublishResult;
+  if (method === "wtc.github.confirm") return typeof githubConfirmResult === "function" ? githubConfirmResult(params) : githubConfirmResult ?? { status: "published", url: "https://github.com/octo/api/pull/7" };
   return {};
 };
 
@@ -498,7 +502,7 @@ test("pending commits block captured publication callbacks before provider dispa
     calls.length = 0;
     await push.onclick();
     await settle();
-    assert.equal(calls.some(c => c.method === "sessions.github.publish"), false);
+    assert.equal(calls.some(c => c.method === "wtc.github.publish"), false);
     const currentPush = [...host.all()].find(n => n.tagName === "BUTTON" && /^14 uncommitted files and 1 commit to publish/.test(n.title));
     assert.ok(currentPush.disabled);
     assert.match(currentPush.title, /Wait for the current action/);
@@ -599,7 +603,7 @@ test("composer: Bitbucket is pushed by the Bitbucket plugin, with the person's o
   const howTo = [...host.all()].find((n) => n.className === "wtc-connect");
   assert.match(howTo.textContent, /Pushing needs your own Bitbucket login/);
   assert.ok([...howTo.all()].some((n) => n.tagName === "A" && n.href === "/plugins/bitbucket/connect"));
-  assert.equal(calls.some((c) => c.actionId === "publish-confirm"), false);
+  assert.equal(calls.some((c) => c.method === "wtc.bitbucket.confirm"), false);
   // Connected: asking names the commit and account, and confirming pushes.
   bitbucket = { user: "ada@example.com", name: "Ada" };
   await push().onclick();
@@ -610,7 +614,7 @@ test("composer: Bitbucket is pushed by the Bitbucket plugin, with the person's o
   assert.match(readable(host), /1 commit/);
   await confirm.onclick();
   await settle();
-  assert.deepEqual(calls.at(-1), { method: "plugins.sessionAction", pluginId: "bitbucket", actionId: "publish-confirm", sessionKey: "agent:main:owner:hooks", agentId: "main", payload: { requestId: "bb-1", requestDigest: "bd1" } });
+  assert.deepEqual(calls.at(-1), { method: "wtc.bitbucket.confirm", sessionKey: "agent:main:owner:hooks", agentId: "main", requestId: "bb-1", requestDigest: "bd1" });
   bitbucket = undefined;
   view.dispose();
 });
@@ -794,7 +798,7 @@ for (const kind of ["composer", "panel"]) test(`${kind}: a delayed next-action c
     view.update({ props: { sessionKey: nextKey, agentId: "main" }, host: { request: hostRequest, ui: { openPanel() {} } }, signal: new AbortController().signal, presented: true, mountDefault: () => () => {} });
     finish({ ok: true, result: { performed: false, repo: r } });
     await settle();
-    assert.equal(calls.some((c) => c.method === "sessions.github.publish" || c.method === "sessions.send"), false);
+    assert.equal(calls.some((c) => c.method === "wtc.github.publish" || c.method === "sessions.send"), false);
     assert.doesNotMatch(readable(host), /Preparing to push docs|confirm to push/);
   } finally { view.dispose(); personal = null; nextResult = undefined; }
 });
@@ -824,7 +828,7 @@ for (const phase of ["prepare", "confirm"]) for (const switchConversation of [fa
     finish(phase === "prepare" ? prepared : published({ sessionKey: "agent:main:owner:api" }));
     await pending;
     await settle();
-    const method = phase === "prepare" ? "sessions.github.publish" : "sessions.github.confirm";
+    const method = phase === "prepare" ? "wtc.github.publish" : "wtc.github.confirm";
     assert.equal(calls.filter((c) => c.method === method).length, phase === "confirm" ? 1 : switchConversation ? 1 : 2);
     const review = phase === "confirm" && !switchConversation ? await reviewAction(host) : undefined;
     if (switchConversation) {
@@ -848,7 +852,7 @@ test("composer: a push is the person's, with their own account, after they confi
   calls.length = 0;
   personal = null;
   await push().onclick();
-  assert.equal(calls.some((c) => c.method === "sessions.github.publish"), false);
+  assert.equal(calls.some((c) => c.method === "wtc.github.publish"), false);
   // The card says how to connect it, linking to the profile page.
   const howTo = [...host.all()].find((n) => n.className === "wtc-connect");
   assert.ok(howTo, "how to connect is shown");
@@ -858,14 +862,14 @@ test("composer: a push is the person's, with their own account, after they confi
   personal = { state: "connected", account: { id: 1, login: "octo" }, generation: "g1" };
   await push().onclick();
   await settle();
-  assert.deepEqual(calls.find((c) => c.method === "sessions.github.publish").selection, { source: "personal", account: { id: 1, login: "octo" }, generation: "g1" });
+  assert.deepEqual(calls.find((c) => c.method === "wtc.github.publish").selection, { source: "personal", account: { id: 1, login: "octo" }, generation: "g1" });
   const confirm = [...host.all()].find((n) => n.tagName === "BUTTON" && n.textContent === "Confirm push");
   assert.equal(confirm.title, "Confirm the captured push of api as @octo");
   assert.match(readable(host), /2 commits/);
   await confirm.onclick();
   await settle();
-  assert.deepEqual(calls.find((c) => c.method === "sessions.github.confirm"),
-    { method: "sessions.github.confirm", sessionKey: "agent:main:owner:api", agentId: "main", requestId: "req-1", generation: "g1", account: { id: 1, login: "octo" }, requestDigest: "d1" });
+  assert.deepEqual(calls.find((c) => c.method === "wtc.github.confirm"),
+    { method: "wtc.github.confirm", sessionKey: "agent:main:owner:api", agentId: "main", requestId: "req-1", generation: "g1", account: { id: 1, login: "octo" }, requestDigest: "d1" });
   personal = null;
   view.dispose();
 });
@@ -892,12 +896,12 @@ test("composer: a new pull request opens with the title and description the agen
   calls.length = 0;
   await push("1 uncommitted file and 1 commit to publish").onclick();
   await settle();
-  const published = calls.find((c) => c.method === "sessions.github.publish");
+  const published = calls.find((c) => c.method === "wtc.github.publish");
   assert.equal(published.title, "Add a web preview");
   assert.equal(published.body, "What, why, and how it was checked.");
   await push("1 commit to push. Commit pending changes and push the branch to PR #7").onclick();
   await settle();
-  const again = calls.filter((c) => c.method === "sessions.github.publish").at(-1);
+  const again = calls.filter((c) => c.method === "wtc.github.publish").at(-1);
   assert.equal("title" in again || "body" in again, false);
   const bb = [...card().all()].find((n) => n.tagName === "BUTTON" && /^1 commit to push.*Bitbucket/.test(n.title));
   await bb.onclick();
@@ -924,12 +928,13 @@ test("Bitbucket descriptions reach the publisher and the captured confirmation i
       assert.equal(request.payload.description, body);
       assert.equal(request.payload.title, title);
       const confirm = [...host.all()].find((n) => n.tagName === "BUTTON" && n.textContent === "Confirm push");
-      assert.match(readable(host), new RegExp(body.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "confirmation previews the exact captured description");
+      assert.ok([...host.all()].some(n=>n.className==="wtc-pr-preview-source"&&n.textContent.includes(body)), "Source retains the exact captured description");
+      assert.ok([...host.all()].some(n=>n.tagName==="STRONG"&&n.textContent==="Markdown"), "description is formatted");
       assert.match(readable(host), /existing PR text is kept/);
       assert.equal([...host.all()].some((n) => n.tagName === "EM"), false, "description is plain text in the tooltip");
       await confirm.onclick();
       await settle();
-      assert.equal(calls.find((c) => c.actionId === "publish-confirm").payload.requestDigest, "bd1");
+      assert.equal(calls.find((c) => c.method === "wtc.bitbucket.confirm").requestDigest, "bd1");
     } finally { view.dispose(); bitbucket = undefined; }
   }
 });
@@ -947,7 +952,7 @@ test("an older Bitbucket publisher requests an upgrade instead of dropping the d
       assert.match(readable(host), /Bitbucket plugin 0\.3\.4 or later/);
       assert.match(readable(host), /nothing was published/);
       assert.equal(calls.filter((c) => c.actionId === "publish").length, 1, "no retry discards the body");
-      assert.equal(calls.some((c) => c.actionId === "publish-confirm" || c.method === "sessions.send"), false);
+      assert.equal(calls.some((c) => c.method === "wtc.bitbucket.confirm" || c.method === "sessions.send"), false);
     } finally { view.dispose(); bitbucket = undefined; bitbucketPublishError = undefined; bitbucketDropDescription = false; }
   }
 });
@@ -1640,7 +1645,7 @@ test("publication preparation checks cancellation after revalidation and account
    await clickText(host,"Cancel queued");
    release(boundary==="revalidation"?{ok:true,result:{performed:false,repo:r}}:{personal});
    for(let i=0;i<6;i++)await settle();
-   assert.equal(calls.filter(c=>c.method==="sessions.github.publish"||c.method==="sessions.github.confirm").length,0,`${kind}/${boundary}`);
+   assert.equal(calls.filter(c=>c.method==="wtc.github.publish"||c.method==="wtc.github.confirm").length,0,`${kind}/${boundary}`);
    assert.match(readable(host),/Cancelled/);
   }finally{view.dispose();nextResult=undefined;controlledOptions=undefined;personal=null;}
  }
@@ -1658,7 +1663,7 @@ test("publication preparation stops after abort or disposal during account looku
    await clickText(host,"Confirm 1 actions");assert.ok(release);
    if(lifecycle==="abort")abort();else view.dispose();
    release({personal});for(let i=0;i<6;i++)await settle();
-   assert.equal(calls.filter(c=>c.method==="sessions.github.publish"||c.method==="sessions.github.confirm").length,0,`${kind}/${lifecycle}`);
+   assert.equal(calls.filter(c=>c.method==="wtc.github.publish"||c.method==="wtc.github.confirm").length,0,`${kind}/${lifecycle}`);
   }finally{view.dispose();nextResult=undefined;controlledOptions=undefined;personal=null;}
  }
 });
@@ -1733,7 +1738,7 @@ test("compact mixed recommendations preserve publication preview and exact captu
    calls.length = 0;
    await clickText(host, "Do next (2) →");
    assert.ok(buttons(host).includes("Confirm 2 actions"));
-   assert.equal(calls.some(c => c.actionId === "next" || c.method === "sessions.send" || c.method === "sessions.github.publish"), false);
+   assert.equal(calls.some(c => c.actionId === "next" || c.method === "sessions.send" || c.method === "wtc.github.publish"), false);
    collections.set(key, collection([api, docs, withChoices("extra")]));
    await [...host.all()].find(n => n.tagName === "BUTTON" && (n.title === "Refresh" || /\. Refresh$/.test(n.title))).onclick({ preventDefault() {}, stopPropagation() {} });
    assert.ok(buttons(host).includes("Confirm 2 actions"));
@@ -1828,10 +1833,10 @@ test("collapsed PR update uses the existing personal preparation and confirmatio
   await clickText(toolbar(), "Update PR");
   assert.equal(card.open, false, "publication keeps the collapsed bar in place");
   assert.ok([...host.all()].some(n => n.className === "wtc-publication-confirmations"), "the separate personal preview is visible above the collapsed bar");
-  assert.equal(calls.filter(c => c.method === "sessions.github.publish").length, 1);
-  assert.equal(calls.filter(c => c.method === "sessions.github.confirm").length, 0);
+  assert.equal(calls.filter(c => c.method === "wtc.github.publish").length, 1);
+  assert.equal(calls.filter(c => c.method === "wtc.github.confirm").length, 0);
   await clickText(host, "Confirm push");
-  assert.equal(calls.filter(c => c.method === "sessions.github.confirm").length, 1);
+  assert.equal(calls.filter(c => c.method === "wtc.github.confirm").length, 1);
   assert.equal(card.open, false, "confirmed publication also preserves the collapsed bar");
  } finally { view.dispose(); nextResult = undefined; personal = null; }
 });
@@ -1846,11 +1851,11 @@ test("a collapsed legacy snapshot exposes publication without clipping it into s
   calls.length = 0;
   await clickText(toolbar, "Push");
   assert.equal(card.open, false);
-  assert.equal(calls.filter(c => c.method === "sessions.github.publish").length, 1);
-  assert.equal(calls.filter(c => c.method === "sessions.github.confirm").length, 0);
+  assert.equal(calls.filter(c => c.method === "wtc.github.publish").length, 1);
+  assert.equal(calls.filter(c => c.method === "wtc.github.confirm").length, 0);
   assert.ok([...host.all()].some(n => n.className === "wtc-publication-confirmations"));
   await clickText(host, "Confirm push");
-  assert.equal(calls.filter(c => c.method === "sessions.github.confirm").length, 1);
+  assert.equal(calls.filter(c => c.method === "wtc.github.confirm").length, 1);
   assert.equal(card.open, false);
  } finally { view.dispose(); personal = null; }
 });
@@ -2077,15 +2082,15 @@ for (const kind of ["composer", "panel"]) test(`${kind}: repeated preparation ta
     assert.ok(confirm); assert.ok(review);
     await review.onclick({ preventDefault() {}, stopPropagation() {} });
     await review.onclick({ preventDefault() {}, stopPropagation() {} });
-    assert.equal(calls.filter(c => c.method === "sessions.github.confirm").length, 0);
+    assert.equal(calls.filter(c => c.method === "wtc.github.confirm").length, 0);
     assert.match(readable(host), /@demo/);
     await [...host.all()].find(n => n.tagName === "BUTTON" && /^Cancel preparation/.test(n.title)).onclick();
     assert.equal([...host.all()].some(n => n.tagName === "BUTTON" && n.textContent === "Confirm push"), false);
     await confirm.onclick();
-    assert.equal(calls.filter(c => c.method === "sessions.github.confirm").length, 0, "a stale confirmation cannot execute after cancellation");
+    assert.equal(calls.filter(c => c.method === "wtc.github.confirm").length, 0, "a stale confirmation cannot execute after cancellation");
     await [...host.all()].find(n => n.tagName === "BUTTON" && /^1 commit to push/.test(n.title)).onclick();
     await confirm.onclick();
-    assert.equal(calls.filter(c => c.method === "sessions.github.confirm").length, 0, "a stale button cannot confirm a newly prepared request");
+    assert.equal(calls.filter(c => c.method === "wtc.github.confirm").length, 0, "a stale button cannot confirm a newly prepared request");
   } finally { view.dispose(); personal = null; }
 });
 
@@ -2098,7 +2103,7 @@ for (const kind of ["composer", "panel"]) test(`${kind}: old confirmation cannot
   const nextKey=`agent:main:other:${++sessions}`;collections.set(nextKey,collection([repo("other")]));
   view.update({props:{sessionKey:nextKey,agentId:"main"},host:{request:hostRequest,ui:{openPanel(){}}},signal:new AbortController().signal,presented:true,mountDefault:()=>()=>{}});
   await settle();calls.length=0;await confirm.onclick();
-  assert.equal(calls.filter(c=>c.method==="sessions.github.confirm").length,0);
+  assert.equal(calls.filter(c=>c.method==="wtc.github.confirm").length,0);
  }finally{view.dispose();personal=null;}
 });
 
@@ -2180,16 +2185,16 @@ test("a failed push offers Retry only for a matching next action", async () => {
   personal = { state: "connected", account: { login: "demo" }, generation: "g1" };
   const { host, view, context } = await mount("composer", collection([r]));
   try {
-    failing.add("sessions.github.publish");
+    failing.add("wtc.github.publish");
     await [...host.all()].find(n => n.tagName === "BUTTON" && /^1 commit to push/.test(n.title)).onclick();
     assert.ok([...host.all()].some(n => n.tagName === "BUTTON" && n.textContent === "Retry"));
     assert.ok([...host.all()].some(n => n.tagName === "BUTTON" && n.textContent === "⚠"));
     const next = { step: "catch-up", by: "wtc", command: ["wtc", "catch-up"], key: "api:catchup:h2", reason: "Behind main" };
     collections.set(context.props.sessionKey, collection([repo("api", { behind: 1, next, choices: { actions: [{ ...next, available: true }] } })]));
-    failing.delete("sessions.github.publish");
+    failing.delete("wtc.github.publish");
     await [...host.all()].find(n => n.tagName === "BUTTON" && /Updated .*Refresh/.test(n.title)).onclick({ preventDefault() {}, stopPropagation() {} });
     assert.equal([...host.all()].some(n => n.className === "wtc-next-step" && n.textContent === "Retry"), false);
-  } finally { failing.delete("sessions.github.publish"); view.dispose(); personal = null; }
+  } finally { failing.delete("wtc.github.publish"); view.dispose(); personal = null; }
 });
 
 
@@ -2296,9 +2301,9 @@ test("a tracked push has one shared log row through confirmation, publication an
     assert.match(rows()[0].textContent,/Running/);
     assert.equal([...second.host.all()].filter(n=>n.tagName === "BUTTON" && /^1 commit to push/.test(n.title)).length,0,"observer arrow must show working while publishing");
     assert.ok([...second.host.all()].find(n=>n.tagName === "BUTTON" && /^Push all/.test(n.title)).disabled,"observer bulk push must be disabled");
-    const prepares=calls.filter(c=>c.method === "sessions.github.publish").length;
+    const prepares=calls.filter(c=>c.method === "wtc.github.publish").length;
     await observerPush.onclick();
-    assert.equal(calls.filter(c=>c.method === "sessions.github.publish").length,prepares,"captured observer control cannot prepare another push");
+    assert.equal(calls.filter(c=>c.method === "wtc.github.publish").length,prepares,"captured observer control cannot prepare another push");
     finish({status:"published",url:"https://github.com/octo/api/pull/7"});await pending;
     assert.equal(rows().length,1);assert.match(rows()[0].textContent,/Done/);
     assert.equal([...second.host.all()].find(n=>n.tagName === "BUTTON" && /^Push all/.test(n.title)).disabled,false,"observer reservation releases after refresh");
@@ -2316,7 +2321,7 @@ test("an unreadable pending confirmation never reports a successful push", async
     assert.ok(log);assert.match(log.textContent,/Needs attention/);
     assert.doesNotMatch(log.textContent,/Done|Pushed/);
     assert.match(log.textContent,/gateway waits for a confirmation/);
-    assert.equal(calls.filter(c=>c.method === "sessions.github.confirm").length,0);
+    assert.equal(calls.filter(c=>c.method === "wtc.github.confirm").length,0);
   } finally {failing.delete("sessions.github.status");personal=null;view.dispose();}
 });
 
@@ -2333,7 +2338,7 @@ test("publication headers distinguish preparation from a personally confirmed pu
     preparation=[...first.host.all()].find(n=>n.tagName === "BUTTON" && /^1 commit to push/.test(n.title)).onclick();
     await settle();
     for(const host of [first.host,second.host]) {assert.match(header(host),/Preparing…/);assert.doesNotMatch(header(host),/Publishing/);}
-    assert.equal(calls.filter(c=>c.method === "sessions.github.confirm").length,0);
+    assert.equal(calls.filter(c=>c.method === "wtc.github.confirm").length,0);
     releasePreparation({status:"needs_confirmation",requestId:"req-1"});await preparation;
     githubConfirmResult=()=>new Promise(resolve=>{releasePublication=resolve;});
     publication=[...first.host.all()].find(n=>n.tagName === "BUTTON" && n.textContent === "Confirm push").onclick();
@@ -2435,13 +2440,13 @@ for (const kind of ["composer", "panel"]) test(`${kind}: Next publication has on
  const {host,view,context}=await mount(kind,data);
  let panel;
  try {
-  failing.add("sessions.github.publish");
+  failing.add("wtc.github.publish");
   await clickText(host,"Push");
   assert.ok([...host.all()].some(n=>n.tagName==="BUTTON"&&n.textContent==="Retry"),"failed Next preparation must leave a retry affordance");
   const failureDetails=await mount("panel",data,undefined,context.props.sessionKey);
-  try {assert.match([...failureDetails.host.all()].find(n=>n.className==="wtc-activity-item").ariaLabel,/sessions.github.publish failed/,"the publisher error must replace generic route progress in details");}
+  try {assert.match([...failureDetails.host.all()].find(n=>n.className==="wtc-activity-item").ariaLabel,/wtc.github.publish failed/,"the publisher error must replace generic route progress in details");}
   finally {failureDetails.view.dispose();}
-  failing.delete("sessions.github.publish");
+  failing.delete("wtc.github.publish");
   await clickText(host,"Retry");
   await clickText(host,"Cancel");
   panel=await mount("panel",data,undefined,context.props.sessionKey);
@@ -2450,7 +2455,7 @@ for (const kind of ["composer", "panel"]) test(`${kind}: Next publication has on
   assert.match(readable(panel.host),/Failed/);assert.match(readable(panel.host),/Cancelled/);
   assert.ok(records.some(n=>/publication cancelled/.test(n.ariaLabel)),"cancel details must not retain the initial Push progress");
   assert.doesNotMatch(readable(panel.host),/Awaiting confirm|Publication response received/);
- } finally {failing.delete("sessions.github.publish");panel?.view.dispose();view.dispose();personal=null;nextResult=undefined;}
+ } finally {failing.delete("wtc.github.publish");panel?.view.dispose();view.dispose();personal=null;nextResult=undefined;}
 });
 
 for(const kind of ["composer","panel"]) test(`${kind}: closing a prepared view cancels its original confirmation record`,async()=>{
@@ -3186,7 +3191,7 @@ test("a provider publication refusal remains visible when no commit request is p
   try{
    calls.length=0;
    await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^14 uncommitted files and 1 commit to publish/.test(n.title)).onclick();await settle();
-   assert.equal(calls.find(c=>c.method==="sessions.github.publish").sessionKey,"agent:main:owner:site");
+   assert.equal(calls.find(c=>c.method==="wtc.github.publish").sessionKey,"agent:main:owner:site");
    assert.ok([...host.all()].some(n=>(n.role??n.attributes.role)==="alert"&&/site: blocked/.test(n.ariaLabel??n.textContent)));
    assert.match(readable(host),/Review and commit its intended changes first/);
   }finally{view.dispose();personal=null;githubPublishResult=previous;}
@@ -3218,7 +3223,7 @@ test("an awaited publication cannot race a commit started from the other surface
   const running=button.onclick();await settle();assert.ok(release);
   await localChangeButton(panel.host).onclick();await settle();calls.length=0;
   release({ok:true,result:{performed:false,repo:r}});await running;await settle();
-  assert.equal(calls.some(c=>c.method==="sessions.github.publish"||c.method==="sessions.github.confirm"),false);
+  assert.equal(calls.some(c=>c.method==="wtc.github.publish"||c.method==="wtc.github.confirm"),false);
   assert.match(readable(panel.host),/repository action is unresolved/);
  }finally{release?.({ok:false,error:"cleanup"});card.view.dispose();panel.view.dispose();personal=null;nextResult=undefined;}
 });
@@ -3517,4 +3522,38 @@ for(const kind of ["composer","panel"])test(`${kind} recovery receipt notifies a
   polls[0]();for(let i=0;i<6;i++)await settle();
   assert.equal(localChangeButton(second.host).disabled,false,"the native receipt must notify the other collection subscription without waiting for its timer");
  }finally{catchUpResult=previous;first.view.dispose();second?.view.dispose();globalThis.setInterval=nativeInterval;}
+});
+
+for(const kind of ["composer","panel"]) test(`${kind} formatted publication preview opens on the correct side of stable controls and respects collapse`,async()=>{
+ personal={state:"connected",account:{id:1,login:"octo"},generation:"g1"};
+ const body="# Summary\n\n**Reviewed** details.\n\n- One\n- Two",proposal={branch:"openclaw/test",title:"Update preview",body};
+ const {host,view,context}=await mount(kind,collection([repo("api",{unpublished:1,proposal})]));
+ try {
+  await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^1 commit to push/.test(n.title)).onclick();await settle();
+  const preview=()=>[...host.all()].find(n=>n.className==="wtc-pr-preview");
+  const section=[...host.all()].find(n=>n.className==="wtc-publication-confirmation");
+  assert.equal(preview().open,true);
+  assert.equal(section.children[kind==="composer"?0:2],preview());
+  assert.equal(section.children[kind==="composer"?3:1].className,"wtc-publication-controls");
+  assert.ok([...preview().all()].some(n=>n.tagName==="STRONG"&&n.textContent==="Reviewed"));
+  preview().open=false;preview().ontoggle();
+  await [...host.all()].find(n=>n.tagName==="BUTTON"&&(n.title==="Refresh"||/^Updated .*Refresh/.test(n.title))).onclick({preventDefault(){},stopPropagation(){}});await settle();
+  assert.equal(preview().open,false,"refresh preserves explicit collapse");
+  const published=calls.find(c=>c.method==="wtc.github.publish");assert.equal(published.body,body,"formatting never rewrites publication text");
+ }finally{view.dispose();personal=null;}
+});
+
+for(const kind of ["composer","panel"]) test(`${kind} tracking pending preserves successful publication and exposes its URL and warning`,async()=>{
+ personal={state:"connected",account:{id:1,login:"octo"},generation:"g1"};
+ githubConfirmResult={status:"published",url:"https://github.com/octo/api/pull/7",tracking:{state:"pending",message:"Refresh to retry tracking; do not publish again."}};
+ const {host,view}=await mount(kind,collection([repo("api",{unpublished:1})]));
+ try {
+  calls.length=0;
+  await [...host.all()].find(n=>n.tagName==="BUTTON"&&/^1 commit to push/.test(n.title)).onclick();await settle();
+  await [...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Confirm push").onclick();await settle();
+  const details=[...host.all()].map(n=>n.title??n.ariaLabel??n.textContent).join(" ");
+  assert.match(details,/pushed branch commits/);assert.match(details,/https:\/\/github\.com\/octo\/api\/pull\/7/);assert.match(details,/Tracking pending: Refresh to retry tracking/);
+  assert.equal(calls.filter(c=>c.method==="wtc.github.confirm").length,1);
+  assert.ok(![...host.all()].some(n=>(n.role??n.attributes.role)==="alert"&&/Tracking pending/.test(n.textContent)),"tracking failure is not a failed publication");
+ }finally{githubConfirmResult=undefined;personal=null;view.dispose();}
 });

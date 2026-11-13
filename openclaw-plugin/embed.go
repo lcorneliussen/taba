@@ -4,5 +4,5 @@ package openclawplugin
 
 import "embed"
 
-//go:embed index.js sandbox-git.js package.json openclaw.plugin.json dist skills
+//go:embed index.js sandbox-git.js publication.js package.json openclaw.plugin.json dist skills
 var Files embed.FS
