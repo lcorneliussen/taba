@@ -3,6 +3,7 @@
 import argparse
 import codecs
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -51,11 +52,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--wtc', required=True, type=Path)
     parser.add_argument('--agg', type=Path)
+    parser.add_argument('--only', choices=['all', 'harness'], default='all')
+    parser.add_argument('--cli-version', help='exact pin; must match the supplied binary')
+    parser.add_argument('--source-revision', help='public source commit for capture provenance')
     args = parser.parse_args()
+    binary = args.wtc.resolve()
+    binary_sha256 = hashlib.sha256(binary.read_bytes()).hexdigest()
+    if args.source_revision and not re.fullmatch(r'[0-9a-f]{40}', args.source_revision):
+        parser.error('--source-revision must be a full public commit ID')
     sandbox = Path(tempfile.mkdtemp(prefix='wtc-public-demo-')).resolve()
     bindir = sandbox / 'bin'
     bindir.mkdir()
-    for name, target in [('wtc', args.wtc)]:
+    for name, target in [('wtc', binary), ('taba', binary)]:
         (bindir / name).symlink_to(target.resolve())
     # No inherited project environment, credential store selection, prompt, or
     # user Git config. Tool binaries are available without global mise/herdr.
@@ -68,7 +76,24 @@ def main():
            'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null',
            'GIT_AUTHOR_NAME': 'Example', 'GIT_AUTHOR_EMAIL': 'example@example.invalid',
            'GIT_COMMITTER_NAME': 'Example', 'GIT_COMMITTER_EMAIL': 'example@example.invalid',
-           'WTC_CONFIG_ROOT': str(sandbox / 'workspace' / '.config')}
+           'WTC_CONFIG_ROOT': str(sandbox / 'workspace' / '.config'),
+           'TABA_DEV_BUILD': 'off', 'WTC_DEV_BUILD': 'off'}
+    try:
+        version_output = subprocess.check_output([str(binary), '--version'], env=env, text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        shutil.rmtree(sandbox)
+        raise
+    match = re.fullmatch(r'(?:taba|wtc) version (\d+\.\d+\.\d+)', version_output)
+    if not match:
+        shutil.rmtree(sandbox)
+        parser.error('supply a published stable CLI binary')
+    version = match.group(1)
+    if args.cli_version and args.cli_version != version:
+        shutil.rmtree(sandbox)
+        parser.error('--cli-version differs from the supplied binary')
+    provenance = {'version': version, 'binarySha256': binary_sha256}
+    if args.source_revision:
+        provenance['sourceRevision'] = args.source_revision
     workspace = sandbox / 'workspace'
     sources = sandbox / 'sources'
     sources.mkdir()
@@ -193,8 +218,11 @@ def main():
             time.sleep(pause)
 
         def save(self):
+            if hashlib.sha256(binary.read_bytes()).hexdigest() != binary_sha256:
+                raise RuntimeError('CLI binary changed during recording')
             header = {'version': 2, 'width': COLS, 'height': ROWS,
-                      'title': self.name, 'env': {'TERM': 'xterm-256color'}}
+                      'title': self.name, 'env': {'TERM': 'xterm-256color'},
+                      'source': provenance}
             cast = OUT / (self.name + '.cast')
             cast.write_text('\n'.join(json.dumps(x) for x in [header, *self.events]) + '\n')
             transcript = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', ''.join(self.transcript)).replace('\r', '')
@@ -210,12 +238,15 @@ def main():
         # The scaffold is exercised here, outside a collection. The pin
         # is fixture metadata only: every command uses the supplied binary.
         harness = sources / 'agent-harness'
-        rec = Recording('harness', 'WTC / a small, project-owned harness')
-        rec.command('wtc harness init agent-harness \\\n  --remote https://example.invalid/h.git \\\n  --cli-version 0.1.39', sources, pause=1.5)
+        rec = Recording('harness', 'Taba / a small, project-owned harness')
+        rec.command(f'taba harness init agent-harness \\\n  --remote https://example.invalid/h.git \\\n  --cli-version {version}', sources, pause=1.5)
         rec.command('cd agent-harness', sources, pause=0.4)
         rec.command('ls -A', harness, pause=1.5)
-        rec.command('cat wtc.toml', harness, pause=2)
+        rec.command('cat taba.toml', harness, pause=2)
         rec.save()
+        if args.only == 'harness':
+            print('Recorded harness scaffold only.')
+            return
         registry = 'schema_version: 1\nrepositories:\n'
         for name, offset in [('agent-harness', 0), ('api', 1), ('web', 2)]:
             registry += f'  - name: {name}\n    remote: {sources / name}\n    default_ref: origin/main\n'
@@ -236,23 +267,23 @@ def main():
         main_dir = workspace / 'main'
         git(sandbox, '--git-dir=' + str(workspace / '.bare/agent-harness.git'),
             'worktree', 'add', '--detach', str(main_dir / 'harness'), 'origin/main')
-        run(['wtc', 'env', 'setup', '--skip-hooks'], main_dir)
-        run(['wtc', 'skills', 'render', '--seed-scope'], main_dir)
+        run(['taba', 'env', 'setup', '--skip-hooks'], main_dir)
+        run(['taba', 'skills', 'render', '--seed-scope'], main_dir)
 
-        rec = Recording('collections', 'WTC / one task, two repositories')
-        rec.command('wtc new add-search api web', main_dir)
+        rec = Recording('collections', 'Taba / one task, two repositories')
+        rec.command('taba new add-search api web', main_dir)
         task = workspace / 'add-search'
         rec.command('cd ../add-search', main_dir, pause=0.4)
-        rec.command('wtc status', task, keys=[(3.5, 'q')], pause=0.5)
+        rec.command('taba status', task, keys=[(3.5, 'q')], pause=0.5)
         rec.command('echo "Search in progress" >> web/README.md', task)
-        rec.command('wtc status', task, keys=[(3, 'r'), (5.5, 'q')], finish=True)
+        rec.command('taba status', task, keys=[(3, 'r'), (5.5, 'q')], finish=True)
         # Reset only the disposable recording fixture's edit.
         git(task / 'web', 'restore', 'README.md')
         rec.save()
 
-        rec = Recording('inventories', 'WTC / inspect environment and secret links')
-        rec.command('wtc env list', task, keys=[(2, 'j'), (3, 'G'), (5, 'q')], pause=0.5)
-        rec.command('wtc secrets list', task, keys=[(2, 'j'), (4.5, 'q')], finish=True)
+        rec = Recording('inventories', 'Taba / inspect environment and secret links')
+        rec.command('taba env list', task, keys=[(2, 'j'), (3, 'G'), (5, 'q')], pause=0.5)
+        rec.command('taba secrets list', task, keys=[(2, 'j'), (4.5, 'q')], finish=True)
         rec.save()
 
         print('Recorded harness scaffold, live status, and inventory TUIs.')
