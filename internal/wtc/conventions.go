@@ -44,29 +44,29 @@ type Convention struct {
 // Conventions lists the wtc conventions in the order they are documented.
 var Conventions = []Convention{
 	{ID: "harness-config", Area: "harness", Old: "`wtc.toml`", New: "`taba.toml`", Support: SupportBoth, Owner: "you", Checked: true,
-		Migrate: "`git mv wtc.toml taba.toml` in the harness, then commit and merge it as usual."},
+		Migrate: "`git mv wtc.toml taba.toml` in the harness, then commit and merge it as usual. `taba harness init` already writes `taba.toml`."},
 	{ID: "harness-pin", Area: "harness", Old: "`.wtc-cli-version`", New: "`.taba-version`", Support: SupportBoth, Owner: "you", Checked: true,
-		Migrate: "`git mv .wtc-cli-version .taba-version` in the harness, together with `taba.toml`."},
+		Migrate: "`git mv .wtc-cli-version .taba-version` in the harness, together with `taba.toml`. A harness with only `.taba-version` seeds new collections with `SCOPE.md`."},
 	{ID: "skill-base-digest", Area: "harness", Old: "`overlays/skills/<name>/.wtc-base.sha256`", New: "`.taba-base.sha256`", Support: SupportBoth, Owner: "you", Checked: true,
 		Migrate: "`git mv` each digest file to `.taba-base.sha256` in the same folder."},
-	{ID: "harness-skills", Area: "harness", Old: "`skills/wtc-<name>`, `overlays/skills/wtc-<name>`", New: "`taba-<name>`", Support: SupportOldOnly, Owner: "you", Checked: true,
-		Migrate: "Once the release names skills `taba-*` (#351), rename each folder to `taba-<name>` and update its `name:`. Until then, keep the old names."},
+	{ID: "harness-skills", Area: "harness", Old: "`skills/wtc-<name>`, `overlays/skills/wtc-<name>`", New: "`taba-<name>`", Support: SupportBoth, Owner: "you", Checked: true,
+		Migrate: "Rename each folder to `taba-<name>` and update its `name:`; section patches and their base digest move with the folder. Until then the old-name override still wins and `taba-<name>` points to it."},
 	{ID: "harness-hooks", Area: "harness", Old: "`hooks/wtc/`", New: "`hooks/taba/` (planned)", Support: SupportOldOnly, Owner: "you", Checked: true,
 		Migrate: "No new name yet (#375). Keep `hooks/wtc/`."},
 	{ID: "browse-overlay", Area: "harness", Old: "`overlays/browse/wtc-browse.lua`", New: "`taba-browse.lua` (planned)", Support: SupportOldOnly, Owner: "you", Checked: true,
 		Migrate: "No new name yet (#375). Keep the old file name."},
-	{ID: "harness-references", Area: "harness", Old: "`WTC_*` variables and `wtc …` commands in harness files", New: "`TABA_*` and `taba …`", Support: SupportBothNewWins, Owner: "you", Checked: true,
-		Migrate: "Replace `WTC_X` with `TABA_X` and `wtc` with `taba` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`)."},
+	{ID: "harness-references", Area: "harness", Old: "`WTC_*` variables, `wtc …` commands and `wtc-*` skill names in harness files", New: "`TABA_*` and `taba …`", Support: SupportBothNewWins, Owner: "you", Checked: true,
+		Migrate: "Replace `WTC_X` with `TABA_X`, `wtc` with `taba`, and old skill names such as `/wtc-start` with `/taba-start` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`)."},
 	{ID: "scope-file", Area: "collection", Old: "`WTC-SCOPE.md`", New: "`SCOPE.md`", Support: SupportBoth, Owner: "you", Checked: true,
-		Migrate: "`mv WTC-SCOPE.md SCOPE.md` at the collection root. The file is local, so nothing to commit."},
+		Migrate: "`mv WTC-SCOPE.md SCOPE.md` at the collection root. The file is local, so nothing to commit. Older harness tooling that reads `WTC-SCOPE.md` needs the same change."},
 	{ID: "local-references", Area: "collection", Old: "`WTC_*` in `.env.collection.local`", New: "`TABA_*`", Support: SupportBothNewWins, Owner: "you", Checked: true,
 		Migrate: "Rename the variables in `.env.collection.local`."},
 	{ID: "mise-tool-key", Area: "collection", Old: "`github:lcorneliussen/wtc-cli` in mise configuration", New: "`github:lcorneliussen/taba`", Support: SupportNew, Owner: "taba", Checked: true,
 		Migrate: "Run `taba env setup` to regenerate `mise.toml`. In `taba.toml` `[mise.tools]`, rename the key by hand."},
 	{ID: "generated-state", Area: "collection", Old: "`.wtc/`, `.wtc-prs`, `.wtc-status.*`, `.wtc-catch-up.*`, `.wtc-reviews/`, `.wtc-review-posted/`, `.wtc-status-watchers/`, `.wtc-review-mode`, `.wtc-dev-mode.json`, `.last-wtc-status.yml`", New: "`.taba…` spellings", Support: SupportBoth, Owner: "taba", Checked: true,
 		Migrate: "Nothing to do by hand: taba still writes these names and moves them itself once writes follow the harness (#375)."},
-	{ID: "rendered-skills", Area: "collection", Old: "rendered `wtc-*` skills in `.claude/skills` and `.agents/skills`", New: "`taba-*`", Support: SupportOldOnly, Owner: "taba", Checked: false,
-		Migrate: "Rendered by `taba skills render` under the old names. Renaming them to `taba-*` is planned in #351; nothing to do by hand."},
+	{ID: "rendered-skills", Area: "collection", Old: "rendered `wtc-*` skills in `.claude/skills` and `.agents/skills`", New: "`taba-*`", Support: SupportNew, Owner: "taba", Checked: false,
+		Migrate: "Nothing to do by hand: `taba skills render` writes `taba-*`, and each old `wtc-*` name is a short shim that points to it."},
 	{ID: "control-root-env", Area: "user", Old: "`$WTC_CONFIG_ROOT/wtc.env`", New: "`taba.env`", Support: SupportBoth, Owner: "you", Checked: true,
 		Migrate: "`mv wtc.env taba.env` in the control root. Every 0.2.x release reads it."},
 	{ID: "user-config-dir", Area: "user", Old: "`$XDG_CONFIG_HOME/wtc`", New: "`$XDG_CONFIG_HOME/taba`", Support: SupportBoth, Owner: "you", Checked: true,
@@ -245,11 +245,11 @@ func scanReferences(harness string, rel func(string) string) ([]ConventionFindin
 	}
 	var out []ConventionFinding
 	for _, path := range files {
-		vars, cmds, err := countReferences(path)
+		vars, cmds, skills, err := countAllReferences(path)
 		if err != nil {
 			return nil, err
 		}
-		if vars+cmds == 0 {
+		if vars+cmds+skills == 0 {
 			continue
 		}
 		var parts []string
@@ -259,32 +259,61 @@ func scanReferences(harness string, rel func(string) string) ([]ConventionFindin
 		if cmds > 0 {
 			parts = append(parts, fmt.Sprintf("%d wtc command(s)", cmds))
 		}
+		if skills > 0 {
+			parts = append(parts, fmt.Sprintf("%d old skill name(s)", skills))
+		}
 		out = append(out, conventionFinding("harness-references", rel(path), strings.Join(parts, ", ")))
 	}
 	return out, nil
 }
 
+// oldSkillName matches an old `wtc-<name>` for a skill this release ships as
+// `taba-<name>`; repository names such as wtc-cli are not skills.
+var oldSkillName = func() *regexp.Regexp {
+	var names []string
+	paths, _ := DefaultPaths()
+	for _, path := range paths {
+		parts := strings.Split(path, "/")
+		if len(parts) == 3 && parts[0] == "skills" && parts[2] == "SKILL.md" && strings.HasPrefix(parts[1], "taba-") {
+			names = append(names, regexp.QuoteMeta(strings.TrimPrefix(parts[1], "taba-")))
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	return regexp.MustCompile(`\bwtc-(?:` + strings.Join(names, "|") + `)\b`)
+}()
+
 func countReferences(path string) (vars, cmds int, err error) {
+	vars, cmds, _, err = countAllReferences(path)
+	return vars, cmds, err
+}
+
+func countAllReferences(path string) (vars, cmds, skills int, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || info.Size() > 1<<20 {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.IndexByte(line, 0) >= 0 {
-			return 0, 0, nil
+			return 0, 0, 0, nil
 		}
 		vars += len(wtcVariable.FindAllString(line, -1))
 		cmds += len(wtcCommand.FindAllString(line, -1))
+		if oldSkillName != nil {
+			skills += len(oldSkillName.FindAllString(line, -1))
+		}
 	}
-	return vars, cmds, scanner.Err()
+	return vars, cmds, skills, scanner.Err()
 }
 
 var generatedStateNames = []string{".wtc", ".wtc-prs", ".wtc-status.json", ".wtc-status.md", ".last-wtc-status.yml", ".wtc-catch-up.json", ".wtc-catch-up.md", ".wtc-reviews", ".wtc-review-posted", ".wtc-status-watchers", ".wtc-review-mode", ".wtc-dev-mode.json"}

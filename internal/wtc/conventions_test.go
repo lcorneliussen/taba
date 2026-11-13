@@ -60,7 +60,7 @@ func TestConventionFindingsInAnUnmigratedProject(t *testing.T) {
 	writeConventionFixture(t, filepath.Join(c.Harness, "wtc.toml"), "[mise.tools]\n\"github:lcorneliussen/wtc-cli\" = \"0.2.0\"\n")
 	writeConventionFixture(t, filepath.Join(c.Harness, ".wtc-cli-version"), "0.2.0\n")
 	writeConventionFixture(t, filepath.Join(c.Harness, "overlays", "skills", "wtc-pr", ".wtc-base.sha256"), "x\n")
-	writeConventionFixture(t, filepath.Join(c.Harness, "hooks", "wtc", "env.post.sh"), "echo \"$WTC_COLLECTION\"\nwtc status --json\n# a wtc collection is a task\n")
+	writeConventionFixture(t, filepath.Join(c.Harness, "hooks", "wtc", "env.post.sh"), "echo \"$WTC_COLLECTION\"\nwtc status --json\n# a wtc collection is a task; run /wtc-start; clone wtc-cli\n")
 	writeConventionFixture(t, filepath.Join(c.Harness, "release-notes", "old.md"), "wtc status\n")
 	writeConventionFixture(t, filepath.Join(c.Collection, "WTC-SCOPE.md"), "task\n")
 	writeConventionFixture(t, filepath.Join(c.Collection, ".env.collection.local"), "WTC_PANES=full\n")
@@ -78,8 +78,8 @@ func TestConventionFindingsInAnUnmigratedProject(t *testing.T) {
 	for _, f := range got {
 		switch f.ID {
 		case "harness-references":
-			if f.Path != "harness/hooks/wtc/env.post.sh" || f.Detail != "1 WTC_ variable(s), 1 wtc command(s)" {
-				t.Fatalf("references counted the noun or release notes: %+v", f)
+			if f.Path != "harness/hooks/wtc/env.post.sh" || f.Detail != "1 WTC_ variable(s), 1 wtc command(s), 1 old skill name(s)" {
+				t.Fatalf("references counted the noun, a repository name or release notes: %+v", f)
 			}
 		case "harness-hooks", "generated-state", "task-metadata":
 			if !f.Blocked {

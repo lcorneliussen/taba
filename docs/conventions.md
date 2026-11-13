@@ -30,8 +30,8 @@ taba conventions       # this list, from the installed release
 ## Migrate in this order
 
 1. **Upgrade the harness to the latest 0.2.x** and roll it out, so every collection's pinned CLI reads both names.
-2. **Harness files:** rename `wtc.toml` and `.wtc-cli-version` together, plus any skill digests, in one harness change. Review, commit and merge it as usual, then roll it out.
-3. **Harness references:** replace `WTC_*` with `TABA_*` and `wtc` with `taba` in hooks, scripts, skills and instructions.
+2. **Harness files:** rename `wtc.toml` and `.wtc-cli-version` together, plus `wtc-*` skill folders and their base digests, in one harness change. Review, commit and merge it as usual, then roll it out.
+3. **Harness references:** replace `WTC_*` with `TABA_*`, `wtc` with `taba`, and old skill names such as `/wtc-start` in hooks, scripts, skills and instructions.
 4. **Each collection:** rename `WTC-SCOPE.md` and update `.env.collection.local`.
 5. **Your machine:** rename `wtc.env` in the control root and the user directories once no wtc 0.1.x client on the machine uses them.
 6. Run `taba doctor --all` again until only *waiting* items remain.
@@ -50,23 +50,23 @@ The tables below are generated from the CLI (`taba conventions`). The "In 0.2.x"
 
 | Old | New | In 0.2.x | Written by | `doctor` | Migrate |
 |---|---|---|---|---|---|
-| `wtc.toml` | `taba.toml` | Both names; the old one wins if both exist | you | yes | `git mv wtc.toml taba.toml` in the harness, then commit and merge it as usual. |
-| `.wtc-cli-version` | `.taba-version` | Both names; the old one wins if both exist | you | yes | `git mv .wtc-cli-version .taba-version` in the harness, together with `taba.toml`. |
+| `wtc.toml` | `taba.toml` | Both names; the old one wins if both exist | you | yes | `git mv wtc.toml taba.toml` in the harness, then commit and merge it as usual. `taba harness init` already writes `taba.toml`. |
+| `.wtc-cli-version` | `.taba-version` | Both names; the old one wins if both exist | you | yes | `git mv .wtc-cli-version .taba-version` in the harness, together with `taba.toml`. A harness with only `.taba-version` seeds new collections with `SCOPE.md`. |
 | `overlays/skills/<name>/.wtc-base.sha256` | `.taba-base.sha256` | Both names; the old one wins if both exist | you | yes | `git mv` each digest file to `.taba-base.sha256` in the same folder. |
-| `skills/wtc-<name>`, `overlays/skills/wtc-<name>` | `taba-<name>` | Old name only | you | yes | Once the release names skills `taba-*` (#351), rename each folder to `taba-<name>` and update its `name:`. Until then, keep the old names. |
+| `skills/wtc-<name>`, `overlays/skills/wtc-<name>` | `taba-<name>` | Both names; the old one wins if both exist | you | yes | Rename each folder to `taba-<name>` and update its `name:`; section patches and their base digest move with the folder. Until then the old-name override still wins and `taba-<name>` points to it. |
 | `hooks/wtc/` | `hooks/taba/` (planned) | Old name only | you | yes | No new name yet (#375). Keep `hooks/wtc/`. |
 | `overlays/browse/wtc-browse.lua` | `taba-browse.lua` (planned) | Old name only | you | yes | No new name yet (#375). Keep the old file name. |
-| `WTC_*` variables and `wtc …` commands in harness files | `TABA_*` and `taba …` | Both names; the new one wins | you | yes | Replace `WTC_X` with `TABA_X` and `wtc` with `taba` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`). |
+| `WTC_*` variables, `wtc …` commands and `wtc-*` skill names in harness files | `TABA_*` and `taba …` | Both names; the new one wins | you | yes | Replace `WTC_X` with `TABA_X`, `wtc` with `taba`, and old skill names such as `/wtc-start` with `/taba-start` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`). |
 
 ### Collection
 
 | Old | New | In 0.2.x | Written by | `doctor` | Migrate |
 |---|---|---|---|---|---|
-| `WTC-SCOPE.md` | `SCOPE.md` | Both names; the old one wins if both exist | you | yes | `mv WTC-SCOPE.md SCOPE.md` at the collection root. The file is local, so nothing to commit. |
+| `WTC-SCOPE.md` | `SCOPE.md` | Both names; the old one wins if both exist | you | yes | `mv WTC-SCOPE.md SCOPE.md` at the collection root. The file is local, so nothing to commit. Older harness tooling that reads `WTC-SCOPE.md` needs the same change. |
 | `WTC_*` in `.env.collection.local` | `TABA_*` | Both names; the new one wins | you | yes | Rename the variables in `.env.collection.local`. |
 | `github:lcorneliussen/wtc-cli` in mise configuration | `github:lcorneliussen/taba` | New name written | taba | yes | Run `taba env setup` to regenerate `mise.toml`. In `taba.toml` `[mise.tools]`, rename the key by hand. |
 | `.wtc/`, `.wtc-prs`, `.wtc-status.*`, `.wtc-catch-up.*`, `.wtc-reviews/`, `.wtc-review-posted/`, `.wtc-status-watchers/`, `.wtc-review-mode`, `.wtc-dev-mode.json`, `.last-wtc-status.yml` | `.taba…` spellings | Both names; the old one wins if both exist | taba | yes | Nothing to do by hand: taba still writes these names and moves them itself once writes follow the harness (#375). |
-| rendered `wtc-*` skills in `.claude/skills` and `.agents/skills` | `taba-*` | Old name only | taba | no | Rendered by `taba skills render` under the old names. Renaming them to `taba-*` is planned in #351; nothing to do by hand. |
+| rendered `wtc-*` skills in `.claude/skills` and `.agents/skills` | `taba-*` | New name written | taba | no | Nothing to do by hand: `taba skills render` writes `taba-*`, and each old `wtc-*` name is a short shim that points to it. |
 
 ### User and control root
 
