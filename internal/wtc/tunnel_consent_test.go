@@ -78,4 +78,17 @@ func TestTunnelConsentDoesNotMistakeDeclaredProtectionForProof(t *testing.T) {
 			t.Fatalf("unverified/stale access reused private consent: %+v", changed)
 		}
 	}
+	for _, policy := range []tunnelPolicyEntry{
+		{Provider: "devtunnel", Mode: "persistent", Access: "account"},
+		{Provider: "tailscale", Mode: "serve", Access: "tailnet", Options: tunnelProviderOptions{ListenerPort: 8443}},
+	} {
+		d.Entry.Policy = policy
+		if _, err := newTunnelConsent(d, false, tunnelAccessEvidence{}); err == nil {
+			t.Fatalf("declared private mode %s bypassed approval without evidence", policy.Access)
+		}
+		approved, err := newTunnelConsent(d, true, tunnelAccessEvidence{})
+		if err != nil || !approved.Public || !approved.permits(d, tunnelAccessEvidence{}) {
+			t.Fatalf("explicit potential-public approval: %+v %v", approved, err)
+		}
+	}
 }

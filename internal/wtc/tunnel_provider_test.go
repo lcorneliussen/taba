@@ -70,4 +70,65 @@ func TestTunnelHostingDoesNotGrantRegistrationAuthority(t *testing.T) {
 	if err := checkTunnelExecution(serve, hostOnly, false); err == nil {
 		t.Fatal("local shared listener cannot be allocated without targeted cleanup")
 	}
+	no := false
+	if err := checkTunnelExecution(tunnelPolicyEntry{Enabled: &no}, all, false); err == nil {
+		t.Fatal("disabled entry admitted with otherwise complete capabilities")
+	}
+	invalid := quick
+	invalid.Options.Hostname = "unexpected.example.test"
+	if err := checkTunnelExecution(invalid, all, false); err == nil {
+		t.Fatal("invalid entry admitted with otherwise complete capabilities")
+	}
+}
+
+func TestTunnelProviderPolicyRejectsInvalidOptionsAndAccess(t *testing.T) {
+	dev := tunnelPolicyEntry{Provider: "devtunnel", Mode: "persistent", Access: "account"}
+	ngrok := tunnelPolicyEntry{Provider: "ngrok", Mode: "domain", Access: "public", Options: tunnelProviderOptions{Domain: "preview.example.test"}}
+	serve := tunnelPolicyEntry{Provider: "tailscale", Mode: "serve", Access: "tailnet", Options: tunnelProviderOptions{ListenerPort: 8443}}
+	quick := tunnelPolicyEntry{Provider: "cloudflare", Mode: "quick", Access: "public"}
+	for _, tc := range []struct {
+		name   string
+		base   tunnelPolicyEntry
+		change func(*tunnelPolicyEntry)
+	}{
+		{"devtunnel hostname", dev, func(e *tunnelPolicyEntry) { e.Options.Hostname = "web.example.test" }},
+		{"devtunnel zone", dev, func(e *tunnelPolicyEntry) { e.Options.ZoneID = "zone" }},
+		{"devtunnel domain", dev, func(e *tunnelPolicyEntry) { e.Options.Domain = "web.example.test" }},
+		{"devtunnel listener", dev, func(e *tunnelPolicyEntry) { e.Options.ListenerPort = 443 }},
+		{"devtunnel path", dev, func(e *tunnelPolicyEntry) { e.Options.Path = "/" }},
+		{"temporary devtunnel registration", dev, func(e *tunnelPolicyEntry) { e.Mode = "temporary"; e.Options.Registration = "named" }},
+		{"devtunnel access", dev, func(e *tunnelPolicyEntry) { e.Access = "protected" }},
+		{"registration identity", dev, func(e *tunnelPolicyEntry) { e.Options.Registration = "../other" }},
+		{"ngrok missing domain", ngrok, func(e *tunnelPolicyEntry) { e.Options.Domain = "" }},
+		{"ngrok wildcard endpoint", ngrok, func(e *tunnelPolicyEntry) { e.Options.Domain = "*.example.test" }},
+		{"ngrok hostname", ngrok, func(e *tunnelPolicyEntry) { e.Options.Hostname = "web.example.test" }},
+		{"ngrok zone", ngrok, func(e *tunnelPolicyEntry) { e.Options.ZoneID = "zone" }},
+		{"ngrok registration", ngrok, func(e *tunnelPolicyEntry) { e.Options.Registration = "named" }},
+		{"ngrok listener", ngrok, func(e *tunnelPolicyEntry) { e.Options.ListenerPort = 443 }},
+		{"ngrok path", ngrok, func(e *tunnelPolicyEntry) { e.Options.Path = "/" }},
+		{"ngrok access", ngrok, func(e *tunnelPolicyEntry) { e.Access = "account" }},
+		{"serve zero port", serve, func(e *tunnelPolicyEntry) { e.Options.ListenerPort = 0 }},
+		{"serve high port", serve, func(e *tunnelPolicyEntry) { e.Options.ListenerPort = 65536 }},
+		{"serve hostname", serve, func(e *tunnelPolicyEntry) { e.Options.Hostname = "web.example.test" }},
+		{"serve zone", serve, func(e *tunnelPolicyEntry) { e.Options.ZoneID = "zone" }},
+		{"serve domain", serve, func(e *tunnelPolicyEntry) { e.Options.Domain = "web.example.test" }},
+		{"serve registration", serve, func(e *tunnelPolicyEntry) { e.Options.Registration = "named" }},
+		{"serve access", serve, func(e *tunnelPolicyEntry) { e.Access = "public" }},
+		{"quick access", quick, func(e *tunnelPolicyEntry) { e.Access = "account" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := tc.base
+			tc.change(&e)
+			if err := e.validate(); err == nil {
+				t.Fatal("invalid provider option or access accepted")
+			}
+		})
+	}
+	for _, path := range []string{"relative", "/../other", "/preview?query", "/preview#fragment", "/preview\\other", "/preview\nother"} {
+		e := serve
+		e.Options.Path = path
+		if err := e.validate(); err == nil {
+			t.Fatalf("invalid Serve path accepted: %q", path)
+		}
+	}
 }

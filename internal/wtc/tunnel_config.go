@@ -10,9 +10,6 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Tunnel policy is receiving-local desired state, never generated runtime data
-// or configuration selected through a credential root. Callers supply already
-// resolved, authorized source paths and bytes; these helpers discover nothing.
 type tunnelKey struct {
 	Repo    string `json:"repo"`
 	Service string `json:"service"`
@@ -62,6 +59,9 @@ func (e tunnelPolicyEntry) validate() error {
 	return validateTunnelProviderPolicy(e)
 }
 
+// Tunnel policy is receiving-local desired state, never generated runtime data
+// or configuration selected through a credential root. Callers supply already
+// resolved, authorized source paths and bytes; these helpers discover nothing.
 type tunnelPolicy struct {
 	Source  string
 	Entries map[tunnelKey]tunnelPolicyEntry

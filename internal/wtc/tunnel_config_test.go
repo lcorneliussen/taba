@@ -78,9 +78,9 @@ domain = "second.example.test"
 
 func testTunnelKey() tunnelKey { return tunnelKey{"widget", "web", "preview"} }
 
-func TestTunnelPolicyStandaloneAndForeignRootDoNotShareChoices(t *testing.T) {
-	// Already-resolved bytes/paths are the only inputs, regardless of ambient
-	// credentials sharing. Pure inspection must not source or read these paths.
+func TestTunnelPolicyStandaloneUsesOnlyExplicitInputs(t *testing.T) {
+	// This unit test covers the pure parser/merge input boundary. Receiving
+	// authorization and filesystem isolation need separate integration coverage.
 	for _, name := range []string{"WTC_CONFIG_ROOT", "TABA_CONFIG_ROOT"} {
 		t.Setenv(name, filepath.Join(t.TempDir(), "foreign-shared-secrets"))
 	}

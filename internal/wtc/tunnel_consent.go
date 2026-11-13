@@ -60,7 +60,9 @@ func (d tunnelDefinition) digest() (string, error) {
 
 type tunnelConsent struct {
 	Definition string `json:"definition"`
-	Public     bool   `json:"public"`
+	// Public records approval of potentially public exposure, not an access
+	// observation. Actual exposure and its evidence remain separate.
+	Public bool `json:"public"`
 }
 
 // Access observations must be current and bound to this effective definition.
@@ -80,10 +82,10 @@ func newTunnelConsent(d tunnelDefinition, explicitPublic bool, evidence tunnelAc
 	if err != nil {
 		return tunnelConsent{}, err
 	}
-	// A declared protection setting is not proof of enforcement. Without a
-	// separate verified access observation, all Internet modes need approval.
+	// Without verified private access for this definition, every mode needs
+	// approval for potentially public exposure, even a declared private mode.
 	if !explicitPublic && !evidence.private(digest, d.Entry.Policy.Access) {
-		return tunnelConsent{}, fmt.Errorf("explicit public tunnel approval is required")
+		return tunnelConsent{}, fmt.Errorf("explicit approval for potentially public exposure is required without verified private access")
 	}
 	return tunnelConsent{digest, explicitPublic}, nil
 }

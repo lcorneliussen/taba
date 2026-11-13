@@ -209,10 +209,15 @@ func tunnelUniqueJSONKeys(d *json.Decoder) bool {
 				if delimiter == '{' {
 					key, err := d.Token()
 					name, ok := key.(string)
-					// encoding/json otherwise accepts case-insensitive aliases
-					// for tagged fields, which could overwrite an earlier receipt.
+					// State tags are lowercase ASCII. encoding/json's Unicode
+					// folding would otherwise also accept aliases such as ſ for s.
 					if err != nil || !ok || strings.ToLower(name) != name || seen[name] {
 						return false
+					}
+					for _, c := range name {
+						if c > 127 {
+							return false
+						}
 					}
 					seen[name] = true
 				}

@@ -1,7 +1,6 @@
 package wtc
 
 import (
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -101,15 +100,17 @@ func TestTunnelStateCorruptionCannotHideCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, data := range map[string][]byte{
-		"wrong owner":          []byte(strings.ReplaceAll(string(data), "synthetic-owner", "foreign-owner")),
-		"unknown schema":       []byte(strings.Replace(string(data), `"schema": 1`, `"schema": 2`, 1)),
-		"unknown field":        []byte(strings.Replace(string(data), `"schema": 1`, `"schema": 1, "secret": "synthetic-secret"`, 1)),
-		"duplicate resources":  []byte(strings.Replace(string(data), `"resources": [`, `"resources": [], "resources": [`, 1)),
-		"case alias resources": []byte(strings.Replace(string(data), `"resources": [`, `"Resources": [], "resources": [`, 1)),
-		"duplicate owner":      []byte(strings.Replace(string(data), `"owner": "synthetic-owner"`, `"owner": "foreign-owner", "owner": "synthetic-owner"`, 1)),
-		"trailing document":    append(append([]byte(nil), data...), []byte(`{}`)...),
-		"bad status":           []byte(strings.Replace(string(data), `"pending"`, `"retry-automatically"`, 1)),
-		"oversized":            []byte(strings.Repeat(" ", tunnelStateLimit+1)),
+		"wrong owner":                  []byte(strings.ReplaceAll(string(data), "synthetic-owner", "foreign-owner")),
+		"unknown schema":               []byte(strings.Replace(string(data), `"schema": 1`, `"schema": 2`, 1)),
+		"unknown field":                []byte(strings.Replace(string(data), `"schema": 1`, `"schema": 1, "secret": "synthetic-secret"`, 1)),
+		"duplicate resources":          []byte(strings.Replace(string(data), `"resources": [`, `"resources": [], "resources": [`, 1)),
+		"case alias resources":         []byte(strings.Replace(string(data), `"resources": [`, `"Resources": [], "resources": [`, 1)),
+		"unicode fold alias resources": []byte(strings.Replace(string(data), `"operation": {`, `"reſources": [], "operation": {`, 1)),
+		"unicode fold alias entries":   []byte(strings.Replace(string(data), `"entries": [`, `"entries": [], "entrieſ": [`, 1)),
+		"duplicate owner":              []byte(strings.Replace(string(data), `"owner": "synthetic-owner"`, `"owner": "foreign-owner", "owner": "synthetic-owner"`, 1)),
+		"trailing document":            append(append([]byte(nil), data...), []byte(`{}`)...),
+		"bad status":                   []byte(strings.Replace(string(data), `"pending"`, `"retry-automatically"`, 1)),
+		"oversized":                    []byte(strings.Repeat(" ", tunnelStateLimit+1)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := decodeTunnelState(data, s.Owner); err == nil || strings.Contains(err.Error(), "synthetic-secret") {
@@ -142,11 +143,5 @@ func TestTunnelStateCorruptionCannotHideCleanup(t *testing.T) {
 	}
 	if _, err := decodeTunnelState([]byte(`{"schema":1,"owner":"synthetic-owner","entries":[]}`), "synthetic-owner"); err != nil {
 		t.Fatal(err)
-	}
-	// Receipts survive an input policy being absent; decode takes no policy or
-	// runtime manifest and cannot clear resources just because either vanished.
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil || raw["entries"] == nil {
-		t.Fatal("expected independent ownership document")
 	}
 }
