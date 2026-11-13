@@ -231,6 +231,9 @@ type PublishOptions struct {
 // PlanPublish checks that publishing this checkout is safe and returns the
 // intent for it. It reads and never writes: no commit, no fetch, no push.
 func (c *Checkout) PlanPublish(opt PublishOptions) (Plan, error) {
+	if err := c.requireRecoveredChanges(); err != nil {
+		return Plan{}, err
+	}
 	if task := c.task(); task != "" {
 		return Plan{}, fmt.Errorf(branding.Text("%s is a worker of %s: a worker's work leaves through the task. Merge it into the task ({{command}} catch-up --from %s in the task's checkout), and the task publishes it"), c.Branch(), task, strings.TrimPrefix(c.Worktree, task+WorkerSeparator))
 	}
@@ -327,9 +330,12 @@ type CatchUp struct {
 	ReturnedToTip bool `json:"returnedToTip,omitempty"`
 	// Worker says the checkout is a worker's: its work reaches the forge
 	// through its task.
-	Worker bool   `json:"worker,omitempty"`
-	Head   string `json:"head"`
-	Note   string `json:"note,omitempty"`
+	Worker           bool   `json:"worker,omitempty"`
+	Head             string `json:"head"`
+	Note             string `json:"note,omitempty"`
+	ChangesRestored  bool   `json:"changesRestored,omitempty"`
+	RecoveryRef      string `json:"recoveryRef,omitempty"`
+	RecoveryRequired bool   `json:"recoveryRequired,omitempty"`
 }
 
 // CatchUp fetches the destination branch. A merged GitHub PR returns its
@@ -337,15 +343,18 @@ type CatchUp struct {
 // rebases and never pushes: published history stays as it is, and the gateway publishes
 // the merge with the next publication (a worker's, with its task's). A
 // conflicted merge is aborted. A detached worktree is not merged into but
-// moved to the tip (forward).
+// moved to the tip (forward). Local edits and staging are retained in a pinned
+// recovery copy. If restoration fails, RecoveryRequired keeps that copy active
+// for the owning agent to reconcile before publication or another merge.
 func (c *Checkout) CatchUp() (CatchUp, error) {
 	result := CatchUp{Branch: c.Branch(), Dest: c.Dest}
 	if c.Detached {
 		result.Branch = ""
 	}
-	if err := c.readyToMerge(); err != nil {
-		return result, err
-	}
+	return c.withCatchUpChanges(result, func() (CatchUp, error) { return c.catchUpClean(result) })
+}
+
+func (c *Checkout) catchUpClean(result CatchUp) (CatchUp, error) {
 	fetch := append(fetchCredentials(c.Origin), "fetch", "--quiet", "--no-recurse-submodules", "origin", "+refs/heads/"+c.Dest+":refs/remotes/origin/"+c.Dest)
 	if _, err := git(c.Dir, fetch...); err != nil {
 		return result, fmt.Errorf("cannot fetch %s from origin: %w", c.Dest, err)
@@ -373,10 +382,9 @@ func (c *Checkout) CatchUpWithTask() (CatchUp, error) {
 	if !HasBranch(c.Dir, Branch(task)) {
 		return result, fmt.Errorf("%s has no branch %s: no task of that name works in this repository", c.Repo, Branch(task))
 	}
-	if err := c.readyToMerge(); err != nil {
-		return result, err
-	}
-	return c.merge(result, "refs/heads/"+Branch(task), Branch(task))
+	return c.withCatchUpChanges(result, func() (CatchUp, error) {
+		return c.merge(result, "refs/heads/"+Branch(task), Branch(task))
+	})
 }
 
 // forward moves a detached worktree to ref, which must contain it: with no
@@ -391,7 +399,10 @@ func (c *Checkout) forward(result CatchUp, ref, label string) (CatchUp, error) {
 	if !gitOK(c.Dir, "merge-base", "--is-ancestor", "HEAD", ref) {
 		return result, fmt.Errorf("%s is detached with commits %s does not have: put them on a branch first (git switch -c %s<name>), then catch up", c.Dir, label, BranchPrefix)
 	}
-	if _, err := git(c.Dir, "checkout", "--quiet", "--detach", ref); err != nil {
+	if err := c.protectIgnored(ref); err != nil {
+		return result, err
+	}
+	if _, err := git(c.Dir, "checkout", "--quiet", "--no-overwrite-ignore", "--detach", ref); err != nil {
 		return result, fmt.Errorf("moving %s to %s, the checkout is as before: %w", c.Dir, label, err)
 	}
 	result.Merged, result.FastForward = true, true
@@ -463,6 +474,11 @@ func (c *Checkout) MergeFrom(from string) (CatchUp, error) {
 		return CatchUp{Dest: c.Dest}, fmt.Errorf("%s is detached: a branch merges into this repository's branch, and it has none yet", c.Dir)
 	}
 	result := CatchUp{Branch: c.Branch(), Dest: c.Dest}
+	unlock, err := c.catchUpLock()
+	if err != nil {
+		return result, err
+	}
+	defer unlock()
 	// A branch by its own name: a sub-session names its branch after its
 	// change, not after this collection.
 	if from != "" && from != result.Branch && HasBranch(c.Dir, from) {
@@ -488,6 +504,9 @@ func (c *Checkout) MergeFrom(from string) (CatchUp, error) {
 }
 
 func (c *Checkout) readyToMerge() error {
+	if err := c.requireRecoveredChanges(); err != nil {
+		return err
+	}
 	if what := c.inProgress(); what != "" {
 		return fmt.Errorf("%s is in progress in %s: finish or abort it first", what, c.Dir)
 	}
@@ -510,8 +529,15 @@ func (c *Checkout) merge(result CatchUp, ref, label string) (CatchUp, error) {
 		result.Note = "already contains " + label
 		return result, nil
 	}
+	base, err := git(c.Dir, "merge-base", "HEAD", ref)
+	if err != nil {
+		return result, err
+	}
+	if err := c.protectIgnoredBetween(base, ref); err != nil {
+		return result, err
+	}
 	result.FastForward = gitOK(c.Dir, "merge-base", "--is-ancestor", "HEAD", ref)
-	if _, mergeErr := git(c.Dir, "merge", "--no-edit", "--quiet", ref); mergeErr != nil {
+	if _, mergeErr := git(c.Dir, "merge", "--no-edit", "--quiet", "--no-overwrite-ignore", ref); mergeErr != nil {
 		result.FastForward = false
 		conflicts, _ := git(c.Dir, "diff", "--name-only", "--diff-filter=U", "--ignore-submodules=dirty")
 		if c.inProgress() != "" {

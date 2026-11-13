@@ -41,6 +41,7 @@ type CheckoutStatus struct {
 	Dirty      int    `json:"dirty"`
 	Untracked  int    `json:"untracked"`
 	Conflicted int    `json:"conflicted"`
+	InProgress string `json:"inProgress,omitempty"`
 	// Published says that the gateway has published this branch before.
 	Published bool `json:"published"`
 	// Unpublished counts the commits since then; with Dirty it is what the
@@ -54,9 +55,12 @@ type CheckoutStatus struct {
 	Proposal *Proposal `json:"proposal,omitempty"`
 	// Next is the repository's next step, read from all of the above; nil
 	// when nothing waits on anyone.
-	Next    *next.Step    `json:"next,omitempty"`
-	Choices *next.Choices `json:"choices,omitempty"`
-	Error   string        `json:"error,omitempty"`
+	Next                     *next.Step          `json:"next,omitempty"`
+	Choices                  *next.Choices       `json:"choices,omitempty"`
+	Error                    string              `json:"error,omitempty"`
+	CatchUpRecovery          string              `json:"catchUpRecovery,omitempty"`
+	CatchUpRecoveryError     string              `json:"catchUpRecoveryError,omitempty"`
+	CatchUpRecoveryCompleted *RecoveryCompletion `json:"catchUpRecoveryCompleted,omitempty"`
 }
 
 // PullRequest is the pull request of a checkout's branch.
@@ -186,6 +190,7 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 		return s
 	}
 	s.Branch, _ = git(top, "branch", "--show-current")
+	s.InProgress = (&Checkout{Dir: top}).inProgress()
 	if rounds, err := readCompletedRounds(top); err != nil {
 		s.Error = err.Error()
 		return s
@@ -250,6 +255,15 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 	if pullRequests && origin.Forge == ForgeGitHub && s.Branch != "" {
 		s.PullRequest = gitHubPullRequest(top, origin, s.Branch)
 	}
+	checkout := &Checkout{Dir: top}
+	if ref, exists, err := checkout.recoveryMarker(); err != nil {
+		s.CatchUpRecoveryError = err.Error()
+	} else if exists {
+		s.CatchUpRecovery = ref
+	} else {
+		// Optional historical evidence must not hide the repository's facts.
+		s.CatchUpRecoveryCompleted, _ = checkout.recoveryCompletion()
+	}
 	choices := next.ChoicesFor(s.facts(top))
 	s.Choices = &choices
 	s.Next = choices.Primary()
@@ -261,7 +275,12 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 func (s CheckoutStatus) facts(top string) next.Facts {
 	f := next.Facts{Repo: s.Repo, Host: next.HostOpenClaw, Branch: s.Branch, Base: s.Base,
 		Ahead: s.Ahead, Behind: s.Behind, Dirty: s.Dirty, Conflicted: s.Conflicted,
-		InProgress: (&Checkout{Dir: top}).inProgress()}
+		InProgress: s.InProgress}
+	if s.CatchUpRecoveryError != "" {
+		f.InProgress = "local changes recovery marker needs inspection: " + s.CatchUpRecoveryError
+	} else if s.CatchUpRecovery != "" {
+		f.InProgress = "local changes recovery from " + s.CatchUpRecovery
+	}
 	if f.Repo == "" {
 		f.Repo = filepath.Base(top)
 	}
