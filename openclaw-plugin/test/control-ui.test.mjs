@@ -3496,3 +3496,22 @@ for(const route of ["direct","batch","resolve"])for(const kind of ["composer","p
   await expireRequests(expirations);const earlier=[...details.all()].find(n=>n.tagName==="BUTTON"&&/^Earlier activity/.test(n.textContent));if(earlier){await earlier.onclick();await settle();}assert.ok([...details.all()].some(n=>n.className==="wtc-activity-item"&&/local edits recovered; backup retained/.test(n.ariaLabel)),"old completion survives newer request timeout");
  }finally{controlledSend=undefined;release?.({});await running;nextResult=undefined;catchUpResult=savedCatch;first.view.dispose();second.view.dispose();globalThis.setTimeout=nativeSet;}
 });
+
+for(const kind of ["composer","panel"])test(`${kind} recovery receipt notifies another subscription to the same collection`,async()=>{
+ const nativeInterval=globalThis.setInterval,polls=[];globalThis.setInterval=(fn,delay,...args)=>delay===30000?(polls.push(fn),{unref(){}}):nativeInterval(fn,delay,...args);
+ const r=repo("api",{path:"/state/worktrees/api/test",behind:1}),data=collection([r]);
+ const canonical=`agent:main:receipt-shared:${++sessions}`;data.collection.sessionKey=canonical;
+ const first=await mount(kind,data,undefined,canonical);let second;
+ const previous=catchUpResult,ref=`refs/wtc-catch-up/${"1".repeat(40)}-789`;
+ try{
+  catchUpResult={ok:true,result:{code:1,message:"restoration stopped",json:{ok:false,data:{recoveryRequired:true,recoveryRef:ref}}}};
+  await [...first.host.all()].find(n=>n.tagName==="BUTTON"&&n.title?.startsWith("1 new on main. Catch up locally")).onclick();await settle();
+  const receipt={kind:"taba.catch-up-recovery-completed/v1",recoveryRef:ref,head:"2".repeat(40)},commit={step:"commit",by:"agent",skill:"wtc",key:"shared:commit",available:true};
+  const ready={...data,repos:[{...r,dirty:1,behind:0,next:commit,choices:{actions:[commit]}}]};
+  second=await mount(kind==="panel"?"composer":"panel",ready,undefined,undefined,{focus:"activity"});
+  assert.equal(localChangeButton(second.host).disabled,true,"the shared handoff reserved the other subscription");
+  collections.set(canonical,{...ready,repos:[{...ready.repos[0],catchUpRecoveryCompleted:receipt}]});
+  polls[0]();for(let i=0;i<6;i++)await settle();
+  assert.equal(localChangeButton(second.host).disabled,false,"the native receipt must notify the other collection subscription without waiting for its timer");
+ }finally{catchUpResult=previous;first.view.dispose();second?.view.dispose();globalThis.setInterval=nativeInterval;}
+});

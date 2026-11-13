@@ -817,19 +817,22 @@ function recordActivity(collection, id, item) {
 function reconcileRecoveryActivity(collection, repos) {
   const records = activityStore.get(collection);
   if (!records) return;
+  let changed = false;
   for (const r of repos) {
     const receipt = r.catchUpRecoveryCompleted;
     if (r.error || r.catchUpRecovery || r.catchUpRecoveryError || receipt?.kind !== "taba.catch-up-recovery-completed/v1" || !receipt.recoveryRef || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(receipt.head ?? "")) continue;
     for (const [id, item] of records) {
       if (!item.recoveryRef || item.recoveryRef !== receipt.recoveryRef || item.repoSessionKey !== r.sessionKey || !item.repoPath || item.repoPath !== r.path) continue;
       const request = requestFeedback.get(`${collection}|${r.sessionKey}`);
-      if (request?.id === id && request.path === r.path && ["catch-up", "resolve", "merge"].includes(request.kind) && ["running", "pending", "unconfirmed"].includes(request.phase)) request.phase = "completed";
+      if (request?.id === id && request.path === r.path && ["catch-up", "resolve", "merge"].includes(request.kind) && ["running", "pending", "unconfirmed"].includes(request.phase)) { request.phase = "completed"; changed = true; }
       if (item.completedRecovery) continue;
+      changed = true;
       const text = `${item.repo}: local edits recovered; backup retained.${r.dirty ? " Changes remain uncommitted." : ""}`;
       records.set(id, { ...item, state: "completed", status: "Completed", detail: text, completedRecovery: receipt, at: Date.now() });
       if (feedbackStore.get(collection)?.activityId === id) feedbackStore.set(collection, { text, failed: false, action: null, activityId: id, at: Date.now() });
     }
   }
+  if (changed) notifyFactFeedback(collection);
 }
 async function trackedServiceRequest(host, sessionKey, agentId, payload, doing, say, logKey = sessionKey) {
   const id = uuid(), repo = payload.group ?? "Services";
