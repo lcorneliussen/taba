@@ -1,15 +1,22 @@
-# wtc under OpenClaw
+# Taba under OpenClaw
 
-An [OpenClaw](https://docs.openclaw.ai) gateway runs agents for a team. `wtc`
-works in an agent's shell there, with one difference from a terminal or herdr:
-it cannot create a worktree the gateway will publish, and it cannot push. The
-gateway owns both. So under OpenClaw `wtc` checks and plans, and the agent
-carries the plan out with the gateway's tools.
+An [OpenClaw](https://docs.openclaw.ai) gateway runs agents for a team. Taba
+(`taba`, also available as `wtc`) works in an agent's shell there, with one
+difference from a terminal or herdr: it cannot create a worktree the gateway
+will publish, and it cannot push. The gateway owns both. Under OpenClaw,
+`taba` checks and plans, and the agent carries the plan out with the gateway's
+tools.
 
-`wtc host` prints `openclaw` when `OPENCLAW_SHELL=exec` is set, which the
+`taba host` prints `openclaw` when `OPENCLAW_SHELL=exec` is set, which the
 gateway's exec tool does, or when `OPENCLAW_STATE_DIR` is: agents on another
 runtime (Codex's bash tool) and the Control UI's terminal only inherit the
 gateway's environment.
+
+The plugin's main skill is **taba**, which uses `taba` commands and also
+recognizes the former name, wtc. A short **wtc** compatibility skill redirects
+to it for older conversations and skill allowlists. The alias stays discoverable for
+older name-based allowlists. Existing per-skill settings and session toggles
+keep their `wtc` key; the plugin ID also remains `wtc`.
 
 ## One conversation, many repositories
 
