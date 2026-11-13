@@ -46,8 +46,9 @@ func statusFreshnessLabel(freshness, observed string) string {
 	return "(" + label + ")"
 }
 
-// Observe the actual cached payload without fetching ancillary evidence or
-// changing its timestamp. Callers choose the existing retention policy.
+// Observe cached payloads without fetching ancillary evidence or changing their
+// timestamps. Age bounds ordinary detail; retained MERGED state is bounded by
+// statusMergedCacheAge.
 func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
 	// A fresh active detail from a released writer cannot supersede retained
 	// merge state. Its original age still controls freshness and action gates.

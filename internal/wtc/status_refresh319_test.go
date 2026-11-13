@@ -621,10 +621,11 @@ func TestStatus319ReservationLeavesSpareBurstCapacity(t *testing.T) {
 	if statusTakeForgeTokenFor(forge, key) {
 		t.Fatal("exhausted budget admitted confirmation")
 	}
-	// With no near refill the one-shot pane exits; restore the standard burst.
+	// The hour-long interval refuses admission without waiting for a refill.
+	// Restore the standard interval.
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
 	burst, _ = statusForgeAllowance(forge)
-	// Refill the bucket while the one-shot confirmation's pane is absent.
+	// Refill the fixture budget while the confirmation remains queued.
 	if err := os.WriteFile(statusForgeStatePath("budget", forge), []byte(fmt.Sprintf("%d %d", burst, time.Now().UnixNano())), 0600); err != nil {
 		t.Fatal(err)
 	}
