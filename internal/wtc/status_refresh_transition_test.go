@@ -867,8 +867,28 @@ func TestStatus319RefreshCoexistsWithReleasedBudgetConsumer(t *testing.T) {
 	// Isolate the interrupted confirmation from ancillary reads for the prior
 	// merge, so the observed budget lock belongs to this pending record.
 	fixtureFile(t, primary.PRFile(), "widget 10 another https://bitbucket.org/example/widget/pull-requests/10 Synthetic interrupted\n", 0600)
-	fixtureFile(t, statusForgeStatePath("budget", "bitbucket.org"), fmt.Sprintf("0 %d\n", time.Now().UnixNano()), 0600)
+	// Rendezvous at the production budget read, after its flock is acquired.
+	// Keeping the FIFO writer open blocks EOF until the collector is killed;
+	// ownership stays observable despite startup and parent scheduling delays.
+	budget := statusForgeStatePath("budget", "bitbucket.org")
+	if err := os.Remove(budget); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(budget, 0600); err != nil {
+		t.Fatal(err)
+	}
 	cancelled := status319Start(t, primary, server.URL, bin, false)
+	cancelledStopped := false
+	var budgetWriter *os.File
+	defer func() {
+		if !cancelledStopped {
+			_ = cancelled.command.Process.Kill()
+			<-cancelled.done
+		}
+		if budgetWriter != nil {
+			_ = budgetWriter.Close()
+		}
+	}()
 	cancelled.until(t, "ready")
 	probe, err := os.OpenFile(statusForgeStatePath("budget", "bitbucket.org")+".lock", os.O_RDWR, 0600)
 	if err != nil {
@@ -879,26 +899,38 @@ func TestStatus319RefreshCoexistsWithReleasedBudgetConsumer(t *testing.T) {
 	defer deadline.Stop()
 	tick := time.NewTicker(time.Millisecond)
 	defer tick.Stop()
-	waiting := false
-	for !waiting {
+	for budgetWriter == nil {
 		select {
 		case <-tick.C:
-			err := unix.Flock(int(probe.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-			if err == nil {
-				_ = unix.Flock(int(probe.Fd()), unix.LOCK_UN)
-			} else if err == unix.EWOULDBLOCK {
-				waiting = true
-			} else {
+			fd, err := unix.Open(budget, unix.O_WRONLY|unix.O_NONBLOCK, 0600)
+			if err == unix.ENXIO {
+				continue
+			}
+			if err != nil {
 				t.Fatal(err)
 			}
+			budgetWriter = os.NewFile(uintptr(fd), budget)
 		case <-deadline.C:
-			t.Fatal("collector never held the admission lock")
+			t.Fatal("collector never reached the budget-read barrier")
 		}
+	}
+	if err := unix.Flock(int(probe.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != unix.EWOULDBLOCK {
+		if err == nil {
+			_ = unix.Flock(int(probe.Fd()), unix.LOCK_UN)
+		}
+		t.Fatalf("collector did not own the admission lock at the budget-read barrier: %v", err)
 	}
 	// Cancel the production collector while it owns the existing budget lock.
 	// No provider read or merge marker may escape, and a released client recovers.
 	_ = cancelled.command.Process.Kill()
 	<-cancelled.done
+	cancelledStopped = true
+	_ = budgetWriter.Close()
+	budgetWriter = nil
+	if err := os.Remove(budget); err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, budget, fmt.Sprintf("0 %d\n", time.Now().UnixNano()), 0600)
 	survivor := status319StartMode(t, primary, server.URL, bin, false, "legacy")
 	survivor.until(t, "ready")
 	defer func() { _ = survivor.command.Process.Kill(); <-survivor.done }()
