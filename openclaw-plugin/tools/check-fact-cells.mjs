@@ -1,3 +1,4 @@
+import { loadControlUIFixtureAssets, serveControlUIFixtureAsset } from "./control-ui-fixture-assets.mjs";
 // Synthetic Chromium geometry and action checks; no gateway or forge is contacted.
 // Install Playwright/Chromium separately and pass its module path plus an output directory.
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
@@ -8,7 +9,7 @@ const [playwrightPath, outputPath] = process.argv.slice(2);
 if (!playwrightPath || !outputPath) throw Error('Usage: check-fact-cells.mjs <playwright module> <output directory>');
 const {chromium} = await import(pathToFileURL(resolve(playwrightPath)).href);
 const source=new URL('../',import.meta.url),out=pathToFileURL(resolve(outputPath)+'/');await mkdir(out,{recursive:true});
-const module=await readFile(new URL('dist/control-ui/v1/index.js',source),'utf8');
+const assets=await loadControlUIFixtureAssets();
 const repo=(name,extra={})=>({repo:name,forge:'github',owner:'example-org',sessionKey:`demo:${name}`,branch:'main',base:'origin/main',ahead:0,behind:0,...extra});
 const scenarios={sparse:[repo('agent-harness'),repo('cli'),repo('site',{branch:'openclaw/update-copy',dirty:1,unpublished:0})],dense:[repo('api',{ahead:2,unpublished:2,behind:3,pullRequest:{number:42,state:'open',checks:'success',review:'approved',url:'https://example.invalid/pr/42'}}),repo('site',{dirty:676,behind:6,branch:'openclaw/update-copy'})]};
 const catchStep = name => ({step:'catch-up',by:'wtc',approve:'agent',command:['wtc','catch-up'],key:name+':catch',reason:'Preserve local edits',available:true});
@@ -19,7 +20,7 @@ const browser=await chromium.launch({headless:true});const results=[];
 try { for(const [scenario,repos] of Object.entries(scenarios)) for(const view of ['card','panel']) for(const width of [320,390,520,604,760,1100]) {
  let html=template.replace('const data = {','const data = window.fixtureData = {').replace(/ repos:\[.*\],/,' repos:'+JSON.stringify(repos)+',').replace('const request = async (method, params) => {',`window.sent=[];const request = async (method, params) => {if(method==='plugins.sessionAction'&&params.actionId==='next'){const r=data.repos.find(r=>r.sessionKey===params.payload.ownerSessionKey),step=r?.choices?.actions.find(a=>a.key===params.payload.key&&a.available);if(!step)return {ok:false,error:'Selection changed'};return {ok:true,result:{performed:false,repo:{...r,next:step}}};}if(method==='sessions.send'){window.sent.push(params);return await new Promise(resolve=>{window.releaseCommit=()=>resolve({runId:'demo-run'});});}`).replace('</style>','body{padding:10px;font:14px/1.55 system-ui,sans-serif}#stage>h1,#stage>p,#stage>footer,.composer{display:none}#panel{min-height:0}</style>');
  const page=await browser.newPage({viewport:{width,height:1100},deviceScaleFactor:2});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):r.request().url()==='https://demo.invalid/plugin.js'?r.fulfill({contentType:'text/javascript',body:module}):r.abort());await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();
+ await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):serveControlUIFixtureAsset(r,assets));await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();
  if(view==='card') await page.locator('#card details').evaluate(n=>n.open=true);else await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).click();
  const root=page.locator(view==='card'?'#card details':'#panel');await page.waitForTimeout(100);
  const local=root.locator('.wtc-local-change:not(.wtc-column-commit)').first();await local.waitFor();

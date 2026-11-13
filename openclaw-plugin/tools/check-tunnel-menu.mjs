@@ -1,3 +1,4 @@
+import { loadControlUIFixtureAssets, serveControlUIFixtureAsset } from "./control-ui-fixture-assets.mjs";
 // Real Chromium checks with a synthetic host; no gateway or forge is contacted.
 // Usage: node openclaw-plugin/tools/check-tunnel-menu.mjs /path/to/playwright/index.mjs /path/to/output
 // Install Playwright/Chromium separately, or point at an existing Playwright installation.
@@ -10,7 +11,7 @@ if (!playwrightPath || !outputPath) throw new Error("Usage: check-tunnel-menu.mj
 const {chromium}=await import(pathToFileURL(resolve(playwrightPath)).href);
 const out=pathToFileURL(resolve(outputPath)+"/");
 await mkdir(out,{recursive:true});
-const module=await readFile(new URL("../dist/control-ui/v1/index.js",import.meta.url),"utf8");
+const assets=await loadControlUIFixtureAssets();
 const original=await readFile(new URL("tunnel-menu-fixture.html",import.meta.url),"utf8");
 const browser=await chromium.launch({headless:true}),results=[];
 try{
@@ -25,7 +26,7 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
  const colors=theme==='dark'?'--bg:#0e1015;--card:#161920;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8b8b94;--border:#1e2028;--border-strong:#2e3040;--bg-hover:#242832':'--bg:#f4f1eb;--card:#fff;--text:#333;--text-strong:#222;--muted:#71717a;--border:#e4e4e7;--border-strong:#d4d4d8;--bg-hover:#efefef';
  html=html.replace('</style>',`:root{color-scheme:${theme};${colors}}body{padding:16px}#stage>h1,#stage>p,#stage>footer{display:none}${view==='card'?'#stage{position:fixed;bottom:16px;left:16px;right:16px}':''}</style>`);
  const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:2});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):r.request().url()==='https://demo.invalid/plugin.js'?r.fulfill({contentType:'text/javascript',body:module}):r.abort());
+ await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):serveControlUIFixtureAsset(r,assets));
  await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();await page.waitForTimeout(200);await page.locator('#card details').evaluate(n=>{n.open=true});
  if(view==='panel'){await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).click();await page.getByText('Repositories',{exact:true}).waitFor();}
  const root=view==='card'?page.locator('#card'):page.locator('#panel');

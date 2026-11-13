@@ -1,3 +1,4 @@
+import { loadControlUIFixtureAssets, serveControlUIFixtureAsset } from "./control-ui-fixture-assets.mjs";
 import {readFile,writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {resolve} from 'node:path';
@@ -9,7 +10,7 @@ if(!playwrightPath||!outputPath)throw new Error('Pass a Playwright module path a
 const {chromium}=await import(pathToFileURL(resolve(playwrightPath)).href);
 const {mkdir}=await import('node:fs/promises');
 await mkdir(resolve(outputPath),{recursive:true});
-const out=pathToFileURL(resolve(outputPath)+'/'),module=await readFile(new URL('../dist/control-ui/v1/index.js',import.meta.url),'utf8');
+const out=pathToFileURL(resolve(outputPath)+'/'),assets=await loadControlUIFixtureAssets();
 const fixture=await readFile(new URL('tunnel-menu-fixture.html',import.meta.url),'utf8');
 const browser=await chromium.launch({headless:true}),results=[];
 try{for(const width of [390,1100])for(const state of ['suggestion','collapsed','expanded','sidebar']){
@@ -17,7 +18,7 @@ try{for(const width of [390,1100])for(const state of ['suggestion','collapsed','
  if(state==='suggestion')html=html.replace(/ repos:\[.*\],\n services:\[.*\]/,' repos:[],\n services:[]').replace(" if(method==='chat.history') return {messages:[]};"," if(method==='chat.history') return {messages:[{role:'user',content:'Work on the api search endpoint'}]};\n if(method==='plugins.sessionAction'&&params.actionId==='suggest')return {ok:true,result:{project:'example',repos:['api'],source:'words'}};");
  const page=await browser.newPage({viewport:{width,height:1000},deviceScaleFactor:2}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{window.routineTimers=[];const interval=window.setInterval;window.setInterval=(fn,ms,...args)=>{if(ms===15000||ms===30000)window.routineTimers.push({fn,ms});return interval(fn,ms,...args);};});
- await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):r.request().url()==='https://demo.invalid/plugin.js'?r.fulfill({contentType:'text/javascript',body:module}):r.abort());await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();await page.waitForTimeout(100);
+ await page.route('**/*',r=>r.request().url()==='https://demo.invalid/'?r.fulfill({contentType:'text/html',body:html}):serveControlUIFixtureAsset(r,assets));await page.goto('https://demo.invalid/');await page.locator('#card details').waitFor();await page.waitForTimeout(100);
  if(state==='expanded')await page.locator('#card details').evaluate(n=>n.open=true);
  if(state==='sidebar'){await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).click();await page.locator('#panel input[placeholder="Find or add a repository"]').press('Enter');}
  const root=state==='sidebar'?page.locator('#panel'):page.locator('#card');

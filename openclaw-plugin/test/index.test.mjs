@@ -2,9 +2,41 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import plugin, { agentGitIdentity, collectionFolder, decideProjects, matchProjects, openaiDecisions, pullRequestChanges, pullRequestWatch, repositoryOrigin, versionWarning, wtcVersionOf } from "../index.js";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, rmSync, readdirSync } from "node:fs";
+import { registerPublicationBridge } from "../publication.js";
 import os from "node:os";
 import path from "node:path";
+
+for(const retryCode of [0,1])test(`collection refreshes join tracking before reading status (metadata exit ${retryCode})`,{timeout:5000},async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),"taba-tracking-refresh-")),worktree=path.join(dir,"worktrees/widget/task"),folder=path.join(dir,"wtc/ad-hoc/task");
+ mkdirSync(path.join(worktree,".git"),{recursive:true});mkdirSync(folder,{recursive:true});symlinkSync(worktree,path.join(folder,"widget"));
+ const owner="agent:main:repo:widget",parent="agent:main:collection:task",entry={parentSessionKey:parent,projectId:"widget",label:"task widget",workspaceDir:worktree,worktree:{branch:"openclaw/task"}};
+ const published={requestId:"request",status:"published",url:"https://github.com/example/widget/pull/7",repository:"example/widget",branch:"captured/topic",headCommit:"1".repeat(40)};
+ let nativeCalls=0;const nativeHandlers=new Map();
+ registerPublicationBridge({registerGatewayMethod:(name,handler)=>nativeHandlers.set(name,handler)},{stateDir:dir,getSessionEntry:async()=>entry,run:async()=>({code:1}),dispatch:async()=>{nativeCalls++;return {ok:true,payload:published};}});
+ let returned;await nativeHandlers.get("wtc.github.confirm")({params:{sessionKey:owner,requestId:"request",requestDigest:"digest"},respond:(ok,payload)=>returned={ok,payload}});
+ assert.equal(returned.ok,true);assert.deepEqual(returned.payload,{...published,tracking:returned.payload.tracking});assert.equal(returned.payload.tracking.state,"pending");
+ let enter,release;const entered=new Promise(r=>enter=r),held=new Promise(r=>release=r),actions=new Map(),commands=[];let enlisted=false,statusReads=0,first,second;
+ try{
+  plugin.register({pluginConfig:{pullRequestPollMinutes:0,pullRequestEvents:"off"},runtime:{state:{resolveStateDir:()=>dir},agent:{session:{listSessionEntriesAsync:async()=>[{sessionKey:parent,entry:{}},{sessionKey:owner,entry}],getSessionEntryAsync:async()=>entry}},system:{runCommandWithTimeout:async (argv,options)=>{
+   commands.push(argv);
+   if(argv[1]==="openclaw"&&argv[2]==="enlist-publication"){
+    assert.equal(argv.at(-1),published.branch);assert.equal(options.timeoutMs,10000);assert.equal(options.killProcessTree,true);enter();await held;enlisted=retryCode===0;return {code:retryCode,stdout:""};
+   }
+   if(argv[1]==="--version")return {code:0,stdout:"taba version dev"};
+   assert.equal(argv[1],"status");statusReads++;
+   return {code:0,stdout:JSON.stringify({task:{folder,repos:[{repo:"widget",path:worktree,branch:"openclaw/task",...(enlisted?{pullRequest:{url:published.url,number:7,state:"open"}}:{})}]}})};
+  }}},session:{controls:{registerSessionAction:a=>actions.set(a.id,a),registerControlUiDescriptor(){}}},registerGatewayMethod(){},registerHttpRoute(){},on(){},logger:{}});
+  const read=()=>actions.get("collection").handler({agentId:"main",sessionKey:parent,payload:{}});
+  first=read();await entered;second=read();
+  await new Promise(setImmediate);assert.equal(statusReads,0,"neither overlapping production loader may read pre-enlist status");
+  assert.equal(commands.filter(a=>a[2]==="enlist-publication").length,1,"the second loader joins the first metadata attempt");
+  release();const results=await Promise.all([first,second]);assert.equal(statusReads,2);
+  for(const r of results){assert.equal(r.ok,true);assert.equal(r.result.repos[0].pullRequest?.url,retryCode===0?published.url:undefined);}
+  assert.equal(nativeCalls,1,"refresh never repeats native publication");
+  assert.equal(readdirSync(path.join(dir,"plugins/wtc/publication-receipts")).length,retryCode===0?0:1,"failed tracking retains its receipt");
+ }finally{release();await Promise.allSettled([first,second]);rmSync(dir,{recursive:true,force:true});}
+});
 
 for (const host of ["legacy", "async-only", "both"]) test(`next actions recheck membership, state and approvals on ${host} hosts`, async () => {
   const actions = new Map();
