@@ -134,7 +134,12 @@ func (p *tunnelProviderRuntime) confirm(ctx context.Context, call tunnelEffectCa
 		return result, true, nil
 	case "stop":
 		if call.Entry.Provider == "tailscale" {
-			return result, false, nil
+			live, receipt, err := p.tailscaleSessionLive(ctx, call.Entry)
+			if err != nil || live {
+				return result, false, err
+			}
+			result.Remove = []tunnelResourceRef{receipt}
+			return result, true, nil
 		}
 		for _, receipt := range call.Entry.Resources {
 			if receipt.Kind != "host-task" && receipt.Lifetime == "session" && receipt.Provider != "callback" {

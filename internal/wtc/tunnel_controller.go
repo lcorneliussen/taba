@@ -184,8 +184,14 @@ func (c *Context) runManagedTunnel(ctx context.Context, opt TunnelOptions, actio
 			if old.Operation == nil {
 				return errTunnelReconcile
 			}
-			if lifecycleComplete(old.Operation) && old.Active != nil && !p.activeHostLive(old) {
-				return c.executeRetainedTunnel(ctx, old, "stop", p)
+			if lifecycleComplete(old.Operation) && old.Active != nil {
+				live, observeErr := p.activeSessionLive(ctx, old)
+				if observeErr != nil {
+					return observeErr
+				}
+				if !live {
+					return c.executeRetainedTunnel(ctx, old, "stop", p)
+				}
 			}
 			return c.managedTunnelLifecycle(p).Reconcile(ctx, old.Key, old.Operation.ID)
 		}
@@ -245,9 +251,15 @@ func (c *Context) runManagedTunnel(ctx context.Context, opt TunnelOptions, actio
 		return err
 	}
 	if action == "start" {
-		if old := lifecycleEntry(&state, entry.Key); old != nil && old.Active != nil && !p.activeHostLive(*old) {
-			if err = c.executeRetainedTunnel(ctx, *old, "stop", p); err != nil {
-				return err
+		if old := lifecycleEntry(&state, entry.Key); old != nil && old.Active != nil {
+			live, observeErr := p.activeSessionLive(ctx, *old)
+			if observeErr != nil {
+				return observeErr
+			}
+			if !live {
+				if err = c.executeRetainedTunnel(ctx, *old, "stop", p); err != nil {
+					return err
+				}
 			}
 		}
 	}

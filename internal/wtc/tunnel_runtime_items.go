@@ -182,7 +182,8 @@ func (c *Context) recordedTunnelItems(observed []RuntimeItem) []RuntimeItem {
 				item.State = "registered"
 			}
 			if old.Active != nil {
-				if c.tunnelProviders().activeHostLive(old) {
+				// Daemon-backed status is recorded; only mutation actions query its scoped state.
+				if old.Provider == "tailscale" || c.tunnelProviders().localHostLive(old) {
 					item.State = "ready"
 					item.URL = old.Active.URL
 				} else {

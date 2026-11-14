@@ -2,8 +2,8 @@
 
 This helper hosts an exact, already registered devtunnel using an explicitly
 supplied host token. Registration and persistent-resource cleanup use separate
-management credentials. These adapters are preparation for stable tunnels;
-they are not yet connected to service commands.
+management credentials. Named service commands run this embedded helper through
+the foreground `svc tunnel-host` task and its owning tunnel lifecycle.
 
 Dev tunnel hosting requires an installed Node 22 or newer. Node 22.14.0 is the
 pinned build and test version. The helper is bundled into the Go executable;

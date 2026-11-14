@@ -47,6 +47,10 @@ func (t tailscaleServeTarget) resource(owner string) (tunnelResourceRef, error) 
 	return r, r.validate(owner)
 }
 
+func tailscaleETagValid(etag string) bool {
+	return etag != "" && len(etag) <= 256 && !strings.ContainsAny(etag, "*,\r\n\x00") && !strings.HasPrefix(etag, "W/")
+}
+
 func tailscaleLocalRequest(ctx context.Context, transport tailscaleLocalTransport, socket, method, suffix, etag string, body []byte) ([]byte, http.Header, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -58,7 +62,7 @@ func tailscaleLocalRequest(ctx context.Context, transport tailscaleLocalTranspor
 		return nil, nil, errors.New("invalid Tailscale socket request")
 	}
 	if method == http.MethodPost {
-		if etag == "" || len(etag) > 256 || strings.ContainsAny(etag, "*,\r\n\x00") || strings.HasPrefix(etag, "W/") {
+		if !tailscaleETagValid(etag) {
 			return nil, nil, errors.New("Tailscale current configuration ETag required")
 		}
 		req.Header.Set("If-Match", etag)
@@ -156,19 +160,7 @@ func tailscaleCanonicalPorts(entries map[string]json.RawMessage, hostport bool) 
 	return nil
 }
 
-// The controller must persist the local reservation/pending effect before this
-// action. The ETag binds the entire read/modify/write, including exposure checks;
-// a conflict is reconciliation, never a blind replay or listener-wide reset.
-func changeTailscaleServe(ctx context.Context, transport tailscaleLocalTransport, owner string, receipt tunnelResourceRef, target tailscaleServeTarget, stop bool) error {
-	expected, err := target.resource(owner)
-	// Session lifetime is controller metadata, separate from the exact daemon
-	// target fingerprint. A registration reservation is never a serve receipt.
-	if receipt.Lifetime == "session" {
-		expected.Lifetime = "session"
-	}
-	if err != nil || receipt != expected || transport == nil {
-		return errors.New("exact owned Tailscale reservation and scoped transport required")
-	}
+func verifyTailscaleNode(ctx context.Context, transport tailscaleLocalTransport, target tailscaleServeTarget) error {
 	node, _, err := tailscaleLocalRequest(ctx, transport, target.Socket, http.MethodGet, "status?peers=false", "", nil)
 	var status struct {
 		BackendState string
@@ -177,119 +169,184 @@ func changeTailscaleServe(ctx context.Context, transport tailscaleLocalTransport
 	if err != nil || !tailscaleUniqueJSON(node) || json.Unmarshal(node, &status) != nil || status.BackendState != "Running" || status.Self == nil || status.Self.ID != target.NodeID || strings.TrimSuffix(status.Self.DNSName, ".") != target.DNSName {
 		return errors.New("Tailscale authorized node identity unavailable or changed")
 	}
+	return nil
+}
+
+type tailscaleServeObservation struct {
+	cfg, tcp, web, server, handlers map[string]json.RawMessage
+	current                         json.RawMessage
+	etag                            string
+}
+
+// Read only the explicitly supplied socket. Both a live handler and absence
+// require the recorded node/listener/path identity and a known configuration;
+// foreign/shared/unknown scope is never proof of cleanup.
+func readOwnedTailscaleServe(ctx context.Context, transport tailscaleLocalTransport, owner string, receipt tunnelResourceRef, target tailscaleServeTarget) (tailscaleServeObservation, error) {
+	expected, err := target.resource(owner)
+	// Session lifetime is controller metadata, separate from the exact daemon
+	// target fingerprint. A registration reservation is never a serve receipt.
+	if receipt.Lifetime == "session" {
+		expected.Lifetime = "session"
+	}
+	if err != nil || receipt != expected || transport == nil {
+		return tailscaleServeObservation{}, errors.New("exact owned Tailscale reservation and scoped transport required")
+	}
+	if err := verifyTailscaleNode(ctx, transport, target); err != nil {
+		return tailscaleServeObservation{}, err
+	}
 	raw, headers, err := tailscaleLocalRequest(ctx, transport, target.Socket, http.MethodGet, "serve-config", "", nil)
 	if err != nil {
-		return err
+		return tailscaleServeObservation{}, err
+	}
+	// A changed profile during the config read is not absence in the original
+	// context. These observations are bounded checks, not an atomic profile lock.
+	if err := verifyTailscaleNode(ctx, transport, target); err != nil {
+		return tailscaleServeObservation{}, err
 	}
 	cfg, err := tailscaleObject(raw)
 	if err != nil {
-		return err
+		return tailscaleServeObservation{}, err
 	}
 	for key := range cfg {
 		switch key {
 		case "TCP", "Web", "AllowFunnel", "Services", "Foreground":
 		default:
-			return errors.New("unsupported Tailscale configuration field")
+			return tailscaleServeObservation{}, errors.New("unsupported Tailscale configuration field")
 		}
 	}
 	port := strconv.Itoa(target.Port)
 	hp := net.JoinHostPort(target.DNSName, port)
 	tcp, err := tailscaleObject(cfg["TCP"])
 	if err != nil {
-		return err
+		return tailscaleServeObservation{}, err
 	}
 	web, err := tailscaleObject(cfg["Web"])
 	if err != nil {
-		return err
+		return tailscaleServeObservation{}, err
 	}
 	if tailscaleCanonicalPorts(tcp, false) != nil || tailscaleCanonicalPorts(web, true) != nil {
-		return errors.New("noncanonical Tailscale configuration listeners")
+		return tailscaleServeObservation{}, errors.New("noncanonical Tailscale configuration listeners")
 	}
 	server, err := tailscaleObject(web[hp])
 	if err != nil {
-		return err
+		return tailscaleServeObservation{}, err
 	}
 	for key := range server {
 		if key != "Handlers" {
-			return errors.New("unsupported Tailscale web server")
+			return tailscaleServeObservation{}, errors.New("unsupported Tailscale web server")
 		}
 	}
 	handlers, err := tailscaleObject(server["Handlers"])
 	if err != nil {
-		return err
+		return tailscaleServeObservation{}, err
 	}
 	current := handlers[target.Path]
-	if stop && len(current) == 0 {
-		return nil
-	}
 	// Foreground sessions/services are separate owners. Do not shadow one on
 	// this listener even when the node-level handler map looks free.
 	for _, group := range []string{"Foreground", "Services"} {
 		children, err := tailscaleObject(cfg[group])
 		if err != nil {
-			return err
+			return tailscaleServeObservation{}, err
 		}
 		for _, child := range children {
 			object, err := tailscaleObject(child)
 			if err != nil {
-				return err
+				return tailscaleServeObservation{}, err
+			}
+			for key := range object {
+				switch key {
+				case "TCP", "Web", "AllowFunnel":
+				default:
+					return tailscaleServeObservation{}, errors.New("unknown Tailscale session/service configuration")
+				}
 			}
 			public, err := tailscaleObject(object["AllowFunnel"])
 			if err != nil || tailscaleCanonicalPorts(public, true) != nil {
-				return errors.New("unknown Tailscale session/service exposure")
+				return tailscaleServeObservation{}, errors.New("unknown Tailscale session/service exposure")
 			}
 			for key, enabled := range public {
 				if strings.HasSuffix(key, ":"+port) && tailscaleCanonical(enabled) != "false" {
-					return errors.New("Tailscale listener has public session/service exposure")
+					return tailscaleServeObservation{}, errors.New("Tailscale listener has public session/service exposure")
 				}
 			}
 			ports, err := tailscaleObject(object["TCP"])
 			if err != nil {
-				return err
+				return tailscaleServeObservation{}, err
 			}
 			if tailscaleCanonicalPorts(ports, false) != nil {
-				return errors.New("noncanonical Tailscale session/service listener")
+				return tailscaleServeObservation{}, errors.New("noncanonical Tailscale session/service listener")
 			}
 			if _, exists := ports[port]; exists {
-				return errors.New("Tailscale listener belongs to another session/service")
+				return tailscaleServeObservation{}, errors.New("Tailscale listener belongs to another session/service")
 			}
 			servers, err := tailscaleObject(object["Web"])
 			if err != nil {
-				return err
+				return tailscaleServeObservation{}, err
 			}
 			if tailscaleCanonicalPorts(servers, true) != nil {
-				return errors.New("noncanonical Tailscale session/service listener")
+				return tailscaleServeObservation{}, errors.New("noncanonical Tailscale session/service listener")
 			}
 			for key := range servers {
 				if strings.HasSuffix(key, ":"+port) {
-					return errors.New("Tailscale listener belongs to another session/service")
+					return tailscaleServeObservation{}, errors.New("Tailscale listener belongs to another session/service")
 				}
 			}
 		}
 	}
 	funnel, err := tailscaleObject(cfg["AllowFunnel"])
 	if err != nil {
-		return err
+		return tailscaleServeObservation{}, err
 	}
 	if tailscaleCanonicalPorts(funnel, true) != nil {
-		return errors.New("noncanonical Tailscale exposure listener")
+		return tailscaleServeObservation{}, errors.New("noncanonical Tailscale exposure listener")
 	}
 	for key, enabled := range funnel {
 		if strings.HasSuffix(key, ":"+port) && tailscaleCanonical(enabled) != "false" {
-			return errors.New("Tailscale listener has public or unknown exposure")
+			return tailscaleServeObservation{}, errors.New("Tailscale listener has public or unknown exposure")
 		}
 	}
 	for key := range web {
 		if key != hp && strings.HasSuffix(key, ":"+port) {
-			return errors.New("Tailscale listener hostname changed")
+			return tailscaleServeObservation{}, errors.New("Tailscale listener hostname changed")
 		}
 	}
 	if value, exists := tcp[port]; exists && tailscaleCanonical(value) != `{"HTTPS":true}` {
-		return errors.New("Tailscale listener mode differs from owned HTTPS reservation")
+		return tailscaleServeObservation{}, errors.New("Tailscale listener mode differs from owned HTTPS reservation")
 	}
 	wanted, _ := json.Marshal(map[string]string{"Proxy": target.Target})
 	if len(current) != 0 && tailscaleCanonical(current) != string(wanted) {
-		return errors.New("Tailscale owned handler changed; cleanup refused")
+		return tailscaleServeObservation{}, errors.New("Tailscale owned handler changed; cleanup refused")
+	}
+	if !tailscaleETagValid(headers.Get("ETag")) {
+		return tailscaleServeObservation{}, errors.New("Tailscale current configuration ETag required")
+	}
+	if len(current) != 0 {
+		if value, exists := tcp[port]; !exists || tailscaleCanonical(value) != `{"HTTPS":true}` {
+			return tailscaleServeObservation{}, errors.New("Tailscale owned handler has no matching HTTPS listener")
+		}
+	} else {
+		for mount := range handlers {
+			if strings.HasPrefix(target.Path, strings.TrimSuffix(mount, "/")+"/") || strings.TrimSuffix(mount, "/") == strings.TrimSuffix(target.Path, "/") {
+				return tailscaleServeObservation{}, errors.New("Tailscale path overlaps an existing handler")
+			}
+		}
+	}
+	return tailscaleServeObservation{cfg: cfg, tcp: tcp, web: web, server: server, handlers: handlers, current: current, etag: headers.Get("ETag")}, nil
+}
+
+// The controller persists its pending effect before mutation. The same scoped
+// observation drives liveness and targeted cleanup; CAS conflicts never replay.
+func changeTailscaleServe(ctx context.Context, transport tailscaleLocalTransport, owner string, receipt tunnelResourceRef, target tailscaleServeTarget, stop bool) error {
+	view, err := readOwnedTailscaleServe(ctx, transport, owner, receipt, target)
+	if err != nil {
+		return err
+	}
+	cfg, tcp, web, server, handlers, current := view.cfg, view.tcp, view.web, view.server, view.handlers, view.current
+	port := strconv.Itoa(target.Port)
+	hp := net.JoinHostPort(target.DNSName, port)
+	wanted, _ := json.Marshal(map[string]string{"Proxy": target.Target})
+	if stop && len(current) == 0 {
+		return nil
 	}
 	if !stop && len(current) != 0 {
 		// A matching URL is not ownership proof for a new effect. Confirmed
@@ -328,6 +385,6 @@ func changeTailscaleServe(ctx context.Context, transport tailscaleLocalTransport
 		cfg["TCP"], _ = json.Marshal(tcp)
 	}
 	body, _ := json.Marshal(cfg)
-	_, _, err = tailscaleLocalRequest(ctx, transport, target.Socket, http.MethodPost, "serve-config", headers.Get("ETag"), body)
+	_, _, err = tailscaleLocalRequest(ctx, transport, target.Socket, http.MethodPost, "serve-config", view.etag, body)
 	return err
 }

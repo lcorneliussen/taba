@@ -97,7 +97,7 @@ func TestTunnelTailscaleCASPreservesOtherHandlersAndListeners(t *testing.T) {
 	if len(handlers) != 1 || tailscaleCanonical(handlers["/other"]) != `{"Text":"unrelated"}` {
 		t.Fatal("targeted stop removed another handler")
 	}
-	if !reflect.DeepEqual(d.journal, []string{"GET /localapi/v0/status?peers=false", "GET /localapi/v0/serve-config", "POST /localapi/v0/serve-config", "GET /localapi/v0/status?peers=false", "GET /localapi/v0/serve-config", "POST /localapi/v0/serve-config"}) {
+	if !reflect.DeepEqual(d.journal, []string{"GET /localapi/v0/status?peers=false", "GET /localapi/v0/serve-config", "GET /localapi/v0/status?peers=false", "POST /localapi/v0/serve-config", "GET /localapi/v0/status?peers=false", "GET /localapi/v0/serve-config", "GET /localapi/v0/status?peers=false", "POST /localapi/v0/serve-config"}) {
 		t.Fatal("unexpected operation journal")
 	}
 }
@@ -115,7 +115,7 @@ func TestTunnelTailscaleRootStopIsTargetedAndAbsentCleanupDoesNotWrite(t *testin
 	}
 	d.journal = nil
 	before := d.config
-	if err := changeTailscaleServe(context.Background(), d.transport(t, target), receipt.Owner, receipt, target, true); err != nil || d.config != before || len(d.journal) != 2 {
+	if err := changeTailscaleServe(context.Background(), d.transport(t, target), receipt.Owner, receipt, target, true); err != nil || d.config != before || len(d.journal) != 3 {
 		t.Fatal("already-absent handler caused a write")
 	}
 	empty := tailscaleSyntheticDaemon("null\n")
@@ -182,12 +182,12 @@ func TestTunnelTailscaleCASConflictRemainsPendingWithoutRetry(t *testing.T) {
 		return transport(ctx, socket, r)
 	}
 	err := changeTailscaleServe(context.Background(), wrapped, receipt.Owner, receipt, target, false)
-	if err == nil || strings.Contains(err.Error(), "synthetic-sensitive-value") || len(d.journal) != 3 || op.Steps[0].Status != "pending" {
+	if err == nil || strings.Contains(err.Error(), "synthetic-sensitive-value") || len(d.journal) != 4 || op.Steps[0].Status != "pending" {
 		t.Fatal("conflict retried or pending ownership lost")
 	}
 	d = tailscaleSyntheticDaemon(`{}`)
 	d.etag = ""
-	if changeTailscaleServe(context.Background(), d.transport(t, target), receipt.Owner, receipt, target, false) == nil || len(d.journal) != 2 {
+	if changeTailscaleServe(context.Background(), d.transport(t, target), receipt.Owner, receipt, target, false) == nil || len(d.journal) != 3 {
 		t.Fatal("missing generation allowed blind write")
 	}
 }

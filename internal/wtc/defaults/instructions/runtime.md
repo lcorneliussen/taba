@@ -293,9 +293,13 @@ shipped pinned self-contained helper. Other providers, registration status and
 pure reads need no Node. The helper never fetches packages at runtime. Dev Tunnel
 backends require an explicit IPv4/localhost HTTP port without a backend path;
 HTTPS/private access declarations alone do not establish enforced access.
-Tailscale verifies the expected running node and uses conditional configuration
-writes, preserving unrelated handlers. Its configuration ETag is not an atomic
-profile-identity lock: an external profile switch cannot be excluded by that API.
+Tailscale's pure status is the last recorded state and performs no daemon I/O.
+Start/reconcile separately observe the exact authorized socket, running node,
+listener and handler. Verified absence clears only that session before a restart;
+unknown, changed-profile or foreign state retains its obligations and refuses.
+A lost stop reply can be confirmed by exact scoped absence without replaying the
+write. Tailscale uses conditional configuration writes, preserving unrelated
+handlers. Its configuration ETag is not an atomic profile-identity lock: an external profile switch cannot be excluded by that API.
 Explicit credentials and minimal child environments are not an OS sandbox.
 
 `--public` approves potential public exposure for the current effective definition,

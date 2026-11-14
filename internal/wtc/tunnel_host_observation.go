@@ -103,10 +103,7 @@ func (p *tunnelProviderRuntime) ownedHostObservation(call tunnelEffectCall, rece
 	}
 	return r, nil
 }
-func (p *tunnelProviderRuntime) activeHostLive(e tunnelEntryState) bool {
-	if e.Provider == "tailscale" {
-		return true
-	} // Pure status never queries its daemon.
+func (p *tunnelProviderRuntime) localHostLive(e tunnelEntryState) bool {
 	if e.Operation == nil || e.Operation.Lifecycle == nil {
 		return false
 	}
