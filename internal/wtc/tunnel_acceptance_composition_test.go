@@ -268,7 +268,7 @@ func TestTunnelAcceptanceNewReceiverNamedPolicyServiceLifecycle(t *testing.T) {
 		t.Fatal("control handler appeared")
 	}
 	// A stale observed definition cannot grant a new operation, even explicitly.
-	if _, err = c.Tunnel(TunnelOptions{Service: "web", Name: "preview", Public: true, ExpectedDefinition: tunnelDigest([]byte("stale"))}); err == nil {
+	if _, err = c.Tunnel(TunnelOptions{Service: "web", Name: "preview", Public: true, ExpectedDefinition: tunnelDigest([]byte("stale"))}); err == nil || !strings.Contains(err.Error(), "definition changed") {
 		t.Fatal("stale approval accepted")
 	}
 	if after, n := daemon.snapshot(); after != config || n != calls {
