@@ -162,8 +162,10 @@ func createDevTunnel(ctx context.Context, client tunnelHTTP, id string, port int
 	return r, nil
 }
 
-// Deletion is a transport primitive for an already checked owned target; it
-// never discovers accounts, selects the last-used tunnel, or deletes by prefix.
+// Deletion is a transport primitive for an exact owned target already checked
+// by checkDevOwned in the current captured credential context. Only after that
+// check may a DELETE 404 be treated as successful absence. This primitive never
+// discovers accounts, selects the last-used tunnel, or deletes by prefix.
 func deleteDevTunnel(ctx context.Context, client tunnelHTTP, cluster, id string) error {
 	if !devTunnelID(id) || !devTunnelCluster(cluster) {
 		return errors.New("invalid exact devtunnel cleanup target")
