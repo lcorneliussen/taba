@@ -356,8 +356,9 @@ func (r references) detail() string {
 	return strings.Join(parts, ", ") + "; " + label + strings.Join(lines, ", ")
 }
 
-// countMentions counts the word wtc, leaving out `x-wtc`, which has no taba
-// name yet and is reported as task-metadata.
+// countMentions counts the word wtc, leaving out `x-wtc`: it has no taba
+// name yet, so it is not counted anywhere (task-metadata reports it in
+// `.harness/dekit.tasks.yaml`).
 func countMentions(line string) int {
 	n := 0
 	for _, m := range wtcMention.FindAllStringIndex(line, -1) {
@@ -430,11 +431,13 @@ func collectionConventionFindings(c *Context) ([]ConventionFinding, error) {
 		out = append(out, conventionFinding("generated-state", base, strings.Join(state, ", ")))
 	}
 	for _, repo := range c.Registry.Repos {
-		// The harness's files are reported by harness-references instead.
+		// The harness has its own reference scan (harness-references);
+		// scanning it here as well would report its files twice.
 		if dir := filepath.Join(root, repo.Name); dir != filepath.Clean(c.Harness) {
 			found, err := repoReferenceFindings(root, repo.Name)
 			if err != nil {
-				return nil, fmt.Errorf("check %s for wtc names: %w", repo.Name, err)
+				// Shown as a finding: the conventions check never stops doctor.
+				out = append(out, conventionFinding("repo-references", base+"/"+repo.Name, "not checked: "+err.Error()))
 			}
 			out = append(out, found...)
 		}
@@ -467,6 +470,13 @@ func historyFile(rel string) bool {
 	return strings.HasPrefix(upper, "CHANGELOG") || strings.HasPrefix(upper, "HISTORY")
 }
 
+// lockFile reports generated dependency lockfiles such as yarn.lock,
+// Cargo.lock, pnpm-lock.yaml and package-lock.json.
+func lockFile(base string) bool {
+	lower := strings.ToLower(base)
+	return strings.HasSuffix(lower, ".lock") || strings.HasSuffix(lower, "-lock.yaml") || strings.HasSuffix(lower, "-lock.json") || strings.HasSuffix(lower, ".lock.json")
+}
+
 // repoReferenceFile picks the tracked files people and agents follow or run:
 // docs, scripts, configuration and CI. Source code is left out; old names
 // there are usually deliberate compatibility code.
@@ -476,7 +486,7 @@ func repoReferenceFile(rel string) bool {
 	}
 	rel = filepath.ToSlash(rel)
 	base := filepath.Base(rel)
-	if strings.Contains(strings.ToLower(base), "lock") {
+	if lockFile(base) {
 		return false
 	}
 	switch strings.ToLower(filepath.Ext(base)) {

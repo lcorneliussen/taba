@@ -193,3 +193,61 @@ func TestReferenceDetailCapsLineNumbers(t *testing.T) {
 		t.Fatalf("detail = %q, want %q", got, want)
 	}
 }
+
+func TestRepoReferenceFileSkipsOnlyLockfiles(t *testing.T) {
+	for name, want := range map[string]bool{
+		"yarn.lock": false, "Cargo.lock": false, "pnpm-lock.yaml": false, "package-lock.json": false,
+		"scripts/unlock.sh": true, "docs/locking.md": true, "BLOCKERS.md": true,
+	} {
+		if got := repoReferenceFile(name); got != want {
+			t.Errorf("repoReferenceFile(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// A symlink is skipped; a file that cannot be read becomes a finding for
+// the repository instead of stopping doctor.
+func TestRepoReferenceFindingsSkipSymlinksAndReportReadErrors(t *testing.T) {
+	c := fixture(t)
+	widget := filepath.Join(c.Collection, "widget")
+	writeConventionFixture(t, filepath.Join(widget, "README.md"), "wtc status\n")
+	if err := os.Symlink("README.md", filepath.Join(widget, "LINK.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "README.md", "LINK.md"}} {
+		if out, err := exec.Command("git", append([]string{"-C", widget}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+	}
+	got, err := c.ConventionFindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, f := range got {
+		if f.ID == "repo-references" {
+			paths = append(paths, f.Path)
+		}
+	}
+	if strings.Join(paths, ",") != "demo/widget/README.md" {
+		t.Fatalf("repo-references = %v", paths)
+	}
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads unreadable files")
+	}
+	if err := os.Chmod(filepath.Join(widget, "README.md"), 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(widget, "README.md"), 0644) })
+	got, err = c.ConventionFindings()
+	if err != nil {
+		t.Fatalf("a read error stopped the check: %v", err)
+	}
+	for _, f := range got {
+		if f.ID == "repo-references" && f.Path == "demo/widget" && strings.HasPrefix(f.Detail, "not checked: ") && !f.Blocked {
+			return
+		}
+	}
+	t.Fatalf("no not-checked finding for the repository: %+v", got)
+}
