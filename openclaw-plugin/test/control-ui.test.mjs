@@ -37,7 +37,7 @@ class Node {
     });
   }
   append(...kids) { this.children.push(...this.#adopt(kids)); }
-  insertBefore(node, next) { node.remove(); const at = next ? this.children.indexOf(next) : this.children.length; node.parentNode = this; this.children.splice(at, 0, node); return node; }
+  insertBefore(node, next) { if (next && next.parentNode !== this) throw new DOMException("Reference node is not a child", "NotFoundError"); node.remove(); const at = next ? this.children.indexOf(next) : this.children.length; node.parentNode = this; this.children.splice(at, 0, node); return node; }
   prepend(...kids) { this.children.unshift(...this.#adopt(kids)); }
   replaceChildren(...kids) {
     for (const c of this.children) if (typeof c === "object") c.parentNode = null;
@@ -3720,11 +3720,11 @@ for (const clipboard of [undefined, { writeText: async () => { throw new Error("
   }
 });
 
-for (const change of ["message", "session", "dispose"]) for (const denied of [false, true]) test(`diagnostic ignores late ${denied ? "failure" : "success"} after ${change}`, async () => {
+for (const change of ["message", "session", "hidden", "abort", "dispose"]) for (const denied of [false, true]) test(`diagnostic ignores late ${denied ? "failure" : "success"} after ${change}`, async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   let resolve, reject;
   Object.defineProperty(globalThis, "navigator", { configurable:true, value:{ clipboard:{ writeText: () => new Promise((yes, no) => { resolve = yes; reject = no; }) } } });
-  const { host, view, context } = await failedDiagnostic();
+  const { host, view, context, abort } = await failedDiagnostic();
   try {
     const note = diagnosticControl(host); note.focus();
     const pending = note.onclick({ preventDefault() {}, stopPropagation() {} });
@@ -3739,7 +3739,9 @@ for (const change of ["message", "session", "dispose"]) for (const denied of [fa
       const nextKey = `agent:main:diagnostic:${++sessions}`;
       collections.set(nextKey, collection([repo("web")]));
       view.update({ ...context, props:{ ...context.props, sessionKey:nextKey } }); await settle();
-    } else view.dispose();
+    } else if (change === "hidden") view.update({ ...context, presented:false });
+    else if (change === "abort") abort();
+    else view.dispose();
     denied ? reject(new Error("denied")) : resolve(); await pending;
     assert.doesNotMatch(host.textContent, /Copied|Could not copy/);
     const manual = [...host.all()].find(n => n.tagName === "TEXTAREA");
@@ -3748,4 +3750,21 @@ for (const change of ["message", "session", "dispose"]) for (const denied of [fa
     controlledCollection = undefined; view.dispose();
     if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator;
   }
+});
+
+test("composer restores diagnostic header controls after a suggestion in the same mount", async () => {
+  const { host, view, context } = await mount("composer", collection([]), [{ role:"user", content:"work on the site" }]);
+  await settle();
+  try {
+    assert.ok([...host.all()].some(n => n.tagName === "BUTTON" && n.textContent === "Start"));
+    const nextKey = `agent:main:diagnostic:${++sessions}`;
+    collections.set(nextKey, collection([repo("api")]));
+    view.update({ ...context, props:{ ...context.props, sessionKey:nextKey } }); await settle();
+    assert.ok([...host.all()].some(n => n.className === "wtc-refresh-control"), "collection refresh control is connected again");
+    assert.ok(titled(host, "Open the taba Collection panel"));
+    controlledCollection = () => ({ ok:false, error:diagnosticError });
+    await [...host.all()].find(n => n.className === "wtc-refresh-control").onclick({ preventDefault() {}, stopPropagation() {} });
+    assert.ok(diagnosticControl(host));
+    assert.ok(titled(host, "Open Activity in the taba Collection panel"));
+  } finally { controlledCollection = undefined; view.dispose(); }
 });

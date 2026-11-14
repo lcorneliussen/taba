@@ -20,8 +20,11 @@ for (const width of [320, 390, 1440]) test(`diagnostic browser interaction at ${
       window.setInterval=(fn,ms)=>{if(ms===30000)window.polls.push(fn);return interval(fn,ms)};
       window.copied=[];window.denied=false;
       Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{if(window.denied)throw Error('denied');window.copied.push(text)}},configurable:true});
-      window.fixture=data;window.fixtureError=null;window.delayed=false;
+      window.fixture=data;window.fixtureError=null;window.delayed=false;window.suggest=false;
       const request = async (method, params) => {
+        if(method==='plugins.sessionAction'&&params.actionId==='suggest')return {ok:true,result:{project:'example',repos:['api'],source:'match'}};
+        if(method==='chat.history'&&window.suggest)return {messages:[{role:'user',content:'Synthetic request to work on api'}]};
+        if(method==='sessions.send')return {};
         if(method==='plugins.sessionAction'&&params.actionId==='collection'&&window.fixtureError){
           if(window.delayed)await new Promise(resolve=>window.releaseRefresh=resolve);
           return {ok:false,error:window.fixtureError};
@@ -44,7 +47,7 @@ for (const width of [320, 390, 1440]) test(`diagnostic browser interaction at ${
     if (output) { await mkdir(output,{recursive:true});await page.screenshot({path:resolve(output,`diagnostic-${width}.png`)}); }
     const card = page.locator("#card details");
     assert.equal(await card.evaluate(n => n.open), false, "fixture starts collapsed");
-    assert(await diagnostic.isVisible(), "diagnostic is available on a collapsed card at narrow widths");
+    assert(await diagnostic.isVisible(), `diagnostic is available on a collapsed card at ${width}px`);
     await diagnostic.hover(); await diagnostic.focus();
     await diagnostic.evaluate(n => { window.originalDiagnostic=n;window.originalTitle=n.title; });
     await page.evaluate(() => { window.delayed=true;window.polls[0](); });
@@ -92,6 +95,24 @@ for (const width of [320, 390, 1440]) test(`diagnostic browser interaction at ${
     await page.getByRole("button",{name:"More collection actions",exact:true}).click();
     await page.getByRole("menuitem",{name:"Activity",exact:true}).click();
     await page.locator("#panel").waitFor({state:"visible"});
+    await page.evaluate(() => {
+      document.querySelector('#card').hidden=false;document.querySelector('#panel').hidden=true;
+      window.fixtureError=null;window.fixture.repos=[];window.suggest=true;
+      window.cardView.update({...window.demoCtx,props:{...window.demoCtx.props,sessionKey:'demo:suggestion'}});
+    });
+    await page.getByRole('button',{name:'Start',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Start',exact:true}).click();
+    await page.evaluate(() => {
+      window.fixture.repos=[{repo:'api',owner:'example',forge:'github',sessionKey:'demo:api',branch:'main',base:'origin/main',ahead:0,behind:0}];
+      window.suggest=false;window.polls.at(-1)();
+    });
+    try { await page.locator('#card .wtc-refresh-control').waitFor(); }
+    catch (err) { assert.deepEqual(errors, [], 'suggestion-to-collection must not throw'); throw err; }
+    assert(await page.getByRole('button',{name:'Open the taba Collection panel',exact:true}).isVisible(), "suggestion-to-collection restores header controls");
+    await page.evaluate(error => {window.fixtureError=error;window.denied=false;window.copied=[];window.polls.at(-1)();}, error);
+    await diagnostic.waitFor(); await diagnostic.focus(); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.copied.length===1);
+    assert.deepEqual(await page.evaluate(() => window.copied), ["Refresh failed: " + error]);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

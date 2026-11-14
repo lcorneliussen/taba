@@ -2834,6 +2834,7 @@ function mountComposer(container, context) {
       else card.remove();
       return;
     }
+    if (headerBrand.parentNode !== summary || headerControls.parentNode !== summary) summary.replaceChildren(headerBrand, headerControls);
     const groups = serviceGroups(entry.data.services ?? []);
     summary.style.display = "flex";
     summary.style.columnGap = "8px";
