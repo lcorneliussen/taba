@@ -53,27 +53,38 @@ process by hand.
 
 ## "Share it", "give me a link", another machine
 
-Open a tunnel, private first:
+Read the receiving-local named policy and recorded status first. Configure an
+explicit entry with `taba svc tunnel <service> --name <name> --action configure
+--definition /absolute/entry.toml`; the canonical runtime instructions document
+its schema and provider inputs. Default writes are collection overrides. Project
+default changes require an explicit native `--project` request; collection UI
+ownership never grants that authority. Do not put token values in desired policy.
 
 ```bash
-taba svc tunnel web tailscale          # this tailnet only
-taba svc tunnel web devtunnel          # the owner's account only
-taba svc tunnel web --stop             # close it
+taba svc tunnel web --name preview --public       # approve/start current definition
+taba svc tunnel web --name preview --stop         # retain stable registration
+taba svc tunnel web --name preview --action unregister
+taba svc tunnel web --name preview --action reconcile
 ```
 
-A tunnel on the internet — `cloudflare` (quick tunnel), `ngrok`, an anonymous
-`devtunnel` — opens only with `--public`. Pass it only when the user asked for
-a public link in so many words, and say that anyone with the link can reach
-the service. Status shows public tunnels in the warning colour.
+Pass `--public` only when the user authorizes potential public exposure. A
+provider name, HTTPS or declared account protection is not enforcement evidence.
+Fresh observed Tailscale tailnet evidence can authorize a private start. Built-in
+providers require explicit scoped hosting/management/cleanup file references or
+an authorized daemon socket; do not run login, inspect global stores, install
+clients, create resources or widen sharing merely to make a refusal disappear.
+Dev Tunnel hosting needs an already installed Node22+ runtime; other providers
+and status do not. Never start provider hosts in your own shell.
 
-Always open a tunnel with `taba svc tunnel <service>`, never as a service of its
-own (`taba svc add …/tunnel -- cloudflared …`) or in your shell: only then is it
-in the group of the service it exposes, starts after it, and shows with it on
-one line. A tunnel that shows as a line of its own was started the other way.
-Consolidate it: note its provider, `taba svc rm <that line>`, then
-`taba svc tunnel <service> <provider>` (with `--public` only if it was a public
-one the user asked for), and give the user the new address — a quick tunnel's
-address changes.
+Several named tunnels can share a service. Stop retains the stable registration;
+service down preserves desired selection. Clean old definitions before replacing
+providers/inputs/hooks. Unknown effects remain pending; reconcile uses exact
+receipts and cannot replay arbitrary callbacks. Keep cleanup code and credentials
+until unregister/retirement completes. Status does not probe provider accounts.
+The UI setup menu gives receiving-local configuration guidance; configured named
+controls use the same policy/journal and definition-bound approval as the CLI.
+Existing explicit temporary task declarations remain supported; do not replace
+those with an automatically generated global-login provider command.
 
 ## Stop, remove
 

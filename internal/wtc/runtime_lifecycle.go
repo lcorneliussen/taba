@@ -282,7 +282,7 @@ func runtimeGroupTasks(selector string, tasks []runtimeTask, starting bool) ([]r
 }
 
 func (c *Context) RuntimeAction(action, target string, wait time.Duration) (RuntimeResult, error) {
-	return c.runtimeAction(action, target, wait, nil)
+	return c.managedRuntimeAction(action, target, wait)
 }
 
 func (c *Context) runtimeAction(action, target string, wait time.Duration, choice *runtimeTunnelIntent) (RuntimeResult, error) {
@@ -326,6 +326,10 @@ func (c *Context) runtimeAction(action, target string, wait time.Duration, choic
 		if err != nil {
 			return err
 		}
+		// Named managed hosts are controlled only by their persisted lifecycle.
+		// Native application selectors cannot restart them behind the journal.
+		tasks = slices.DeleteFunc(slices.Clone(tasks), func(t runtimeTask) bool { return t.ManagedTunnel })
+
 		if choice != nil {
 			if len(tasks) != 1 || tasks[0].Kind != "endpoint" || choice.On && tasks[0].Definition != choice.Definition {
 				return fmt.Errorf("tunnel declaration changed; choose the tunnel again")
@@ -675,18 +679,52 @@ func runtimeURLReachable(url string, budget time.Duration) bool {
 
 // RetireRuntime uses the target's manifest even if runtime opt-in was removed.
 // An unconfirmed shutdown or failed teardown keeps the worktrees and record.
-func (c *Context) RetireRuntime() error {
-	defer c.signalServicesChanged()
+func (c *Context) RetireRuntime() (resultErr error) {
+	// A successful collection retirement has already disposed its journaled
+	// obligations and removed this directory. Repeated cleanup is a no-op,
+	// not permission to recreate it or to infer remote absence. An existing
+	// collection still reads the journal even when its manifest is missing.
+	info, pathErr := os.Lstat(c.Collection)
+	if os.IsNotExist(pathErr) {
+		return nil
+	}
+	if pathErr != nil {
+		return pathErr
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("runtime cleanup requires the actual collection directory")
+	}
 	if err := c.runtimeConflict(); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(filepath.Join(c.runtimeRoot(), "manifest.json")); os.IsNotExist(err) {
+	state, err := c.readTunnelJournal()
+	if err != nil {
+		return err
+	}
+	manifest, err := c.runtimeManifest()
+	if err != nil {
+		return err
+	}
+	if manifest == nil && state.Policy == nil && len(state.Entries) == 0 && !state.Retiring {
+		// Nothing was enlisted. Do not create a journal/root just to retire it.
 		return nil
+	}
+	defer c.signalServicesChanged()
+	attempt, err := c.beginTunnelRetirement(context.Background())
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, c.endTunnelRetirement(context.Background(), attempt, true)) }()
+	if err := c.cleanupManagedTunnels(context.Background()); err != nil {
+		return err
 	}
 	return c.withRuntimeLock(c.retireRuntime)
 }
 
 func (c *Context) retireRuntime() error {
+	if err := c.refuseTunnelObligations(); err != nil {
+		return err
+	}
 	m, err := c.runtimeManifest()
 	if err != nil {
 		return err

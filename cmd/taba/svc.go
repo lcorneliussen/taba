@@ -90,24 +90,30 @@ needs --shared, since removing it there is a change to the repository.`,
 	}
 
 	var topt wtc.TunnelOptions
-	tunnel := &cobra.Command{Use: "tunnel <service> [tailscale|cloudflare|ngrok|devtunnel]", Short: "Open or close a tunnel to a service",
-		Long: `Open a tunnel to a service through a provider, or close it with --stop.
+	tunnel := &cobra.Command{Use: "tunnel <service> [tailscale|cloudflare|ngrok|devtunnel]", Short: "Manage a named tunnel to a service",
+		Long: `Manage receiving-local desired tunnel policy and retained registrations.
 
-A service without a tunnel for the provider gets one in this collection's task
-file, built from its --port-env. A tailscale tunnel stays on your tailnet and
-a devtunnel admits your account only; a cloudflare quick tunnel, ngrok and an
-anonymous devtunnel are on the internet and open only with --public.`,
-		Example: branding.Text(`  {{command}} svc tunnel web tailscale
-  {{command}} svc tunnel web cloudflare --public
-  {{command}} svc tunnel web --stop`),
+Select a configured entry with --name. --action accepts configure, register,
+start, stop, unregister or reconcile. Configure reads one named entry from an
+explicit TOML --definition file. --project writes receiving project defaults;
+otherwise configure and disable write only this collection's override.
 
+Stopping retains stable registration and records start-off for this collection.
+Unregister cleans owned resources using retained definitions. Public exposure
+requires --public for the current definition. Status never logs into providers.`,
 		Args: cobra.RangeArgs(1, 2)}
+	tunnel.Flags().StringVar(&topt.Name, "name", "", "Named tunnel entry")
+	tunnel.Flags().BoolVar(&topt.Declared, "declared", false, "Act only on an explicit native endpoint declaration")
+	tunnel.Flags().StringVar(&topt.Action, "action", "start", "configure, disable, register, start, stop, unregister or reconcile")
+	tunnel.Flags().StringVar(&topt.DefinitionFile, "definition", "", "TOML file containing one complete named definition")
+	tunnel.Flags().BoolVar(&topt.Project, "project", false, "Write receiving project desired defaults explicitly")
+	tunnel.Flags().StringVar(&topt.ExpectedDefinition, "expected-definition", "", "Refuse a changed definition")
 	tunnel.Flags().BoolVar(&topt.Public, "public", false, "Allow a tunnel reachable from the internet")
 	tunnel.Flags().BoolVar(&topt.Stop, "stop", false, "Close the tunnel")
 	tunnel.Flags().DurationVar(&topt.Wait, "wait", 60*time.Second, "Wait until the tunnel answers (0 returns immediately)")
 	tunnel.RunE = func(cmd *cobra.Command, args []string) error {
 		load := startContext
-		if topt.Stop {
+		if topt.Stop || topt.Action == "stop" || topt.Action == "unregister" || topt.Action == "reconcile" {
 			load = runtimeContext
 		}
 		c, err := load()
@@ -159,5 +165,16 @@ show in {{command}} status.`),
 		}
 		return nil
 	}
-	svc.AddCommand(add, rm, tunnel, dekit)
+	var hostRepo, hostService, hostName string
+	host := &cobra.Command{Use: "tunnel-host", Hidden: true, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		c, err := runtimeContext()
+		if err != nil {
+			return err
+		}
+		return c.ServeTunnelHost(cmd.Context(), hostRepo, hostService, hostName)
+	}}
+	host.Flags().StringVar(&hostRepo, "repo", "", "Registered repository")
+	host.Flags().StringVar(&hostService, "service", "", "Service")
+	host.Flags().StringVar(&hostName, "name", "", "Named entry")
+	svc.AddCommand(add, rm, tunnel, dekit, host)
 }

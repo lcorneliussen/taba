@@ -106,7 +106,7 @@ func TestProviderLoginReadings(t *testing.T) {
 }
 
 // A tunnel whose provider client is not signed in is not opened.
-func TestTunnelRefusedWithoutProviderLogin(t *testing.T) {
+func TestTunnelRefusesImplicitProviderSetupWithoutLoginProbe(t *testing.T) {
 	c := runtimeFixture(t)
 	fixtureFile(t, filepath.Join(c.Collection, ".env.collection.local"), "ECHO_PORT=43001\n", 0600)
 	if _, err := c.AddService(ServiceOptions{Service: "echo", PortEnv: "ECHO_PORT", Cmd: []string{"python3", "-m", "http.server"}, NoStart: true}); err != nil {
@@ -114,15 +114,11 @@ func TestTunnelRefusedWithoutProviderLogin(t *testing.T) {
 	}
 	was := runtimeLoginCheck
 	t.Cleanup(func() { runtimeLoginCheck = was })
-	runtimeLoginCheck = func(p string) string {
-		if p == "tailscale" {
-			return "Tailscale needs a login: tailscale up"
-		}
-		return ""
-	}
+	probes := 0
+	runtimeLoginCheck = func(string) string { probes++; return "unexpected global login lookup" }
 	_, err := c.Tunnel(TunnelOptions{Service: "echo", Provider: "tailscale"})
-	if err == nil || !strings.Contains(err.Error(), "tailscale up") {
-		t.Fatalf("opened a tunnel without a login: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "configure receiving-local tunnels.toml") || probes != 0 {
+		t.Fatalf("implicit provider setup/query: %v (probes=%d)", err, probes)
 	}
 	if data, _ := os.ReadFile(c.runtimeLocalFragment("widget")); strings.Contains(string(data), "tailscale") {
 		t.Fatal("a refused tunnel was written")
@@ -182,15 +178,18 @@ func TestRuntimeStatusWiring(t *testing.T) {
 				return tc.answer == "yes", tc.detail
 			}
 			items := c.RuntimeStatus()
-			if len(items) != 2 || logins != 1 || probes[m.Tasks[0].URL] != 1 || probes[m.Tasks[1].URL] != 1 {
+			if len(items) != 2 || logins != 0 || probes[m.Tasks[0].URL] != 1 || probes[m.Tasks[1].URL] != 0 {
 				t.Fatalf("public status did not enrich the runner snapshot: %+v, probes %+v, logins %d", items, probes, logins)
 			}
 			for _, item := range items {
+				if item.Kind == "endpoint" {
+					if item.State != "ready" || item.Login != "" || item.Answering != "" || item.AnswerDetail != "" {
+						t.Fatalf("status probed provider/account: %+v", item)
+					}
+					continue
+				}
 				if item.State != "ready" || item.Answering != tc.answer || item.AnswerDetail != tc.detail {
 					t.Fatalf("missing reachability observation: %+v", item)
-				}
-				if item.Kind == "endpoint" && item.Login != tc.login {
-					t.Fatalf("missing login observation: %+v", item)
 				}
 			}
 			logins, probes = 0, map[string]int{}

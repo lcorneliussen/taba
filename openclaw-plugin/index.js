@@ -21,7 +21,6 @@ const WORKER_SEPARATOR = "--";
 // The client each tunnel provider of wtc svc tunnel runs, and the providers
 // whose tunnel anyone with the link can open.
 const TUNNEL_PROGRAMS = { tailscale: "tailscale", devtunnel: "devtunnel", cloudflare: "cloudflared", ngrok: "ngrok" };
-const PUBLIC_TUNNELS = new Set(["cloudflare", "ngrok"]);
 // The wtc this plugin came from: wtc openclaw install stamps its version.
 const PLUGIN_VERSION = (() => {
   try {
@@ -839,6 +838,17 @@ export default {
       const payload = action.payload ?? {};
       const group = String(payload.group ?? "");
       const provider = String(payload.provider ?? "");
+      const tunnelName = String(payload.name ?? "");
+      const tunnelAction = String(payload.action ?? (payload.stop ? "stop" : "start"));
+      const expectedDefinition = String(payload.expectedDefinition ?? "");
+      const declared = payload.declared === true;
+      if (op === "tunnel" && declared && (tunnelName || !["start","stop"].includes(tunnelAction))) return { ok:false,error:"declared endpoint actions cannot select named policy" };
+      if (op === "tunnel" && !payload.add && ["start","register"].includes(tunnelAction) && ((!declared && !tunnelName) || !/^[a-f0-9]{64}$/.test(expectedDefinition))) return {ok:false,error:"refresh and select the exact declared or named definition before approving exposure"};
+      if (op === "tunnel" && (payload.project || payload.definition || payload.definitionFile)) return { ok: false, error: "collection controls cannot write project defaults or select definition files" };
+      if (op === "tunnel" && tunnelName && (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(tunnelName))) return { ok: false, error: "invalid named tunnel" };
+      if (op === "tunnel" && !["register", "start", "stop", "unregister", "reconcile"].includes(tunnelAction)) return { ok: false, error: "invalid tunnel lifecycle action" };
+      if (op === "tunnel" && tunnelName && ["start","register"].includes(tunnelAction) && !expectedDefinition) return { ok: false, error: "refresh the configured tunnel definition before approving exposure" };
+      if (op === "tunnel" && expectedDefinition && !/^[a-f0-9]{64}$/.test(expectedDefinition)) return { ok: false, error: "invalid expected tunnel definition" };
       if (!["up", "down", "restart", "tunnel", "logs"].includes(op)) return { ok: false, error: "op is up, down, restart, tunnel or logs" };
       if (group && (!(op === "logs" ? /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/ : /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/).test(group) || group.length > 512 || group.split("/").some(part => part === "." || part === ".."))) return { ok: false, error: "name a service as <repo>/<service>" };
       if (op === "logs" && !group) return { ok: false, error: "name the service whose logs to read" };
@@ -851,12 +861,14 @@ export default {
       const argv = ["wtc", "svc", op, ...(group ? [group] : [])];
       if (op === "tunnel") {
         argv.push(provider);
-        if (payload.stop) argv.push("--stop");
-        // Only a person's click opens a tunnel anyone with the link can use.
-        else if (payload.public && PUBLIC_TUNNELS.has(provider)) argv.push("--public");
-        // A new tunnel runs the provider's client from the PATH; without it
-        // the conversation can install one first.
-        if (payload.add && !payload.stop && !onPath(TUNNEL_PROGRAMS[provider])) return { ok: true, result: { missing: TUNNEL_PROGRAMS[provider] } };
+        if (tunnelName) argv.push("--name", tunnelName);
+        if (declared) argv.push("--declared");
+        argv.push("--action", tunnelAction);
+        if (expectedDefinition) argv.push("--expected-definition", expectedDefinition);
+        // This click approves potential public exposure for this exact
+        // definition. It never grants project policy or global credentials.
+        if (payload.public && ["start", "register"].includes(tunnelAction)) argv.push("--public");
+        if (payload.add) return { ok: true, result: { setup: true, message: `Configure a collection-local ${provider} entry in .config/tunnels.toml with explicit receiving credential files or an authorized socket. Use: taba svc tunnel ${group} --name preview --action configure --definition /absolute/entry.toml. The definition file contains one [tunnels.<registered-repo>.<service>.preview] table; see the runtime instructions for provider fields. This action has not installed, logged into, or started a provider, and grants no project-default authority.` } };
       }
       const cwd = collectionFolder(stateDir, name);
       if (!cwd) return { ok: false, error: `collection ${name} has no folder yet: wtc status ${name} makes it` };

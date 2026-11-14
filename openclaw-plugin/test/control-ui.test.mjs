@@ -3,6 +3,10 @@
 // than in someone's browser. Run with `node --test openclaw-plugin/test/`.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import gatewayPlugin from "../index.js";
+import { mkdtempSync,mkdirSync,rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // Just enough of the DOM for el(), css() and the views: elements with
 // children, text, attributes and style; nothing is laid out.
@@ -166,7 +170,7 @@ const hostRequest = async (method, params) => {
   }
   calls.push({ method, ...params });
   if (method === "sessions.send" && controlledSend) return controlledSend;
-  if (method === "plugins.sessionAction" && params.actionId === "svc") return svcResult;
+  if (method === "plugins.sessionAction" && params.actionId === "svc") return typeof svcResult === "function" ? svcResult(params) : svcResult;
   if (method === "plugins.sessionAction" && params.actionId === "svc-logs") return typeof serviceLogsResult === "function" ? serviceLogsResult(params) : serviceLogsResult;
   if (method === "plugins.sessionAction" && params.actionId === "catch-up") return catchUpResult;
   if (method === "plugins.sessionAction" && params.actionId === "next") return typeof nextResult === "function" ? nextResult(params) : nextResult;
@@ -218,7 +222,7 @@ async function mount(kind, data, history, key, props = {}) {
 const collection = (repos, services = []) => ({
   collection: { label: "test collection", folder: "/state/wtc-collections/test" },
   repos,
-  services,
+  services:services.map(s=>s.kind==="endpoint" && !s.managed_tunnel && !s.managedTunnel ? {definition_id:"c".repeat(64),...s} : s),
 });
 const repo = (name, fields = {}) => ({
   repo: name, owner: "octo", forge: "github", sessionKey: `agent:main:owner:${name}`,
@@ -994,7 +998,7 @@ test("panel: play, stop and start all run wtc svc", async () => {
   view.dispose();
 });
 
-test("panel: a new tunnel, and one whose client is missing", async () => {
+test("panel: a new provider offers receiving-local configuration guidance", async () => {
   const { host, view } = await mount("panel", collection([repo("api")], [
     { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url: "http://127.0.0.1:42201" },
   ]));
@@ -1003,16 +1007,16 @@ test("panel: a new tunnel, and one whose client is missing", async () => {
   // installed first, and Tailscale is not offered on a personal tailnet.
   assert.deepEqual(pick.children.map((o) => o.value), ["gateway", "cloudflare", "ngrok", "devtunnel"]);
   assert.equal(pick.children[0].ariaLabel, "Gateway · OpenClaw portal");
-  assert.equal(pick.children[1].ariaLabel, "Cloudflare · public link · install first");
+  assert.equal(pick.children[1].ariaLabel, "Cloudflare · public link · configure first");
   // Only reachable on the gateway: the port, not a link.
   assert.ok(texts(host).includes(":42201"));
   calls.length = 0;
-  svcResult = { ok: true, result: { missing: "cloudflared" } };
+  svcResult = { ok: true, result: { setup:true,message:"Configure a collection override in .config/tunnels.toml with explicit scoped provider inputs first." } };
   await pick.children.find(o => o.value === "cloudflare").onclick({ preventDefault() {}, stopPropagation() {} });
   svcResult = { ok: true, result: { message: "done" } };
-  assert.deepEqual(calls[0].payload, { op: "tunnel", group: "api/web", provider: "cloudflare", public: true, add: true });
-  const asked = calls.find((c) => c.method === "sessions.send");
-  assert.match(asked.message, /cloudflare tunnel to api\/web\. cloudflared is not on the gateway's PATH/);
+  assert.deepEqual(calls[0].payload, { op: "tunnel", group: "api/web", provider: "cloudflare", add: true });
+  assert.equal(calls.some(c=>c.method==="sessions.send"),false,"setup guidance does not dispatch an installation or an agent task");
+  assert.match(readable(host),/Configure a collection override/);
   view.dispose();
 });
 
@@ -1030,13 +1034,13 @@ test("panel: the ways to a service", async () => {
   const team = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["tailscale", "cloudflare"], teamTailnet: true });
   const pick = [...team.host.all()].find((n) => n.className === "wtc-tunnel-menu");
   assert.deepEqual(pick.children.map((o) => o.ariaLabel),
-    ["Gateway · OpenClaw portal", "Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Tailscale · team tailnet"]);
+    ["Gateway · OpenClaw portal", "Cloudflare · public link · configure first", "ngrok · public link · configure first", "Dev Tunnel · your account · configure first", "Tailscale · team tailnet · configure first"]);
   team.view.dispose();
   // Without portal ingress, the gateway's portal comes last, marked.
   const bare = await mount("panel", { ...collection([repo("api")], [web]), tunnelProviders: ["cloudflare"], portalIngress: false });
   const choice = [...bare.host.all()].find((n) => n.className === "wtc-tunnel-menu");
   assert.deepEqual(choice.children.map((o) => o.ariaLabel),
-    ["Cloudflare · public link", "ngrok · public link · install first", "Dev Tunnel · your account · install first", "Gateway · OpenClaw portal · needs ingress"]);
+    ["Cloudflare · public link · configure first", "ngrok · public link · configure first", "Dev Tunnel · your account · configure first", "Gateway · OpenClaw portal · needs ingress"]);
   bare.view.dispose();
   // With every other way taken, the one left is named.
   const tunnels = ["cloudflare", "ngrok", "devtunnel"].map((p) => ({ group: "api/web", path: `api/web/${p}`, repo: "api", kind: "endpoint", provider: p, state: "idle" }));
@@ -3601,4 +3605,46 @@ for (const kind of ["composer", "panel"]) test(`${kind}: a running tunnel names 
   assert.ok([...host.all()].some(n=>n.role==="img"&&n.ariaLabel==="Access unknown"));
   assert.ok([...host.all()].some(n=>n.tagName==="A"&&n.href==="https://preview.example.invalid"));
  } finally {view.dispose();}
+});
+
+test("offered provider setup and named/declared controls reach the scoped gateway contract", async()=>{
+ const state=mkdtempSync(path.join(os.tmpdir(),"taba-tunnel-ui-"));
+ const folder=path.join(state,"wtc/platform/ui-tunnels");mkdirSync(folder,{recursive:true});
+ const actions=new Map(),commands=[];
+ const sessionKey="agent:main:collection:ui-tunnels";
+ const entries=[{sessionKey:"agent:main:repo:api",entry:{parentSessionKey:sessionKey,projectId:"api",worktree:{branch:"openclaw/ui-tunnels"},workspaceDir:"/synthetic/api"}}];
+ gatewayPlugin.register({pluginConfig:{},runtime:{state:{resolveStateDir:()=>state},agent:{session:{listSessionEntries:()=>entries,getSessionEntry:async()=>undefined}},system:{runCommandWithTimeout:async(argv,options)=>{commands.push({argv,options});return {code:0,stdout:"",stderr:""};}}},session:{controls:{registerSessionAction:a=>actions.set(a.id,a),registerControlUiDescriptor(){}}},registerHttpRoute(){},on(){},logger:{}});
+ const previous=svcResult;
+ svcResult=params=>actions.get("svc").handler({sessionKey:params.sessionKey,agentId:params.agentId,payload:params.payload});
+ const web={group:"api/web",path:"api/web/main",repo:"api",kind:"service",label:"preview",state:"ready",url:"http://127.0.0.1:42201"};
+ const click=()=>({preventDefault(){},stopPropagation(){}});
+ try{
+  // Every offered provider setup item uses the real gateway handler. Portals
+  // retain their existing direct host route and are covered by existing tests.
+  for(const provider of ["cloudflare","ngrok","devtunnel","tailscale"]){
+   const mounted=await mount("panel",{...collection([repo("api")],[web]),teamTailnet:true},undefined,sessionKey);
+   try{const menu=[...mounted.host.all()].find(n=>n.className==="wtc-tunnel-menu");await menu.children.find(n=>n.value===provider).onclick(click());
+    assert.match(readable(mounted.host),/Configure a collection-local/);assert.match(readable(mounted.host),/--action configure --definition/);
+    assert.equal(commands.length,0,"setup guidance cannot launch providers or write policy");
+   }finally{mounted.view.dispose()}
+  }
+  const desired="a".repeat(64),retained="b".repeat(64);
+  for(const [state,registered,action,label] of [["idle",false,"register","Register"],["idle",false,"start","▶"],["registered",true,"unregister","Unregister"],["ready",true,"stop","✕"],["pending",true,"reconcile","Reconcile"]]){
+   const named={group:"api/web",path:"api/web/tunnel-preview",repo:"api",kind:"endpoint",provider:"ngrok",managed_tunnel:true,tunnel_name:"preview",tunnel_mode:"domain",state,registered,desired_definition_id:desired,definition_id:retained,...(state==="ready"?{url:"https://web.example.test"}:{})};
+   const mounted=await mount("panel",collection([repo("api")],[web,named]),undefined,sessionKey);
+   try{await [...mounted.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent===label).onclick(click());const call=commands.at(-1);assert.equal(call.options.cwd,folder);
+    const starting=["start","register"].includes(action);
+    assert.deepEqual(call.argv,["wtc","svc","tunnel","api/web","ngrok","--name","preview","--action",action,"--expected-definition",starting?desired:retained,...(starting?["--public"]:[])]);
+   }finally{mounted.view.dispose()}
+  }
+  const legacy={group:"api/web",path:"api/web/temporary",repo:"api",kind:"endpoint",provider:"cloudflare",state:"idle"};
+  const mounted=await mount("panel",collection([repo("api")],[web,legacy]),undefined,sessionKey);
+  try{await titled(mounted.host,"Open the cloudflare tunnel again: anyone with the link can use it (idle)").onclick(click());assert.deepEqual(commands.at(-1).argv,["wtc","svc","tunnel","api/web","cloudflare","--declared","--action","start","--expected-definition","c".repeat(64),"--public"])}finally{mounted.view.dispose()}
+
+  const count=commands.length;
+  const unnamed=await actions.get("svc").handler({sessionKey,agentId:"main",payload:{op:"tunnel",group:"api/web",provider:"ngrok",public:true}});
+  assert.equal(unnamed.ok,false);assert.equal(commands.length,count,"unnamed public approval cannot select current named policy");
+  const forged=await actions.get("svc").handler({sessionKey,agentId:"main",payload:{op:"tunnel",group:"api/web",provider:"ngrok",name:"preview",action:"start",public:true,project:true,expectedDefinition:desired}});
+  assert.equal(forged.ok,false);assert.equal(commands.length,count);
+ }finally{svcResult=previous;rmSync(state,{recursive:true,force:true})}
 });

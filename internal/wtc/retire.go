@@ -1,7 +1,9 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -39,7 +41,7 @@ type retireWorktree struct {
 
 // RetireCollection first inspects every worktree, then removes only the named
 // collection. Remote branches and bare owners are never changed.
-func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
+func (c *Context) RetireCollection(opt RetireOptions) (result RetireResult, resultErr error) {
 	if opt.Self {
 		if opt.Name != filepath.Base(c.Collection) {
 			return RetireResult{}, fmt.Errorf("self-retirement target must be the current collection")
@@ -62,6 +64,21 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 		return result, err
 	}
 	target := result.Collection
+	runtimeTarget, err := OpenCollection(target)
+	if err != nil {
+		return result, err
+	}
+	attempt, err := runtimeTarget.beginTunnelRetirement(context.Background())
+	if err != nil {
+		return result, err
+	}
+	admissionFinalized := false
+	defer func() {
+		if !admissionFinalized {
+			resultErr = errors.Join(resultErr, runtimeTarget.endTunnelRetirement(context.Background(), attempt, true))
+		}
+	}()
+
 	// Close the source workspace before hooks or worktree removal. Once closed,
 	// no new pane or agent turn can start against a collection being deleted.
 	if opt.Self && !opt.InPlace {
@@ -84,13 +101,13 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 		result, worktrees = checked, current
 		result.WorkspaceClosed = true
 	}
-	values := map[string]string{"target": target, "force": strconv.FormatBool(opt.Force)}
-	if err := c.RunHook("retire.pre", values); err != nil {
+	// Validate owned tunnel obligations while cleanup code and credentials
+	// still exist, before arbitrary destructive legacy retire.pre hooks.
+	if err := runtimeTarget.cleanupManagedTunnels(context.Background()); err != nil {
 		return result, err
 	}
-	// Runtime ownership belongs to the target, not to the caller's harness.
-	runtimeTarget, err := OpenCollection(target)
-	if err != nil {
+	values := map[string]string{"target": target, "force": strconv.FormatBool(opt.Force)}
+	if err := c.RunHook("retire.pre", values); err != nil {
 		return result, err
 	}
 	unlockWatchers, err := runtimeTarget.lockStatusWatchers()
@@ -99,10 +116,28 @@ func (c *Context) RetireCollection(opt RetireOptions) (RetireResult, error) {
 	}
 	defer unlockWatchers()
 	err = runtimeTarget.withRuntimeLock(func() error {
+		if err := runtimeTarget.assessTunnelPrivateControl(false); err != nil {
+			return err
+		}
 		if err := runtimeTarget.retireRuntime(); err != nil {
 			return fmt.Errorf("runtime cleanup: %w", err)
 		}
 		if err := stopRetiredStatusWatchers(target); err != nil {
+			return err
+		}
+		if err := runtimeTarget.assessTunnelPrivateControl(false); err != nil {
+			return err
+		}
+		// Finalize this attempt while the receiver/harness is intact, before any
+		// policy/worktree/metadata removal. Keep allocation fenced and make an
+		// interrupted destruction retryable. The same lock stays held throughout;
+		// no deferred writer may reopen the retired or partly removed receiver.
+		bound := context.WithValue(context.Background(), tunnelHeldRuntimeLock{}, runtimeTarget.runtimeRoot())
+		if err := runtimeTarget.endTunnelRetirement(bound, attempt, false); err != nil {
+			return err
+		}
+		admissionFinalized = true
+		if err := runtimeTarget.assessTunnelPrivateControl(true); err != nil {
 			return err
 		}
 		postRan := false
@@ -222,30 +257,8 @@ func (c *Context) retirePreflight(opt RetireOptions) (RetireResult, []retireWork
 	if err != nil {
 		return result, nil, err
 	}
-	scope, err := targetContext.ValidateControlRoot()
-	if err != nil {
+	if err := targetContext.assessTunnelPrivateControl(false); err != nil {
 		return result, nil, err
-	}
-	privateRoots := []string{filepath.Join(target, ".config")}
-	canonicalTarget, err := canonicalPath(target)
-	if err != nil {
-		return result, nil, err
-	}
-	if withinPath(canonicalTarget, scope.Root) {
-		privateRoots = append(privateRoots, scope.Root)
-	}
-	for _, privateRoot := range privateRoots {
-		if info, err := os.Lstat(privateRoot); err == nil {
-			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-				return result, nil, fmt.Errorf("retirement blocked: collection private control path requires manual preservation")
-			}
-			entries, err := os.ReadDir(privateRoot)
-			if err != nil || len(entries) != 0 {
-				return result, nil, fmt.Errorf("retirement blocked: preserve collection private control data before retiring; --force cannot discard credentials")
-			}
-		} else if !os.IsNotExist(err) {
-			return result, nil, fmt.Errorf("retirement blocked: cannot verify collection private control data")
-		}
 	}
 	result.Collection = target
 	if _, err := preflightDevRetirement(target); err != nil {
@@ -402,12 +415,12 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 	files := []string{
 		"HANDOFF.md", ".env.collection", ".env.collection.local", "mise.toml", ".DS_Store",
 		"WTC-SCOPE.md", "SCOPE.md", ".env.toolchain",
-		".wtc-runtime.lock", ".wtc-status-watchers.lock",
+		".wtc-status-watchers.lock",
 		".wtc-prs", ".wtc-prs.lock", ".last-wtc-status.yml", ".wtc-status.json", ".wtc-status.md",
 		".wtc-catch-up.json", ".wtc-catch-up.json.md", ReviewModeFile,
 		".taba-prs", ".last-taba-status.yml", ".taba-status.json", ".taba-status.md",
 		".taba-catch-up.json", ".taba-catch-up.json.md",
-		".taba-review-mode", ".taba-runtime.lock", ".taba-status-watchers.lock",
+		".taba-review-mode", ".taba-status-watchers.lock",
 		".wtc-dev-mode.json", ".wtc-dev-mode.lock", ".wtc-dev-build.lock",
 		".taba-dev-mode.json", ".taba-dev-mode.lock", ".taba-dev-build.lock",
 	}
@@ -465,6 +478,15 @@ func removeRetiredGeneratedFiles(target string, adHoc bool) error {
 		}
 		_ = os.Remove(root) // Other namespaces and local files stay for inspection.
 	}
+	// Keep the existing admission lock through generated-root destruction.
+	// A waiting writer must revalidate an invalid receiver, rather than open a
+	// new lock inode after the receiving boundary and generated journal are removed.
+	for _, name := range []string{".wtc-runtime.lock", ".taba-runtime.lock"} {
+		if err := os.Remove(filepath.Join(target, name)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
 	return nil
 }
 

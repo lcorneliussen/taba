@@ -48,7 +48,7 @@ func runtimeAnswering(items []RuntimeItem, probe func(string) (bool, string)) {
 	var wg sync.WaitGroup
 	for i := range items {
 		item := &items[i]
-		if item.State != "ready" || !(strings.HasPrefix(item.URL, "http://") || strings.HasPrefix(item.URL, "https://")) {
+		if item.Kind == "endpoint" || item.State != "ready" || !(strings.HasPrefix(item.URL, "http://") || strings.HasPrefix(item.URL, "https://")) {
 			continue
 		}
 		wg.Add(1)

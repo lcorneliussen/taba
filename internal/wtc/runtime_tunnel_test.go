@@ -157,9 +157,9 @@ func TestServiceAddTunnelAndRemove(t *testing.T) {
 			t.Fatalf("echo: %+v", task)
 		}
 	}
-	// A public provider needs --public, and nothing is written without it.
-	if _, err := c.Tunnel(TunnelOptions{Service: "echo", Provider: "cloudflare"}); err == nil || !strings.Contains(err.Error(), "--public") {
-		t.Fatalf("opened a public tunnel without --public: %v", err)
+	// A provider without desired policy is refused before implicit setup or login.
+	if _, err := c.Tunnel(TunnelOptions{Service: "echo", Provider: "cloudflare"}); err == nil || !strings.Contains(err.Error(), "configure receiving-local tunnels.toml") {
+		t.Fatalf("implicit provider setup was accepted: %v", err)
 	}
 	if data, _ := os.ReadFile(local); strings.Contains(string(data), "cloudflare") {
 		t.Fatal("a refused tunnel was written")
@@ -232,7 +232,7 @@ func TestNoServicesSignalWithoutServices(t *testing.T) {
 	}
 }
 
-func TestServiceTunnelTemplatesAndRemovingTheLastService(t *testing.T) {
+func TestServiceExplicitTunnelDeclarationsAndRemovingTheLastService(t *testing.T) {
 	c := runtimeFixture(t)
 	fixtureFile(t, filepath.Join(c.Collection, ".env.collection.local"), "ECHO_PORT=43001\n", 0600)
 	if _, err := c.AddService(ServiceOptions{Service: "echo", PortEnv: "ECHO_PORT", Cmd: []string{"python3", "-m", "http.server"}, NoStart: true}); err != nil {
@@ -250,6 +250,13 @@ func TestServiceTunnelTemplatesAndRemovingTheLastService(t *testing.T) {
 		{"cloudflare", true, `exec cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$ECHO_PORT"`, ExposurePublic},
 		{"ngrok", true, `exec ngrok http "$ECHO_PORT" --log stdout`, ExposurePublic},
 	} {
+		// Compatibility is for explicit receiving declarations. The API no
+		// longer invents a command that can use a global provider login.
+		if err := c.runtimeChange(c.runtimeLocalFragment("widget"), func(tasks *yaml.Node) error {
+			return runtimeAddTask(tasks, "echo/"+tc.provider, map[string]any{"cmd": []string{"sh", "-c", tc.cmd}, "deps": []string{"echo/main"}, "tags": []string{"endpoint"}, "x-wtc": map[string]any{"tunnel": tc.provider}})
+		}); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := c.Tunnel(TunnelOptions{Service: "echo", Provider: tc.provider, Public: tc.public}); err != nil {
 			t.Fatalf("%s: %v", tc.provider, err)
 		}
@@ -318,6 +325,12 @@ func TestServiceUpAndRestartLeaveAStoppedPublicTunnelClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixtureFile(t, filepath.Join(c.runtimeRoot(), "fake-tasks.json"), `{"tasks":[]}`, 0600)
+	// This existing explicit temporary endpoint keeps declaration dispatch.
+	if err := c.runtimeChange(c.runtimeLocalFragment("widget"), func(tasks *yaml.Node) error {
+		return runtimeAddTask(tasks, "echo/cloudflare", map[string]any{"cmd": []string{"sh", "-c", `exec cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$ECHO_PORT"`}, "deps": []string{"echo/main"}, "tags": []string{"endpoint"}, "x-wtc": map[string]any{"tunnel": "cloudflare"}})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.Tunnel(TunnelOptions{Service: "echo", Provider: "cloudflare", Public: true}); err != nil {
 		t.Fatal(err)
 	}
