@@ -2622,11 +2622,11 @@ function mountComposer(container, context) {
   const headerControls = el("span");
   const diagnostic = css(el("button", { type:"button", className:"wtc-header-feedback wtc-action-control" }), "border:0;background:transparent;padding:0;text-align:left;font:inherit;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;flex:1");
   const diagnosticAnnouncement = css(el("span", { ariaLive:"polite", ariaAtomic:"true" }), "position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap");
-  const copyStatus = css(el("div", { role:"status", ariaLive:"polite" }), "font-size:12px;padding:0 12px;overflow-wrap:anywhere");
+  const copyStatus = css(el("div", { role:"status", ariaLive:"polite" }), "box-sizing:border-box;width:calc(100% - var(--chat-composer-side-inset,36px));max-width:var(--chat-thread-max-width,48rem);margin:0 auto;font-size:12px;padding:0 12px;overflow-wrap:anywhere");
   const manualCopy = css(el("textarea", { readOnly:true, ariaLabel:"Full diagnostic for manual copy" }), "box-sizing:border-box;width:100%;min-height:100px;white-space:pre-wrap");
   const copyFallback = css(el("div", {}, manualCopy), "padding:4px 12px");
   summary.append(headerBrand, headerFacts, headerControls);
-  const copyRegion = css(el("section", { ariaLabel:"Diagnostic copy" }, copyStatus, copyFallback), "box-sizing:border-box;width:calc(100% - var(--chat-composer-side-inset,36px));max-width:var(--chat-thread-max-width,48rem);margin:4px auto;font:inherit;color:var(--text,inherit)");
+  const copyRegion = css(el("section", { ariaLabel:"Diagnostic copy" }, copyFallback), "box-sizing:border-box;width:calc(100% - var(--chat-composer-side-inset,36px));max-width:var(--chat-thread-max-width,48rem);margin:4px auto;font:inherit;color:var(--text,inherit)");
   copyRegion.hidden = true;
   card.append(summary, detail, actionFeedback());
   let diagnosticText = "", diagnosticFailed, copyGeneration = 0, copyTimer;
@@ -2644,17 +2644,17 @@ function mountComposer(container, context) {
       if (!globalThis.navigator?.clipboard?.writeText) throw new Error("Clipboard unavailable");
       await globalThis.navigator.clipboard.writeText(text);
       if (!current()) return;
-      copyFallback.hidden = true; copyRegion.hidden = false; copyStatus.textContent = "Copied";
+      copyFallback.hidden = true; copyRegion.hidden = true; copyStatus.textContent = "Copied";
       copyTimer = setTimeout(() => { if (current()) { copyStatus.textContent = ""; copyRegion.hidden = true; } }, 3000);
     } catch {
       if (!current()) return;
-      copyStatus.textContent = "Could not copy. Select the full diagnostic below and copy it manually.";
       manualCopy.value = text; copyFallback.hidden = false; copyRegion.hidden = false;
+      copyStatus.textContent = "Could not copy. Select the full diagnostic below and copy it manually.";
     }
   };
   card.addEventListener("toggle", () => remember(card.open));
   const composer = el("div");
-  container.append(diagnosticAnnouncement, copyRegion, composer);
+  container.append(diagnosticAnnouncement, copyStatus, copyRegion, composer);
   const unmountDefault = ctx.mountDefault(composer);
 
   const iconButton = (text, title, run) => {
@@ -2936,7 +2936,7 @@ function mountComposer(container, context) {
       clearTimeout(noteTimer);
       sized?.disconnect();
       watch?.dispose();
-      card.remove(); extra.remove(); copyRegion.remove(); diagnosticAnnouncement.remove();
+      card.remove(); extra.remove(); copyRegion.remove(); copyStatus.remove(); diagnosticAnnouncement.remove();
       unmountDefault?.();
     },
   };

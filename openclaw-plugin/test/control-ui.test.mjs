@@ -3706,14 +3706,25 @@ for (const clipboard of [undefined, { writeText: async () => { throw new Error("
   const { host, view } = await failedDiagnostic();
   try {
     const note = diagnosticControl(host); note.focus();
+    const status = [...host.all()].find(n => n.role === "status" && n.ariaLive === "polite");
+    const exposed = () => { for (let n = status; n; n = n.parentNode) if (n.hidden) return false; return status.isConnected; };
+    const initiallyExposed = exposed(), mutations = [];
+    const text = Object.getOwnPropertyDescriptor(Node.prototype, "textContent");
+    Object.defineProperty(status, "textContent", { get() { return text.get.call(this); }, set(value) {
+      if (value) mutations.push({ text:value, exposed:exposed() });
+      text.set.call(this, value);
+    } });
     await note.onclick({ preventDefault() {}, stopPropagation() {} });
     const manual = [...host.all()].find(n => n.tagName === "TEXTAREA");
     assert.equal(manual.value, "Refresh failed: " + diagnosticError);
     assert.equal(manual.readOnly, true); assert.equal(manual.parentNode.hidden, false);
     assert.match(host.textContent, /Could not copy/); assert.doesNotMatch(host.textContent, /Copied/);
     assert.equal(document.activeElement, note);
+    assert.deepEqual(mutations, [{ text:"Could not copy. Select the full diagnostic below and copy it manually.", exposed:true }], "failure is written into an already exposed live region");
+    assert.equal(initiallyExposed, true, "empty live status is exposed before the clipboard attempt");
     view.update(contexts.get(host));
     assert.equal(manual.value, "Refresh failed: " + diagnosticError);
+    assert.equal([...host.all()].find(n => n.role === "status" && n.ariaLive === "polite"), status);
   } finally {
     controlledCollection = undefined; view.dispose();
     if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator;
@@ -3727,6 +3738,7 @@ for (const change of ["message", "session", "hidden", "abort", "dispose"]) for (
   const { host, view, context, abort } = await failedDiagnostic();
   try {
     const note = diagnosticControl(host); note.focus();
+    const status = [...host.all()].find(n => n.role === "status" && n.ariaLive === "polite");
     const pending = note.onclick({ preventDefault() {}, stopPropagation() {} });
     if (change === "message") {
       controlledCollection = () => ({ ok:false, error:"Different synthetic failure" });
@@ -3742,7 +3754,10 @@ for (const change of ["message", "session", "hidden", "abort", "dispose"]) for (
     } else if (change === "hidden") view.update({ ...context, presented:false });
     else if (change === "abort") abort();
     else view.dispose();
+    const focused = document.activeElement;
     denied ? reject(new Error("denied")) : resolve(); await pending;
+    assert.equal(document.activeElement, focused, "stale completion cannot steal focus");
+    if (change === "dispose") assert.equal(status.isConnected, false, "persistent live status is disposed too");
     assert.doesNotMatch(host.textContent, /Copied|Could not copy/);
     const manual = [...host.all()].find(n => n.tagName === "TEXTAREA");
     if (manual) assert.equal(manual.parentNode.hidden, true);
