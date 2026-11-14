@@ -14,10 +14,10 @@ import (
 // conventionsCheck summarises findings as one doctor check. It never fails
 // doctor: during 0.2.x old names are supported.
 func conventionsCheck(findings []wtc.ConventionFinding) map[string]any {
-	actionable := actionableFindings(findings)
+	actionable, review := actionableFindings(findings), reviewFindings(findings)
 	detail := "no wtc conventions found"
 	if len(findings) > 0 {
-		detail = fmt.Sprintf("%d wtc convention(s) to migrate, %d waiting for taba", actionable, len(findings)-actionable)
+		detail = fmt.Sprintf("%d wtc convention(s) to migrate, %d waiting for taba, %d to review", actionable, len(findings)-actionable-review, review)
 	}
 	return map[string]any{"name": "conventions", "ok": actionable == 0, "detail": detail, "findings": findings}
 }
@@ -37,6 +37,9 @@ func printConventionFindings(w io.Writer, findings []wtc.ConventionFinding, inde
 		if f.Detail != "" {
 			line += " (" + f.Detail + ")"
 		}
+		if f.Review {
+			line = "review: " + line
+		}
 		fmt.Fprintf(w, "%s         %s\n", indent, line)
 	}
 }
@@ -48,7 +51,12 @@ func printConventionSection(w io.Writer, findings []wtc.ConventionFinding) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "wtc conventions still in use (all of them: taba conventions):")
 	printConventionFindings(w, findings, "  ")
+	fmt.Fprintln(w, migrateHint)
 }
+
+// migrateHint tells the reader that an agent can do the migration from the
+// steps above.
+const migrateHint = "\nTo migrate, ask an agent: \"Run taba doctor --all and finish the migration to taba.\""
 
 type doctorAllCollection struct {
 	Collection string                  `json:"collection"`
@@ -166,6 +174,9 @@ func runDoctorAll(c *wtc.Context, discoverErr error, asJSON bool) error {
 		}
 	}
 	fmt.Fprintf(out, "\n%d collection(s): %d with nothing left to migrate by hand, %d with wtc conventions to migrate, %d not checked.\n", len(results), migrated, len(results)-migrated-unchecked, unchecked)
+	if len(results)-migrated-unchecked > 0 || actionableFindings(user) > 0 {
+		fmt.Fprintln(out, migrateHint)
+	}
 	return nil
 }
 
@@ -195,7 +206,17 @@ func conventionsCommand(asJSON *bool) *cobra.Command {
 func actionableFindings(findings []wtc.ConventionFinding) int {
 	n := 0
 	for _, f := range findings {
-		if !f.Blocked {
+		if !f.Blocked && !f.Review {
+			n++
+		}
+	}
+	return n
+}
+
+func reviewFindings(findings []wtc.ConventionFinding) int {
+	n := 0
+	for _, f := range findings {
+		if f.Review {
 			n++
 		}
 	}

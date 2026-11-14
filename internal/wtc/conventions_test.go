@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -67,20 +68,45 @@ func TestConventionFindingsInAnUnmigratedProject(t *testing.T) {
 	writeConventionFixture(t, filepath.Join(c.Collection, ".env.collection.local"), "WTC_PANES=full\n")
 	writeConventionFixture(t, filepath.Join(c.Collection, ".wtc", "skills", "x"), "")
 	writeConventionFixture(t, filepath.Join(c.Collection, "widget", ".harness", "dekit.tasks.yaml"), "tasks:\n  web:\n    x-wtc: {}\n")
+	// A repository sibling: its docs, scripts and CI are checked, its source
+	// code, changelog and untracked files are not.
+	widget := filepath.Join(c.Collection, "widget")
+	writeConventionFixture(t, filepath.Join(widget, "README.md"), "# widget\n\nStart with:\n\n    wtc status\n")
+	writeConventionFixture(t, filepath.Join(widget, "docs", "intro.md"), "Open it as a wtc collection.\n")
+	writeConventionFixture(t, filepath.Join(widget, "main.go"), "// wtc status\n")
+	writeConventionFixture(t, filepath.Join(widget, "CHANGELOG.md"), "- wtc status\n")
+	writeConventionFixture(t, filepath.Join(widget, "scripts", "dev"), "#!/bin/sh\necho $WTC_COLLECTION\n")
+	for _, args := range [][]string{{"init", "-q"}, {"add", "README.md", "docs", "main.go", "CHANGELOG.md", "scripts", ".harness"}} {
+		if out, err := exec.Command("git", append([]string{"-C", widget}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+	}
+	writeConventionFixture(t, filepath.Join(widget, "NOTES.md"), "wtc status\n")
 
 	got, err := c.ConventionFindings()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"generated-state", "harness-config", "harness-hooks", "harness-pin", "harness-references", "harness-skills", "local-references", "mise-tool-key", "scope-file", "skill-base-digest", "task-metadata"}
+	want := []string{"generated-state", "harness-config", "harness-hooks", "harness-pin", "harness-references", "harness-references", "harness-skills", "local-references", "mise-tool-key", "repo-references", "repo-references", "repo-references", "scope-file", "skill-base-digest", "task-metadata"}
 	if ids := findingIDs(got); strings.Join(ids, ",") != strings.Join(want, ",") {
 		t.Fatalf("findings = %v, want %v", ids, want)
 	}
 	for _, f := range got {
 		switch f.ID {
-		case "harness-references":
-			if f.Path != "harness/hooks/wtc/env.post.sh" || f.Detail != "1 WTC_ variable(s), 1 wtc command(s), 1 old skill name(s)" {
-				t.Fatalf("references counted the noun, a repository name or release notes: %+v", f)
+		case "harness-references", "repo-references":
+			want, ok := map[string]struct {
+				detail string
+				review bool
+			}{
+				"harness/hooks/wtc/env.post.sh": {"1 WTC_ variable(s), 1 wtc command(s), 1 old skill name(s), 2 other mention(s) of wtc; lines 1, 2, 3", false},
+				// The mise key names the old repository: prose only.
+				"harness/wtc.toml":          {"1 other mention(s) of wtc; line 2", true},
+				"demo/widget/README.md":     {"1 wtc command(s); line 5", false},
+				"demo/widget/docs/intro.md": {"1 other mention(s) of wtc; line 1", true},
+				"demo/widget/scripts/dev":   {"1 WTC_ variable(s); line 2", false},
+			}[f.Path]
+			if !ok || f.Detail != want.detail || f.Review != want.review {
+				t.Fatalf("unexpected reference finding: %+v", f)
 			}
 		case "harness-hooks", "generated-state", "task-metadata":
 			if !f.Blocked {

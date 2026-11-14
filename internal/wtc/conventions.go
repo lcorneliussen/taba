@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -64,7 +65,7 @@ var Conventions = []Convention{
 		Migrate: "No new name yet (#375). Keep the old file name."},
 	{ID: "harness-references", Area: "harness", Old: "`WTC_*` variables, `wtc …` commands and `wtc-*` skill names in harness files", New: "`TABA_*`, `taba …` and `taba-*`", Support: SupportBothNewWins, Owner: "you", Checked: true,
 		SupportNote: "Variables: both, the new one wins. Commands: both ship. Skill names: the old ones are shims",
-		Migrate:     "Replace `WTC_X` with `TABA_X`, `wtc` with `taba`, and old skill names such as `/wtc-start` with `/taba-start` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`)."},
+		Migrate:     "Replace `WTC_X` with `TABA_X`, `wtc` with `taba`, and old skill names such as `/wtc-start` with `/taba-start` in hooks, scripts, skills and instructions, at the lines listed. Other mentions of wtc, such as \"a wtc collection\" or a link to `wtc-cli`, usually become taba too; a file with only those is marked *review*, and a sentence that explains the rename can stay. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`)."},
 	{ID: "scope-file", Area: "collection", Old: "`WTC-SCOPE.md`", New: "`SCOPE.md`", Support: SupportBoth, Owner: "you", Checked: true,
 		Migrate: "`mv WTC-SCOPE.md SCOPE.md` at the collection root. The file is local, so nothing to commit. Older harness tooling that reads `WTC-SCOPE.md` needs the same change."},
 	{ID: "local-references", Area: "collection", Old: "`WTC_*` in `.env.collection.local`", New: "`TABA_*`", Support: SupportBothNewWins, Owner: "you", Checked: true,
@@ -81,6 +82,9 @@ var Conventions = []Convention{
 		Migrate: "`mv ~/.config/wtc ~/.config/taba` (or under `$XDG_CONFIG_HOME`) once no wtc 0.1.x client uses it."},
 	{ID: "user-data-dir", Area: "user", Old: "`$XDG_DATA_HOME/wtc`", New: "`$XDG_DATA_HOME/taba`", Support: SupportBoth, Owner: "you", Checked: true,
 		Migrate: "`mv ~/.local/share/wtc ~/.local/share/taba` (or under `$XDG_DATA_HOME`) once no wtc 0.1.x client uses it."},
+	{ID: "repo-references", Area: "repository", Old: "`WTC_*` variables, `wtc …` commands, `wtc-*` skill names and other mentions of wtc in a repository's docs, scripts, configuration and CI", New: "`TABA_*`, `taba …`, `taba-*` and taba", Support: SupportBothNewWins, Owner: "you", Checked: true,
+		SupportNote: "Variables: both, the new one wins. Commands: both ship. Skill names: the old ones are shims",
+		Migrate:     "Replace them at the lines listed and merge the change through the repository's normal review. Source code is not checked, nor are changelogs and release notes. A file with only other mentions of wtc is marked *review*; a sentence that explains the rename can stay."},
 	{ID: "task-metadata", Area: "repository", Old: "`x-wtc` in `.harness/dekit.tasks.yaml`", New: "`x-taba` (planned)", Support: SupportOldOnly, Owner: "you", Checked: true,
 		Migrate: "No new name yet (#375). Keep `x-wtc`."},
 	{ID: "command", Area: "tooling", Old: "`wtc` command", New: "`taba`", Support: SupportBothShip, Owner: "taba", Checked: false,
@@ -100,6 +104,8 @@ type ConventionFinding struct {
 	Migrate string `json:"migrate"`
 	// Blocked findings have no supported new name yet, or are taba's to move.
 	Blocked bool `json:"blocked,omitempty"`
+	// Review findings only mention wtc in prose; they may stay.
+	Review bool `json:"review,omitempty"`
 }
 
 func conventionByID(id string) Convention {
@@ -207,6 +213,9 @@ var (
 	// worktree collection, which stays. TestDoctorAllReportsConventionsFromTheWorkspaceRoot
 	// checks that every CLI subcommand is in the list.
 	wtcCommand = regexp.MustCompile("(?:^|[\\s;|&(`$\"'/])wtc\\s+(?:" + strings.Join(ConventionCommands, "|") + ")\\b")
+	// wtcMention matches the word wtc anywhere else: "a wtc collection",
+	// wtc-cli, .wtc-prs. WTC_ variables are counted separately.
+	wtcMention = regexp.MustCompile(`(?i)\bwtc\b`)
 )
 
 // ConventionCommands are the subcommands and flags `taba doctor` looks for
@@ -259,26 +268,22 @@ func scanReferences(harness string, rel func(string) string) ([]ConventionFindin
 			return nil, err
 		}
 	}
+	return referenceFindings("harness-references", files, rel)
+}
+
+func referenceFindings(id string, files []string, rel func(string) string) ([]ConventionFinding, error) {
 	var out []ConventionFinding
 	for _, path := range files {
-		vars, cmds, skills, err := countAllReferences(path)
+		r, err := countAllReferences(path)
 		if err != nil {
 			return nil, err
 		}
-		if vars+cmds+skills == 0 {
+		if r.total() == 0 {
 			continue
 		}
-		var parts []string
-		if vars > 0 {
-			parts = append(parts, fmt.Sprintf("%d WTC_ variable(s)", vars))
-		}
-		if cmds > 0 {
-			parts = append(parts, fmt.Sprintf("%d wtc command(s)", cmds))
-		}
-		if skills > 0 {
-			parts = append(parts, fmt.Sprintf("%d old skill name(s)", skills))
-		}
-		out = append(out, conventionFinding("harness-references", rel(path), strings.Join(parts, ", ")))
+		f := conventionFinding(id, rel(path), r.detail())
+		f.Review = r.vars+r.cmds+r.skills == 0
+		out = append(out, f)
 	}
 	return out, nil
 }
@@ -301,35 +306,87 @@ var oldSkillName = func() *regexp.Regexp {
 	return regexp.MustCompile(`\bwtc-(?:` + strings.Join(names, "|") + `)\b`)
 }()
 
-func countReferences(path string) (vars, cmds int, err error) {
-	vars, cmds, _, err = countAllReferences(path)
-	return vars, cmds, err
+// references counts old names in one file and remembers where they are.
+type references struct {
+	vars, cmds, skills, mentions int
+	lines                        []int
 }
 
-func countAllReferences(path string) (vars, cmds, skills int, err error) {
+func (r references) total() int { return r.vars + r.cmds + r.skills + r.mentions }
+
+func (r references) detail() string {
+	var parts []string
+	for _, p := range []struct {
+		n    int
+		what string
+	}{{r.vars, "WTC_ variable(s)"}, {r.cmds, "wtc command(s)"}, {r.skills, "old skill name(s)"}, {r.mentions, "other mention(s) of wtc"}} {
+		if p.n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", p.n, p.what))
+		}
+	}
+	const shown = 10
+	var lines []string
+	for i, l := range r.lines {
+		if i == shown {
+			lines = append(lines, fmt.Sprintf("+%d more", len(r.lines)-shown))
+			break
+		}
+		lines = append(lines, fmt.Sprint(l))
+	}
+	label := "line "
+	if len(r.lines) > 1 {
+		label = "lines "
+	}
+	return strings.Join(parts, ", ") + "; " + label + strings.Join(lines, ", ")
+}
+
+// countMentions counts the word wtc, leaving out `x-wtc`, which has no taba
+// name yet and is reported as task-metadata.
+func countMentions(line string) int {
+	n := 0
+	for _, m := range wtcMention.FindAllStringIndex(line, -1) {
+		if !strings.HasSuffix(strings.ToLower(line[:m[0]]), "x-") {
+			n++
+		}
+	}
+	return n
+}
+
+func countAllReferences(path string) (references, error) {
+	var r references
 	f, err := os.Open(path)
 	if err != nil {
-		return 0, 0, 0, err
+		return r, err
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || info.Size() > 1<<20 {
-		return 0, 0, 0, err
+		return r, err
 	}
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 64*1024), 1<<20)
-	for scanner.Scan() {
+	for n := 1; scanner.Scan(); n++ {
 		line := scanner.Text()
 		if strings.IndexByte(line, 0) >= 0 {
-			return 0, 0, 0, nil
+			return references{}, nil
 		}
-		vars += len(wtcVariable.FindAllString(line, -1))
-		cmds += len(wtcCommand.FindAllString(line, -1))
+		vars := len(wtcVariable.FindAllString(line, -1))
+		cmds := len(wtcCommand.FindAllString(line, -1))
+		skills := 0
 		if oldSkillName != nil {
-			skills += len(oldSkillName.FindAllString(line, -1))
+			skills = len(oldSkillName.FindAllString(line, -1))
+		}
+		// Every command and old skill name also contains the word.
+		mentions := countMentions(line) - cmds - skills
+		if mentions < 0 {
+			mentions = 0
+		}
+		if vars+cmds+skills+mentions > 0 {
+			r.vars, r.cmds, r.skills, r.mentions = r.vars+vars, r.cmds+cmds, r.skills+skills, r.mentions+mentions
+			r.lines = append(r.lines, n)
 		}
 	}
-	return vars, cmds, skills, scanner.Err()
+	return r, scanner.Err()
 }
 
 var generatedStateNames = []string{".wtc", ".wtc-prs", ".wtc-status.json", ".wtc-status.md", ".last-wtc-status.yml", ".wtc-catch-up.json", ".wtc-catch-up.md", ".wtc-reviews", ".wtc-review-posted", ".wtc-status-watchers", ".wtc-review-mode", ".wtc-dev-mode.json"}
@@ -357,6 +414,13 @@ func collectionConventionFindings(c *Context) []ConventionFinding {
 		out = append(out, conventionFinding("generated-state", base, strings.Join(state, ", ")))
 	}
 	for _, repo := range c.Registry.Repos {
+		// The harness has its own, wider check.
+		if dir := filepath.Join(root, repo.Name); dir == filepath.Clean(c.Harness) {
+			continue
+		}
+		if found, err := repoReferenceFindings(root, repo.Name); err == nil {
+			out = append(out, found...)
+		}
 		p := filepath.Join(root, repo.Name, ".harness", "dekit.tasks.yaml")
 		if data, err := os.ReadFile(p); err == nil && strings.Contains(string(data), "x-wtc") {
 			out = append(out, conventionFinding("task-metadata", base+"/"+repo.Name+"/.harness/dekit.tasks.yaml", ""))
@@ -366,11 +430,77 @@ func collectionConventionFindings(c *Context) []ConventionFinding {
 }
 
 func countFileReferences(path string) int {
-	vars, _, err := countReferences(path)
+	r, err := countAllReferences(path)
 	if err != nil {
 		return 0
 	}
-	return vars
+	return r.vars
+}
+
+// historyFile reports files that describe the past rather than instruct:
+// changelogs, history and release notes keep the names they shipped with.
+func historyFile(rel string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == "release-notes" || part == "testdata" || part == "vendor" || part == "node_modules" {
+			return true
+		}
+	}
+	upper := strings.ToUpper(filepath.Base(rel))
+	return strings.HasPrefix(upper, "CHANGELOG") || strings.HasPrefix(upper, "HISTORY")
+}
+
+// repoReferenceFile picks the tracked files people and agents follow or run:
+// docs, scripts, configuration and CI. Source code is left out; old names
+// there are usually deliberate compatibility code.
+func repoReferenceFile(rel string) bool {
+	if historyFile(rel) {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	base := filepath.Base(rel)
+	if strings.Contains(strings.ToLower(base), "lock") {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(base)) {
+	case ".md", ".mdx", ".txt", ".sh", ".bash", ".zsh", ".fish", ".toml", ".yml", ".yaml", ".envrc", ".mk":
+		return true
+	}
+	switch base {
+	case "Makefile", "Justfile", "justfile", "Dockerfile", "Procfile", ".envrc", "package.json":
+		return true
+	}
+	if strings.HasPrefix(base, ".env") {
+		return true
+	}
+	for _, dir := range []string{"bin/", "scripts/", "hooks/", ".github/", ".harness/"} {
+		if strings.HasPrefix(rel, dir) || strings.Contains(rel, "/"+dir) {
+			return filepath.Ext(base) == ""
+		}
+	}
+	return false
+}
+
+// repoReferenceFindings scans one repository sibling's tracked files.
+func repoReferenceFindings(collection, repo string) ([]ConventionFinding, error) {
+	dir := filepath.Join(collection, repo)
+	out, err := exec.Command("git", "-C", dir, "ls-files", "-z").Output()
+	if err != nil {
+		return nil, nil
+	}
+	var files []string
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel != "" && repoReferenceFile(rel) {
+			files = append(files, filepath.Join(dir, rel))
+		}
+	}
+	base := filepath.Base(collection)
+	return referenceFindings("repo-references", files, func(path string) string {
+		r, err := filepath.Rel(collection, path)
+		if err != nil {
+			return path
+		}
+		return base + "/" + filepath.ToSlash(r)
+	})
 }
 
 // UserConventionFindings checks the control root and the per-user
