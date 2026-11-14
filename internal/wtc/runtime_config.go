@@ -573,6 +573,9 @@ func (c *Context) renderRuntime() (*runtimeManifest, error) {
 		// It is managed state even when first render was interrupted. Never
 		// accept or remove unrelated files merely because this path exists.
 		if err := runtimeRegular(c.tunnelJournalPath()); err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("unmanaged runtime directory already exists")
+			}
 			return nil, err
 		}
 		if _, err := c.readTunnelJournal(); err != nil {

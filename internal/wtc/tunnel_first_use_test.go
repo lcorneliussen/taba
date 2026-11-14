@@ -103,15 +103,22 @@ func TestTunnelFirstUseAdmissionPreservesUnsafeState(t *testing.T) {
 			case "foreign-journal":
 				fixtureFile(t, journal, `{"schema":1,"owner":"foreign-owner"}`, 0600)
 			case "unknown-journal-schema":
-				fixtureFile(t, journal, `{"schema":99,"owner":"foreign-owner"}`, 0600)
+				data, _ := json.Marshal(tunnelState{Schema: 99, Owner: c.tunnelOwner()})
+				fixtureFile(t, journal, string(data), 0600)
 			case "linked-journal":
+				data, err := os.ReadFile(journal)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixtureFile(t, target, string(data), 0600)
 				removeJournal()
 				link(target, journal)
 			case "directory-journal":
 				removeJournal()
 				fixtureFile(t, filepath.Join(journal, "keep"), "user bytes", 0600)
 			case "unknown-manifest-schema":
-				fixtureFile(t, manifest, `{"schema":99}`, 0600)
+				data, _ := json.Marshal(runtimeManifest{Schema: 99, Root: root, Binary: c.Config.Runtime.Binary})
+				fixtureFile(t, manifest, string(data), 0600)
 			case "foreign-manifest":
 				data, _ := json.Marshal(runtimeManifest{Schema: 1, Root: outside, Binary: c.Config.Runtime.Binary})
 				fixtureFile(t, manifest, string(data), 0600)
@@ -128,6 +135,10 @@ func TestTunnelFirstUseAdmissionPreservesUnsafeState(t *testing.T) {
 			before, outsideBefore := aliasSafetySnapshot(t, root), aliasSafetySnapshot(t, outside)
 			if _, err := c.RenderRuntime(false); err == nil {
 				t.Fatal("unsafe first-use state was admitted")
+			} else if kind == "marker-without-journal" && !strings.Contains(err.Error(), "unmanaged runtime directory already exists") {
+				t.Fatal("missing journal lost unmanaged-state diagnostic", err)
+			} else if (kind == "linked-journal" || kind == "directory-journal" || kind == "linked-manifest") && !strings.Contains(err.Error(), "expected a regular file") {
+				t.Fatal("unsafe path failed for an unrelated reason", err)
 			}
 			c.signalServicesChanged()
 			if !reflect.DeepEqual(before, aliasSafetySnapshot(t, root)) {
