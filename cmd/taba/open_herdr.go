@@ -31,8 +31,33 @@ type openTabInfo struct {
 	ID    string `json:"tab_id"`
 }
 
+type openAgentInfo struct {
+	Name             string `json:"name"`
+	Kind             string `json:"agent"`
+	Pane             string `json:"pane_id"`
+	Terminal         string `json:"terminal_id"`
+	Workspace        string `json:"workspace_id"`
+	Cwd              string `json:"cwd"`
+	ForegroundCwd    string `json:"foreground_cwd"`
+	Status           string `json:"agent_status"`
+	InteractiveReady bool   `json:"interactive_ready"`
+	LaunchPending    bool   `json:"launch_pending"`
+}
+
+type openHerdrError struct {
+	Code  string
+	Cause error
+}
+
+func (e *openHerdrError) Error() string { return e.Cause.Error() }
+func (e *openHerdrError) Unwrap() error { return e.Cause }
+
 type openHerdrResponse struct {
+	Error struct {
+		Code string `json:"code"`
+	} `json:"error"`
 	Result struct {
+		Agent       openAgentInfo       `json:"agent"`
 		Workspaces  []openWorkspaceInfo `json:"workspaces"`
 		Panes       []openPaneInfo      `json:"panes"`
 		Tabs        []openTabInfo       `json:"tabs"`
@@ -81,7 +106,16 @@ func openHerdr(session string, args ...string) (openHerdrResponse, error) {
 	command := exec.CommandContext(ctx, "herdr", append([]string{"--session", session}, args...)...)
 	out, err := command.CombinedOutput()
 	if err != nil {
-		return result, fmt.Errorf("herdr %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		// Server error codes are structured protocol data, never inferred from
+		// arbitrary terminal text or a diagnostic mentioning a known code.
+		start := strings.IndexByte(string(out), '{')
+		if start >= 0 {
+			var parsed openHerdrResponse
+			if json.Unmarshal(out[start:], &parsed) == nil {
+				result = parsed
+			}
+		}
+		return result, &openHerdrError{Code: result.Error.Code, Cause: fmt.Errorf("herdr %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))}
 	}
 	start := strings.IndexByte(string(out), '{')
 	if start < 0 {
