@@ -119,37 +119,35 @@ func TestAddRepoMissingRetainedCheckoutRefusesBeforeWrites(t *testing.T) {
 		{"worker-target", map[string]bool{"api": true}, false, "probe"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// These labels are controls only: the planner must not read guessed records.
-			for _, context := range []string{"unknown", "expired", "mismatched"} {
-				t.Run(context, func(t *testing.T) {
-					state := evictionGateway(t)
-					target := "327-probe"
-					if tc.worker != "" {
-						target += "--" + tc.worker
-					}
-					retainedFixture(t, state, target, tc.missing)
-					before := evictionSnapshot(t, state)
-					out, err := evictionPlan(t, "327-probe", "origin/main", tc.separate, tc.worker)
-					if err == nil || !strings.Contains(err.Error(), "missing checkout") || !strings.Contains(err.Error(), "unknown") {
-						t.Errorf("want missing checkout with unknown ownership/recovery: output=%s error=%v", out, err)
-					}
-					if out != "" {
-						t.Errorf("partial plan printed: %s", out)
-					}
-					if after := evictionSnapshot(t, state); !reflect.DeepEqual(before, after) {
-						t.Error("refusal changed files, links, git refs, index or config")
-					} else {
-						t.Log("refusal snapshot unchanged: files, links, refs, index and config; no plan output")
-					}
-				})
+			state := evictionGateway(t)
+			target := "327-probe"
+			if tc.worker != "" {
+				target += "--" + tc.worker
+			}
+			retainedFixture(t, state, target, tc.missing)
+			before := evictionSnapshot(t, state)
+			out, err := evictionPlan(t, "327-probe", "origin/main", tc.separate, tc.worker)
+			if err == nil || !strings.Contains(err.Error(), "missing checkout") || !strings.Contains(err.Error(), "unknown") {
+				t.Errorf("want missing checkout with unknown ownership/recovery: output=%s error=%v", out, err)
+			}
+			if out != "" {
+				t.Errorf("partial plan printed: %s", out)
+			}
+			if !reflect.DeepEqual(before, evictionSnapshot(t, state)) {
+				t.Error("refusal changed files, links, git refs, index or config")
+			} else {
+				t.Log("refusal snapshot unchanged: files, links, refs, index and config; no plan output")
 			}
 		})
 	}
 }
 
 func TestAddRepoRetainedObservationErrorsRefuseBeforeWrites(t *testing.T) {
-	for _, kind := range []string{"ambiguous", "legacy-ambiguous", "escaping-link", "escaping-ancestor", "link-loop", "not-directory", "unsafe-folder", "unreadable-collection"} {
+	for _, kind := range []string{"ambiguous", "legacy-ambiguous", "escaping-link", "escaping-ancestor", "link-loop", "not-directory", "unsafe-folder", "dangling-folder", "unreadable-collection"} {
 		t.Run(kind, func(t *testing.T) {
+			if kind == "unreadable-collection" && os.Geteuid() == 0 {
+				t.Skip("root can read chmod-zero directories")
+			}
 			state := evictionGateway(t)
 			folder := retainedFixture(t, state, "327-probe", nil)
 			switch kind {
@@ -185,6 +183,13 @@ func TestAddRepoRetainedObservationErrorsRefuseBeforeWrites(t *testing.T) {
 				file := filepath.Join(state, "file")
 				os.WriteFile(file, []byte("fixture"), 0600)
 				if err := os.Symlink(file, filepath.Join(folder, "api")); err != nil {
+					t.Fatal(err)
+				}
+			case "dangling-folder":
+				if err := os.Rename(folder, folder+"-saved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(state, "missing-collection"), folder); err != nil {
 					t.Fatal(err)
 				}
 			case "unsafe-folder":
@@ -243,5 +248,36 @@ func TestAddRepoHealthyAndFreshPlansRemainAvailable(t *testing.T) {
 				t.Fatalf("control changed: %s %v", out, err)
 			}
 		})
+	}
+}
+
+func TestAddRepoWorkerTaskAmbiguityRefusesBeforeWrites(t *testing.T) {
+	state := evictionGateway(t)
+	retainedFixture(t, state, "327-probe", nil)
+	if err := os.MkdirAll(filepath.Join(state, "wtc", "other", "327-probe"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	before := evictionSnapshot(t, state)
+	out, err := evictionPlan(t, "327-probe", "origin/main", false, "probe")
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") || out != "" {
+		t.Fatalf("worker task ambiguity: %s %v", out, err)
+	}
+	if !reflect.DeepEqual(before, evictionSnapshot(t, state)) {
+		t.Error("worker refusal changed state")
+	}
+}
+
+func TestAddRepoSandboxDoesNotInferFromLocalRetainedLinks(t *testing.T) {
+	state := evictionGateway(t)
+	retainedFixture(t, state, "327-probe", map[string]bool{"api": true, "platform-harness": true})
+	sandboxMetadataServer(t, 200, strings.ReplaceAll(sandboxMetadata, "42-fix", "327-probe"))
+	t.Setenv("OPENCLAW_STATE_DIR", state)
+	before := evictionSnapshot(t, state)
+	out, err := evictionPlan(t, "327-probe", "", false, "")
+	if err != nil || !strings.Contains(out, `"projectId": "api-id"`) {
+		t.Fatalf("sandbox metadata control changed: %s %v", out, err)
+	}
+	if !reflect.DeepEqual(before, evictionSnapshot(t, state)) {
+		t.Error("sandbox plan changed local gateway evidence")
 	}
 }

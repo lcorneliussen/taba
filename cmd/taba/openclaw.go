@@ -386,6 +386,11 @@ func plannerCollectionFolder(stateDir, name string) (string, error) {
 		}
 		info, err := os.Stat(candidate)
 		if os.IsNotExist(err) {
+			if _, linkErr := os.Lstat(candidate); linkErr == nil {
+				return "", errors.New("cannot inspect gateway collection: retained folder link is unavailable; ownership and recovery availability are unknown")
+			} else if !os.IsNotExist(linkErr) {
+				return "", fmt.Errorf("cannot inspect gateway collection: %w", linkErr)
+			}
 			continue
 		}
 		if err != nil {
