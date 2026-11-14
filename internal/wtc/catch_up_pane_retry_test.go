@@ -82,6 +82,16 @@ esac
 			if len(report.Outcomes) != 1 || report.Outcomes[0].Outcome != tc.outcome {
 				t.Fatalf("outcome: %+v, want %s", report.Outcomes, tc.outcome)
 			}
+			switch tc.mode {
+			case "interrupt-always", "interrupt-unrelated", "restart-always", "restart-shell":
+				reason := report.Outcomes[0].Reason
+				if !strings.Contains(reason, "inspect pane before retrying reload") {
+					t.Errorf("missing recovery hint: %s", reason)
+				}
+				if strings.HasPrefix(tc.mode, "interrupt-") && !strings.Contains(reason, "no command sent") {
+					t.Errorf("missing command-delivery state: %s", reason)
+				}
+			}
 			count := func(name string) int {
 				data, _ := os.ReadFile(filepath.Join(state, name))
 				return strings.Count(string(data), "\n")
