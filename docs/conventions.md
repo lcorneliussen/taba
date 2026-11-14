@@ -14,7 +14,7 @@ taba doctor --all      # every collection in the workspace; also from the worksp
 taba conventions       # this list, from the installed release
 ```
 
-`doctor` prints each convention it finds once, with its migration step, followed by the places it was found. *migrate* means you can move it now. *waiting* means taba has no new name for it yet, or taba moves it itself. During 0.2.x, findings never fail `doctor`. `--json` returns the same findings.
+`doctor` prints each convention it finds once, with its migration step, followed by the places it was found. It checks the harness, the collection, your user directories, and the docs, scripts, configuration and CI tracked in each repository; source code, changelogs and release notes are left out. For old names in files it gives the line numbers. *migrate* means you can move it now. *waiting* means taba has no new name for it yet, or taba moves it itself. *review* marks a file that only mentions wtc in prose: usually that becomes taba too, but a sentence that explains the rename can stay. During 0.2.x, findings never fail `doctor`. `--json` returns the same findings.
 
 ## Migrate
 
@@ -52,7 +52,7 @@ The tables below are generated from the CLI (`taba conventions`). The "In 0.2.x"
 | `skills/wtc-<name>`, `overlays/skills/wtc-<name>` | `taba-<name>` | Both names; the old one wins if both exist | you | yes | Rename each folder to `taba-<name>` and update its `name:`; section patches and their base digest move with the folder. Until then the old-name override still wins and `taba-<name>` points to it. |
 | `hooks/wtc/` | `hooks/taba/` (planned) | Old name only | you | yes | No new name yet (#375). Keep `hooks/wtc/`. |
 | `overlays/browse/wtc-browse.lua` | `taba-browse.lua` (planned) | Old name only | you | yes | No new name yet (#375). Keep the old file name. |
-| `WTC_*` variables, `wtc …` commands and `wtc-*` skill names in harness files | `TABA_*`, `taba …` and `taba-*` | Variables: both, the new one wins. Commands: both ship. Skill names: the old ones are shims | you | yes | Replace `WTC_X` with `TABA_X`, `wtc` with `taba`, and old skill names such as `/wtc-start` with `/taba-start` in hooks, scripts, skills and instructions. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`). |
+| `WTC_*` variables, `wtc …` commands and `wtc-*` skill names in harness files | `TABA_*`, `taba …` and `taba-*` | Variables: both, the new one wins. Commands: both ship. Skill names: the old ones are shims | you | yes | Replace `WTC_X` with `TABA_X`, `wtc` with `taba`, and old skill names such as `/wtc-start` with `/taba-start` in hooks, scripts, skills and instructions, at the lines listed. Other mentions of wtc, such as "a wtc collection" or a link to `wtc-cli`, usually become taba too; a file with only those is marked *review*, and a sentence that explains the rename can stay. Generated environments set both prefixes and ship both commands during 0.2.x. A few variables have no `TABA_` form yet: `WTC_GATEWAY_GIT`, `WTC_RETIRE_*`, `WTC_REVIEW_STATS_FILE`, `WTC_AGENT_ENV` and `WTC_DEV_*` (except `WTC_DEV_BUILD`). |
 
 ### Collection
 
@@ -76,6 +76,7 @@ The tables below are generated from the CLI (`taba conventions`). The "In 0.2.x"
 
 | Old | New | In 0.2.x | Written by | `doctor` | Migrate |
 |---|---|---|---|---|---|
+| `WTC_*` variables, `wtc …` commands, `wtc-*` skill names and other mentions of wtc in a repository's docs, scripts, configuration and CI | `TABA_*`, `taba …`, `taba-*` and taba | Variables: both, the new one wins. Commands: both ship. Skill names: the old ones are shims | you | yes | Replace them at the lines listed and merge the change through the repository's normal review. Source code is not checked, nor are changelogs and release notes. A file with only other mentions of wtc is marked *review*; a sentence that explains the rename can stay. |
 | `x-wtc` in `.harness/dekit.tasks.yaml` | `x-taba` (planned) | Old name only | you | yes | No new name yet (#375). Keep `x-wtc`. |
 
 ### Command

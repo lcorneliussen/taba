@@ -14,10 +14,10 @@ import (
 // conventionsCheck summarises findings as one doctor check. It never fails
 // doctor: during 0.2.x old names are supported.
 func conventionsCheck(findings []wtc.ConventionFinding) map[string]any {
-	actionable := actionableFindings(findings)
+	actionable, review := actionableFindings(findings), reviewFindings(findings)
 	detail := "no wtc conventions found"
 	if len(findings) > 0 {
-		detail = fmt.Sprintf("%d wtc convention(s) to migrate, %d waiting for taba", actionable, len(findings)-actionable)
+		detail = fmt.Sprintf("%d wtc convention(s) to migrate, %d waiting for taba, %d to review", actionable, len(findings)-actionable-review, review)
 	}
 	return map[string]any{"name": "conventions", "ok": actionable == 0, "detail": detail, "findings": findings}
 }
@@ -36,6 +36,9 @@ func printConventionFindings(w io.Writer, findings []wtc.ConventionFinding, inde
 		line := f.Path
 		if f.Detail != "" {
 			line += " (" + f.Detail + ")"
+		}
+		if f.Review {
+			line = "review: " + line
 		}
 		fmt.Fprintf(w, "%s         %s\n", indent, line)
 	}
@@ -203,7 +206,17 @@ func conventionsCommand(asJSON *bool) *cobra.Command {
 func actionableFindings(findings []wtc.ConventionFinding) int {
 	n := 0
 	for _, f := range findings {
-		if !f.Blocked {
+		if !f.Blocked && !f.Review {
+			n++
+		}
+	}
+	return n
+}
+
+func reviewFindings(findings []wtc.ConventionFinding) int {
+	n := 0
+	for _, f := range findings {
+		if f.Review {
 			n++
 		}
 	}
