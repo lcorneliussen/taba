@@ -114,6 +114,9 @@ type StatusFollow struct {
 }
 
 type StatusPRRow struct {
+	// NotEnlisted marks transient branch discoveries, never durable follow-up ownership.
+	NotEnlisted   bool   `json:"not_enlisted,omitempty"`
+	EnlistCommand string `json:"enlist_command,omitempty"`
 	// StateSource, Freshness and ObservedAt describe only PR state, independently
 	// of snapshot age. They do not date checks, reviews or mergeability.
 	StateSource     string         `json:"observation_source,omitempty"`

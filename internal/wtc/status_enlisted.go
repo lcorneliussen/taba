@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
 )
 
@@ -442,6 +443,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 		c.statusReturnMerged(&snapshot, originalRecords, details)
 	}
 	repos := c.prRepositories()
+	inventoried := map[string]bool{}
 	for i, record := range records {
 		localSlug, localForge := repos.forge(record.Repo)
 		slug, forge, refErr := c.statusReadOnlyPRForge(repos, record)
@@ -507,6 +509,9 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 			row.DisplayTitle = "MERGED — " + row.LandingLabel() + "; still on " + record.Branch + "  " + detail.Title
 		}
 		snapshot.PRs = append(snapshot.PRs, row)
+		if refErr == nil {
+			inventoried[prForgeIdentity("https://"+forge+"/"+slug)+"#"+record.Number] = true
+		}
 	}
 	for i, row := range snapshot.Repos {
 		if row.BranchKind != "branch" || row.PR != nil || enlistedBranches[row.Dir+"\x00"+row.Branch] {
@@ -526,6 +531,22 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 				URL: prURLForStatus(forge, slug, number), Merge: detail.Merge, Review: detail.Review, Draft: detail.State == "DRAFT",
 				Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
 				MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
+			identity := prForgeIdentity("https://"+forge+"/"+slug) + "#" + number
+			if !inventoried[identity] {
+				command := branding.Text("{{command}} pr enlist ") + shellQuote(row.Repo) + " " + number + " --branch " + shellQuote(row.Branch)
+				snapshot.PRs = append(snapshot.PRs, StatusPRRow{
+					Repo: row.Repo, Number: detail.Number, State: detail.State,
+					NotEnlisted: true, EnlistCommand: command,
+					Title: detail.Title, DisplayTitle: "not enlisted — " + command + "  " + detail.Title,
+					Slug: slug, URL: statusString(prURLForStatus(forge, slug, number)),
+					Checks: statusString(detail.Checks), Merge: statusString(detail.Merge), Review: statusString(detail.Review),
+					Draft: detail.State == "DRAFT", HeadCommit: detail.HeadCommit, Base: detail.Base,
+					Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
+					MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase,
+					worktreeDir: row.Dir,
+				})
+				inventoried[identity] = true
+			}
 		}
 	}
 	if includeBuild {

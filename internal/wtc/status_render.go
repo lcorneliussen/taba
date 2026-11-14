@@ -235,6 +235,9 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 		}
 		for _, row := range active {
 			bits := []string{fmt.Sprintf("**%s**", row.Repo), "#" + row.Number}
+			if row.NotEnlisted {
+				bits = append(bits, "_not enlisted_", runtimeTextSafe(row.EnlistCommand))
+			}
 			if label := statusFreshnessLabel(row.Freshness, row.ObservedAt); label != "" {
 				bits = append(bits, label)
 			}

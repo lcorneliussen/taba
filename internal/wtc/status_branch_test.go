@@ -328,8 +328,8 @@ esac
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.PRs) != 0 {
-		t.Fatalf("unenlisted PR entered the enlisted section: %+v", snapshot.PRs)
+	if len(snapshot.PRs) != 1 || !snapshot.PRs[0].NotEnlisted {
+		t.Fatalf("unenlisted PR missing discovery provenance: %+v", snapshot.PRs)
 	}
 	for _, row := range snapshot.Repos {
 		if row.Dir == "harness" {
