@@ -1,1 +1,4 @@
-Status-pane reload now retries transient foreground lookup failures within the existing bounded observation windows after interruption and command delivery. It still requires a verified shell before sending the command and an observed status process before reporting a restart. Exhausted observations report uncertainty and suggest inspecting the pane before retrying.
+## Status
+
+- **Retry status reload on transient foreground lookup errors.** Reload keeps its bounded waits and requires a verified shell before sending a command and an observed status process before reporting success. Exhausted waits suggest inspecting the pane before retrying.
+  ([#380](https://github.com/lcorneliussen/taba/issues/380), [#398](https://github.com/lcorneliussen/taba/pull/398)).
