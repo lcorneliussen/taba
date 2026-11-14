@@ -181,7 +181,7 @@ func TestStatusDiscoveryDoesNotInventOpenOrPersistentMerge(t *testing.T) {
 			c.Registry.Repos[0].Remote = "https://github.com/example/agent-harness.git"
 			fixtureGit(t, "-C", c.Harness, "switch", "-qc", "topic")
 			bin := t.TempDir()
-			// Discovery supplies the branch identity, while detail is absent or terminal.
+			// Terminal list items identify the branch; failed or empty lookups identify none.
 			payload := `[{"number":7,"headRefName":"topic","state":"` + state + `"}]`
 			if state == "empty" {
 				payload = `[]`
