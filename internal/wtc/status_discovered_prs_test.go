@@ -213,3 +213,129 @@ func TestStatusDiscoveryDoesNotInventOpenOrPersistentMerge(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusDiscoveredPRDedupDoesNotCollapseEmptyAliasIdentities(t *testing.T) {
+	for _, mode := range []string{"unresolved enlistment", "distinct dot repositories", "enlisted dot repository", "case normalized dot alias"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("TMPDIR", t.TempDir())
+			c := newWorkspaceFixture(t)
+			fixtureGit(t, "--git-dir="+filepath.Join(c.Workspace, ".bare", "widget.git"), "worktree", "add", "-q", "--detach", filepath.Join(c.Collection, "widget"), "origin/main")
+			for i, dir := range []string{c.Harness, filepath.Join(c.Collection, "widget")} {
+				remote := "https://github.com/example/.github.git"
+				if i == 1 {
+					remote = "https://github.com/another/.github.git"
+				}
+				c.Registry.Repos[i].Remote = remote
+				fixtureGit(t, "-C", dir, "remote", "set-url", "origin", remote)
+				fixtureGit(t, "-C", dir, "switch", "-qc", "topic")
+			}
+			var record PRRecord
+			switch mode {
+			case "unresolved enlistment":
+				record = PRRecord{Repo: "missing", Number: "7"}
+			case "enlisted dot repository":
+				record = PRRecord{Repo: "agent-harness", Number: "7"}
+			case "case normalized dot alias":
+				record = PRRecord{Repo: "reference", Number: "7", URL: "https://github.com/EXAMPLE/.GITHUB/pull/7"}
+			}
+			if record.Repo != "" {
+				if _, err := c.EnlistPR(record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			repos := c.prRepositories()
+			for _, name := range []string{"agent-harness", "widget"} {
+				slug, forge := repos.forge(name)
+				if forge != "github.com" || !strings.HasSuffix(slug, "/.github") {
+					t.Fatalf("fixture did not retain forge lookup identity: %s %s", forge, slug)
+				}
+				if prForgeIdentity("https://"+forge+"/"+slug) != "" {
+					t.Fatal("fixture must exercise an identity rejected only by the local-alias helper")
+				}
+			}
+			bin := t.TempDir()
+			fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
+[ "$2" = list ] || exit 3
+printf '[{"number":7,"state":"OPEN","headRefName":"topic","title":"Synthetic dot repository"}]\n'
+`, 0755)
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			before, _ := os.ReadFile(c.PRFile())
+			refs := []string{fixtureGit(t, "-C", c.Harness, "show-ref"), fixtureGit(t, "-C", filepath.Join(c.Collection, "widget"), "show-ref")}
+			snapshot, err := c.StatusForgePreview()
+			if err != nil {
+				t.Fatal(err)
+			}
+			inline := 0
+			for _, row := range snapshot.Repos {
+				if row.PR != nil && row.PR.Number == "7" {
+					inline++
+				}
+			}
+			if inline != 2 {
+				t.Fatalf("fixture lost inline branch facts: %+v", snapshot.Repos)
+			}
+			want := 2
+			if mode == "unresolved enlistment" {
+				want = 3
+			}
+			if len(snapshot.PRs) != want {
+				t.Fatalf("distinct forge identities collapsed: got %d rows want %d: %+v", len(snapshot.PRs), want, snapshot.PRs)
+			}
+			urls := map[string]bool{}
+			for _, row := range snapshot.PRs {
+				if row.URL == nil {
+					if row.Repo != "missing" || row.State != "UNKNOWN" || row.NotEnlisted {
+						t.Fatalf("unresolved record gained facts: %+v", row)
+					}
+					continue
+				}
+				url := strings.ToLower(*row.URL)
+				if urls[url] {
+					t.Fatalf("duplicate verified forge identity: %s", url)
+				}
+				urls[url] = true
+			}
+			for _, url := range []string{"https://github.com/example/.github/pull/7", "https://github.com/another/.github/pull/7"} {
+				if !urls[url] {
+					t.Fatalf("missing discovered identity %s", url)
+				}
+			}
+			after, _ := os.ReadFile(c.PRFile())
+			if string(before) != string(after) {
+				t.Fatal("dedup changed enlistment")
+			}
+			if refs[0] != fixtureGit(t, "-C", c.Harness, "show-ref") || refs[1] != fixtureGit(t, "-C", filepath.Join(c.Collection, "widget"), "show-ref") {
+				t.Fatal("dedup changed refs")
+			}
+		})
+	}
+}
+
+func TestStatusPRInventoryKeyUsesForgePathIdentity(t *testing.T) {
+	for _, tc := range []struct{ forge, slug, number, want string }{
+		{"github.com", "Example/.GITHUB", "7", "github.com/example/.github#7"},
+		{"bitbucket.org", "Example/.config", "7", "bitbucket.org/Example/.config#7"},
+		{"github.com", "example/widget", "8", "github.com/example/widget#8"},
+		{"", "", "7", ""},
+		{"github.com", "", "7", ""},
+		{"github.com.evil.invalid", "example/widget", "7", ""},
+		{"github.com", "example/../widget", "7", ""},
+		{"github.com", "example/..", "7", ""},
+		{"github.com", "example/.", "7", ""},
+		{"github.com", "example/%2Egithub", "7", ""},
+		{"github.com", "example/widget#7", "7", ""},
+		{"github.com", "example/widget?x", "7", ""},
+		{"github.com", "user@example/widget", "7", ""},
+		{"github.com", "example/widget", "", ""},
+		{"github.com", "example/widget", "0", ""},
+		{"github.com", "example/widget", "07", ""},
+		{"github.com", "example/widget", "-7", ""},
+	} {
+		t.Run(tc.forge+"/"+tc.slug+"/"+tc.number, func(t *testing.T) {
+			key, valid := statusPRInventoryKey(tc.forge, tc.slug, tc.number)
+			if key != tc.want || valid != (tc.want != "") {
+				t.Fatalf("inventory key=%q valid=%v want %q", key, valid, tc.want)
+			}
+		})
+	}
+}

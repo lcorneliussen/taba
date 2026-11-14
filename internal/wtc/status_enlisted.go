@@ -67,6 +67,22 @@ func prURLForStatus(forge, slug, number string) string {
 	return prURL("https://"+forge+"/"+slug, number)
 }
 
+// Inventory equality validates forge paths independently of local aliases.
+// An unresolved identity cannot suppress any other inventory row.
+func statusPRInventoryKey(forge, slug, number string) (string, bool) {
+	if forge != "github.com" && forge != "bitbucket.org" {
+		return "", false
+	}
+	parts := strings.Split(slug, "/")
+	if len(parts) != 2 || !statusPRForgePart(parts[0]) || !statusPRForgePart(parts[1]) || !prNumber.MatchString(number) || strings.HasPrefix(number, "0") {
+		return "", false
+	}
+	if forge == "github.com" {
+		slug = strings.ToLower(slug)
+	}
+	return forge + "/" + slug + "#" + number, true
+}
+
 func (c *Context) statusRecordForge(record PRRecord, _ []StatusRepo) (slug, forge string) {
 	return c.prRepositories(record.Repo).forge(record.Repo)
 }
@@ -509,8 +525,8 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 			row.DisplayTitle = "MERGED — " + row.LandingLabel() + "; still on " + record.Branch + "  " + detail.Title
 		}
 		snapshot.PRs = append(snapshot.PRs, row)
-		if refErr == nil {
-			inventoried[prForgeIdentity("https://"+forge+"/"+slug)+"#"+record.Number] = true
+		if identity, valid := statusPRInventoryKey(forge, slug, record.Number); refErr == nil && valid {
+			inventoried[identity] = true
 		}
 	}
 	for i, row := range snapshot.Repos {
@@ -531,8 +547,8 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 				URL: prURLForStatus(forge, slug, number), Merge: detail.Merge, Review: detail.Review, Draft: detail.State == "DRAFT",
 				Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
 				MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
-			identity := prForgeIdentity("https://"+forge+"/"+slug) + "#" + number
-			if !inventoried[identity] {
+			identity, valid := statusPRInventoryKey(forge, slug, number)
+			if !valid || !inventoried[identity] {
 				command := branding.Text("{{command}} pr enlist ") + shellQuote(row.Repo) + " " + number + " --branch " + shellQuote(row.Branch)
 				snapshot.PRs = append(snapshot.PRs, StatusPRRow{
 					Repo: row.Repo, Number: detail.Number, State: detail.State,
@@ -545,7 +561,9 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 					MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase,
 					worktreeDir: row.Dir,
 				})
-				inventoried[identity] = true
+				if valid {
+					inventoried[identity] = true
+				}
 			}
 		}
 	}
