@@ -546,7 +546,12 @@ func (c *Context) signalServicesChanged() {
 	if c.runtimePathsSafe() != nil {
 		return
 	}
-	if _, err := os.Lstat(c.runtimeRoot()); err != nil {
+	// A journal alone does not establish a configured runtime for immediate
+	// refresh hints. Policy-only or corrupt state is read on the next poll.
+	if manifest, err := c.runtimeManifest(); err != nil || manifest == nil {
+		return
+	}
+	if _, err := c.readTunnelJournal(); err != nil {
 		return
 	}
 	path := c.statusSignalPath()

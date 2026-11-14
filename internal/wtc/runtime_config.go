@@ -572,6 +572,9 @@ func (c *Context) renderRuntime() (*runtimeManifest, error) {
 		// The tunnel intent journal is committed before the forward fence.
 		// It is managed state even when first render was interrupted. Never
 		// accept or remove unrelated files merely because this path exists.
+		if err := runtimeRegular(c.tunnelJournalPath()); err != nil {
+			return nil, err
+		}
 		if _, err := c.readTunnelJournal(); err != nil {
 			return nil, err
 		}
@@ -579,7 +582,14 @@ func (c *Context) renderRuntime() (*runtimeManifest, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(entries) != 1 || entries[0].Name() != "tunnels.json" {
+		owned := len(entries) == 1 && entries[0].Name() == "tunnels.json"
+		// A policy-only action may have left an empty advisory notification.
+		// Recover it only beside the validated receiving-owned journal above.
+		if len(entries) == 2 && entries[0].Name() == "services-changed" && entries[1].Name() == "tunnels.json" {
+			info, err := os.Lstat(c.statusSignalPath())
+			owned = err == nil && info.Mode().IsRegular() && info.Size() == 0
+		}
+		if !owned {
 			return nil, fmt.Errorf("unmanaged runtime directory already exists")
 		}
 	} else if !os.IsNotExist(err) {

@@ -131,6 +131,17 @@ func acceptanceAction(t *testing.T, c *Context, action string) {
 }
 
 func TestTunnelAcceptanceNewReceiverNamedPolicyServiceLifecycle(t *testing.T) {
+	for _, recovery := range []bool{false, true} {
+		name := "fresh"
+		if recovery {
+			name = "released-marker"
+		}
+		t.Run(name, func(t *testing.T) { acceptanceNewReceiverLifecycle(t, recovery) })
+	}
+}
+
+func acceptanceNewReceiverLifecycle(t *testing.T, recovery bool) {
+	t.Helper()
 	for _, name := range []string{"WTC_CONFIG_ROOT", "TABA_CONFIG_ROOT", "WTC_PROJECT_ROOT", "TABA_PROJECT_ROOT"} {
 		t.Setenv(name, "")
 	}
@@ -181,14 +192,27 @@ func TestTunnelAcceptanceNewReceiverNamedPolicyServiceLifecycle(t *testing.T) {
 	if _, calls := daemon.snapshot(); calls != 0 {
 		t.Fatal("creation contacted daemon")
 	}
+	if _, err = c.Tunnel(TunnelOptions{Service: "web", Name: "disabled", Action: "disable"}); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := c.runtimeManifest(); err != nil || m != nil {
+		t.Fatal("policy-only disable rendered runtime", err)
+	}
+	if _, err := os.Stat(filepath.Join(c.runtimeRoot(), "calls")); !os.IsNotExist(err) {
+		t.Fatal("policy-only disable invoked runner", err)
+	}
+	if _, calls := daemon.snapshot(); calls != 0 {
+		t.Fatal("policy-only disable contacted provider")
+	}
+	if recovery {
+		// Reproduce the empty advisory marker written by 0.2.5 before any manifest.
+		fixtureFile(t, c.statusSignalPath(), "", 0600)
+	}
 	if _, err := c.Tunnel(TunnelOptions{Service: "web", Name: "public-approval", Action: "register"}); err == nil || !strings.Contains(err.Error(), "explicit approval") {
 		t.Fatal("project default granted implicit public/account authority", err)
 	}
 	if _, calls := daemon.snapshot(); calls != 0 {
 		t.Fatal("public approval refusal reached daemon")
-	}
-	if _, err := c.RenderRuntime(false); err != nil {
-		t.Fatal("prepare runtime", err)
 	}
 	// Borrowed-domain registration performs no remote allocation or hosting.
 	if _, err = c.Tunnel(TunnelOptions{Service: "web", Name: "public-approval", Action: "register", Public: true}); err != nil {
@@ -207,9 +231,6 @@ func TestTunnelAcceptanceNewReceiverNamedPolicyServiceLifecycle(t *testing.T) {
 	}
 	if _, err = c.Tunnel(TunnelOptions{Service: "web", Name: "public-approval", Action: "register", Public: true, ExpectedDefinition: approved.Definition}); err == nil || !strings.Contains(err.Error(), "definition changed") {
 		t.Fatal("stale observed public definition accepted", err)
-	}
-	if _, err = c.Tunnel(TunnelOptions{Service: "web", Name: "disabled", Action: "disable"}); err != nil {
-		t.Fatal(err)
 	}
 	for _, name := range []string{"preview", "selected", "stopped"} {
 		if _, err = c.Tunnel(TunnelOptions{Service: "web", Name: name, Action: "register", Public: true}); err != nil {
