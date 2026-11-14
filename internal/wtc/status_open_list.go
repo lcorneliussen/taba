@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -349,30 +350,59 @@ func statusParseBBBranchList(raw []byte, branch string) (string, error) {
 	return "", nil
 }
 
+// The caller pays for the initial/page request. Redirects are additional forge
+// reads and must compete with ordinary reads for unreserved allowance.
 func statusBBGET(endpoint, user, pass string) ([]byte, error) {
-	request, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.SetBasicAuth(user, pass)
-	request.Header.Set("Accept", "application/json")
-	response, err := (&http.Client{Timeout: 15 * time.Second}).Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body := strings.TrimSpace(string(raw))
-		if len(body) > 200 {
-			body = body[:200]
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	origin := endpoint
+	for dispatched := 0; ; dispatched++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil || request.URL.User != nil || (request.URL.Scheme != "http" && request.URL.Scheme != "https") {
+			return nil, fmt.Errorf("invalid Bitbucket API request")
 		}
-		return nil, fmt.Errorf("Bitbucket pull request list API returned %s: %s", response.Status, body)
+		request.SetBasicAuth(user, pass)
+		request.Header.Set("Accept", "application/json")
+		response, err := client.Do(request)
+		if err != nil {
+			// net/http errors can include a credential-bearing URL or Location. Never
+			// expose those values through status diagnostics.
+			return nil, fmt.Errorf("Bitbucket API request failed")
+		}
+		switch response.StatusCode {
+		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			location, err := response.Location()
+			response.Body.Close()
+			if err != nil || location.User != nil || !statusSameOrigin(origin, location.String()) {
+				return nil, fmt.Errorf("unsafe Bitbucket API redirect")
+			}
+			if dispatched >= 9 {
+				return nil, fmt.Errorf("Bitbucket API redirect limit reached")
+			}
+			if statusForgeCooling("bitbucket.org") {
+				return nil, errForgeCooling
+			}
+			if !statusTakeForgeToken("bitbucket.org") {
+				return nil, errForgeBudget
+			}
+			endpoint = location.String()
+			continue
+		}
+		raw, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
+		response.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("Bitbucket API response read failed")
+		}
+		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			body := strings.TrimSpace(string(raw))
+			if len(body) > 200 {
+				body = body[:200]
+			}
+			return nil, fmt.Errorf("Bitbucket pull request list API returned %s: %s", response.Status, body)
+		}
+		return raw, nil
 	}
-	return raw, nil
 }
 
 func statusSameOrigin(left, right string) bool {
