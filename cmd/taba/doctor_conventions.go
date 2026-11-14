@@ -51,11 +51,13 @@ func printConventionSection(w io.Writer, findings []wtc.ConventionFinding) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "wtc conventions still in use (all of them: taba conventions):")
 	printConventionFindings(w, findings, "  ")
-	fmt.Fprintln(w, migrateHint)
+	if actionableFindings(findings) > 0 {
+		fmt.Fprintln(w, migrateHint)
+	}
 }
 
 // migrateHint tells the reader that an agent can do the migration from the
-// steps above.
+// migration steps doctor prints.
 const migrateHint = "\nTo migrate, ask an agent: \"Run taba doctor --all and finish the migration to taba.\""
 
 type doctorAllCollection struct {

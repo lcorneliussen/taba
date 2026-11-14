@@ -76,12 +76,18 @@ func TestConventionFindingsInAnUnmigratedProject(t *testing.T) {
 	writeConventionFixture(t, filepath.Join(widget, "main.go"), "// wtc status\n")
 	writeConventionFixture(t, filepath.Join(widget, "CHANGELOG.md"), "- wtc status\n")
 	writeConventionFixture(t, filepath.Join(widget, "scripts", "dev"), "#!/bin/sh\necho $WTC_COLLECTION\n")
+	writeConventionFixture(t, filepath.Join(widget, "docs", "removed.md"), "wtc status\n")
 	for _, args := range [][]string{{"init", "-q"}, {"add", "README.md", "docs", "main.go", "CHANGELOG.md", "scripts", ".harness"}} {
 		if out, err := exec.Command("git", append([]string{"-C", widget}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v", out, err)
 		}
 	}
 	writeConventionFixture(t, filepath.Join(widget, "NOTES.md"), "wtc status\n")
+	// Deleted but not staged: still listed by git, gone from the worktree.
+	// The rest of the repository is still checked.
+	if err := os.Remove(filepath.Join(widget, "docs", "removed.md")); err != nil {
+		t.Fatal(err)
+	}
 
 	got, err := c.ConventionFindings()
 	if err != nil {
@@ -99,7 +105,8 @@ func TestConventionFindingsInAnUnmigratedProject(t *testing.T) {
 				review bool
 			}{
 				"harness/hooks/wtc/env.post.sh": {"1 WTC_ variable(s), 1 wtc command(s), 1 old skill name(s), 2 other mention(s) of wtc; lines 1, 2, 3", false},
-				// The mise key names the old repository: prose only.
+				// The mise key names the old repository: a mention, not a name to
+				// migrate here (mise-tool-key covers it).
 				"harness/wtc.toml":          {"1 other mention(s) of wtc; line 2", true},
 				"demo/widget/README.md":     {"1 wtc command(s); line 5", false},
 				"demo/widget/docs/intro.md": {"1 other mention(s) of wtc; line 1", true},
@@ -171,5 +178,18 @@ func writeConventionFixture(t *testing.T, path, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReferenceDetailCapsLineNumbers(t *testing.T) {
+	r := references{cmds: 12}
+	for i := 1; i <= 12; i++ {
+		r.lines = append(r.lines, i)
+	}
+	if got, want := r.detail(), "12 wtc command(s); lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, +2 more"; got != want {
+		t.Fatalf("detail = %q, want %q", got, want)
+	}
+	if got, want := (references{mentions: 1, lines: []int{4}}).detail(), "1 other mention(s) of wtc; line 4"; got != want {
+		t.Fatalf("detail = %q, want %q", got, want)
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -125,5 +126,29 @@ func TestDoctorAllReportsConventionsFromTheWorkspaceRoot(t *testing.T) {
 	sort.Strings(missing)
 	if len(missing) > 0 {
 		t.Fatalf("wtc.ConventionCommands misses %v", missing)
+	}
+}
+
+// Findings that are only waiting or only to review leave the check ok and
+// do not ask anyone to migrate.
+func TestConventionsCheckWithoutActionableFindings(t *testing.T) {
+	findings := []wtc.ConventionFinding{
+		{ID: "generated-state", Path: "c", Blocked: true},
+		{ID: "repo-references", Path: "c/r/README.md", Detail: "1 other mention(s) of wtc; line 1", Review: true},
+	}
+	check := conventionsCheck(findings)
+	if check["ok"] != true || check["detail"] != "0 wtc convention(s) to migrate, 1 waiting for taba, 1 to review" {
+		t.Fatalf("check = %v", check)
+	}
+	var out bytes.Buffer
+	printConventionSection(&out, findings)
+	if strings.Contains(out.String(), "finish the migration") || !strings.Contains(out.String(), "review: c/r/README.md") {
+		t.Fatalf("section:\n%s", out.String())
+	}
+	findings = append(findings, wtc.ConventionFinding{ID: "scope-file", Path: "c/WTC-SCOPE.md"})
+	out.Reset()
+	printConventionSection(&out, findings)
+	if !strings.Contains(out.String(), "finish the migration") {
+		t.Fatalf("section without hint:\n%s", out.String())
 	}
 }

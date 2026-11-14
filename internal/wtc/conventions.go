@@ -104,7 +104,8 @@ type ConventionFinding struct {
 	Migrate string `json:"migrate"`
 	// Blocked findings have no supported new name yet, or are taba's to move.
 	Blocked bool `json:"blocked,omitempty"`
-	// Review findings only mention wtc in prose; they may stay.
+	// Review findings mention wtc without a variable, command or skill name:
+	// prose, links or a repository name. They may stay.
 	Review bool `json:"review,omitempty"`
 }
 
@@ -148,7 +149,11 @@ func (c *Context) ConventionFindings() ([]ConventionFinding, error) {
 		out = append(out, found...)
 	}
 	if c.Collection != "" {
-		out = append(out, collectionConventionFindings(c)...)
+		found, err := collectionConventionFindings(c)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, found...)
 	}
 	return out, nil
 }
@@ -274,6 +279,17 @@ func scanReferences(harness string, rel func(string) string) ([]ConventionFindin
 func referenceFindings(id string, files []string, rel func(string) string) ([]ConventionFinding, error) {
 	var out []ConventionFinding
 	for _, path := range files {
+		// A tracked file can be missing from the worktree (deleted but not
+		// staged, sparse checkout) or not be a regular file (symlink,
+		// submodule). Neither has text to migrate.
+		if info, err := os.Lstat(path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		} else if !info.Mode().IsRegular() {
+			continue
+		}
 		r, err := countAllReferences(path)
 		if err != nil {
 			return nil, err
@@ -391,7 +407,7 @@ func countAllReferences(path string) (references, error) {
 
 var generatedStateNames = []string{".wtc", ".wtc-prs", ".wtc-status.json", ".wtc-status.md", ".last-wtc-status.yml", ".wtc-catch-up.json", ".wtc-catch-up.md", ".wtc-reviews", ".wtc-review-posted", ".wtc-status-watchers", ".wtc-review-mode", ".wtc-dev-mode.json"}
 
-func collectionConventionFindings(c *Context) []ConventionFinding {
+func collectionConventionFindings(c *Context) ([]ConventionFinding, error) {
 	var out []ConventionFinding
 	root := c.Collection
 	base := filepath.Base(root)
@@ -414,11 +430,12 @@ func collectionConventionFindings(c *Context) []ConventionFinding {
 		out = append(out, conventionFinding("generated-state", base, strings.Join(state, ", ")))
 	}
 	for _, repo := range c.Registry.Repos {
-		// The harness has its own, wider check.
-		if dir := filepath.Join(root, repo.Name); dir == filepath.Clean(c.Harness) {
-			continue
-		}
-		if found, err := repoReferenceFindings(root, repo.Name); err == nil {
+		// The harness's files are reported by harness-references instead.
+		if dir := filepath.Join(root, repo.Name); dir != filepath.Clean(c.Harness) {
+			found, err := repoReferenceFindings(root, repo.Name)
+			if err != nil {
+				return nil, fmt.Errorf("check %s for wtc names: %w", repo.Name, err)
+			}
 			out = append(out, found...)
 		}
 		p := filepath.Join(root, repo.Name, ".harness", "dekit.tasks.yaml")
@@ -426,7 +443,7 @@ func collectionConventionFindings(c *Context) []ConventionFinding {
 			out = append(out, conventionFinding("task-metadata", base+"/"+repo.Name+"/.harness/dekit.tasks.yaml", ""))
 		}
 	}
-	return out
+	return out, nil
 }
 
 func countFileReferences(path string) int {
@@ -437,8 +454,9 @@ func countFileReferences(path string) int {
 	return r.vars
 }
 
-// historyFile reports files that describe the past rather than instruct:
-// changelogs, history and release notes keep the names they shipped with.
+// historyFile reports files that describe the past rather than instruct, or
+// are not the project's own: changelogs, history and release notes keep the
+// names they shipped with, and testdata, vendor and node_modules are skipped.
 func historyFile(rel string) bool {
 	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
 		if part == "release-notes" || part == "testdata" || part == "vendor" || part == "node_modules" {
