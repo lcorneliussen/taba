@@ -995,7 +995,8 @@ const actionFeedback = () => el("style", { textContent: `
   .wtc-collection-card>summary { column-gap:4px !important; }
   .wtc-collection-card, .wtc-collection, .wtc-transient-actions { --wtc-control-height:32px; --wtc-control-width:24px; --wtc-icon-size:36px; --wtc-state-size:24px; }
   .wtc-header-controls { --wtc-control-height:36px; --wtc-control-width:36px; }
-  .wtc-header-feedback { display:none; }
+  .wtc-collection-card>summary { flex-wrap:wrap;height:auto !important; }
+  .wtc-header-feedback { order:3;flex-basis:100% !important;min-height:32px; }
   .wtc-header-controls { gap:0 !important; }
   .wtc-next-step .wtc-action-control, .wtc-bulk-actions .wtc-action-control { min-height:32px !important; }
   .wtc-repo-identity { min-height:20px !important; }
@@ -1705,6 +1706,7 @@ function collectionTables(v) {
       {id:"catch-up",label: `Catch up (${catches.length})`, detail: catches.length ? `Catch up: ${catches.map(nameOf).join(", ")}. Preserve local edits; conflicts go to the conversation.` : "No eligible checkout needs catching up", previewTargets:catches, preview:on=>preview(catches,on), disabled: !catches.length || batchIsRunning() || catches.some(reserved) || recoveryQueueBusy(), run: () => catches.every(r => r.next && ["catch-up", "return-to-tip"].includes(r.next.step)) ? startTargets(catches.map(repo => ({repo,step:repo.next}))) : catchUp([...catches])},
       {id:"restore",label: `Restore (${recoverable.length})`, detail: recoverable.length ? "Recover saved checkouts; gateway admin required" : "No recoverable checkout is currently evicted", disabled: !recoverable.length || batchIsRunning() || recoveryQueueBusy(), run: () => restoreCheckouts(recoverable)},
       {id:"push",label: `Prepare pushes (${pushes.length})`, detail: pushes.length ? "Review each push before confirming" : "No unpublished commits ready to push", disabled: !pushes.length || batchIsRunning() || pushes.some(reserved) || recoveryQueueBusy(), run: () => pushAll([...pushes])},
+      {label: "Activity", detail: "Open full action details in the sidebar", run: openActivity},
       {label: "Refresh status", detail: "Recheck the collection without running an action", run: () => v.refresh()},
       {label: "Choose steps…", detail: "Select different steps per repository", disabled: !rows.length || batchIsRunning() || recoveryQueueBusy(), run: () => {choosing=true;v.reveal?.();v.showActions?.();v.rerender();}},
     ];
@@ -2615,10 +2617,44 @@ function mountComposer(container, context) {
     "box-sizing:border-box;width:calc(100% - var(--chat-composer-side-inset,36px));max-width:var(--chat-thread-max-width,48rem);margin:4px auto 0;padding:10px 12px;display:grid;gap:6px;max-height:min(40dvh,360px);overflow:auto;background:var(--card,#fff);color:var(--text,inherit);border:1px solid var(--border,rgba(0,0,0,.08));border-bottom:0;border-radius:14px 14px 0 0;font:inherit;font-size:14px");
   const summary = css(el("summary"), "list-style:none;display:flex;align-items:baseline;height:calc(var(--wtc-icon-size,24px) + 8px + var(--wtc-header-top-extra,6px));box-sizing:border-box;gap:6px;padding:calc(3px + var(--wtc-header-top-extra,6px)) 12px 3px;cursor:pointer;white-space:nowrap;overflow:hidden");
   const detail = css(el("div"), "padding:2px 12px 8px;display:grid;gap:6px");
+  const headerBrand = el("span");
+  const headerFacts = el("span");
+  const headerControls = el("span");
+  const diagnostic = css(el("button", { type:"button", className:"wtc-header-feedback wtc-action-control" }), "border:0;background:transparent;padding:0;text-align:left;font:inherit;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;flex:1");
+  const diagnosticAnnouncement = css(el("span", { ariaLive:"polite", ariaAtomic:"true" }), "position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap");
+  const copyStatus = css(el("div", { role:"status", ariaLive:"polite" }), "font-size:12px;padding:0 12px;overflow-wrap:anywhere");
+  const manualCopy = css(el("textarea", { readOnly:true, ariaLabel:"Full diagnostic for manual copy" }), "box-sizing:border-box;width:100%;min-height:100px;white-space:pre-wrap");
+  const copyFallback = css(el("div", {}, manualCopy), "padding:4px 12px");
+  summary.append(headerBrand, headerFacts, headerControls);
+  const copyRegion = css(el("section", { ariaLabel:"Diagnostic copy" }, copyStatus, copyFallback), "box-sizing:border-box;width:calc(100% - var(--chat-composer-side-inset,36px));max-width:var(--chat-thread-max-width,48rem);margin:4px auto;font:inherit;color:var(--text,inherit)");
+  copyRegion.hidden = true;
   card.append(summary, detail, actionFeedback());
+  let diagnosticText = "", diagnosticFailed, copyGeneration = 0, copyTimer;
+  copyFallback.hidden = true;
+  const resetCopy = () => {
+    copyGeneration++; clearTimeout(copyTimer); copyStatus.textContent = ""; diagnosticAnnouncement.textContent = ""; copyRegion.hidden = true;
+    copyFallback.hidden = true; manualCopy.value = "";
+  };
+  diagnostic.onclick = async e => {
+    e.preventDefault(); e.stopPropagation();
+    const text = diagnosticText, conversation = key, generation = ++copyGeneration;
+    clearTimeout(copyTimer);
+    const current = () => !disposed && ctx.presented && !ctx.signal?.aborted && key === conversation && generation === copyGeneration;
+    try {
+      if (!globalThis.navigator?.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await globalThis.navigator.clipboard.writeText(text);
+      if (!current()) return;
+      copyFallback.hidden = true; copyRegion.hidden = false; copyStatus.textContent = "Copied";
+      copyTimer = setTimeout(() => { if (current()) { copyStatus.textContent = ""; copyRegion.hidden = true; } }, 3000);
+    } catch {
+      if (!current()) return;
+      copyStatus.textContent = "Could not copy. Select the full diagnostic below and copy it manually.";
+      manualCopy.value = text; copyFallback.hidden = false; copyRegion.hidden = false;
+    }
+  };
   card.addEventListener("toggle", () => remember(card.open));
   const composer = el("div");
-  container.append(composer);
+  container.append(diagnosticAnnouncement, copyRegion, composer);
   const unmountDefault = ctx.mountDefault(composer);
 
   const iconButton = (text, title, run) => {
@@ -2786,13 +2822,13 @@ function mountComposer(container, context) {
     renderedStamp = collectionStamp(next, key);
     const repos = entry?.data?.repos ?? [];
     if (!ctx.presented || ctx.signal.aborted) {
-      card.remove(); extra.remove();
+      resetCopy(); card.remove(); extra.remove();
       return;
     }
     // Only a collection that loaded and has nothing yet: a failed load is
     // no reason to start another one.
     if (repos.length === 0 && !entry?.data?.subSessions?.length) {
-      extra.remove();
+      resetCopy(); extra.remove();
       if (entry?.data) void suggestFor(key);
       if (entry?.data && suggestion?.key === key && suggestion.result && !dismissed.has(key)) renderSuggestion(suggestion.result);
       else card.remove();
@@ -2809,15 +2845,31 @@ function mountComposer(container, context) {
     const publicationCount = [...(activityStore.get(entry.data.collection?.sessionKey ?? key)?.values() ?? [])].filter(item => item.action === "push" && item.inFlight).length;
     const publicationContext = publicationCount > 1 ? `${publicationCount} repos` : latestActivity?.repo;
     const headerLabel = !headerFailed && latestFeedback?.text === headerNote && latestActivity?.action === "push" && latestActivity.inFlight ? publicationContext : entry.error ? "Refresh failed" : feedbackLabel(headerNote, headerFailed);
-    const feedback = headerNote ? css(el("button", { type: "button", className: "wtc-header-feedback wtc-action-control", role: headerFailed ? "alert" : "status", ariaLive: "polite", textContent: `${headerFailed ? "⚠ " : ""}${headerLabel}`, title: headerNote + " — Open full details", ariaLabel: headerNote + ". Open full details in the sidebar" }), `border:0;background:transparent;padding:0;text-align:left;font:inherit;font-size:12px;color:${headerFailed ? TONE.failure : "var(--muted,#888)"};min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;flex:1`) : null;
-    if (feedback) feedback.onclick = (e) => { e.preventDefault(); e.stopPropagation(); ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx), focus: "activity" }); };
-    summary.replaceChildren(
-      css(el("span", {}, brand("12px", entry.data.version, repoNarrow)), "flex:none;display:inline-flex;align-items:baseline"),
-      feedback ?? facts,
-      css(el("span", { className: "wtc-header-controls" }, tables.actionToolbar(repos, true, { failed: headerFailed, text: headerNote }),
-        iconButton("↻", refreshTitle(entry), () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
-        iconButton("⤢", "Open the taba Collection panel", () => ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) })),
-        css(el("span", { ariaHidden: "true" }, controlIcon(card.open ? "⌃" : "⌄")), "display:inline-flex;align-items:center;justify-content:center;color:var(--muted,#888);padding:0 2px")), "margin-left:auto;flex:none;display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap"));
+    if (diagnosticText !== headerNote || diagnosticFailed !== headerFailed) {
+      resetCopy(); diagnosticText = headerNote; diagnosticFailed = headerFailed;
+      diagnosticAnnouncement.role = headerFailed ? "alert" : "status";
+      diagnosticAnnouncement.textContent = headerNote;
+      diagnostic.title = headerNote + " — Copy full diagnostic";
+      diagnostic.ariaLabel = headerNote + ". Copy full diagnostic";
+      diagnostic.style.color = headerFailed ? TONE.failure : "var(--muted,#888)";
+    }
+    const label = `${headerFailed ? "⚠ " : ""}${headerLabel}`;
+    if (diagnostic.textContent !== label) diagnostic.textContent = label;
+    headerBrand.replaceChildren(css(el("span", {}, brand("12px", entry.data.version, repoNarrow)), "flex:none;display:inline-flex;align-items:baseline"));
+    if (headerNote) {
+      headerFacts.remove();
+      if (diagnostic.parentNode !== summary) summary.insertBefore(diagnostic, headerControls);
+    } else {
+      diagnostic.remove(); headerFacts.replaceChildren(facts);
+      if (headerFacts.parentNode !== summary) summary.insertBefore(headerFacts, headerControls);
+    }
+    headerFacts.style.cssText = "flex:1;min-width:0;overflow:hidden";
+    headerControls.className = "wtc-header-controls";
+    headerControls.style.cssText = "margin-left:auto;flex:none;display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap";
+    headerControls.replaceChildren(...[tables.actionToolbar(repos, true, { failed: headerFailed, text: headerNote }),
+      iconButton("↻", refreshTitle(entry), () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
+      iconButton("⤢", "Open the taba Collection panel", () => ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) })),
+      css(el("span", { ariaHidden:"true" }, controlIcon(card.open ? "⌃" : "⌄")), "display:inline-flex;align-items:center;justify-content:center;color:var(--muted,#888);padding:0 2px")].filter(Boolean));
     tables.checkAccount(repos);
     detail.replaceChildren(...[tables.repoTable(repos, repoNarrow, entry.data.subSessions),
       groups.length ? css(el("section", { className: "wtc-base-services", ariaLabel: "Collection services" }, css(el("div", {}, css(el("h3", { textContent: "Services" }), "margin:0;font-size:12px;line-height:16px;font-weight:600;color:var(--text-strong,inherit)"), tables.serviceControls(groups)), "display:flex;align-items:baseline;gap:10px;margin-bottom:4px"), tables.serviceTable(groups, entry.data, narrow)), "min-width:0;border-top:1px solid var(--border,rgba(128,128,128,.2));margin-top:4px;padding-top:8px") : null].filter(Boolean));
@@ -2839,6 +2891,7 @@ function mountComposer(container, context) {
   function follow(next) {
     const sessionKey = keyOf(next);
     if (sessionKey === key) return;
+    resetCopy(); diagnosticText = "";
     serviceLogIntents.delete(entry?.data?.collection?.sessionKey ?? key);
     tables.clearServiceLogs();
     watch?.dispose();
@@ -2855,7 +2908,7 @@ function mountComposer(container, context) {
   function show(next) {
     const changed = renderedStamp !== collectionStamp(next, key);
     entry = next;
-    if (!ctx.presented || ctx.signal.aborted) { card.remove(); extra.remove(); return; }
+    if (!ctx.presented || ctx.signal.aborted) { resetCopy(); card.remove(); extra.remove(); return; }
     if (changed) render(next);
     else {
       syncTimeLabels(card, next, { composer: true }); syncTimeLabels(extra, next);
@@ -2875,13 +2928,14 @@ function mountComposer(container, context) {
     },
     dispose() {
       disposed = true;
+      resetCopy();
       tables.dispose();
       clearInterval(tick);
       clearTimeout(draftTimer);
       clearTimeout(noteTimer);
       sized?.disconnect();
       watch?.dispose();
-      card.remove(); extra.remove();
+      card.remove(); extra.remove(); copyRegion.remove(); diagnosticAnnouncement.remove();
       unmountDefault?.();
     },
   };

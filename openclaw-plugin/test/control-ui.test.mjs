@@ -194,7 +194,8 @@ async function reviewAction(host) {
   if (action) return action;
   const trigger = [...host.all()].find(n => n.className?.includes("wtc-header-feedback"));
   assert.ok(trigger, "publication outcome opens its sidebar details");
-  trigger.onclick({ preventDefault() {}, stopPropagation() {} });
+  titled(host, "More collection actions").click();
+  [...host.all()].find(n => n.ariaLabel === "Activity" && n.role === "menuitem").click();
   const [, props] = openedPanels.at(-1);
   assert.equal(props.focus, "activity");
   const ctx = contexts.get(host);
@@ -1438,9 +1439,9 @@ test("composer: a catch-up that fails reads as a failure, without wtc's prefix",
   await [...card.all()].find((n) => n.tagName === "BUTTON" && /^3 new on main\. Catch up/.test(n.title)).onclick();
   catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
   const note = [...card.all()].find(n => n.className?.includes("wtc-header-feedback"));
-  assert.equal(note.role, "alert");
+  assert.equal(note.tagName, "BUTTON");
   assert.match(note.ariaLabel, /api: cannot fetch main from origin: exit status 128/);
-  assert.match(note.style.cssText, /color:var\(--danger/);
+  assert.match(note.style.color, /var\(--danger/);
   assert.match([...host.all()].find(n => n.className?.startsWith("wtc-toolbar-primary")).textContent, /Failed/, "failure remains visible in the fixed primary slot at narrow widths");
   view.dispose();
 });
@@ -3647,4 +3648,99 @@ test("offered provider setup and named/declared controls reach the scoped gatewa
   const forged=await actions.get("svc").handler({sessionKey,agentId:"main",payload:{op:"tunnel",group:"api/web",provider:"ngrok",name:"preview",action:"start",public:true,project:true,expectedDefinition:desired}});
   assert.equal(forged.ok,false);assert.equal(commands.length,count);
  }finally{svcResult=previous;rmSync(state,{recursive:true,force:true})}
+});
+
+const diagnosticControl = host => [...host.all()].find(n => n.className?.split(" ").includes("wtc-header-feedback"));
+const diagnosticError = "Synthetic transport failure: <img src=x onerror=alert(1)>\n" + "complete diagnostic detail ".repeat(200) + "END";
+async function failedDiagnostic() {
+  const mounted = await mount("composer", collection([repo("api")]));
+  controlledCollection = () => ({ ok: false, error: diagnosticError });
+  await titled(mounted.host, "Updated just now. Refresh").onclick({ preventDefault() {}, stopPropagation() {} });
+  await settle();
+  return mounted;
+}
+
+test("diagnostic click copies the full synthetic error without opening Activity", async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const copied = [];
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async text => copied.push(text) } } });
+  const { host, view } = await failedDiagnostic();
+  try {
+    const opened = openedPanels.length;
+    await diagnosticControl(host).onclick({ preventDefault() {}, stopPropagation() {} });
+    assert.deepEqual(copied, ["Refresh failed: " + diagnosticError]);
+    assert.equal(openedPanels.length, opened);
+    assert.match(host.textContent, /Copied/);
+  } finally {
+    controlledCollection = undefined; view.dispose();
+    if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator;
+  }
+});
+
+test("diagnostic keeps its connected focused node through a delayed repeated failure", async () => {
+  const { host, view } = await failedDiagnostic();
+  let release;
+  try {
+    const note = diagnosticControl(host); note.focus();
+    controlledCollection = () => new Promise(resolve => { release = resolve; });
+    const refresh = [...host.all()].find(n => n.className === "wtc-refresh-control");
+    const pending = refresh.onclick({ preventDefault() {}, stopPropagation() {} });
+    await settle();
+    assert.equal(diagnosticControl(host), note);
+    release({ ok: false, error: diagnosticError }); await pending; await settle();
+    assert.equal(diagnosticControl(host), note);
+    assert.equal(note.isConnected, true);
+    assert.equal(document.activeElement, note);
+  } finally { release?.({ ok: false, error: diagnosticError }); controlledCollection = undefined; view.dispose(); }
+});
+
+
+for (const clipboard of [undefined, { writeText: async () => { throw new Error("denied"); } }]) test(`diagnostic ${clipboard ? "denied" : "unavailable"} clipboard exposes full manual-copy text`, async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable:true, value:{ clipboard } });
+  const { host, view } = await failedDiagnostic();
+  try {
+    const note = diagnosticControl(host); note.focus();
+    await note.onclick({ preventDefault() {}, stopPropagation() {} });
+    const manual = [...host.all()].find(n => n.tagName === "TEXTAREA");
+    assert.equal(manual.value, "Refresh failed: " + diagnosticError);
+    assert.equal(manual.readOnly, true); assert.equal(manual.parentNode.hidden, false);
+    assert.match(host.textContent, /Could not copy/); assert.doesNotMatch(host.textContent, /Copied/);
+    assert.equal(document.activeElement, note);
+    view.update(contexts.get(host));
+    assert.equal(manual.value, "Refresh failed: " + diagnosticError);
+  } finally {
+    controlledCollection = undefined; view.dispose();
+    if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator;
+  }
+});
+
+for (const change of ["message", "session", "dispose"]) for (const denied of [false, true]) test(`diagnostic ignores late ${denied ? "failure" : "success"} after ${change}`, async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let resolve, reject;
+  Object.defineProperty(globalThis, "navigator", { configurable:true, value:{ clipboard:{ writeText: () => new Promise((yes, no) => { resolve = yes; reject = no; }) } } });
+  const { host, view, context } = await failedDiagnostic();
+  try {
+    const note = diagnosticControl(host); note.focus();
+    const pending = note.onclick({ preventDefault() {}, stopPropagation() {} });
+    if (change === "message") {
+      controlledCollection = () => ({ ok:false, error:"Different synthetic failure" });
+      await [...host.all()].find(n => n.className === "wtc-refresh-control").onclick({ preventDefault() {}, stopPropagation() {} });
+      assert.equal(diagnosticControl(host), note);
+      assert.match(note.title, /Different synthetic failure/);
+      assert.equal(document.activeElement, note);
+    } else if (change === "session") {
+      controlledCollection = undefined;
+      const nextKey = `agent:main:diagnostic:${++sessions}`;
+      collections.set(nextKey, collection([repo("web")]));
+      view.update({ ...context, props:{ ...context.props, sessionKey:nextKey } }); await settle();
+    } else view.dispose();
+    denied ? reject(new Error("denied")) : resolve(); await pending;
+    assert.doesNotMatch(host.textContent, /Copied|Could not copy/);
+    const manual = [...host.all()].find(n => n.tagName === "TEXTAREA");
+    if (manual) assert.equal(manual.parentNode.hidden, true);
+  } finally {
+    controlledCollection = undefined; view.dispose();
+    if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator;
+  }
 });
