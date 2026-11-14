@@ -27,6 +27,14 @@ separate conversation per repository is only for when the person asks for one
 (`--separate`, or a spawn of your own with `visible: true`). Parallel work is
 a collection of its own (below).
 
+If `wtc add-repo` refuses because an existing collection retains a repository
+link to a missing checkout, do not rerun it as a repair or choose another name
+to bypass the refusal. Inspect the existing collection's native controls or
+ask an authorized gateway operator. A missing checkout does not establish its
+owner or whether recovery is available. This check covers retained local links;
+it does not detect every existing owner or prevent duplicate plans when the
+checkout is healthy. A sandbox may not have this local evidence.
+
 ## Parallel work: a collection of its own
 
 A collection has one focus: per repository one branch, and one pull request.

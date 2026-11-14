@@ -213,9 +213,30 @@ func addRepoIntents(repos []string, worktree, baseRef, harnessFlag string, separ
 			return err
 		}
 	}
+	// Resolve local collection ambiguity before harnessRepos reads a binding.
+	// Sandbox metadata has its own authenticated visibility and permissions.
+	localFolder := ""
+	if !sandbox {
+		var err error
+		if localFolder, err = plannerCollectionFolder(gatewayStateDir(), target); err != nil {
+			return err
+		}
+		if task != target {
+			if _, err := plannerCollectionFolder(gatewayStateDir(), task); err != nil {
+				return err
+			}
+		}
+	}
 	adds, harness, err := harnessRepos(repos, task, baseFlag, harnessFlag, adHoc, worker != "")
 	if err != nil {
 		return err
+	}
+	// Check all retained repository links, including the harness, before a
+	// selected repository can record a base or produce even a partial plan.
+	if localFolder != "" {
+		if err := checkRetainedPlannerLinks(gatewayStateDir(), localFolder); err != nil {
+			return err
+		}
 	}
 	var intents []openclaw.Intent
 	var projects []string
@@ -339,6 +360,130 @@ func addRepoIntents(repos []string, worktree, baseRef, harnessFlag string, separ
 		plan.Warnings = append(plan.Warnings, "Each of "+strings.Join(projects, ", ")+" must be a project on the gateway under that name. For a GitHub repository that is not, pass owner/name instead: the gateway clones it.")
 	}
 	return printPlan(plan)
+}
+
+// plannerCollectionFolder refuses ambiguous local evidence instead of choosing
+// the first folder. It does not establish native ownership or recovery state.
+func plannerCollectionFolder(stateDir, name string) (string, error) {
+	candidates := []string{filepath.Join(stateDir, "wtc-collections", name)}
+	if err := plannerObservationWithin(stateDir, filepath.Join(stateDir, "wtc")); err != nil {
+		return "", err
+	}
+	projects, err := os.ReadDir(filepath.Join(stateDir, "wtc"))
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("cannot inspect gateway collection: %w", err)
+	}
+	for _, project := range projects {
+		if !project.IsDir() && project.Type()&os.ModeSymlink == 0 {
+			continue
+		}
+		candidates = append(candidates, filepath.Join(stateDir, "wtc", project.Name(), name))
+	}
+	var found string
+	for _, candidate := range candidates {
+		if err := plannerObservationWithin(stateDir, candidate); err != nil {
+			return "", err
+		}
+		info, err := os.Stat(candidate)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("cannot inspect gateway collection: %w", err)
+		}
+		if !info.IsDir() {
+			return "", errors.New("cannot inspect gateway collection: expected a directory")
+		}
+		if found != "" {
+			return "", errors.New("gateway collection is ambiguous: several local folders have this name; inspect the existing collection before adding repositories")
+		}
+		found = candidate
+	}
+	return found, nil
+}
+
+// Resolve existing ancestors as well as dangling targets: a missing leaf must
+// not hide a symlink that escapes the state directory, or an observation error.
+func plannerObservationWithin(stateDir, path string) error {
+	var resolve func(string) (string, error)
+	resolve = func(p string) (string, error) {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return "", err
+		}
+		real, err := filepath.EvalSymlinks(abs)
+		if !os.IsNotExist(err) {
+			return real, err
+		}
+		if info, statErr := os.Lstat(abs); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			target, readErr := os.Readlink(abs)
+			if readErr != nil {
+				return "", readErr
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(abs), target)
+			}
+			return resolve(target)
+		} else if statErr != nil && !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		parent, err := resolve(filepath.Dir(abs))
+		return filepath.Join(parent, filepath.Base(abs)), err
+	}
+	root, err := resolve(stateDir)
+	if err != nil {
+		return fmt.Errorf("cannot inspect gateway state directory: %w", err)
+	}
+	resolved, err := resolve(path)
+	if err != nil {
+		return fmt.Errorf("cannot inspect retained checkout location: %w", err)
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return errors.New("cannot inspect retained checkout: link or collection folder escapes the gateway state directory; ownership and recovery availability are unknown")
+	}
+	return nil
+}
+
+func checkRetainedPlannerLinks(stateDir, folder string) error {
+	c, err := wtc.OpenCollection(folder)
+	if err != nil {
+		return fmt.Errorf("cannot inspect retained collection links: %w", err)
+	}
+	for _, repo := range c.Registry.Repos {
+		link := filepath.Join(folder, repo.Name)
+		info, err := os.Lstat(link)
+		if os.IsNotExist(err) {
+			continue // No retained link: this check makes no ownership claim.
+		}
+		if err != nil {
+			return fmt.Errorf("cannot inspect retained repository link: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		target, err := os.Readlink(link)
+		if err != nil {
+			return fmt.Errorf("cannot inspect retained repository link: %w", err)
+		}
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(folder, target)
+		}
+		if err := plannerObservationWithin(stateDir, target); err != nil {
+			return err
+		}
+		checkout, err := os.Stat(link)
+		if os.IsNotExist(err) {
+			return fmt.Errorf("repository %s has a retained link to a missing checkout; ownership and recovery availability are unknown. Do not rerun add-repo as a repair: inspect the existing collection's native controls or ask an authorized gateway operator", repo.Name)
+		}
+		if err != nil {
+			return fmt.Errorf("cannot inspect retained checkout: %w", err)
+		}
+		if !checkout.IsDir() {
+			return errors.New("cannot inspect retained checkout: repository link does not point to a directory; ownership and recovery availability are unknown")
+		}
+	}
+	return nil
 }
 
 // workerTask is what a worker's session is told: the part of the task it
