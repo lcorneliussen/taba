@@ -64,11 +64,13 @@ const pathAvailability = (program) => {
   let state = dirs.length ? "missing" : "unknown";
   for (const dir of dirs) {
     const candidate = path.join(dir, program);
+    let regular = false;
     try {
       if (!statSync(candidate).isFile()) {
         if (state !== "unknown") state = "unusable";
         continue;
       }
+      regular = true;
       accessSync(candidate, constants.X_OK);
       return { state: "available", scope: "gateway-path" };
     } catch (err) {
@@ -77,13 +79,13 @@ const pathAvailability = (program) => {
         // A dangling symlink exists but cannot be executed.
         try { next = lstatSync(candidate).isSymbolicLink() ? "unusable" : "unknown"; }
         catch (lookup) { next = ["ENOENT", "ENOTDIR"].includes(lookup.code) ? "missing" : "unknown"; }
-      } else next = err.code === "EACCES" || err.code === "EPERM" ? "unusable" : "unknown";
+      } else next = regular && ["EACCES", "EPERM"].includes(err.code) ? "unusable" : "unknown";
       if (next === "unknown" || next === "unusable" && state !== "unknown") state = next;
     }
   }
   return { state, scope: "gateway-path" };
 };
-const onPath = (program) => pathAvailability(program).state === "available";
+const onPath = (program) => String(process.env.PATH ?? "").split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, program)));
 
 const warnedEnvConflicts = new Set();
 
@@ -690,9 +692,12 @@ export default {
         repos: [],
         warnings: [],
       };
-      // Preserve the badge list while exposing the limited lookup evidence.
+      // Every provider gets gateway lookup evidence; only available clients
+      // appear in the badge list.
       result.tunnelProviderAvailability = Object.fromEntries(Object.entries(TUNNEL_PROGRAMS).map(([provider, program]) => [provider, pathAvailability(program)]));
       result.tunnelProviders = Object.keys(TUNNEL_PROGRAMS).filter((p) => result.tunnelProviderAvailability[p].state === "available");
+      // Whether the gateway's tailnet is the team's, so that a Tailscale
+      // tunnel is worth offering.
       result.teamTailnet = api.pluginConfig?.teamTailnet === true;
       // Whether a portal gets an address beyond the gateway's own: a
       // wildcard domain or Tailscale run by the gateway.
@@ -879,7 +884,7 @@ export default {
       if (group && (!(op === "logs" ? /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/ : /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/).test(group) || group.length > 512 || group.split("/").some(part => part === "." || part === ".."))) return { ok: false, error: "name a service as <repo>/<service>" };
       if (op === "logs" && !group) return { ok: false, error: "name the service whose logs to read" };
       if (op === "tunnel" && !group) return { ok: false, error: "name the service to tunnel to" };
-      if (op === "tunnel" && !TUNNEL_PROGRAMS[provider]) return { ok: false, error: `the provider is one of ${Object.keys(TUNNEL_PROGRAMS).join(", ")}` };
+      if (op === "tunnel" && !Object.hasOwn(TUNNEL_PROGRAMS, provider)) return { ok: false, error: `the provider is one of ${Object.keys(TUNNEL_PROGRAMS).join(", ")}` };
       if (!action.sessionKey || !action.agentId) return { ok: false, error: "sessionKey and agentId are required" };
       const { children } = await collectionOf(action.agentId, action.sessionKey);
       const name = op === "logs" ? collectionIdentity(children).task : children.map((c) => String(c.entry.worktree?.branch ?? "").replace(/^openclaw\//, "")).find(Boolean);

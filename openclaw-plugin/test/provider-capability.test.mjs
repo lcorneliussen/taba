@@ -47,6 +47,10 @@ test("gateway provider lookup rejects unusable candidates and rechecks setup", a
   };
   try {
     process.env.PATH = bin;
+    for (const provider of ["constructor", "toString", "__proto__"]) {
+      const invalid = await actions.get("svc").handler({ agentId: "main", sessionKey: "task", payload: { op: "tunnel", group: "widget/main", provider, add: true } });
+      assert.equal(invalid.ok, false, "only declared providers may reach lookup");
+    }
     // Fail-before: mere filesystem existence must not advertise a provider.
     writeFileSync(candidate, "synthetic fixture\n", { mode: 0o600 });
     assert.equal((await read()).tunnelProviders.includes("cloudflare"), false);
@@ -60,7 +64,17 @@ test("gateway provider lookup rejects unusable candidates and rechecks setup", a
     symlinkSync(candidate, candidate); await expect("unknown");
     writeFileSync(path.join(local, "cloudflared"), "fixture\n", { mode: 0o700 });
     process.env.PATH = bin + path.delimiter + local; await expect("available");
+    const unusableBin = path.join(root, "unusable-bin"); mkdirSync(unusableBin);
+    writeFileSync(path.join(unusableBin, "cloudflared"), "fixture\n", { mode: 0o600 });
+    process.env.PATH = bin + path.delimiter + unusableBin; await expect("unknown");
+    process.env.PATH = unusableBin + path.delimiter + bin; await expect("unknown");
     process.env.PATH = bin; rmSync(candidate);
+    if (process.getuid?.() !== 0) {
+      const blocked = path.join(root, "blocked"); mkdirSync(blocked, { mode: 0o700 });
+      chmodSync(blocked, 0);
+      try { process.env.PATH = blocked; await expect("unknown"); }
+      finally { chmodSync(blocked, 0o700); process.env.PATH = bin; }
+    }
     // A later eligible candidate wins over an unusable or failed earlier lookup.
     writeFileSync(path.join(local, "cloudflared"), "fixture\n", { mode: 0o700 });
     writeFileSync(candidate, "fixture\n", { mode: 0o600 });

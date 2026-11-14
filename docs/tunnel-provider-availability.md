@@ -7,8 +7,10 @@ PATH. It also includes `tunnelProviderAvailability`, keyed by provider, with
 
 - `available`: a regular file passes execute-access checking, following symlinks.
 - `missing`: no candidate was found in the searched nonempty PATH entries.
-- `unusable`: a candidate is a directory, a dangling symlink, or inaccessible for execution.
-- `unknown`: PATH is unavailable/empty or lookup encountered another filesystem error.
+- `unusable`: a candidate is a directory, a dangling symlink, or a confirmed regular file without execute access.
+- `unknown`: PATH is unavailable/empty or lookup encountered a filesystem error before
+  establishing a candidate (including permission-denied traversal), or another
+  unexpected error.
 
 A usable later PATH candidate wins. Otherwise unknown errors take precedence
 over unusable candidates, which take precedence over missing candidates.
