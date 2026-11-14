@@ -1,0 +1,1 @@
+Status-pane reload now retries transient foreground lookup failures within the existing bounded observation windows after interruption and command delivery. It still requires a verified shell before sending the command and an observed status process before reporting a restart. Exhausted observations report uncertainty and suggest inspecting the pane before retrying.

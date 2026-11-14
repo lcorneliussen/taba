@@ -338,18 +338,20 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 	idle := false
 	for attempt := 0; attempt < 5; attempt++ {
 		argv, err = catchUpForeground(session, pane)
-		if err != nil {
-			add("failed", "foreground lookup failed after interrupting "+pane)
-			return
-		}
-		if catchUpShell(argv) {
+		// A foreground group can disappear while the interrupted process exits.
+		// An unknown observation consumes the same budget as a busy process.
+		if err == nil && catchUpShell(argv) {
 			idle = true
 			break
 		}
 		time.Sleep(time.Second)
 	}
 	if !idle {
-		add("needs-owner", "pane "+pane+" did not become a verified shell")
+		if err != nil {
+			add("failed", "foreground unknown in "+pane+"; no command sent; inspect pane before retrying reload")
+			return
+		}
+		add("needs-owner", "pane "+pane+" did not become a verified shell; no command sent; inspect pane before retrying reload")
 		return
 	}
 	checkPane, agent, err := catchUpPane(target, session, t.collection)
@@ -372,15 +374,12 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 	}
 	for attempt := 0; attempt < 5; attempt++ {
 		argv, err = catchUpForeground(session, pane)
-		if err != nil {
-			add("failed", "foreground lookup failed after restarting "+pane)
-			return
-		}
-		if catchUpStatusProcess(argv) {
+		// Command delivery is not proof that the status process has started.
+		if err == nil && catchUpStatusProcess(argv) {
 			add("restarted", "observed status process in "+pane+"; ongoing health not monitored")
 			return
 		}
 		time.Sleep(time.Second)
 	}
-	add("failed", "command delivered to "+pane+" but status restart not observed")
+	add("failed", "command delivered to "+pane+" but status restart not observed; inspect pane before retrying reload")
 }
