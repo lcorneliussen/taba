@@ -14,8 +14,8 @@ import (
 	"testing"
 )
 
-// Only the external daemon is synthetic. Requests reach this socket through
-// the production permission checks, LocalAPI transport and provider adapter.
+// acceptanceDaemon is the synthetic Tailscale LocalAPI boundary. Requests reach
+// it through the production permission checks, transport and provider adapter.
 type acceptanceDaemon struct {
 	mu     sync.Mutex
 	config string
@@ -82,8 +82,8 @@ func acceptancePolicy(socket, path string) tunnelPolicyEntry {
 		Inputs:  tunnelInputRefs{Socket: socket, NodeID: "synthetic-node", DNSName: "node.synthetic.ts.net"}}
 }
 
-// The runner models the app process boundary, including what config it sees
-// at startup. It never invents tunnel readiness or writes the tunnel journal.
+// The synthetic runner models app startup and reports app readiness, including
+// what config it sees. It never invents tunnel readiness or writes the journal.
 func acceptanceRunner(t *testing.T, c *Context) {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "dekit")
@@ -154,7 +154,7 @@ func TestTunnelAcceptanceNewReceiverNamedPolicyServiceLifecycle(t *testing.T) {
 	if err := owner.SetTunnelPolicy("widget", "web", "public-approval", publicPolicy, true); err != nil {
 		t.Fatal(err)
 	}
-	// Declare the application in the source before public/core creation checks it out.
+	// Commit the app task declaration before NewCollection checks out widget.
 	source := filepath.Join(owner.Workspace, "source-widget")
 	fixtureFile(t, filepath.Join(source, ".harness/dekit.tasks.yaml"), "tasks:\n web/server:\n  cmd: [echo, synthetic]\n  x-wtc: {url: 'http://127.0.0.1:3000'}\n", 0644)
 	fixtureGit(t, "-C", source, "add", "-A")
