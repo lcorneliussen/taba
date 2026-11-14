@@ -1235,10 +1235,22 @@ func TestStatus319ProductionReleasedMergeMigration(t *testing.T) {
 			before := wire.count()
 			assertMerge := func(event status319Event) {
 				t.Helper()
-				if len(event.Snapshot.PRs) != 1 {
+				if len(event.Snapshot.PRs) != 2 {
 					t.Fatal(event.Snapshot.PRs)
 				}
-				pr := event.Snapshot.PRs[0]
+				var pr, draft *StatusPRRow
+				for i := range event.Snapshot.PRs {
+					row := &event.Snapshot.PRs[i]
+					if row.Repo == "widget" && row.Number == "7" {
+						pr = row
+					}
+					if row.Repo == "widget" && row.Number == "8" {
+						draft = row
+					}
+				}
+				if pr == nil || pr.NotEnlisted || draft == nil || !draft.NotEnlisted || !draft.Draft {
+					t.Fatalf("merged enlistment and transient draft inventory: %+v", event.Snapshot.PRs)
+				}
 				at, err := time.Parse(time.RFC3339Nano, pr.ObservedAt)
 				if pr.State != "MERGED" || pr.MergedOn != nil || err != nil || at.Sub(old).Abs() > time.Millisecond || !statusObservationUnavailable(pr.Freshness) {
 					t.Fatalf("legacy authority lost or renewed: %+v", pr)

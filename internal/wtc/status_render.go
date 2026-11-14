@@ -7,7 +7,7 @@ import (
 	"taba.sh/taba/internal/branding"
 )
 
-// StatusPRsByPriority keeps enlisted order within each visible group while
+// StatusPRsByPriority keeps inventory order within each visible group while
 // putting review-ready PRs ahead of drafts and completed work.
 func StatusPRsByPriority(rows []StatusPRRow) []StatusPRRow {
 	ordered := append([]StatusPRRow(nil), rows...)
@@ -103,7 +103,7 @@ func (s StatusSnapshot) Markdown() string {
 	return s.markdown(true)
 }
 
-// ReposMarkdown omits the collection's enlisted PR section.
+// ReposMarkdown omits the collection's PR inventory section.
 func (s StatusSnapshot) ReposMarkdown() string {
 	return s.markdown(false)
 }
