@@ -42,7 +42,9 @@ for (const width of [320, 390, 1440]) test(`diagnostic browser interaction at ${
     await diagnostic.waitFor({ state:"attached" });
     const output = process.env.WTC_TEST_SCREENSHOTS;
     if (output) { await mkdir(output,{recursive:true});await page.screenshot({path:resolve(output,`diagnostic-${width}.png`)}); }
-    assert(await diagnostic.isVisible(), "diagnostic is available at narrow widths");
+    const card = page.locator("#card details");
+    assert.equal(await card.evaluate(n => n.open), false, "fixture starts collapsed");
+    assert(await diagnostic.isVisible(), "diagnostic is available on a collapsed card at narrow widths");
     await diagnostic.hover(); await diagnostic.focus();
     await diagnostic.evaluate(n => { window.originalDiagnostic=n;window.originalTitle=n.title; });
     await page.evaluate(() => { window.delayed=true;window.polls[0](); });
@@ -76,6 +78,11 @@ for (const width of [320, 390, 1440]) test(`diagnostic browser interaction at ${
     await page.evaluate(() => { window.denied=true; }); await diagnostic.click();
     const manual = page.getByRole("textbox",{name:"Full diagnostic for manual copy"});
     await manual.waitFor(); assert.equal(await manual.inputValue(), "Refresh failed: " + error);
+    assert.equal(await card.evaluate(n => n.open), false, "copy does not expand the card");
+    await card.evaluate(n => { n.open=true; });
+    assert(await manual.isVisible(), "manual copy remains visible on an expanded card");
+    await card.evaluate(n => { n.open=false; });
+    assert(await manual.isVisible(), "manual copy remains visible on a collapsed card");
     assert.equal(await manual.getAttribute("readonly"), "");
     if (output) await page.screenshot({path:resolve(output,`diagnostic-${width}-fallback.png`)});
     await manual.focus(); await page.keyboard.press("ControlOrMeta+A");

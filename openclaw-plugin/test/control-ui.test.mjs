@@ -193,7 +193,7 @@ async function reviewAction(host) {
   let action = [...host.all()].find(n => n.tagName === "BUTTON" && n.textContent === "Review PR text");
   if (action) return action;
   const trigger = [...host.all()].find(n => n.className?.includes("wtc-header-feedback"));
-  assert.ok(trigger, "publication outcome opens its sidebar details");
+  assert.ok(trigger, "publication outcome renders its diagnostic control");
   titled(host, "More collection actions").click();
   [...host.all()].find(n => n.ariaLabel === "Activity" && n.role === "menuitem").click();
   const [, props] = openedPanels.at(-1);
@@ -1816,13 +1816,19 @@ test("collapsed card exposes the top action without expanding for local work", a
   await clickText(summary, "Catch up 2");
   assert.equal(card.open, false, "local execution keeps the one-line card collapsed");
   assert.equal(calls.filter(c => c.actionId === "next").length, 1);
+  controlledCollection = () => ({ ok:false, error:"Synthetic batch refresh failure" });
+  await [...summary.all()].find(n => n.className === "wtc-refresh-control").onclick({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(titled(host, "More collection actions"), undefined, "batch cancellation occupies the menu slot");
+  titled(host, "Open Activity in the taba Collection panel").click();
+  assert.equal(openedPanels.at(-1)[1].focus, "activity", "Activity stays reachable during a batch diagnostic");
+  controlledCollection = undefined;
   await clickText(summary, "Cancel queued");
   release({ ok: true, result: { performed: true, repo: rows[0], code: 0 } });
   for (let i = 0; i < 6; i++) await settle();
   assert.equal(card.open, false);
   await clickText(summary, "Choose steps…");
   assert.equal(card.open, true, "opening the chooser reveals its controls");
- } finally { view.dispose(); nextResult = undefined; }
+ } finally { controlledCollection = undefined; view.dispose(); nextResult = undefined; }
 });
 
 test("collapsed PR update uses the existing personal preparation and confirmation", async () => {
@@ -3693,7 +3699,6 @@ test("diagnostic keeps its connected focused node through a delayed repeated fai
     assert.equal(document.activeElement, note);
   } finally { release?.({ ok: false, error: diagnosticError }); controlledCollection = undefined; view.dispose(); }
 });
-
 
 for (const clipboard of [undefined, { writeText: async () => { throw new Error("denied"); } }]) test(`diagnostic ${clipboard ? "denied" : "unavailable"} clipboard exposes full manual-copy text`, async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");

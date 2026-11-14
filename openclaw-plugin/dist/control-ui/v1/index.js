@@ -2868,7 +2868,7 @@ function mountComposer(container, context) {
     headerControls.style.cssText = "margin-left:auto;flex:none;display:flex;align-items:baseline;justify-content:flex-end;gap:4px;white-space:nowrap";
     headerControls.replaceChildren(...[tables.actionToolbar(repos, true, { failed: headerFailed, text: headerNote }),
       iconButton("↻", refreshTitle(entry), () => trackedRefresh(watch, entry?.data?.collection?.sessionKey ?? key, say, () => entry?.data?.collection?.sessionKey ?? key, () => !disposed)),
-      iconButton("⤢", "Open the taba Collection panel", () => ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx) })),
+      iconButton("⤢", headerNote ? "Open Activity in the taba Collection panel" : "Open the taba Collection panel", () => ctx.host.ui.openPanel("collection", { sessionKey: key, agentId: agentOf(ctx), ...(headerNote ? { focus:"activity" } : {}) })),
       css(el("span", { ariaHidden:"true" }, controlIcon(card.open ? "⌃" : "⌄")), "display:inline-flex;align-items:center;justify-content:center;color:var(--muted,#888);padding:0 2px")].filter(Boolean));
     tables.checkAccount(repos);
     detail.replaceChildren(...[tables.repoTable(repos, repoNarrow, entry.data.subSessions),
