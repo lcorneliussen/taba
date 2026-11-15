@@ -17,5 +17,8 @@ application address checks retain their separate two-second limit; the native
 budget is not a five-second bound on the whole status command or workspace sweep.
 
 Action and readiness polling retain their existing 30-second native command
-limits and action deadlines. Status reads do not repair discovery, reload task
-definitions, upgrade the runner, or change service state.
+limits and action deadlines. Post-action result snapshots also call
+`RuntimeStatus`, so their task observations use the same five-second read budget.
+An action can finish successfully while its returned snapshot reports an
+unconfirmed task state as `unknown`. Status reads do not repair discovery, reload
+task definitions, upgrade the runner, or change service state.

@@ -35,6 +35,16 @@ func TestRuntimeObservationBackend(t *testing.T) {
 	}
 	args = args[1:]
 	if reflect.DeepEqual(args, []string{"--version"}) {
+		roots := filepath.SplitList(os.Getenv("WTC_OBSERVATION_ROOTS"))
+		if len(roots) != 1 {
+			os.Exit(98)
+		}
+		f, err := os.OpenFile(filepath.Join(roots[0], "fake-argv"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			os.Exit(98)
+		}
+		fmt.Fprintln(f, "--version")
+		f.Close()
 		fmt.Println("dekit 0.10.0")
 		os.Exit(0)
 	}
@@ -180,9 +190,9 @@ func TestRuntimeObservationPublicBudget(t *testing.T) {
 func TestRuntimeObservationSharedBudget(t *testing.T) {
 	c, m, plan := observationFixture(t)
 	plan.RunnerDelay = 100 * time.Millisecond
-	plan.ListDelay = time.Second
+	plan.ListDelay = 5 * time.Second
 	writeObservationPlan(t, plan)
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	items := c.runtimeStatusContext(ctx, m)
 	observationUnknown(t, items)
