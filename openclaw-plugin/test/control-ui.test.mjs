@@ -1074,6 +1074,54 @@ test("panel: a portal of the gateway beside its service", async () => {
   open.view.dispose();
 });
 
+test("panel: HTTP(S) service ports use scheme defaults for loopback display", async (t) => {
+  for (const [url, port] of [
+    ["http://localhost/", 80],
+    ["http://localhost:80/", 80],
+    ["https://localhost/", 443],
+    ["https://localhost:443/", 443],
+    ["http://127.0.0.1:8080/preview", 8080],
+    ["https://127.0.0.1:9443/preview", 9443],
+    ["http://[::1]/", 80],
+    ["http://[::1]:80/", 80],
+    ["https://[::1]/", 443],
+    ["https://[::1]:443/", 443],
+    ["https://[::1]:9443/preview", 9443],
+  ]) await t.test(url, async () => {
+    const web = { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url };
+    const { host, view } = await mount("panel", collection([repo("api")], [web]));
+    try {
+      const hint = [...host.all()].find(n => n.title === `${url} on the gateway: open a tunnel to reach it from here`);
+      assert.equal(hint?.textContent, `:${port}`);
+    } finally { view.dispose(); }
+  });
+});
+
+test("panel: HTTP(S) service ports associate only the matching gateway portal", async (t) => {
+  for (const [url, port] of [
+    ["http://localhost/", 80],
+    ["http://localhost:80/", 80],
+    ["https://localhost/", 443],
+    ["https://localhost:443/", 443],
+    ["https://localhost:9443/preview", 9443],
+    ["http://[::1]/", 80],
+    ["https://[::1]:443/", 443],
+    ["https://[::1]:9443/preview", 9443],
+    ["http://localhost:99999/", null],
+    ["not a URL", null],
+    ["ftp://localhost:443/", null],
+    ["ws://localhost:80/", null],
+  ]) await t.test(url, async () => {
+    portals = [80, 443, 9443].map(port => ({ id: `port-${port}`, port, publicUrl: `https://localhost:14443/preview/${port}`, url: `https://localhost:14443/preview/${port}` }));
+    const web = { group: "api/web", path: "api/web/main", repo: "api", kind: "service", label: "preview", state: "ready", url };
+    const { host, view } = await mount("panel", collection([repo("api")], [web]));
+    try {
+      const links = [...host.all()].filter(n => n.tagName === "A" && n.href?.startsWith("https://localhost:14443/preview/"));
+      assert.deepEqual(links.map(n => n.href), port ? [`https://localhost:14443/preview/${port}`] : []);
+    } finally { view.dispose(); portals = []; }
+  });
+});
+
 test("composer: collapsed, the same facts summed", async () => {
   const { host, view } = await mount("composer", busy);
   const card = [...host.all()].find((n) => n.className === "wtc-collection-card");
