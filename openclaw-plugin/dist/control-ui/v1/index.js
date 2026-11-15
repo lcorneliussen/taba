@@ -927,7 +927,7 @@ const repositoryColumns = (narrow, actionWidth = REPO_NEXT_WIDTH, facts = { widt
   : [{ head: "Repository", width: "fit-content(40%)" }, { head: "Branch", width: "minmax(64px,200px)" }, { head: "Changes", width: `${facts.width}px` }, ...(facts.pr ? [{ head: "Pull request", width: "164px" }] : []), { head: "Next", width: `minmax(${actionWidth}px,1fr)`, align: "end" }];
 const actionFeedback = () => el("style", { textContent: `
 .wtc-tunnel-trigger:hover,.wtc-tunnel-existing:hover,.wtc-tunnel-option:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
-.wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--focus,var(--accent,#888));outline-offset:2px; }
+.wtc-tunnel-trigger:focus-visible,.wtc-tunnel-option:focus-visible { outline:2px solid var(--ring,var(--accent,#888));outline-offset:2px; }
 .wtc-tunnel-option:focus-visible { outline-offset:-2px; }
 
 .wtc-service-bulk:is(:hover,:focus-visible) { background:var(--bg-hover,rgba(128,128,128,.12)) !important;color:var(--text-strong,var(--text,inherit)) !important; }
