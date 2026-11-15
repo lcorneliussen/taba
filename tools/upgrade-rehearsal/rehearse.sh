@@ -7,12 +7,13 @@
 # its own config root and mise data, clones the harness bare from its remote,
 # creates one collection on the harness's current pin, records its state,
 # upgrades it with the pinned binary, catches it up with the new one and
-# records the state again. Nothing outside --work is written: no pushes and
-# no forge writes; --from commits its pin on a local branch of the clone. Forge reads (clone, fetch, release lookups) use
+# records the state again. Script-managed installs and state stay under --work.
+# No pushes or forge writes; --from commits its pin on a local branch of the clone. Forge reads (clone, fetch, release lookups) use
 # your normal git and gh authentication.
 #
 # The harness's own hooks run, as they would in a real collection. Rehearse
-# only harnesses whose code you would run anyway.
+# only harnesses whose code you would run anyway. Hooks, caller tool config
+# and external secrets policy are not sandboxed by this script.
 #
 # Options:
 #   --harness URL        harness remote to clone (required)
@@ -86,18 +87,29 @@ base_path="$PATH"
 failures=0
 results=()
 # step <name> <command...>: run, log, and record pass/fail without stopping.
-step() {
-  local name="$1"; shift
-  local log="$logs/$(printf '%02d' "${#results[@]}")-${name// /-}.log"
-  printf '→ %s\n' "$name" >&2
-  if "$@" >"$log" 2>&1; then
+record_result() {
+  local name="$1" code="$2" log="$3"
+  if [ "$code" -eq 0 ]; then
     results+=("| $name | pass | \`${log#"$work"/}\` |")
   else
-    local code=$?
     results+=("| $name | **fail ($code)** | \`${log#"$work"/}\` |")
     failures=$((failures + 1))
     printf '  failed (%s), see %s\n' "$code" "$log" >&2
   fi
+}
+step() {
+  local name="$1"; shift
+  local log="$logs/$(printf '%02d' "${#results[@]}")-${name// /-}.log" code=0
+  printf '→ %s\n' "$name" >&2
+  "$@" >"$log" 2>&1 || code=$?
+  record_result "$name" "$code" "$log"
+}
+# Observe commands separately: later diagnostics must not mask an earlier exit.
+observe() {
+  local stage="$1" name="$2" out="$3" code=0; shift 3
+  "$@" >"$out" 2>&1 || code=$?
+  record_result "snapshot $stage: $name" "$code" "$out"
+  return "$code"
 }
 skip() { results+=("| $1 | skipped | $2 |"); }
 # stop <reason>: end early with a short report of the steps so far.
@@ -149,10 +161,63 @@ if [ "$(tr -d ' \n' < "$hdir/$pin_file" 2>/dev/null)" != "$from" ]; then
   step "pin harness to $from" pin_from
 fi
 
+# Resolve directory and file links before probing any selected executable.
+# The install tree itself must not redirect execution outside its private path.
+private_executable() {
+  local path="$1" dir link count=0
+  while [ "$count" -lt 40 ]; do
+    dir="$(cd -P -- "$(dirname -- "$path")" 2>/dev/null && pwd -P)" || return 1
+    path="$dir/$(basename -- "$path")"
+    case "$path" in "$work/mise/data/installs/"*) ;; *) return 1 ;; esac
+    if [ ! -L "$path" ]; then
+      [ -f "$path" ] && [ -x "$path" ] || return 1
+      printf '%s\n' "$path"
+      return 0
+    fi
+    link="$(readlink "$path")" || return 1
+    case "$link" in /*) path="$link" ;; *) path="$dir/$link" ;; esac
+    count=$((count + 1))
+  done
+  return 1
+}
+requires_taba() {
+  local major minor
+  IFS=. read -r major minor _ <<< "${1%%-*}"
+  [ "${major:-0}" -gt 0 ] || [ "${minor:-0}" -ge 2 ]
+}
+release_dir=""
+validate_release() {
+  local dir="$1" version="$2" name binary output actual
+  release_dir=""
+  for name in wtc taba; do
+    if [ "$name" = taba ] && ! requires_taba "$version" &&
+       [ ! -e "$dir/taba" ] && [ ! -L "$dir/taba" ]; then
+      continue
+    fi
+    binary="$(private_executable "$dir/$name")" || {
+      echo "$name $version is missing or outside the private mise installs tree" >&2
+      return 1
+    }
+    output="$("$binary" --version)" || return $?
+    actual="$(printf '%s\n' "$output" | awk '{print $3}')"
+    [ "$actual" = "$version" ] || {
+      echo "$name reports '$output'; expected $version" >&2
+      return 1
+    }
+  done
+  release_dir="$(cd -P -- "$dir" && pwd -P)"
+}
 install_from() { mise install "github:$cli_repo@$from"; }
 step "install $from" install_from
-from_dir="$(mise where "github:$cli_repo@$from" 2>/dev/null)"
-[ -x "$from_dir/wtc" ] || stop "wtc $from could not be installed."
+from_dir=""
+select_from() {
+  local candidate
+  candidate="$(mise where "github:$cli_repo@$from")" || return $?
+  validate_release "$candidate" "$from" || return $?
+  from_dir="$release_dir"
+}
+step "validate release $from" select_from
+[ -n "$from_dir" ] || stop "wtc $from could not be selected safely."
 export PATH="$from_dir:$base_path"
 
 cd "$coll" || stop "The collection directory is missing."
@@ -174,12 +239,21 @@ fi
 
 # snapshot <name>: record names and shapes, never secret values.
 snapshot() {
-  local out="$work/$1"
+  local stage="$1" out="$work/$1" code
   mkdir -p "$out"
   # Only the release's own taba counts, not one elsewhere on the caller's PATH.
   local bin; bin="$(dirname "$(command -v wtc)")"
-  { wtc --version; [ -x "$bin/taba" ] && "$bin/taba" --version || echo "taba: not in this release"; } > "$out/versions.txt" 2>&1
-  wtc env list > "$out/env-list.txt" 2>&1
+  observe "$stage" "wtc version" "$out/wtc-version.txt" wtc --version
+  local version="$from"
+  [ "$stage" = before ] || version="$to"
+  if [ -x "$bin/taba" ] || requires_taba "$version"; then
+    observe "$stage" "taba version" "$out/taba-version.txt" "$bin/taba" --version
+  else
+    echo "taba: not in this release" > "$out/taba-version.txt"
+    skip "snapshot $stage: taba version" "not in this release"
+  fi
+  cat "$out/wtc-version.txt" "$out/taba-version.txt" > "$out/versions.txt"
+  observe "$stage" "env list" "$out/env-list.txt" wtc env list
   [ -f .env.collection ] && sed -E 's/=.*$//' .env.collection | sort > "$out/env-collection-names.txt"
   for f in mise.toml .mcp.json .cursor/mcp.json .codex/config.toml; do
     [ -f "$f" ] && mkdir -p "$out/files/$(dirname "$f")" && cp "$f" "$out/files/$f"
@@ -201,14 +275,19 @@ snapshot() {
     d="${d%/}"
     [ -e "$d/.git" ] && printf '%s %s\n' "$d" "$(git -C "$d" remote get-url origin 2>/dev/null)"
   done > "$out/origins.txt"
+  observe "$stage" status "$out/status.json" snapshot_status
+  observe "$stage" doctor "$out/doctor.txt" wtc doctor
+  code=$?
+  echo "exit $code" >> "$out/doctor.txt"
+}
+snapshot_status() {
   wtc status --json 2>&1 | perl -MJSON::PP -0777 -ne '
     my $j = eval { JSON::PP->new->decode($_) } or do { print; exit };
     sub scrub { my $v = shift;
       if (ref $v eq "HASH") { for (keys %$v) { $v->{$_} = /(_at|_age|cli_version)$/ ? "<volatile>" : scrub($v->{$_}) } }
       elsif (ref $v eq "ARRAY") { $_ = scrub($_) for @$v }
       $v }
-    print JSON::PP->new->canonical->pretty->encode(scrub($j))' > "$out/status.json"
-  wtc doctor > "$out/doctor.txt" 2>&1; echo "exit $?" >> "$out/doctor.txt"
+    print JSON::PP->new->canonical->pretty->encode(scrub($j))'
 }
 snapshot before
 
@@ -220,8 +299,11 @@ else
   # release and lets it move the pin, which is what this reproduces.
   skip "upgrade with $from" "$from has no upgrade command; the new release moves the pin"
   manual_upgrade() {
+    local candidate
     mise install "github:$cli_repo@$to" &&
-    "$(mise where "github:$cli_repo@$to")/wtc" upgrade --version "$to"
+    candidate="$(mise where "github:$cli_repo@$to")" &&
+    validate_release "$candidate" "$to" &&
+    "$release_dir/wtc" upgrade --version "$to"
   }
   step "upgrade with $to" manual_upgrade
 fi
@@ -229,26 +311,37 @@ fi
 # The release may be installed under github:<owner>/wtc-cli or
 # github:<owner>/taba; take the one the
 # collection's mise config now resolves, then any install of that version.
-to_dir="$(dirname "$(mise which wtc 2>/dev/null)" 2>/dev/null)"
-if [ ! -x "$to_dir/wtc" ] || [ "$("$to_dir/wtc" --version 2>/dev/null | awk '{print $3}')" != "$to" ]; then
-  to_dir="$(find "$MISE_DATA_DIR/installs" -mindepth 2 -maxdepth 2 -type d -name "$to" 2>/dev/null | head -n 1)"
-fi
-if [ -x "$to_dir/wtc" ]; then
-  export PATH="$to_dir:$base_path"
-  # Releases from 0.2.0 on, pre-releases included, ship taba next to wtc.
-  IFS=. read -r to_major to_minor _ <<< "${to%%-*}"
-  if [ "${to_major:-0}" -gt 0 ] || [ "${to_minor:-0}" -ge 2 ]; then
-    check_both() { "$to_dir/wtc" --version && "$to_dir/taba" --version; }
-    step "wtc and taba $to on PATH" check_both
+to_dir=""
+select_to() {
+  local candidate resolved
+  resolved="$(mise which wtc 2>/dev/null)" || resolved=""
+  if [ -n "$resolved" ]; then
+    candidate="$(dirname -- "$resolved")"
+    if validate_release "$candidate" "$to"; then
+      to_dir="$release_dir"
+      return 0
+    fi
   fi
+  while IFS= read -r candidate; do
+    if validate_release "$candidate" "$to"; then
+      to_dir="$release_dir"
+      return 0
+    fi
+  done < <(find "$MISE_DATA_DIR/installs" -mindepth 2 -maxdepth 2 -type d -name "$to" 2>/dev/null)
+  echo "No private installed release matches $to" >&2
+  return 1
+}
+step "locate and validate release $to" select_to
+if [ -n "$to_dir" ]; then
+  export PATH="$to_dir:$base_path"
   step "catch-up ($to)" wtc catch-up --report "$logs/catch-up-after.json"
   snapshot after
 else
-  results+=("| locate release $to | **fail** | the upgrade left no installed \`wtc $to\` |")
-  failures=$((failures + 1))
+  skip "catch-up ($to)" "no valid private target release"
+  [ "$followup" = 0 ] || skip "registry follow-up" "no valid private target release"
 fi
 
-if [ "$followup" = 1 ] && [ -x "${to_dir:-}/wtc" ]; then
+if [ "$followup" = 1 ] && [ -n "$to_dir" ]; then
   registry="$hdir/.harness-repos.yml"
   if grep -qE '^[[:blank:]]*-[[:blank:]]*name:[[:blank:]]*wtc-cli[[:blank:]]*$' "$registry" 2>/dev/null; then
     rename_entry() {
