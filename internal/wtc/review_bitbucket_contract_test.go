@@ -29,7 +29,7 @@ func TestBitbucketCommentReadContractEnvelopes(t *testing.T) {
 }
 func TestBitbucketCommentReadContractRefusesUnprovenCollections(t *testing.T) {
 	cases := []string{
-		`[]`, `{}`, `null`, `{"comments":[]}`, `{"count":0}`, `{"count":0,"comments":null}`,
+		`[]`, `{}`, `null`, `{"count":null,"comments":[]}`, `{"comments":[]}`, `{"count":0}`, `{"count":0,"comments":null}`,
 		`{"count":0,"comments":{}}`, `{"count":-1,"comments":[]}`, `{"count":1,"comments":[]}`,
 		`{"count":0,"comments":[{"content":{"raw":"x"}}]}`, `{"count":"0","comments":[]}`, `{"count":0.5,"comments":[]}`,
 		`{"count":0,"comments":[],"next":"page2"}`, `{"count":0,"comments":[],"next":null}`,
@@ -97,7 +97,7 @@ func TestBitbucketCommentReadContractSharedArgsAndDecodedMarkers(t *testing.T) {
 	}
 }
 func TestBitbucketCommentReadContractIgnoresMetadataMarkers(t *testing.T) {
-	raw := `{"workspace":"wtc-review-inline v1 key=0123456789","repoSlug":"app","pullRequestId":7,"filters":{"resolution":null},"count":0,"comments":[]}`
+	raw := `{"workspace":"wtc-review-inline v1 key=0123456789","repoSlug":"app","pullRequestId":7,"filters":{"resolution":null},"count":1,"comments":[{"content":{"raw":""},"body":"wtc-review-inline v1 key=0123456789","user":{"display_name":"wtc-review-inline v1 key=0123456789"}}]}`
 	bitbucketReadContractCLI(t, raw, false)
 	keys := priorReviewInlineKeys(ReviewManifest{PR: "7", Forge: "bitbucket", Slug: "example/app", RepoDir: t.TempDir()}, t.TempDir())
 	if keys == nil || len(keys) != 0 {
@@ -115,8 +115,12 @@ func TestBitbucketCommentReadContractUncertainReadsPreventCreates(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			log := bitbucketReadContractCLI(t, tc.raw, tc.fail)
 			bundle := t.TempDir()
-			os.Mkdir(filepath.Join(bundle, "findings"), 0700)
-			os.WriteFile(filepath.Join(bundle, "findings/code.json"), []byte(`{"concern":"code","findings":[{"file":"sample.go","line":4,"title":"Synthetic finding"}]}`), 0600)
+			if err := os.Mkdir(filepath.Join(bundle, "findings"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bundle, "findings/code.json"), []byte(`{"concern":"code","findings":[{"file":"sample.go","line":4,"title":"Synthetic finding"}]}`), 0600); err != nil {
+				t.Fatal(err)
+			}
 			m := ReviewManifest{PR: "7", Forge: "bitbucket", Slug: "example/app", RepoDir: bundle}
 			for i := 0; i < 2; i++ {
 				posted, failed, _ := postReviewInline(m, bundle)
@@ -129,5 +133,23 @@ func TestBitbucketCommentReadContractUncertainReadsPreventCreates(t *testing.T) 
 				t.Fatalf("write after uncertain read: %q", calls)
 			}
 		})
+	}
+}
+
+func TestBitbucketCommentReadContractEscapedPriorFindingPreventsCreate(t *testing.T) {
+	bundle := t.TempDir()
+	key := inlineReviewKey("code", "sample.go", 4, "Synthetic finding")
+	raw := `{"count":1,"comments":[{"content":{"raw":"\u0077tc-review-inline v1 key=` + key + `"}}]}`
+	log := bitbucketReadContractCLI(t, raw, false)
+	if err := os.Mkdir(filepath.Join(bundle, "findings"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "findings/code.json"), []byte(`{"concern":"code","findings":[{"file":"sample.go","line":4,"title":"Synthetic finding"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	posted, failed, _ := postReviewInline(ReviewManifest{PR: "7", Forge: "bitbucket", Slug: "example/app", RepoDir: bundle}, bundle)
+	calls, err := os.ReadFile(log)
+	if err != nil || posted != 0 || failed != 0 || strings.Contains(string(calls), "comments add") || strings.Count(string(calls), "\n") != 1 {
+		t.Fatalf("prior finding reposted: posted=%d failed=%d calls=%q err=%v", posted, failed, calls, err)
 	}
 }
