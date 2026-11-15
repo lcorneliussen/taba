@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"taba.sh/taba/internal/branding"
 )
@@ -129,10 +130,11 @@ func copyPublicReviewComments(dir string, manifest ReviewManifest) {
 	}
 }
 
-// Both supported community CLI versions collect pages into this wrapper. Keep
-// the cap explicit: their count reports collected items, not the remote total.
+const bitbucketReviewCommentLimit = 1000
+
+// Both supported community CLI versions collect pages into a comments/count envelope.
 func readBitbucketReviewComments(m ReviewManifest) ([]bundleComment, error) {
-	raw, err := reviewBitbucketCommand(m, []string{"pr", "comments", "list", m.PR, "--limit", "1000", "--json"}, nil)
+	raw, err := reviewBitbucketCommand(m, []string{"pr", "comments", "list", m.PR, "--limit", strconv.Itoa(bitbucketReviewCommentLimit), "--json"}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +142,6 @@ func readBitbucketReviewComments(m ReviewManifest) ([]bundleComment, error) {
 }
 
 func parseBitbucketBundleComments(raw []byte) ([]bundleComment, error) {
-	const commentLimit = 1000
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	token, err := decoder.Token()
 	if err != nil || token != json.Delim('{') {
@@ -190,8 +191,10 @@ func parseBitbucketBundleComments(raw []byte) ([]bundleComment, error) {
 	if count != len(rows) {
 		return nil, fmt.Errorf("Bitbucket returned %d of %d comments", len(rows), count)
 	}
-	if len(rows) >= commentLimit {
-		return nil, fmt.Errorf("Bitbucket returned the %d-comment limit; review context may be incomplete", commentLimit)
+	// The CLI count is collected length. Reaching the requested cap therefore
+	// cannot establish completeness, even when count matches the array length.
+	if len(rows) >= bitbucketReviewCommentLimit {
+		return nil, fmt.Errorf("Bitbucket returned the %d-comment limit; review context may be incomplete", bitbucketReviewCommentLimit)
 	}
 	comments := make([]bundleComment, 0, len(rows))
 	for _, row := range rows {
