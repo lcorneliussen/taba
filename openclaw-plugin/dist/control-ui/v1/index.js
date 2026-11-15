@@ -266,9 +266,9 @@ function watchCollection(host, sessionKey, agentId, onChange) {
   return {
     // Manual clicks join a read; mutation callers below still request a fresh read.
     manualRefresh: (logKey) => {
-      if (disposed || entry.paused) return Promise.resolve(null);
-      if (entry.manual) return entry.manual.host === host && entry.manual.agentId === agentId ? entry.manual.promise : Promise.resolve(null);
-      if (entry.inflight && (entry.readHost !== host || entry.readAgent !== agentId)) return Promise.resolve(null);
+      if (disposed) return Promise.resolve(null);
+      if (entry.manual) return entry.manual.host === host && entry.manual.agentId === agentId ? entry.manual.promise : Promise.resolve({ refused: "Refresh was not started: another host or agent context owns the active refresh." });
+      if (entry.inflight && (entry.readHost !== host || entry.readAgent !== agentId)) return Promise.resolve({ refused: "Refresh was not started: another host or agent context owns the active read." });
       const generation = entry.generation ?? 0, id = uuid();
       const operation = { host, agentId };
       entry.manual = operation;
@@ -277,14 +277,17 @@ function watchCollection(host, sessionKey, agentId, onChange) {
         entry.manual = null;
         recordActivity(logKey, id, { state, status });
       };
-      operation.cancel = () => finish("unknown", "Refresh result unavailable after the collection changed or closed.");
+      operation.cancel = (status = "Refresh observation ended when the collection view closed.") => finish("unknown", status);
       operation.promise = Promise.resolve().then(() => {
         if (entry.manual !== operation) return null;
         return load(true);
       }).then(result => {
         if (entry.manual !== operation) return null;
-        if (generation !== (entry.generation ?? 0) || store.get(sessionKey) !== entry || !result || result.inflight) {
+        if (generation !== (entry.generation ?? 0) || store.get(sessionKey) !== entry || !result) {
           operation.cancel(); return null;
+        }
+        if (result.inflight || entry.paused) {
+          operation.cancel("Refresh was superseded by a collection action or a newer status read."); return null;
         }
         const error = result.error;
         finish(error ? "failed" : "completed", error || "Collection status refreshed.");
@@ -305,7 +308,7 @@ function watchCollection(host, sessionKey, agentId, onChange) {
     pause: (on) => {
       entry.paused = Math.max(0, (entry.paused ?? 0) + (on ? 1 : -1));
       entry.generation = (entry.generation ?? 0) + 1;
-      entry.manual?.cancel();
+      entry.manual?.cancel("Refresh was superseded by a collection action.");
     },
     dispose() {
       disposed = true;
@@ -950,6 +953,7 @@ async function trackedServiceRequest(host, sessionKey, agentId, payload, doing, 
 async function trackedRefresh(watch, sessionKey, say, currentSession = () => sessionKey, alive = () => true) {
   const result = await watch?.manualRefresh(sessionKey);
   if (!result || !alive() || currentSession() !== sessionKey) return;
+  if (result.refused) { say(result.refused, true); return; }
   const { id, error } = result;
   if (error) say(`Refresh failed: ${error}`, true, null, id);
   else say("Collection status refreshed.", false, null, id);
