@@ -124,10 +124,10 @@ func TestEnlistPreservesMetadataWrittenWhileWaitingForLock(t *testing.T) {
 	<-started
 	select {
 	case r := <-done:
-		t.Fatalf("enlistment bypassed shared lock: %+v", r)
+		t.Fatalf("enlistment bypassed registry lock: %+v", r)
 	case <-time.After(100 * time.Millisecond):
 	}
-	// An older client can update the row while holding the same shared lock.
+	// An older client can update the row while holding the same registry lock.
 	url := "https://github.com/example/widget/pull/7/files"
 	fixtureFile(t, c.PRFile(), "widget 7 old/topic "+url+" Latest title\n", 0644)
 	if err := unix.Flock(int(lock.Fd()), unix.LOCK_UN); err != nil {
