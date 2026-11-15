@@ -239,15 +239,18 @@ function watchCollection(host, sessionKey, agentId, onChange) {
     entry = { data: null, error: null, at: 0, inflight: null, listeners: new Set(), timer: null };
     store.set(sessionKey, entry);
   }
+  let disposed = false;
   const notify = () => entry.listeners.forEach((fn) => fn(entry));
   const load = (force) => {
     if (entry.inflight) return entry.inflight;
     if (!force && entry.data && Date.now() - entry.at < REFRESH_MS / 2) return Promise.resolve(entry);
     // The gateway's portals, to show beside the services they expose.
     const generation = entry.generation ?? 0;
+    entry.readHost = host; entry.readAgent = agentId;
     entry.inflight = Promise.all([call(host, "collection", sessionKey, agentId), host.request("portal.list", {}).catch(() => null)])
       .then(([data, portals]) => {
         if (generation !== (entry.generation ?? 0)) return;
+        if (!data?.collection || !Array.isArray(data.repos) || data.cancelled) { entry.error = "Collection status refresh did not return a result."; return; }
         entry.data = { ...data, portals: portals?.portals ?? [] }; entry.error = null; entry.at = Date.now();
         reconcileRecoveryActivity(data.collection?.sessionKey ?? sessionKey, data.repos ?? []);
       }, (err) => { if (generation === (entry.generation ?? 0)) entry.error = String(err?.message ?? err); })
@@ -261,6 +264,40 @@ function watchCollection(host, sessionKey, agentId, onChange) {
   if (entry.data || entry.error) onChange(entry);
   void load(false);
   return {
+    // Manual clicks join a read; mutation callers below still request a fresh read.
+    manualRefresh: (logKey) => {
+      if (disposed || entry.paused) return Promise.resolve(null);
+      if (entry.manual) return entry.manual.host === host && entry.manual.agentId === agentId ? entry.manual.promise : Promise.resolve(null);
+      if (entry.inflight && (entry.readHost !== host || entry.readAgent !== agentId)) return Promise.resolve(null);
+      const generation = entry.generation ?? 0, id = uuid();
+      const operation = { host, agentId };
+      entry.manual = operation;
+      const finish = (state, status) => {
+        if (entry.manual !== operation) return;
+        entry.manual = null;
+        recordActivity(logKey, id, { state, status });
+      };
+      operation.cancel = () => finish("unknown", "Refresh result unavailable after the collection changed or closed.");
+      operation.promise = Promise.resolve().then(() => {
+        if (entry.manual !== operation) return null;
+        return load(true);
+      }).then(result => {
+        if (entry.manual !== operation) return null;
+        if (generation !== (entry.generation ?? 0) || store.get(sessionKey) !== entry || !result || result.inflight) {
+          operation.cancel(); return null;
+        }
+        const error = result.error;
+        finish(error ? "failed" : "completed", error || "Collection status refreshed.");
+        return { id, error };
+      }, error => {
+        if (entry.manual !== operation) return null;
+        const message = String(error?.message ?? error);
+        finish("failed", message);
+        return { id, error: message };
+      });
+      recordActivity(logKey, id, { repo: "Collection", action: "refresh", state: "running", status: "Refreshing collection status…" });
+      return operation.promise;
+    },
     refresh: () => {
       if (!entry.inflight) return load(true);
       return entry.inflight.then(() => load(true));
@@ -268,10 +305,13 @@ function watchCollection(host, sessionKey, agentId, onChange) {
     pause: (on) => {
       entry.paused = Math.max(0, (entry.paused ?? 0) + (on ? 1 : -1));
       entry.generation = (entry.generation ?? 0) + 1;
+      entry.manual?.cancel();
     },
     dispose() {
+      disposed = true;
       entry.listeners.delete(onChange);
       if (entry.listeners.size === 0) {
+        entry.manual?.cancel();
         clearInterval(entry.timer);
         store.delete(sessionKey);
       }
@@ -908,16 +948,11 @@ async function trackedServiceRequest(host, sessionKey, agentId, payload, doing, 
 }
 
 async function trackedRefresh(watch, sessionKey, say, currentSession = () => sessionKey, alive = () => true) {
-  const id = uuid();
-  recordActivity(sessionKey, id, { repo: "Collection", action: "refresh", state: "running", status: "Refreshing collection status…" });
-  const entry = await watch?.refresh();
-  if (entry?.error) {
-    recordActivity(sessionKey, id, { state: "failed", status: entry.error });
-    if (alive() && currentSession() === sessionKey) say(`Refresh failed: ${entry.error}`, true, null, id);
-  } else {
-    recordActivity(sessionKey, id, { state: "completed", status: "Collection status refreshed." });
-    if (alive() && currentSession() === sessionKey) say("Collection status refreshed.", false, null, id);
-  }
+  const result = await watch?.manualRefresh(sessionKey);
+  if (!result || !alive() || currentSession() !== sessionKey) return;
+  const { id, error } = result;
+  if (error) say(`Refresh failed: ${error}`, true, null, id);
+  else say("Collection status refreshed.", false, null, id);
 }
 
 const REPO_NEXT_WIDTH = 132, REPO_COLUMN_GAP = 10;

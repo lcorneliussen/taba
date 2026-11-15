@@ -2618,6 +2618,82 @@ for(const mode of ["hidden","aborted","workers"])test(`unchanged ${mode} compose
 });
 
 
+for (const failure of [false, true]) test(`manual refresh coalesces card/panel reads and activity (${failure ? "failure" : "success"})`, async () => {
+ const data=collection([repo("api")]),card=await mount("composer",data);
+ const panelHost=container(),panel=mounts.panel(panelHost,card.context);
+ const click=host=>[...host.all()].find(n=>n.className==="wtc-refresh-control").onclick({preventDefault(){},stopPropagation(){}});
+ let reads=0;const pending=[];
+ controlledCollection=()=>{reads++;return new Promise(resolve=>pending.push(resolve));};
+ try {
+  const clicks=[click(card.host),click(card.host),click(panelHost)];await settle();
+  assert.equal(reads,1);
+  assert.equal(panelHost.textContent.split("Collection · Refresh").length-1,1,"one shared activity");
+  pending.shift()({ok:!failure,...(failure?{error:"Synthetic refresh failure"}:{result:data})});
+  for(let i=0;i<4;i++)await settle();
+  assert.equal(reads,1,"manual clicks never queue a second read");
+  await Promise.all(clicks);
+  assert.match(readable(card.host),failure?/Refresh failed/:/Collection status refreshed/);
+  assert.match(readable(panelHost),failure?/Synthetic refresh failure/:/Collection status refreshed/);
+  const next=click(panelHost);await settle();assert.equal(reads,2,"settled operation permits a fresh manual read");
+  pending.shift()({ok:true,result:data});await next;
+ } finally {controlledCollection=undefined;for(const resolve of pending)resolve({ok:true,result:data});panel.dispose();card.view.dispose();}
+});
+
+test("manual refresh joins a background read without queuing another",async t=>{
+ const timers=[],original=globalThis.setInterval;
+ t.mock.method(globalThis,"setInterval",(fn,ms,...args)=>{if(ms===30000)timers.push(fn);return original(fn,ms,...args);});
+ const data=collection([repo("api")]),panel=await mount("panel",data);let reads=0,release;
+ controlledCollection=()=>{reads++;return new Promise(resolve=>release=resolve);};
+ try{
+  timers[0]();await settle();
+  const refresh=[...panel.host.all()].find(n=>n.className==="wtc-refresh-control").onclick({preventDefault(){},stopPropagation(){}});
+  await settle();assert.equal(reads,1);release({ok:true,result:data});
+  for(let i=0;i<4;i++)await settle();assert.equal(reads,1);await refresh;
+ }finally{controlledCollection=undefined;release?.({ok:true,result:data});panel.view.dispose();}
+});
+
+for(const transition of ["one-view-dispose","last-view-remount","session-change","aborted"])test(`manual refresh late failure is safe after ${transition}`,async()=>{
+ const data=collection([repo("api")]),card=await mount("composer",data);
+ const panelHost=container(),panel=mounts.panel(panelHost,card.context);let release;
+ controlledCollection=()=>new Promise(resolve=>release=resolve);
+ let remount;
+ try{
+  const refresh=[...card.host.all()].find(n=>n.className==="wtc-refresh-control").onclick({preventDefault(){},stopPropagation(){}});await settle();
+  if(transition==="one-view-dispose")card.view.dispose();
+  if(transition==="last-view-remount"){card.view.dispose();panel.dispose();controlledCollection=undefined;remount=await mount("panel",data,undefined,card.context.props.sessionKey);}
+  if(transition==="session-change"){
+   controlledCollection=undefined;const key=`agent:main:changed:${++sessions}`;collections.set(key,collection([repo("other")]));
+   const ctx={...card.context,props:{...card.context.props,sessionKey:key}};card.view.update(ctx);panel.update(ctx);await settle();
+  }
+  if(transition==="aborted")card.abort();
+  release({ok:false,error:"Late synthetic failure"});await refresh;await settle();
+  if(transition==="one-view-dispose")assert.match(readable(panelHost),/Late synthetic failure/);
+  if(transition==="last-view-remount")assert.doesNotMatch(readable(remount.host),/Late synthetic failure|Collection status refreshed/);
+  if(transition==="session-change")assert.doesNotMatch(readable(card.host)+readable(panelHost),/Late synthetic failure|Collection status refreshed/);
+  if(transition==="aborted")assert.doesNotMatch(readable(card.host),/Refresh failed|Collection status refreshed/);
+ }finally{controlledCollection=undefined;release?.({ok:true,result:data});remount?.view.dispose();panel.dispose();card.view.dispose();}
+});
+
+for(const result of [undefined,{cancelled:true}])test(`manual refresh cannot complete an absent or cancelled result (${result ? "cancelled" : "absent"})`,async()=>{
+ const panel=await mount("panel",collection([repo("api")]));controlledCollection=()=>({ok:true,result});
+ try{await [...panel.host.all()].find(n=>n.className==="wtc-refresh-control").onclick({preventDefault(){},stopPropagation(){}});await settle();assert.doesNotMatch(readable(panel.host),/Collection status refreshed/);}
+ finally{controlledCollection=undefined;panel.view.dispose();}
+});
+
+test("manual refresh does not consume the forced reload after a service action",async()=>{
+ const data=collection([repo("api")],[{group:"api/web",path:"api/web/main",repo:"api",kind:"service",label:"preview",state:"absent"}]);
+ const panel=await mount("panel",data);let reads=0;const pending=[];
+ controlledCollection=()=>{reads++;return new Promise(resolve=>pending.push(resolve));};
+ try{
+  const refresh=[...panel.host.all()].find(n=>n.className==="wtc-refresh-control").onclick({preventDefault(){},stopPropagation(){}});await settle();
+  const action=titled(panel.host,"preview: absent. Start it").onclick({preventDefault(){},stopPropagation(){}});await settle();
+  assert.equal(reads,1);pending.shift()({ok:true,result:data});
+  for(let i=0;i<4;i++)await settle();assert.equal(reads,2,"service completion still forces a post-action read");
+  assert.doesNotMatch(readable(panel.host),/Collection status refreshed/,"old read cannot announce completion while forced read is pending");
+  pending.shift()({ok:true,result:data});await action;await refresh;
+ }finally{controlledCollection=undefined;for(const resolve of pending)resolve({ok:true,result:data});panel.view.dispose();}
+});
+
 test("panel feedback renders once and keeps its refreshed stamp for later host updates",async()=>{
  const {host,view,context}=await mount("panel",collection([repo("api")]));
  try{
