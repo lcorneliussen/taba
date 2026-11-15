@@ -439,13 +439,15 @@ func priorReviewInlineKeys(m ReviewManifest, bundle string) map[string]bool {
 			keys[match[1]] = true
 		}
 	} else {
-		out, err := reviewBitbucketCommand(m, []string{"pr", "comments", "list", m.PR, "--all", "--json"}, nil)
+		comments, err := readBitbucketReviewComments(m)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, branding.Text("{{command}}: read prior Bitbucket inline comments: %v\n"), err)
 			return nil
 		}
-		for _, match := range reviewInlineMarker.FindAllStringSubmatch(string(out), -1) {
-			keys[match[1]] = true
+		for _, comment := range comments {
+			for _, match := range reviewInlineMarker.FindAllStringSubmatch(comment.Content.Raw, -1) {
+				keys[match[1]] = true
+			}
 		}
 	}
 	return keys

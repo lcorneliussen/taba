@@ -1,8 +1,10 @@
 package wtc
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -94,14 +96,9 @@ func copyPublicReviewComments(dir string, manifest ReviewManifest) {
 		return
 	}
 	if manifest.Forge == "bitbucket" {
-		raw, err := reviewBitbucketCommand(manifest, []string{"--json", "pr", "comments", "list", manifest.PR, "--limit", "1000", "--no-truncate"}, nil)
+		comments, err := readBitbucketReviewComments(manifest)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, branding.Text("{{command}}: warning: Bitbucket review comments unavailable: %v\n"), err)
-			return
-		}
-		comments, err := parseBitbucketBundleComments(raw)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, branding.Text("{{command}}: warning: Bitbucket review comments could not be parsed: %v\n"), err)
 			return
 		}
 		if err := writeBundleComments(dir, comments); err != nil {
@@ -132,30 +129,88 @@ func copyPublicReviewComments(dir string, manifest ReviewManifest) {
 	}
 }
 
+// Both supported community CLI versions collect pages into this wrapper. Keep
+// the cap explicit: their count reports collected items, not the remote total.
+func readBitbucketReviewComments(m ReviewManifest) ([]bundleComment, error) {
+	raw, err := reviewBitbucketCommand(m, []string{"pr", "comments", "list", m.PR, "--limit", "1000", "--json"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return parseBitbucketBundleComments(raw)
+}
+
 func parseBitbucketBundleComments(raw []byte) ([]bundleComment, error) {
 	const commentLimit = 1000
-	var comments []bundleComment
-	if err := json.Unmarshal(raw, &comments); err != nil {
-		var page struct {
-			Comments []bundleComment `json:"comments"`
-			Values   []bundleComment `json:"values"`
-			Count    *int            `json:"count"`
-		}
-		if err := json.Unmarshal(raw, &page); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, fmt.Errorf("Bitbucket comments need a CLI collection wrapper")
+	}
+	fields := map[string]json.RawMessage{}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
 			return nil, err
 		}
-		comments = page.Comments
-		if comments == nil {
-			comments = page.Values
+		name, ok := token.(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid Bitbucket comments field")
 		}
-		if page.Count != nil && *page.Count > len(comments) {
-			return nil, fmt.Errorf("Bitbucket returned %d of %d comments", len(comments), *page.Count)
+		switch name {
+		case "comments", "count", "pullRequestId", "workspace", "repoSlug", "filters":
+		default:
+			return nil, fmt.Errorf("unsupported Bitbucket comments field %q; completeness is unknown", name)
 		}
+		if _, exists := fields[name]; exists {
+			return nil, fmt.Errorf("duplicate Bitbucket comments field %q", name)
+		}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[name] = value
 	}
-	// The CLI's count can mean the number collected rather than the remote
-	// total. Reaching the requested limit therefore cannot prove completeness.
-	if len(comments) >= commentLimit {
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("invalid trailing Bitbucket comments data")
+	}
+	var count int
+	countRaw, hasCount := fields["count"]
+	if !hasCount || bytes.Equal(countRaw, []byte("null")) || json.Unmarshal(countRaw, &count) != nil || count < 0 {
+		return nil, fmt.Errorf("Bitbucket comments need a nonnegative collection count")
+	}
+	var rows []json.RawMessage
+	commentsRaw := bytes.TrimSpace(fields["comments"])
+	if len(commentsRaw) == 0 || commentsRaw[0] != '[' || json.Unmarshal(commentsRaw, &rows) != nil {
+		return nil, fmt.Errorf("Bitbucket comments need a comments array")
+	}
+	if count != len(rows) {
+		return nil, fmt.Errorf("Bitbucket returned %d of %d comments", len(rows), count)
+	}
+	if len(rows) >= commentLimit {
 		return nil, fmt.Errorf("Bitbucket returned the %d-comment limit; review context may be incomplete", commentLimit)
+	}
+	comments := make([]bundleComment, 0, len(rows))
+	for _, row := range rows {
+		var shape struct {
+			Content *struct {
+				Raw *string `json:"raw"`
+			} `json:"content"`
+		}
+		if json.Unmarshal(row, &shape) != nil || shape.Content == nil || shape.Content.Raw == nil {
+			return nil, fmt.Errorf("Bitbucket comment has no valid content.raw")
+		}
+		var comment bundleComment
+		if err := json.Unmarshal(row, &comment); err != nil {
+			return nil, err
+		}
+		// A Bitbucket comment's text comes only from REST content.raw. The body
+		// field belongs to GitHub and must not supply markers or transcript text.
+		comment.Body = ""
+		comments = append(comments, comment)
 	}
 	sort.SliceStable(comments, func(i, j int) bool { return comments[i].when() < comments[j].when() })
 	return comments, nil
