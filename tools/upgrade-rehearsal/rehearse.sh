@@ -77,6 +77,8 @@ report="$work/report.md"
 while IFS='=' read -r name _; do
   case "$name" in WTC_*|TABA_*|MISE_*) unset "$name" ;; esac
 done < <(env)
+# Run the chosen releases, including when the receiving harness has a dev build.
+export TABA_DEV_BUILD=off WTC_DEV_BUILD=off
 : > "$work/mise/global.toml"
 export MISE_DATA_DIR="$work/mise/data" MISE_CACHE_DIR="$work/mise/cache" \
   MISE_STATE_DIR="$work/mise/state" MISE_CONFIG_DIR="$work/mise/config" \
@@ -198,7 +200,7 @@ validate_release() {
       echo "$name $version is missing or outside the private mise installs tree" >&2
       return 1
     }
-    output="$("$binary" --version)" || return $?
+    output="$(cd -P -- "$coll" && "$binary" --version)" || return $?
     actual="$(printf '%s\n' "$output" | awk '{print $3}')"
     [ "$actual" = "$version" ] || {
       echo "$name reports '$output'; expected $version" >&2

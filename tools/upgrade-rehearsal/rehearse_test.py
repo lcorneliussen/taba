@@ -19,7 +19,13 @@ root = pathlib.Path(os.environ["FIXTURE"])
 state = root / "stage"
 stage = state.read_text() if state.exists() else "preflight"
 with (root / "calls").open("a") as f:
-    f.write(json.dumps({"exe": str(p), "args": a, "stage": stage}) + "\n")
+    f.write(json.dumps({"exe": str(p), "args": a, "stage": stage,
+                        "cwd": str(pathlib.Path.cwd()),
+                        "dev_flags": [os.environ.get("TABA_DEV_BUILD"), os.environ.get("WTC_DEV_BUILD")]}) + "\n")
+if (pathlib.Path.cwd() / ".synthetic-dev").exists() and "off" not in (
+        os.environ.get("TABA_DEV_BUILD"), os.environ.get("WTC_DEV_BUILD")):
+    print("wtc version 9.9.9")
+    sys.exit(0)
 command = {("--version",): p.name + " version", ("env", "list"): "env list",
            ("status", "--json"): "status", ("doctor",): "doctor"}.get(tuple(a))
 if stage == os.environ.get("FAIL_STAGE") and command == os.environ.get("FAIL_COMMAND"):
@@ -33,6 +39,7 @@ if a == ["--version"]:
 elif a == ["env", "setup"]:
     if os.environ.get("INVALID") == "setup": sys.exit(38)
     pathlib.Path(".env.collection").write_text("WTC_COLLECTION='rehearsal'\n")
+    if os.environ.get("INVALID") == "local-dev": pathlib.Path(".synthetic-dev").touch()
 elif a == ["mcp", "render"]:
     state.write_text("before")
 elif a == ["upgrade", "--help"]:
@@ -206,6 +213,26 @@ class RehearsalTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any("exterior" in c["exe"] for c in calls))
         self.assertTrue(any(c["args"][:1] == ["catch-up"] for c in calls))
+
+    def test_selected_releases_ignore_caller_and_receiving_dev_builds(self):
+        (self.root / ".synthetic-dev").touch()
+        release = self.root / "releases/0.1.9/wtc"
+        control = subprocess.run([str(release), "--version"], cwd=self.root,
+                                 env=self.env, capture_output=True, text=True, check=True)
+        self.assertIn("9.9.9", control.stdout)
+        for flag in ("TABA_DEV_BUILD", "WTC_DEV_BUILD"):
+            control = subprocess.run([str(release), "--version"], cwd=self.root,
+                                     env=dict(self.env, **{flag: "off"}),
+                                     capture_output=True, text=True, check=True)
+            self.assertIn("0.1.9", control.stdout)
+        (self.root / "calls").unlink()  # Only rehearsal invocations count below.
+        result, report, calls = self.run_rehearsal(invalid="local-dev", extra=("--registry-followup",))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("catch-up after registry rename | pass", report)
+        work = (self.root / "work").resolve()
+        for call in calls:
+            self.assertTrue(Path(call["cwd"]).is_relative_to(work), call)
+            self.assertEqual(call["dev_flags"], ["off", "off"], call)
 
     def test_legacy_install_key_fallback(self):
         result, report, _ = self.run_rehearsal(invalid="legacy")
