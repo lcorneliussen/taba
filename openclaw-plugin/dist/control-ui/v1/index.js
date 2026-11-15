@@ -264,7 +264,7 @@ function watchCollection(host, sessionKey, agentId, onChange) {
   if (entry.data || entry.error) onChange(entry);
   void load(false);
   return {
-    // Manual clicks join a read; mutation callers below still request a fresh read.
+    // Refresh buttons join a read; refresh() retains forced reloads for actions and the palette.
     manualRefresh: (logKey) => {
       if (disposed) return Promise.resolve(null);
       if (entry.manual) return entry.manual.host === host && entry.manual.agentId === agentId ? entry.manual.promise : Promise.resolve({ refused: "Refresh was not started: another host or agent context owns the active refresh." });

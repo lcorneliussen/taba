@@ -2690,6 +2690,8 @@ test("manual refresh does not consume the forced reload after a service action",
   assert.equal(reads,1);pending.shift()({ok:true,result:data});
   for(let i=0;i<4;i++)await settle();assert.equal(reads,2,"service completion still forces a post-action read");
   assert.doesNotMatch(readable(panel.host),/Collection status refreshed/,"old read cannot announce completion while forced read is pending");
+  assert.match(readable(panel.host),/Refresh was superseded by a collection action or a newer status read/);
+  assert.doesNotMatch(readable(panel.host),/Refreshing collection status…/);
   pending.shift()({ok:true,result:data});await action;await refresh;
  }finally{controlledCollection=undefined;for(const resolve of pending)resolve({ok:true,result:data});panel.view.dispose();}
 });
@@ -2713,7 +2715,7 @@ for(const mismatch of ["host","agent"])for(const source of ["manual","background
 
 test("manual refresh during publication reads but cannot complete the paused generation",async()=>{
  const data=collection([repo("api",{unpublished:1})]);personal={state:"connected",account:{login:"demo"},generation:"g1"};
- const card=await mount("composer",data);let finishPublish,reads=0;const pending=[];
+ const card=await mount("composer",data),panelHost=container(),panel=mounts.panel(panelHost,card.context);let finishPublish,reads=0;const pending=[];
  try{
   await [...card.host.all()].find(n=>n.tagName==="BUTTON"&&/^1 commit to push/.test(n.title)).onclick();
   githubConfirmResult=()=>new Promise(resolve=>finishPublish=resolve);
@@ -2722,10 +2724,20 @@ test("manual refresh during publication reads but cannot complete the paused gen
   const refresh=[...card.host.all()].find(n=>n.className==="wtc-refresh-control").onclick({preventDefault(){},stopPropagation(){}});await settle();
   assert.equal(reads,1,"manual click remains admitted while publication is paused");
   pending.shift()({ok:true,result:data});await refresh;assert.doesNotMatch(readable(card.host),/Collection status refreshed/);
+  assert.match(readable(panelHost),/Refresh was superseded by a collection action or a newer status read/);
+  assert.doesNotMatch(readable(panelHost),/Refreshing collection status…/);
   finishPublish({status:"published",created:false,url:"https://github.com/octo/api/pull/7"});
   for(let i=0;i<4;i++)await settle();assert.equal(reads,2,"publication still requires a fresh read");
   pending.shift()({ok:true,result:data});await publication;assert.equal(reads,2);
- }finally{controlledCollection=undefined;for(const resolve of pending)resolve({ok:true,result:data});finishPublish?.({status:"blocked"});githubConfirmResult=undefined;personal=null;card.view.dispose();}
+ }finally{controlledCollection=undefined;for(const resolve of pending)resolve({ok:true,result:data});finishPublish?.({status:"blocked"});githubConfirmResult=undefined;personal=null;panel.dispose();card.view.dispose();}
+});
+
+for(const result of [undefined,{cancelled:true}])test(`background refresh rejects missing or cancelled status (${result ? "cancelled" : "missing"})`,async t=>{
+ const timers=[],original=globalThis.setInterval;
+ t.mock.method(globalThis,"setInterval",(fn,ms,...args)=>{if(ms===30000)timers.push(fn);return original(fn,ms,...args);});
+ const card=await mount("composer",collection([repo("api")]));controlledCollection=()=>({ok:true,result});
+ try{timers[0]();await settle();assert.match(readable(card.host),/Refresh failed: Collection status refresh did not return a result/);assert.doesNotMatch(readable(card.host),/Collection status refreshed/);}
+ finally{controlledCollection=undefined;card.view.dispose();}
 });
 
 test("panel feedback renders once and keeps its refreshed stamp for later host updates",async()=>{
