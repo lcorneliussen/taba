@@ -475,7 +475,8 @@ const portOf = (url) => {
   try {
     const parsed = new URL(url);
     if (!["http:", "https:"].includes(parsed.protocol)) return null;
-    return Number(parsed.port) || (parsed.protocol === "https:" ? 443 : 80);
+    if (parsed.port) return Number(parsed.port) || null;
+    return parsed.protocol === "https:" ? 443 : 80;
   } catch { return null; }
 };
 // A portal at a loopback or private address the browser is not on (a
