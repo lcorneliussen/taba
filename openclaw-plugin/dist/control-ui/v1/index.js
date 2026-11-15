@@ -277,7 +277,8 @@ function watchCollection(host, sessionKey, agentId, onChange) {
         entry.manual = null;
         recordActivity(logKey, id, { state, status });
       };
-      operation.cancel = (status = "Refresh observation ended when the collection view closed.") => finish("unknown", status);
+      // Ending this observation does not cancel the host read.
+      operation.cancel = (status = "Refresh observation ended when the collection view closed.") => finish("cancelled", status);
       operation.promise = Promise.resolve().then(() => {
         if (entry.manual !== operation) return null;
         return load(true);

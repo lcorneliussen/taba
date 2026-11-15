@@ -2618,6 +2618,15 @@ for(const mode of ["hidden","aborted","workers"])test(`unchanged ${mode} compose
 });
 
 
+const cancelledRefreshRow = host => {
+ const row=[...host.all()].find(n=>n.className==="wtc-activity-item"&&n.children[0].textContent.includes("Collection · Refresh"));
+ assert.ok(row,"the read observation remains in activity history");
+ assert.match(row.children[0].textContent,/Cancelled/);
+ assert.doesNotMatch(row.children[0].textContent,/Unconfirmed|Done/);
+ assert.ok(!buttons(row).includes("Ask agent for help"),"ended read observations do not escalate to an agent");
+ return row;
+};
+
 for (const failure of [false, true]) test(`manual refresh coalesces card/panel reads and activity (${failure ? "failure" : "success"})`, async () => {
  const data=collection([repo("api")]),card=await mount("composer",data);
  const panelHost=container(),panel=mounts.panel(panelHost,card.context);
@@ -2668,7 +2677,7 @@ for(const transition of ["one-view-dispose","last-view-remount","session-change"
   if(transition==="aborted")card.abort();
   release({ok:false,error:"Late synthetic failure"});await refresh;await settle();
   if(transition==="one-view-dispose")assert.match(readable(panelHost),/Late synthetic failure/);
-  if(transition==="last-view-remount")assert.doesNotMatch(readable(remount.host),/Late synthetic failure|Collection status refreshed/);
+  if(transition==="last-view-remount"){assert.doesNotMatch(readable(remount.host),/Late synthetic failure|Collection status refreshed/);assert.match(cancelledRefreshRow(remount.host).textContent,/Refresh observation ended when the collection view closed/);}
   if(transition==="session-change")assert.doesNotMatch(readable(card.host)+readable(panelHost),/Late synthetic failure|Collection status refreshed/);
   if(transition==="aborted")assert.doesNotMatch(readable(card.host),/Refresh failed|Collection status refreshed/);
  }finally{controlledCollection=undefined;release?.({ok:true,result:data});remount?.view.dispose();panel.dispose();card.view.dispose();}
@@ -2692,6 +2701,8 @@ test("manual refresh does not consume the forced reload after a service action",
   assert.doesNotMatch(readable(panel.host),/Collection status refreshed/,"old read cannot announce completion while forced read is pending");
   assert.match(readable(panel.host),/Refresh was superseded by a collection action or a newer status read/);
   assert.doesNotMatch(readable(panel.host),/Refreshing collection status…/);
+  cancelledRefreshRow(panel.host);
+  assert.equal(pending.length,1,"the forced host read remains pending");
   pending.shift()({ok:true,result:data});await action;await refresh;
  }finally{controlledCollection=undefined;for(const resolve of pending)resolve({ok:true,result:data});panel.view.dispose();}
 });
@@ -2726,6 +2737,7 @@ test("manual refresh during publication reads but cannot complete the paused gen
   pending.shift()({ok:true,result:data});await refresh;assert.doesNotMatch(readable(card.host),/Collection status refreshed/);
   assert.match(readable(panelHost),/Refresh was superseded by a collection action or a newer status read/);
   assert.doesNotMatch(readable(panelHost),/Refreshing collection status…/);
+  cancelledRefreshRow(panelHost);
   finishPublish({status:"published",created:false,url:"https://github.com/octo/api/pull/7"});
   for(let i=0;i<4;i++)await settle();assert.equal(reads,2,"publication still requires a fresh read");
   pending.shift()({ok:true,result:data});await publication;assert.equal(reads,2);
@@ -2738,6 +2750,16 @@ for(const result of [undefined,{cancelled:true}])test(`background refresh reject
  const card=await mount("composer",collection([repo("api")]));controlledCollection=()=>({ok:true,result});
  try{timers[0]();await settle();assert.match(readable(card.host),/Refresh failed: Collection status refresh did not return a result/);assert.doesNotMatch(readable(card.host),/Collection status refreshed/);}
  finally{controlledCollection=undefined;card.view.dispose();}
+});
+
+test("ended refresh observations leave ordinary unconfirmed action help intact",async()=>{
+ const data=collection([repo("site",{dirty:1})]),card=await mount("composer",data),panelHost=container(),panel=mounts.panel(panelHost,card.context);
+ try{
+  calls.length=0;failing.add("sessions.send");await localChangeButton(card.host).onclick();await settle();failing.delete("sessions.send");
+  const row=[...panelHost.all()].find(n=>n.className==="wtc-activity-item"&&n.children[0].textContent.includes("site"));
+  assert.ok(row);assert.match(row.children[0].textContent,/Unconfirmed/);assert.ok(buttons(row).includes("Ask agent for help"));
+  assert.equal(calls.filter(c=>c.method==="sessions.send").length,0,"the synthetic failed handoff sends no real notification");
+ }finally{failing.delete("sessions.send");panel.dispose();card.view.dispose();}
 });
 
 test("panel feedback renders once and keeps its refreshed stamp for later host updates",async()=>{
