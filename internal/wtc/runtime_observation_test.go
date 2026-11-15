@@ -101,7 +101,7 @@ func observationFixture(t *testing.T) (*Context, *runtimeManifest, observationPl
 	c.Config.Runtime.Backend = "dekit"
 	c.Config.Runtime.Binary = binary
 	fixtureFile(t, filepath.Join(c.Harness, "wtc.toml"), "[runtime]\nbackend = 'dekit'\nbinary = '"+binary+"'\n", 0600)
-	m := &runtimeManifest{Schema: 2, Root: root, Binary: binary, Resources: []runtimeResource{{Dir: "widget", Repo: "widget", State: "provision-hook-completed"}}}
+	m := &runtimeManifest{Schema: 1, Root: root, Binary: binary, Resources: []runtimeResource{{Dir: "widget", Repo: "widget", State: "provision-hook-completed"}}}
 	for _, name := range []string{"web", "stopped"} {
 		path := "widget/" + name
 		m.Tasks = append(m.Tasks, runtimeTask{RuntimeItem: RuntimeItem{Collection: filepath.Base(c.Collection), Dir: "widget", Repo: "widget", Path: path, Kind: "service"}, Log: filepath.Join(root, "logs", path+".log")})
@@ -323,6 +323,7 @@ func TestRuntimeObservationPreservesManagedFactsAndDeclarations(t *testing.T) {
 	}
 	observationUnchanged(t, c, before)
 	// Publication still requires the managed journal; an observed task does not grant ownership.
+	m.Schema = 2
 	if err := runtimeSaveManifest(m); err != nil {
 		t.Fatal(err)
 	}
@@ -340,6 +341,8 @@ func TestRuntimeObservationPreservesManagedFactsAndDeclarations(t *testing.T) {
 		t.Fatalf("missing ownership diagnostic: %+v", published)
 	}
 	c, _, _ = observationFixture(t)
+	fixtureGit(t, "-C", c.Harness, "init", "-q", "-b", "main")
+	fixtureGit(t, "-C", c.Harness, "remote", "add", "origin", "https://example.invalid/harness-example.git")
 	app := filepath.Join(c.Collection, "widget")
 	fixtureFile(t, filepath.Join(app, "README.md"), "synthetic\n", 0600)
 	fixtureGit(t, "-C", app, "init", "-q", "-b", "main")
