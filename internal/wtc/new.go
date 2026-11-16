@@ -13,12 +13,14 @@ import (
 )
 
 type NewOptions struct {
-	Slug    string
-	Repos   []string
-	Issue   string
-	Tracker string
-	PR      string
-	Branch  string
+	RepoBases  map[string]string
+	BaseReason string
+	Slug       string
+	Repos      []string
+	Issue      string
+	Tracker    string
+	PR         string
+	Branch     string
 	// Review makes a PR collection review-only: pushing from the PR worktree
 	// is disabled and the author's review steps refuse to run.
 	Review bool
@@ -39,6 +41,9 @@ var githubSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9
 
 func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	result := NewResult{}
+	if err := validateNewBaseInputs(opt); err != nil {
+		return result, err
+	}
 	if _, err := c.ValidateControlRoot(); err != nil {
 		return result, err
 	}
@@ -187,6 +192,9 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 			return result, err
 		}
 	}
+	if err := c.validateNewBases(opt, result.Repositories); err != nil {
+		return result, err
+	}
 	values := map[string]string{"collection": result.Collection, "source": result.Source, "branch": result.IntendedBranch}
 	if err := c.RunHook("new.pre", values); err != nil {
 		return result, err
@@ -194,6 +202,14 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	if err := os.Mkdir(result.Collection, 0755); err != nil {
 		return result, err
 	}
+	if err := c.writeNewBases(opt, result.Collection); err != nil {
+		return result, err
+	}
+	// Keep the chosen creation registry throughout bootstrap: a freshly checked
+	// out harness may predate a rename already visible in the invoking registry.
+	// The receiver's local base file remains the only override input.
+	creating := *c
+	creating.Collection = result.Collection
 	// Preserve the shell command's ordering: harness first, then the primary
 	// issue/PR repository, then explicit siblings.
 	for _, name := range result.Repositories {
@@ -219,7 +235,7 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 				result.Review = err == nil
 			}
 		} else {
-			err = c.AddWorktree(name, directory, result.Collection, branch)
+			err = creating.AddWorktree(name, directory, result.Collection, branch)
 		}
 		if err != nil {
 			return result, fmt.Errorf("add %s: %w (partial collection at %s)", name, err, result.Collection)
@@ -229,6 +245,23 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	if err != nil {
 		return result, err
 	}
+	// New explicit intent must also be meaningful to the completed receiver.
+	for selector, ref := range opt.RepoBases {
+		name := selector
+		if name == "harness" {
+			name = harnessRepo
+		}
+		repo, _ := baseRepository(c.Registry, name) // validated before creation
+		base, err := target.RepositoryBase(repo.Name)
+		if err != nil {
+			return result, fmt.Errorf("receiving registry cannot resolve requested base: %w (partial collection at %s)", err, result.Collection)
+		}
+		expected, _ := normalizeRepoBase(ref)
+		if base.Source != "collection" || base.EffectiveRef != expected {
+			return result, fmt.Errorf("receiving registry does not apply requested base for %q (partial collection at %s)", repo.Name, result.Collection)
+		}
+	}
+
 	// Resolve the target permission independently of the creating collection.
 	if _, err := target.ValidateControlRoot(); err != nil {
 		return result, err

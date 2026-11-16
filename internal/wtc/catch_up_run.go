@@ -37,11 +37,14 @@ func (c *Context) catchUpDefaultRef(t catchUpTarget) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	repo, err := target.Repository(t.repo)
-	if err != nil || repo.DefaultRef == "" {
+	if _, err := target.Repository(t.repo); err != nil {
 		return catchUpLocalRef(t, "origin/main"), nil
 	}
-	return catchUpLocalRef(t, repo.DefaultRef), nil
+	base, err := target.RepositoryBase(t.repo)
+	if err != nil {
+		return "", err
+	}
+	return catchUpLocalRef(t, base.EffectiveRef), nil
 }
 
 // catchUpOriginRepo is the registry entry whose remote a shared owner should

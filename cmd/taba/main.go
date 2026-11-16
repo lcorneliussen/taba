@@ -321,6 +321,7 @@ func run() error {
 	addHostCommands(root, &asJSON)
 	addOpenClawCommands(root)
 	addRegistryCommands(root, &asJSON)
+	addRepoBaseCommands(root, &asJSON)
 	addMCPCommands(root, &asJSON)
 	addSecretsCommands(root, &asJSON)
 	addAgentEnvCommand(root, &asJSON)

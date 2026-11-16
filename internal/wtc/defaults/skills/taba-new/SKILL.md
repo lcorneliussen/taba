@@ -43,7 +43,8 @@ the cheap mistake.
 
 ## 3. No branch is created — that is deliberate
 
-Every sibling is checked out **detached at its `default_ref`**. Nothing to
+Every sibling is checked out **detached at its receiving development base**
+(`repo base show`; explicit `new --repo-base` selects an initial override). Nothing to
 decide here, but two consequences worth knowing:
 
 - **Every collection can sit at the tip at once.** A branch can only be

@@ -696,6 +696,7 @@ func statusPRBase(snapshot *StatusSnapshot, index int, base string) {
 		snapshot.StaleCount--
 	}
 	r.Behind, r.baseRef = behind, "origin/"+base
+	r.ComparisonRef = r.baseRef
 	if behind > 0 {
 		snapshot.StaleCount++
 	}

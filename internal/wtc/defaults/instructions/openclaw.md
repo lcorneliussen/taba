@@ -218,3 +218,7 @@ makes it unpublishable.
 
 Never run `git push` yourself, and never `git rebase` or `git commit --amend`
 on commits that were published.
+
+Existing local receiving collections can select a development checkout base
+with `repo base set`; see `docs/repository-bases.md`. This does not change gateway
+publication destinations or grant sandbox access to private local settings.

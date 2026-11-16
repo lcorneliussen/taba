@@ -190,6 +190,12 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 		if len(builds) != 0 {
 			parts = append(parts, strings.Join(builds, "; "))
 		}
+		if base := row.DevelopmentBase; base != nil && base.Source == "collection" {
+			parts = append(parts, "base "+statusBaseLiteral(base.EffectiveRef)+" (collection), reason "+statusBaseLiteral(base.Reason))
+			if row.ComparisonRef != "" && row.ComparisonRef != base.EffectiveRef {
+				parts = append(parts, "PR comparison "+statusBaseLiteral(row.ComparisonRef))
+			}
+		}
 		b.WriteString("- " + strings.Join(parts, "; ") + "\n")
 	}
 	if s.StaleCount != 0 {
@@ -331,4 +337,14 @@ func statusRetiredHolding(row StatusRetired) string {
 		return "nothing left"
 	}
 	return "holds " + strings.Join(row.BlockingPaths, ", ")
+}
+
+// A variable-length code span keeps untrusted local prose literal in Markdown.
+func statusBaseLiteral(value string) string {
+	value = fmt.Sprintf("%q", value)
+	fence := "`"
+	for strings.Contains(value, fence) {
+		fence += "`"
+	}
+	return fence + " " + value + " " + fence
 }

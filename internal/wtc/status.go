@@ -33,27 +33,29 @@ type StatusSnapshot struct {
 }
 
 type StatusRepo struct {
-	Collection    string         `json:"collection"`
-	Dir           string         `json:"dir"`
-	Repo          string         `json:"repo"`
-	RenamedTo     string         `json:"renamed_to,omitempty"` // current name when Dir is an alias
-	Worktree      string         `json:"worktree"`
-	Slug          string         `json:"slug"`
-	Forge         string         `json:"forge,omitempty"`
-	BranchKind    string         `json:"branch_kind"`
-	Branch        string         `json:"branch"`
-	BranchDisplay string         `json:"branch_display"`
-	Ahead         int            `json:"ahead"`
-	AheadRef      string         `json:"ahead_ref,omitempty"`
-	AheadBasis    string         `json:"ahead_basis,omitempty"`
-	UpstreamState string         `json:"upstream_state,omitempty"`
-	Landing       *StatusLanding `json:"landing,omitempty"`
-	Behind        int            `json:"behind"`
-	Tree          string         `json:"tree"`
-	Changed       int            `json:"changed"`
-	Conflict      bool           `json:"conflict,omitempty"`
-	Operation     string         `json:"operation,omitempty"`
-	PR            *StatusPRFacts `json:"pr"`
+	DevelopmentBase *RepositoryBase `json:"development_base,omitempty"`
+	ComparisonRef   string          `json:"comparison_ref,omitempty"`
+	Collection      string          `json:"collection"`
+	Dir             string          `json:"dir"`
+	Repo            string          `json:"repo"`
+	RenamedTo       string          `json:"renamed_to,omitempty"` // current name when Dir is an alias
+	Worktree        string          `json:"worktree"`
+	Slug            string          `json:"slug"`
+	Forge           string          `json:"forge,omitempty"`
+	BranchKind      string          `json:"branch_kind"`
+	Branch          string          `json:"branch"`
+	BranchDisplay   string          `json:"branch_display"`
+	Ahead           int             `json:"ahead"`
+	AheadRef        string          `json:"ahead_ref,omitempty"`
+	AheadBasis      string          `json:"ahead_basis,omitempty"`
+	UpstreamState   string          `json:"upstream_state,omitempty"`
+	Landing         *StatusLanding  `json:"landing,omitempty"`
+	Behind          int             `json:"behind"`
+	Tree            string          `json:"tree"`
+	Changed         int             `json:"changed"`
+	Conflict        bool            `json:"conflict,omitempty"`
+	Operation       string          `json:"operation,omitempty"`
+	PR              *StatusPRFacts  `json:"pr"`
 	// PRUnconfirmed blocks branch actions and collection retirement for a matching
 	// local repository/branch when its enlisted PR state is stale, deferred or
 	// unavailable, or its PR URL is rejected. It does not claim the PR is open.
@@ -206,7 +208,7 @@ func statusCount(worktree, rangeSpec string) (int, error) {
 func statusLocalRepo(t catchUpTarget) (StatusRepo, error) {
 	dir := filepath.Base(t.path)
 	row := StatusRepo{Collection: t.collection, Dir: dir, Repo: t.repo,
-		Worktree: t.path, Tree: "clean", baseRef: t.ref, RenamedTo: t.renamed}
+		Worktree: t.path, Tree: "clean", baseRef: t.ref, ComparisonRef: t.ref, DevelopmentBase: t.developmentBase, RenamedTo: t.renamed}
 	remote, err := statusGit(t.path, "remote", "get-url", "origin")
 	if err == nil {
 		row.Slug, row.Forge = catchUpForge(remote)

@@ -331,7 +331,7 @@ func TestSandboxPlansRequireExistingPublicationDestination(t *testing.T) {
 		args              []string
 		rejected          bool
 	}{
-		{"registry differs", "main", nil, true},
+		{"recorded destination wins", "main", nil, false},
 		{"recorded destination matches", "develop", nil, false},
 		{"unknown destination", "", nil, true},
 		{"explicit matching base", "main", []string{"--base", "main"}, false},
