@@ -90,6 +90,9 @@ type StatusPRFacts struct {
 	MergeSource    string   `json:"merge_source,omitempty"`
 	MergeHead      string   `json:"merge_head,omitempty"`
 	MergeBase      string   `json:"merge_base,omitempty"`
+
+	ObservationReason string `json:"observation_reason,omitempty"`
+	RetryAt           string `json:"retry_at,omitempty"`
 }
 
 type StatusBuild struct {
@@ -152,6 +155,9 @@ type StatusPRRow struct {
 	// worktreeDir carries a verified branch association during collection;
 	// cached snapshots already contain the resulting Next and Choices.
 	worktreeDir string
+
+	ObservationReason string `json:"observation_reason,omitempty"`
+	RetryAt           string `json:"retry_at,omitempty"`
 }
 
 type StatusRetired struct {
@@ -378,4 +384,37 @@ func statusFacts(r StatusRepo) next.Facts {
 		}
 	}
 	return f
+}
+
+// StatusPreferNewerObservations protects presentation from an older collector
+// completion. It never grants local action authority from retained UI facts.
+func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnapshot {
+	if incoming.Collection != current.Collection {
+		return incoming
+	}
+	for i, row := range incoming.PRs {
+		for _, old := range current.PRs {
+			if row.Repo != old.Repo || row.Number != old.Number || row.URL == nil || old.URL == nil || *row.URL != *old.URL {
+				continue
+			}
+			at, err := time.Parse(time.RFC3339Nano, row.ObservedAt)
+			before, oldErr := time.Parse(time.RFC3339Nano, old.ObservedAt)
+			terminal := old.State == "MERGED" && !statusObservationUnavailable(old.Freshness) && row.State != "MERGED"
+			if !terminal && (oldErr != nil || (err == nil && !before.After(at))) {
+				continue
+			}
+			retained := old
+			if statusObservationUnavailable(row.Freshness) {
+				retained.Freshness, retained.ObservationReason, retained.RetryAt = row.Freshness, row.ObservationReason, row.RetryAt
+			}
+			incoming.PRs[i] = retained
+			for j := range incoming.Repos {
+				if incoming.Repos[j].Repo == row.Repo {
+					incoming.Repos[j].PRUnconfirmed = true
+					incoming.Repos[j].Next, incoming.Repos[j].Choices = nil, nil
+				}
+			}
+		}
+	}
+	return incoming
 }

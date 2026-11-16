@@ -251,6 +251,7 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 	case publishErr != nil:
 		outcome.Reason = "detail-publication-failed"
 	default:
+		outcome.Reason = "provider-confirmed"
 		statusMarkFullRefresh(forge, slug, record.Number)
 	}
 	return detail, outcome

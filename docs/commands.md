@@ -96,3 +96,9 @@ See [retirement readiness](retirement.md) for source coverage and limits.
 Repository development bases: `taba repo base set|show|clear` and
 `new --repo-base` provide explicit receiving-local overrides. See
 [collection-local repository bases](repository-bases.md).
+
+In the collection status view, `r` forces active enlisted PR metadata reads past
+TTL/open-list reuse, with the existing shared budget and cooldown. Repeated keys
+coalesce. Compact `s:age`/`d:age`/`u:age` marks keep freshness out of PR titles;
+`?` help and `l` log show original observation times and known deferral reasons.
+This does not change startup or promise cancellation of the full collector.

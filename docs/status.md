@@ -184,8 +184,27 @@ separate preservation blockers from unknown coverage; see
 ## Freshness, missing facts and controls
 
 The live header shows refresh timing and the running CLI version. Active PR
-facts normally use a 90-second forge cache. `r` requests refresh, but a fresh
-screen can still contain cached provider facts. `l` opens the refresh log.
+facts normally use a 90-second forge cache. In the collection view, `r` explicitly
+rechecks active enlisted PR metadata by number, bypassing detail TTL and stale
+open-list membership. It uses the same shared request budget and provider
+cooldown as background readers, with finite foreground priority. Repeated keys
+coalesce; a request made during collection runs immediately after that collection.
+Manual Refresh is not delayed by the background interval. Recorded/retained
+merges are reused without metadata queries. Periodic collection, branch discovery,
+local refs, runtime and build coverage retain their existing policies.
+
+The PR STATE cell uses compact `s:age` (stale), `d:age` (deferred), and `u:age`
+(unavailable) marks so titles remain visible. `never` means no known observation;
+`?` means unknown age. The header shows a refresh in progress. `?` help and `l`
+log provide the full last-known state, original observation time, actual admission
+reason and retry time when known. Older records with no reason say unknown;
+age alone never establishes a provider rate limit. Existing landing warnings
+remain visible. JSON adds `observation_reason` and `retry_at` without changing
+the meaning of `observed_at`. Reading or rendering does not renew observations.
+
+This foreground metadata change does not provide cached-first startup or full
+collector child cancellation. Those lifecycle changes remain separate work;
+visibility/attachment information is not inferred from unsupported host APIs.
 
 ```sh
 taba status                 # interactive live view in a terminal

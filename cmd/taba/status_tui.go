@@ -22,15 +22,21 @@ import (
 
 type statusTickMsg time.Time
 
-type statusRefreshStartedMsg struct{ events <-chan tea.Msg }
+type statusRefreshStartedMsg struct {
+	events    <-chan tea.Msg
+	requestID uint64
+}
 
 type statusProgressMsg struct {
-	message string
-	at      time.Time
-	events  <-chan tea.Msg
+	requestID uint64
+	message   string
+	at        time.Time
+	events    <-chan tea.Msg
 }
 
 type statusLoadedMsg struct {
+	requestID uint64
+	intent    wtc.StatusRefreshIntent
 	snapshot  wtc.StatusSnapshot
 	processes []wtc.StatusProcess
 	fetched   wtc.StatusFetchReport
@@ -60,6 +66,12 @@ type statusDevRestart struct {
 }
 
 type statusTUIModel struct {
+	uiContext         context.Context
+	refreshCancel     context.CancelFunc
+	refreshID         uint64
+	foreground        bool
+	pendingForeground bool
+
 	context        *wtc.Context
 	runtimeReading bool      // a service state read is in flight
 	runtimeReadAt  time.Time // when the last one started
@@ -292,6 +304,38 @@ func statusTUIRefreshWithCollector(c *wtc.Context, procs bool, collect func(*wtc
 	}
 }
 
+func (m *statusTUIModel) startForegroundRefresh() tea.Cmd {
+	m.startRefresh()
+	m.foreground = true
+	m.pendingForeground = false
+	m.refreshID++
+	parent := m.uiContext
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	m.refreshCancel = cancel
+	c, id := m.context, m.refreshID
+	return func() tea.Msg {
+		events := make(chan tea.Msg, 128)
+		go func() {
+			collector := *c
+			collector.StatusProgress = func(message string) {
+				select {
+				case events <- statusProgressMsg{requestID: id, message: message, at: time.Now(), events: events}:
+				default:
+				}
+			}
+			snapshot, err := collector.StatusForegroundSnapshot(ctx)
+			select {
+			case events <- statusLoadedMsg{requestID: id, intent: wtc.StatusRefreshForeground, snapshot: snapshot, err: err, at: time.Now()}:
+			case <-ctx.Done():
+			}
+		}()
+		return statusRefreshStartedMsg{events: events, requestID: id}
+	}
+}
+
 func statusTUIWait(events <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg { return <-events }
 }
@@ -470,8 +514,11 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.revealNext()
 		}
 	case tea.FocusMsg:
+		wasFocused := m.focused
 		m.focused = true
-		m.nextRefresh = time.Now().Add(m.interval)
+		if !wasFocused {
+			m.nextRefresh = time.Now()
+		}
 	case tea.BlurMsg:
 		m.focused = false
 		m.nextRefresh = time.Now().Add(m.background)
@@ -499,8 +546,14 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, statusTUIRuntimeTick()
 	case statusRefreshStartedMsg:
+		if msg.requestID != 0 && msg.requestID != m.refreshID {
+			return m, nil
+		}
 		return m, statusTUIWait(msg.events)
 	case statusProgressMsg:
+		if msg.requestID != 0 && msg.requestID != m.refreshID {
+			return m, nil
+		}
 		if m.startedAt.IsZero() {
 			m.startedAt = msg.at
 		}
@@ -516,6 +569,14 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.focusLogTail()
 		return m, statusTUIWait(msg.events)
 	case statusLoadedMsg:
+		if msg.requestID != 0 && msg.requestID != m.refreshID {
+			return m, nil
+		}
+		if m.refreshCancel != nil {
+			m.refreshCancel()
+			m.refreshCancel = nil
+		}
+		m.foreground = false
 		anchor := m.scrollAnchor()
 		selectedVisible := m.selectedNextVisible()
 		selectedKey := ""
@@ -530,6 +591,19 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		outcome := "Refresh finished"
 		if msg.err != nil {
 			outcome = "Refresh failed: " + msg.err.Error()
+		} else if msg.intent == wtc.StatusRefreshForeground {
+			deferred, unavailable, observed := 0, 0, 0
+			for _, row := range msg.snapshot.PRs {
+				switch row.Freshness {
+				case "deferred":
+					deferred++
+				case "unavailable", "stale":
+					unavailable++
+				case "live":
+					observed++
+				}
+			}
+			outcome = fmt.Sprintf("Refresh: %d live, %d deferred, %d unavailable/stale (l log; ? details)", observed, deferred, unavailable)
 		} else if msg.fetched.Failed != 0 {
 			plural := "es"
 			if msg.fetched.Failed == 1 {
@@ -539,7 +613,14 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.progressLog = append(m.progressLog, fmt.Sprintf("%s  %s", msg.at.Sub(m.startedAt).Truncate(time.Second), outcome))
 		m.focusLogTail()
-		m.lastRefresh = msg.at
+		if msg.intent == wtc.StatusRefreshForeground {
+			for _, row := range msg.snapshot.PRs {
+				m.progressLog = append(m.progressLog, statusTUISafe(wtc.StatusPRObservationDetail(row)))
+			}
+		}
+		if msg.err == nil {
+			m.lastRefresh = msg.at
+		}
 		m.nextRefresh = msg.at.Add(m.interval)
 		if !m.focused {
 			m.nextRefresh = msg.at.Add(m.background)
@@ -550,7 +631,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Service states from the short cycle are newer than the ones a
 			// full refresh read when it started.
 			live := m.snapshot.Runtime
-			m.snapshot = msg.snapshot
+			m.snapshot = wtc.StatusPreferNewerObservations(msg.snapshot, m.snapshot)
 			m.selectedNext = min(m.selectedNext, max(0, len(statusNextRepos(m.snapshot))-1))
 			for i, row := range statusNextRepos(m.snapshot) {
 				if statusNextIdentity(row) == selectedKey {
@@ -578,6 +659,10 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.devResume != nil {
 			m.restoreDevPresentation()
 			m.devResume = nil
+		}
+		if m.pendingForeground && m.context != nil && !m.all && !m.procs {
+			command := m.startForegroundRefresh()
+			return m, command
 		}
 	case statusDevMsg:
 		m.devChecking, m.devError = false, msg.err != nil
@@ -795,6 +880,9 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
+			if m.refreshCancel != nil {
+				m.refreshCancel()
+			}
 			m.devAutoExit, m.devRestart = false, nil
 			if m.nextCancel != nil {
 				m.nextCancel()
@@ -815,9 +903,19 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showArchived = !m.showArchived
 			m.restoreScroll(anchor)
 		case "r":
-			if !m.refreshing && !m.nextRunning {
-				m.startRefresh()
-				return m, statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge)
+			if !m.nextRunning {
+				if m.refreshing {
+					if !m.foreground {
+						m.pendingForeground = true
+						m.progressStep = "Refresh queued after current collection"
+					}
+				} else if m.context != nil && !m.all && !m.procs {
+					command := m.startForegroundRefresh()
+					return m, command
+				} else {
+					m.startRefresh()
+					return m, statusTUIRefresh(m.context, m.all, m.procs, m.noFetch, m.fetchAge)
+				}
 			}
 		case "l":
 			m.showLog = !m.showLog
@@ -1628,16 +1726,8 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		number := statusTUIPRNumberCell(row.Number, target, l.number, styled, linkTone)
 		repo := statusTUIFit(statusTUISafe(row.Repo), l.repo)
-		if row.Freshness == "stale" || row.Freshness == "deferred" || row.Freshness == "unavailable" {
-			state = row.Freshness
-			observation := "not yet observed"
-			if row.State != "" && row.State != "UNKNOWN" {
-				observation = "last " + strings.ToLower(row.State)
-			}
-			if row.ObservedAt != "" {
-				observation += "; observed " + statusTUISafe(row.ObservedAt)
-			}
-			label = row.Freshness + ": " + observation + "; " + label
+		if mark := wtc.StatusPRFreshnessMark(row.Freshness, row.ObservedAt, time.Now()); mark != "" {
+			state = mark
 		}
 		stateCell := statusTUIFit(state, l.state)
 		signals := statusTUIPRSignals(row.Checks, row.Merge, row.Review, styled)
@@ -1819,7 +1909,16 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
 			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
-			"Refresh uses shared cache and rate limits; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up.",
+			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up.",
+		}
+		for _, row := range m.snapshot.PRs {
+			if row.Archived && !m.showArchived {
+				continue
+			}
+			help = append(help, wtc.StatusPRObservationDetail(row))
+			if row.OnBranch && row.Landing != nil {
+				help = append(help, row.LandingLabel())
+			}
 		}
 		for _, text := range help {
 			lines = append(lines, strings.Split(ansi.Wrap(text, width, ""), "\n")...)
@@ -2007,6 +2106,7 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 		return err
 	}
 	defer cleanup()
+	model.uiContext = ctx
 	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
 	if updated, ok := final.(statusTUIModel); err == nil && ok && updated.devAutoExit && updated.devRestart != nil && updated.devIdle() {
 		cleanup()

@@ -2,6 +2,8 @@ package wtc
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -128,4 +130,57 @@ func statusRetainedMergeContext(ctx context.Context, record PRRecord, slug, forg
 		}
 	}
 	return detail, known, ctx.Err()
+}
+
+// StatusPRFreshnessMark keeps observation age out of the title column. A
+// missing/invalid time never becomes a current observation or a rate-limit claim.
+func StatusPRFreshnessMark(freshness, observed string, now time.Time) string {
+	if !statusObservationUnavailable(freshness) && freshness != "refreshing" {
+		return ""
+	}
+	if observed == "" {
+		if freshness == "refreshing" {
+			return "reading"
+		}
+		return "never"
+	}
+	age := "?"
+	if at, err := time.Parse(time.RFC3339Nano, observed); err == nil && !at.After(now) {
+		seconds := int(now.Sub(at).Seconds())
+		switch {
+		case seconds < 60:
+			age = fmt.Sprintf("%ds", seconds)
+		case seconds < 3600:
+			age = fmt.Sprintf("%dm", seconds/60)
+		case seconds < 86400:
+			age = fmt.Sprintf("%dh", seconds/3600)
+		default:
+			age = fmt.Sprintf("%dd", seconds/86400)
+		}
+	}
+	prefix := map[string]string{"stale": "s", "deferred": "d", "unavailable": "u", "refreshing": "r"}[freshness]
+	return prefix + ":" + age
+}
+
+// StatusPRObservationDetail is for the existing help/log surface, not a PR row.
+func StatusPRObservationDetail(row StatusPRRow) string {
+	observation := "not yet observed"
+	if row.State != "" && row.State != "UNKNOWN" {
+		observation = "last " + strings.ToLower(row.State)
+	}
+	if row.ObservedAt != "" {
+		observation += "; observed " + row.ObservedAt
+	}
+	reason := row.ObservationReason
+	if reason == "" {
+		reason = statusDetailObservation(statusPRDetail{State: row.State, Freshness: row.Freshness, ObservedAt: row.ObservedAt}).Reason
+	}
+	if reason == "" {
+		reason = "unknown"
+	}
+	text := row.Repo + "#" + row.Number + ": " + row.Freshness + "; " + observation + "; reason " + reason
+	if row.RetryAt != "" {
+		text += "; retry after " + row.RetryAt
+	}
+	return text
 }
