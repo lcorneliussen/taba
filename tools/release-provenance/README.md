@@ -7,9 +7,13 @@ at the initial validation. Both the build and release commands use this
 [build pipeline](https://github.com/goreleaser/goreleaser/blob/v2.19.0/internal/pipeline/pipeline.go).
 
 The release workflow runs `check.py preflight` before GoReleaser's `--clean`.
+Both release and CI verify the locked helper through `verify-helper.sh`, which
+exports its committed sources and embedded assets into a temporary copy, runs
+the existing helper checks there, and then checks the original checkout.
+Thus helper verification cannot leave ignored `node_modules/` in release source.
 It rejects tracked or untracked source changes, locally ignored files outside
 `dist/`, hidden index entries, tracked output paths, symlinks and unexpected
-output files. Only the current two binaries' four target directories and
+output files. Only the eight target directories for the two binaries and
 GoReleaser's build metadata files are accepted as removable build outputs.
 Archives and other unexpected prior outputs require manual inspection; the
 guard never deletes or repairs anything.

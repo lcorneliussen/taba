@@ -19,7 +19,7 @@ jobs:
         with:
           node-version: '22.14.0'
       - name: Verify locked embedded devtunnel helper
-        run: node tools/devtunnel-host/check.mjs
+        run: bash tools/release-provenance/verify-helper.sh
       - name: Validate committed release notes
         id: notes
         env:
