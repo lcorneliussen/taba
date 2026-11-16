@@ -39,6 +39,9 @@ func addRepoBaseCommands(root *cobra.Command, asJSON *bool) {
 			_ = cmd.MarkFlagRequired("reason")
 		}
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
+			if action == "set" && args[1] == "" {
+				return fmt.Errorf("base ref must not be empty; use repo base clear to clear an override")
+			}
 			c, err := context()
 			if err != nil {
 				return err

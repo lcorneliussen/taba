@@ -747,3 +747,177 @@ func TestRepositoryBaseExplicitSetValidatesCanonicalInput(t *testing.T) {
 		})
 	}
 }
+
+func TestRepositoryBaseExistingBranchDoesNotNeedAvailableBase(t *testing.T) {
+	for _, kind := range []string{"local", "origin"} {
+		t.Run(kind, func(t *testing.T) {
+			c := newWorkspaceFixture(t)
+			bare := filepath.Join(c.Workspace, ".bare", "widget.git")
+			ref := "refs/heads/existing-topic"
+			if kind == "origin" {
+				ref = "refs/remotes/origin/existing-topic"
+			}
+			fixtureGit(t, "--git-dir="+bare, "update-ref", ref, "refs/remotes/origin/main")
+			if kind == "origin" {
+				// ensureBare fetches: advertise the branch from the isolated source too.
+				source := fixtureGit(t, "--git-dir="+bare, "remote", "get-url", "origin")
+				fixtureGit(t, "-C", source, "branch", "existing-topic")
+			}
+			if _, err := c.SetRepositoryBase("widget", "not-yet-published", "Future default only"); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.AddWorktree("widget", "existing", c.Collection, "existing-topic"); err != nil {
+				t.Fatalf("available explicit %s branch blocked by unused base: %v", kind, err)
+			}
+			if err := c.AddWorktree("widget", "detached", c.Collection, ""); err == nil || !strings.Contains(err.Error(), "unavailable") {
+				t.Errorf("detached checkout did not require available base: %v", err)
+			}
+			if err := c.AddWorktree("widget", "new", c.Collection, "new-topic"); err == nil || !strings.Contains(err.Error(), "unavailable") {
+				t.Errorf("new branch did not require available base: %v", err)
+			}
+			stateFile := filepath.Join(c.Collection, ".wtc", "repo-bases.toml")
+			valid, err := os.ReadFile(stateFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixtureFile(t, stateFile, "schema_version=2\n", 0600)
+			if err := c.AddWorktree("widget", "corrupt", c.Collection, "existing-topic"); err == nil || !strings.Contains(err.Error(), "schema") {
+				t.Errorf("explicit branch did not preserve malformed-state refusal: %v", err)
+			}
+			for i, body := range []string{
+				"schema_version=1\n[repos.widget]\nbase='beta^{commit}'\nreason='unsafe ref'\n",
+				"schema_version=1\n[repos.widget]\nbase='beta'\nreason=''\n",
+			} {
+				fixtureFile(t, stateFile, body, 0600)
+				if err := c.AddWorktree("widget", fmt.Sprintf("invalid-state-%d", i), c.Collection, "existing-topic"); err == nil || !strings.Contains(err.Error(), "repository bases") {
+					t.Errorf("explicit branch bypassed unsafe state: %v", err)
+				}
+			}
+			if err := os.Remove(stateFile); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), "state")
+			fixtureFile(t, outside, string(valid), 0600)
+			if err := os.Symlink(outside, stateFile); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.AddWorktree("widget", "linked-state", c.Collection, "existing-topic"); err == nil || !strings.Contains(err.Error(), "repository bases") {
+				t.Errorf("explicit branch followed symlinked state: %v", err)
+			}
+			if err := os.Remove(stateFile); err != nil {
+				t.Fatal(err)
+			}
+			fixtureFile(t, stateFile, string(valid), 0600)
+			if err := c.AddWorktree("widget", "unsafe-branch", c.Collection, "bad~branch"); err == nil || !strings.Contains(err.Error(), "invalid branch") {
+				t.Errorf("explicit branch bypassed branch validation: %v", err)
+			}
+			c.Registry.Repos[0].Aliases = []string{"widget"}
+			if err := c.AddWorktree("widget", "ambiguous", c.Collection, "existing-topic"); err == nil || !strings.Contains(err.Error(), "exactly one") {
+				t.Errorf("explicit branch bypassed ambiguous identity: %v", err)
+			}
+			c.Registry.Repos[0].Aliases = nil
+			c.Registry.Repos[1].Name = "../unsafe"
+			c.Registry.Repos[1].Aliases = []string{"widget"}
+			if err := c.AddWorktree("widget", "unsafe-identity", c.Collection, "existing-topic"); err == nil || !strings.Contains(err.Error(), "invalid repository selector") {
+				t.Errorf("explicit branch bypassed unsafe canonical identity: %v", err)
+			}
+		})
+	}
+}
+
+func TestRepositoryBaseInventoryValidationIsLinearAndFresh(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	gadget := c.Registry.Repos[1]
+	gadget.Name = "gadget"
+	c.Registry.Repos = append(c.Registry.Repos, gadget)
+	registryFile := filepath.Join(c.Harness, ".harness-repos.yml")
+	body, err := os.ReadFile(registryFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, registryFile, string(body)+fmt.Sprintf("  - name: gadget\n    remote: %q\n    default_ref: origin/main\n", gadget.Remote), 0600)
+	for _, name := range []string{"widget", "gadget"} {
+		if err := c.AddWorktree(name, name, c.Collection, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"agent-harness", "widget", "gadget"} {
+		if _, err := c.SetRepositoryBase(name, "beta", "Inventory fixture"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin, log := t.TempDir(), filepath.Join(t.TempDir(), "validations")
+	fixtureFile(t, filepath.Join(bin, "git"), "#!/bin/sh\nif [ \"$1\" = check-ref-format ]; then printf 'validate\\n' >> \"$BASE_TEST_GIT_LOG\"; exit 0; fi\nexec \"$BASE_TEST_REAL_GIT\" \"$@\"\n", 0755)
+	t.Setenv("BASE_TEST_REAL_GIT", realGit)
+	t.Setenv("BASE_TEST_GIT_LOG", log)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, ref := range []string{"beta", "gamma"} {
+		if ref == "gamma" {
+			file := filepath.Join(c.Collection, ".wtc", "repo-bases.toml")
+			body, _ := os.ReadFile(file)
+			fixtureFile(t, file, strings.ReplaceAll(string(body), "origin/beta", "origin/gamma"), 0600)
+		}
+		fixtureFile(t, log, "", 0600)
+		_, targets, err := c.CatchUpInventory(CatchUpOptions{DryRun: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		trace, _ := os.ReadFile(log)
+		calls := strings.Count(string(trace), "validate\n")
+		t.Logf("3 repositories x 3 stored overrides: %d check-ref-format calls for one %s inventory", calls, ref)
+		if calls > 3 {
+			t.Errorf("store validation repeated per lookup: %d calls, want at most 3", calls)
+		}
+		if len(targets) != 3 {
+			t.Fatalf("fixture targets: %d", len(targets))
+		}
+		for _, target := range targets {
+			if target.ref != "origin/"+ref {
+				t.Errorf("new operation hid receiving edits: %s", target.ref)
+			}
+		}
+	}
+}
+
+func TestRepositoryBaseSnapshotIsOperationLocalAndImmutable(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	c.Registry.Repos[1].Aliases = []string{"legacy"}
+	if _, err := c.SetRepositoryBase("widget", "beta", "Original snapshot"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := newRepositoryBaseSnapshot(c.Collection, c.Registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Registry.Repos[1].DefaultRef = "origin/next"
+	c.Registry.Repos[1].Aliases[0] = "different"
+	file := filepath.Join(c.Collection, ".wtc", "repo-bases.toml")
+	fixtureFile(t, file, "schema_version=1\n[repos.widget]\nbase='gamma'\nreason='New receiving edit'\n", 0600)
+	old, err := snapshot.resolve("widget", false)
+	if err != nil || old.EffectiveRef != "origin/beta" || old.RegistryRef != "origin/main" || old.Reason != "Original snapshot" {
+		t.Fatalf("operation snapshot changed: %+v %v", old, err)
+	}
+	fresh, err := c.RepositoryBase("widget")
+	if err != nil || fresh.EffectiveRef != "origin/gamma" || fresh.RegistryRef != "origin/next" {
+		t.Fatalf("fresh operation hid receiving edits: %+v %v", fresh, err)
+	}
+	// Alias guards also use the operation's copied identity data.
+	c.Registry.Repos[1].Aliases[0] = "legacy"
+	fixtureFile(t, file, "schema_version=1\n[repos.legacy]\nbase='beta'\nreason='Retained intent'\n", 0600)
+	snapshot, err = newRepositoryBaseSnapshot(c.Collection, c.Registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Registry.Repos[1].Aliases[0] = "different"
+	if _, err := snapshot.resolve("widget", false); err == nil || !strings.Contains(err.Error(), "clear legacy") {
+		t.Fatalf("snapshot alias identity was mutable: %v", err)
+	}
+	fixtureFile(t, file, "schema_version=2\n", 0600)
+	if _, err := c.RepositoryBase("widget"); err == nil {
+		t.Fatal("next operation reused snapshot over corrupt receiving edit")
+	}
+}

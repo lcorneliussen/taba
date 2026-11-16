@@ -89,10 +89,24 @@ local function receiving_base_for(dir_name)
   return result.data.effective_ref
 end
 
+local function checked_comparison_ref(wt, ref, kind, label)
+  if git(wt, { "rev-parse", "--verify", ref .. "^{commit}" }) == "" then
+    error("unavailable comparison ref " .. string.format("%q", ref) .. " for " .. string.format("%q", label or wt))
+  end
+  return ref, kind
+end
+
+local function comparison_error_level(err)
+  if tostring(err):find("unavailable comparison ref", 1, true) then
+    return vim.log.levels.ERROR
+  end
+  return vim.log.levels.DEBUG
+end
+
 local function compare_ref(wt, dir_name)
   local hit = ref_cache[wt]
   if hit and (vim.uv.now() - hit.t) < 60000 then
-    return hit.ref, hit.kind
+    return checked_comparison_ref(wt, hit.ref, hit.kind, dir_name)
   end
   local ref, kind = receiving_base_for(dir_name), "tip"
   local branch = git(wt, { "branch", "--show-current" })
@@ -107,6 +121,7 @@ local function compare_ref(wt, dir_name)
       end
     end
   end
+  checked_comparison_ref(wt, ref, kind, dir_name)
   ref_cache[wt] = { ref = ref, kind = kind, t = vim.uv.now() }
   return ref, kind
 end
@@ -735,7 +750,7 @@ local function start_change_watch()
       refresh_collection_tab(found)
     end)
     if not ok then
-      vim.notify("wtc-browse watch: " .. tostring(err), vim.log.levels.DEBUG)
+      vim.notify("wtc-browse watch: " .. tostring(err), comparison_error_level(err))
     end
   end))
 end

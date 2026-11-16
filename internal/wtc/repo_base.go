@@ -175,6 +175,26 @@ func readReceivingRepoBases(collection string, registry Registry) (repoBaseStore
 	return store, nil
 }
 
+// repositoryBaseSnapshot is confined to one read operation. It owns validated
+// store data and the identity/ref fields it resolves; updates never use it.
+type repositoryBaseSnapshot struct {
+	collection string
+	registry   Registry
+	store      repoBaseStore
+}
+
+func newRepositoryBaseSnapshot(collection string, registry Registry) (*repositoryBaseSnapshot, error) {
+	copyRegistry := Registry{Repos: make([]Repo, len(registry.Repos))}
+	for i, repo := range registry.Repos {
+		copyRegistry.Repos[i] = Repo{Name: repo.Name, Aliases: append([]string(nil), repo.Aliases...), DefaultRef: repo.DefaultRef, ProductionRef: repo.ProductionRef, ReleaseRef: repo.ReleaseRef}
+	}
+	store, err := readReceivingRepoBases(collection, copyRegistry)
+	if err != nil {
+		return nil, err
+	}
+	return &repositoryBaseSnapshot{collection: collection, registry: copyRegistry, store: store}, nil
+}
+
 // ResolveRepositoryBase reads only receivingCollection, never the caller's
 // environment, PR destination, shared owner or registry output files.
 func ResolveRepositoryBase(receivingCollection string, registry Registry, selector string) (RepositoryBase, error) {
@@ -182,11 +202,16 @@ func ResolveRepositoryBase(receivingCollection string, registry Registry, select
 }
 
 func resolveRepositoryBase(receivingCollection string, registry Registry, selector string, unmanaged bool) (RepositoryBase, error) {
-	repo, err := canonicalBaseRepository(registry, selector)
-	store, storeErr := readReceivingRepoBases(receivingCollection, registry)
-	if storeErr != nil {
-		return RepositoryBase{}, storeErr
+	snapshot, err := newRepositoryBaseSnapshot(receivingCollection, registry)
+	if err != nil {
+		return RepositoryBase{}, err
 	}
+	return snapshot.resolve(selector, unmanaged)
+}
+
+func (snapshot *repositoryBaseSnapshot) resolve(selector string, unmanaged bool) (RepositoryBase, error) {
+	receivingCollection, registry, store := snapshot.collection, snapshot.registry, snapshot.store
+	repo, err := canonicalBaseRepository(registry, selector)
 	if !unmanaged && errors.Is(err, errUnregisteredBaseRepository) {
 		if _, exists := store.Repos[selector]; exists {
 			return RepositoryBase{}, fmt.Errorf("%w; stored intent is orphaned; run repo base clear %s", err, selector)

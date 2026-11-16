@@ -237,8 +237,11 @@ func (c *Context) AddWorktree(name, directory, destination, branch string) error
 		return err
 	}
 	ref := base.EffectiveRef
-	if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", ref); err != nil {
-		return fmt.Errorf("%s development tip %s is unavailable: %w", name, ref, err)
+	requireBase := func() error {
+		if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", ref); err != nil {
+			return fmt.Errorf("%s development tip %s is unavailable: %w", name, ref, err)
+		}
+		return nil
 	}
 	path := filepath.Join(destination, directory)
 	if _, err := os.Lstat(path); err == nil {
@@ -248,6 +251,9 @@ func (c *Context) AddWorktree(name, directory, destination, branch string) error
 	}
 	args := []string{"--git-dir=" + bare, "worktree", "add"}
 	if branch == "" {
+		if err := requireBase(); err != nil {
+			return err
+		}
 		args = append(args, "--detach", path, ref)
 	} else {
 		if _, err := gitOutput("check-ref-format", "--branch", branch); err != nil {
@@ -258,6 +264,9 @@ func (c *Context) AddWorktree(name, directory, destination, branch string) error
 		} else if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", "refs/remotes/origin/"+branch); err == nil {
 			args = append(args, "-b", branch, path, "origin/"+branch)
 		} else {
+			if err := requireBase(); err != nil {
+				return err
+			}
 			args = append(args, "-b", branch, path, ref)
 		}
 	}

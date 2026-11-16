@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+	"taba.sh/taba/internal/wtc"
 )
 
 func repositoryBaseCLI(t *testing.T, args ...string) (string, error) {
@@ -187,4 +189,161 @@ func TestRepositoryBaseCommandsKeepReusedAliasOrphanSeparate(t *testing.T) {
 	if _, err := repositoryBaseCLI(t, "repo", "base", "show", "widget", "--unmanaged", "--collection", collection); err == nil {
 		t.Fatal("CLI unmanaged fallback bypassed corrupt store")
 	}
+}
+
+func TestRepositoryBaseSetEmptyRefDoesNotClear(t *testing.T) {
+	collection := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(collection, "harness"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := "repos:\n  - name: widget\n    remote: https://example.invalid/widget.git\n    default_ref: origin/main\n"
+	if err := os.WriteFile(filepath.Join(collection, "harness", ".harness-repos.yml"), []byte(registry), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repositoryBaseCLI(t, "repo", "base", "set", "widget", "beta", "--reason", "Keep this intent", "--collection", collection); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(collection, ".wtc", "repo-bases.toml")
+	before, _ := os.ReadFile(file)
+	if _, err := repositoryBaseCLI(t, "repo", "base", "set", "widget", "", "--reason", "Empty variable", "--collection", collection); err == nil {
+		t.Error("empty set ref silently cleared intent")
+	}
+	after, _ := os.ReadFile(file)
+	if string(before) != string(after) {
+		t.Error("empty set mutated persisted intent")
+	}
+	if _, err := repositoryBaseCLI(t, "repo", "base", "clear", "widget", "--collection", collection); err != nil {
+		t.Fatalf("explicit clear failed: %v", err)
+	}
+}
+
+func TestRepositoryBaseBrowseFinalComparison(t *testing.T) {
+	var runtime string
+	var nvim bool
+	for _, name := range []string{"luajit", "lua", "lua5.4", "lua5.3", "nvim"} {
+		if path, err := exec.LookPath(name); err == nil {
+			runtime, nvim = path, name == "nvim"
+			break
+		}
+	}
+	if runtime == "" {
+		if os.Getenv("WTC_TEST_REQUIRE_RUNTIME") == "1" {
+			t.Fatal("Lua comparison runtime is required for this test job")
+		}
+		t.Skip("isolated Lua comparison check needs Lua/LuaJIT/Neovim; dynamic local proof is recorded separately")
+	}
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	git := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("fixture git %v: %s %v", args, out, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	if err := os.Mkdir(repo, 0700); err != nil {
+		t.Fatal(err)
+	}
+	git("init", "-q", "-b", "main")
+	file := filepath.Join(repo, "tracked.txt")
+	if err := os.WriteFile(file, []byte("base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "base")
+	git("update-ref", "refs/remotes/origin/main", "HEAD")
+	git("checkout", "-qb", "topic")
+	if err := os.WriteFile(file, []byte("committed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "topic")
+	if err := os.WriteFile(file, []byte("dirty\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	base := git("merge-base", "HEAD", "origin/main")
+	commands := [][]string{{"branch", "--show-current"}, {"status", "--porcelain=v1", "-uno"}, {"ls-files", "-o", "--exclude-standard"}, {"diff", "--numstat", base}}
+	for _, ref := range []string{"origin/main", "origin/missing"} {
+		commands = append(commands, []string{"rev-parse", "--verify", ref + "^{commit}"}, []string{"merge-base", "HEAD", ref}, []string{"rev-list", "--count", ref + "..HEAD"}, []string{"rev-list", "--count", "HEAD.." + ref}, []string{"diff", "--numstat", ref})
+	}
+	var script strings.Builder
+	script.WriteString("local responses={}\n")
+	for _, args := range commands {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		var stdout, stderr strings.Builder
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		code := 0
+		if err := cmd.Run(); err != nil {
+			if exit, ok := err.(*exec.ExitError); ok {
+				code = exit.ExitCode()
+			} else {
+				t.Fatal(err)
+			}
+		}
+		fmt.Fprintf(&script, "responses[%q]={code=%d,stdout=%q,stderr=%q}\n", strings.Join(args, "|"), code, stdout.String(), stderr.String())
+	}
+	view, err := wtc.ReadDefault("browse/wtc-browse.lua")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, _, found := strings.Cut(string(view), "local tree_ns =")
+	if !found {
+		t.Fatal("comparison test boundary missing")
+	}
+	// Run the actual comparison/collection functions without loading UI plugins.
+	script.WriteString("local source=[====[" + prefix + "]====]\n")
+	script.WriteString(`
+local cases={
+ {name='missing configured',configured='origin/missing',error='unavailable comparison ref'},
+ {name='valid PR replaces missing configured',configured='origin/missing',pr='main'},
+ {name='missing final PR target',configured='origin/main',pr='missing',error='unavailable comparison ref'},
+ {name='corrupt state before valid PR',configured='origin/main',pr='main',corrupt=true,error='cannot resolve receiving repository base'},
+}
+for _,case in ipairs(cases) do
+ vim={g={wtc_browse_root='/fixture',wtc_base_command='serving-cli'},fs={normalize=function(x)return x end},uv={now=function()return 0 end},fn={getcwd=function()return '/fixture' end,executable=function()return case.pr and 1 or 0 end},json={decode=function()return {data={effective_ref=case.configured}} end},log={levels={ERROR=1,DEBUG=2}}}
+ vim.list_extend=function(a,b)for _,v in ipairs(b)do a[#a+1]=v end;return a end
+ vim.system=function(args,opts)
+  local result
+  if args[1]=='serving-cli' then result={code=case.corrupt and 1 or 0,stdout='data',stderr='malformed state'}
+  elseif args[1]=='gh' then result={code=case.pr and 0 or 1,stdout=case.pr or '',stderr=''}
+  elseif args[1]=='git' then
+   local parts={};for i=4,#args do parts[#parts+1]=args[i] end
+   local key=table.concat(parts,'|');result=responses[key]
+   assert(result,'unexpected Git command '..key)
+   if case.deleted and key:find('origin/main',1,true) then result={code=128,stdout='',stderr='deleted ref'} end
+  else error('unexpected command') end
+  return {wait=function()return result end}
+ end
+ local api=assert((loadstring or load)(source..'\nreturn {collect=collect_changes,level=comparison_error_level}'))()
+ local ok,result=pcall(api.collect,{path='/fixture/widget',name='widget'})
+ if case.error then
+  assert(not ok and tostring(result):find(case.error,1,true),case.name..' did not return its truthful error: '..tostring(result))
+ else
+  assert(ok, tostring(result));assert(result.ref=='origin/main' and result.ahead==1 and result.behind==0 and #result.files==1 and result.files[1].path=='tracked.txt' and result.files[1].kind=='dirty','tracked changes/counts lost after PR selection')
+  case.deleted=true
+  local cached,cached_error=pcall(api.collect,{path='/fixture/widget',name='widget'})
+  assert(not cached and tostring(cached_error):find('unavailable comparison ref',1,true),'cached selected ref was not revalidated')
+  assert(api.level(cached_error)==vim.log.levels.ERROR,'comparison watch error is hidden at DEBUG')
+  assert(api.level('unrelated watch failure')==vim.log.levels.DEBUG,'unrelated watch error policy changed')
+ end
+ print('PASS '..case.name)
+end
+`)
+	path := filepath.Join(root, "comparison.lua")
+	if err := os.WriteFile(path, []byte(script.String()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{path}
+	if nvim {
+		args = []string{"--headless", "-u", "NONE", "-i", "NONE", "--noplugin", "-l", path}
+	}
+	cmd := exec.Command(runtime, args...)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+filepath.Join(root, "config"), "XDG_DATA_HOME="+filepath.Join(root, "data"), "XDG_STATE_HOME="+filepath.Join(root, "state"), "XDG_CACHE_HOME="+filepath.Join(root, "cache"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("actual Lua comparison functions: %s %v", out, err)
+	}
+	t.Logf("%s", out)
 }

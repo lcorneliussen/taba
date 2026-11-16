@@ -15,6 +15,7 @@ must identify exactly one registered repository. `set` accepts a branch name or
 without control characters. It records intent only: it does not fetch, switch,
 reset, merge, push or modify existing dirty or unpublished work. The branch must
 be available when a consumer needs it; an unavailable override is an error.
+`set` rejects an empty ref; clearing requires the explicit `clear` command.
 `clear` restores the registry default, or `origin/main` when no default is set.
 
 For a new collection, select bases before its worktrees are created:
@@ -27,8 +28,10 @@ Repeat `--repo-base` for multiple selected repositories. Each receives the
 explicit reason. A new collection never inherits the invoking collection's
 local overrides. `add-repo` uses the receiving collection's setting, including
 when invoked from another collection. An explicit existing branch or exact PR
-head retains its existing checkout semantics; a missing explicit branch starts
-from the effective development base.
+head retains its existing checkout semantics. An existing local or origin branch
+does not need the unused development base to be available, but receiving state
+and identity validation still apply. Detached checkout and a new explicit branch
+require the effective development base to be available.
 
 The single local file is `.wtc/repo-bases.toml` in the receiving collection:
 
@@ -44,6 +47,9 @@ parallel `.taba` file or environment override. Commands use canonical repository
 names, reject ambiguous aliases, malformed state and symlinked state paths, and
 serialize updates under a lock. Do not commit the file or copy it into a shared
 registry. Malformed data must be corrected locally before it can be read or changed.
+A multi-repository inventory reads one consistent validated collection snapshot;
+the next operation rereads receiving edits. Updates always validate current state
+again under the lock.
 A valid stored key orphaned by a registry removal or rename is retained and does
 not block unrelated repositories. `show` explains how to clear that exact old key;
 `clear` removes it without inventing a new effective base. Unrelated updates
@@ -103,3 +109,8 @@ when its base is omitted; it never reads or claims to apply a host-local overrid
 Explicit sandbox bases must still match that destination. Prepare a different
 publication destination through the existing explicit gateway workflow. Browse uses the serving CLI's
 resolver rather than parsing another configuration format.
+
+Browse checks that its final comparison resolves to a commit after choosing a
+readable PR target. An unavailable final comparison is a visible error, not zero
+ahead/behind counts or an empty tracked-change list. A readable PR target can
+replace an unavailable configured development base.
