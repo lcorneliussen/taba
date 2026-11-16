@@ -412,9 +412,12 @@ function serviceGroups(services) {
 // A service listens on the gateway, often in a container: its loopback address
 // opens nowhere else, so it shows as its port, and a tunnel makes it reachable.
 const LOOPBACK = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/;
-const address = (url) => LOOPBACK.test(url)
-  ? css(el("span", { textContent: `:${new URL(url).port || "80"}`, title: `${url} on the gateway: open a tunnel to reach it from here` }), "font-family:var(--mono, ui-monospace, monospace);color:var(--muted, #888)")
-  : link(url.replace(/^https?:\/\//, ""), url);
+const address = (url) => {
+  const port = portOf(url);
+  return LOOPBACK.test(url) && port
+    ? css(el("span", { textContent: `:${port}`, title: `${url} on the gateway: open a tunnel to reach it from here` }), "font-family:var(--mono, ui-monospace, monospace);color:var(--muted, #888)")
+    : link(url.replace(/^https?:\/\//, ""), url);
+};
 const TUNNEL_URL = /^https:\/\/[^/]*(trycloudflare\.com|\.ts\.net|ngrok[-a-z]*\.(app|io|dev)|devtunnels\.ms)(:\d+)?(\/|$)/;
 const consolidate = (g) => `The tunnel ${g.group} runs as a service of its own. Consolidate it as the taba-svc skill says: remove it and open it again with wtc svc tunnel on the service it exposes.`;
 const tunnelName = (t) => t.provider || (/trycloudflare\.com/.test(t.url ?? "") ? "cloudflare" : /\.ts\.net/.test(t.url ?? "") ? "tailscale" : "tunnel");
@@ -467,7 +470,15 @@ const TUNNEL_PROVIDERS = [
 // portal.list leaves out a portal's URL with its access token; opening the
 // same port again returns it. Kept for the portals this page opened.
 const portalUrls = new Map();
-const portOf = (url) => { try { return Number(new URL(url).port) || null; } catch { return null; } };
+// URL.port omits the scheme's default, even when :80 or :443 was explicit.
+const portOf = (url) => {
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return null;
+    if (parsed.port) return Number(parsed.port) || null;
+    return parsed.protocol === "https:" ? 443 : 80;
+  } catch { return null; }
+};
 // A portal at a loopback or private address the browser is not on (a
 // container's, say) needs portal ingress on the gateway to be reached.
 const PRIVATE_HOST = /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|localhost$|\[::1\]$)/;
