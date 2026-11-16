@@ -44,7 +44,7 @@ shift 4
 printf '%s\n' "$*" >> "$FAKE_BB_LOG"
 case "$*" in
   'pr view 7 --json') printf '{"source":{"commit":{"hash":"1234567890abcdef1234567890abcdef12345678"}}}\n' ;;
-  'pr comments list 7 --all --json') printf '{"comments":[]}\n' ;;
+  'pr comments list 7 --limit 1000 --json') printf '{"count":0,"comments":[]}\n' ;;
   'pr comments add 7 '*'--file feature.go --line-to 4 --json') printf '{"id":401}\n' ;;
   'pr comments add 7 '*'--json') printf '{"id":301,"links":{"html":{"href":"https://bitbucket.org/example/app/pull-requests/7#comment-301"}}}\n' ;;
   'pr comments edit 7 301 '*) : ;;
