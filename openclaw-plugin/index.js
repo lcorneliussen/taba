@@ -9,7 +9,7 @@
 // Bitbucket repositories use the logins of the Bitbucket plugin
 // (openclaw-bitbucket) when it is installed.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { accessSync, constants, lstatSync, statSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { registerPublicationBridge } from "./publication.js";
 import { startSandboxGit } from "./sandbox-git.js";
@@ -57,6 +57,34 @@ function worktreeRecovery(entry, sessionKey, records) {
   return { state: "restorable", key, removedAt: r.removedAt };
 }
 
+// Gateway PATH evidence only: runtime tunnel policy may select a different
+// executable, Node helper or socket. Never execute a client to probe it.
+const pathAvailability = (program) => {
+  const dirs = String(process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  let state = dirs.length ? "missing" : "unknown";
+  for (const dir of dirs) {
+    const candidate = path.join(dir, program);
+    let regular = false;
+    try {
+      if (!statSync(candidate).isFile()) {
+        if (state !== "unknown") state = "unusable";
+        continue;
+      }
+      regular = true;
+      accessSync(candidate, constants.X_OK);
+      return { state: "available", scope: "gateway-path" };
+    } catch (err) {
+      let next;
+      if (err.code === "ENOENT" || err.code === "ENOTDIR") {
+        // A dangling symlink exists but cannot be executed.
+        try { next = lstatSync(candidate).isSymbolicLink() ? "unusable" : "unknown"; }
+        catch (lookup) { next = ["ENOENT", "ENOTDIR"].includes(lookup.code) ? "missing" : "unknown"; }
+      } else next = regular && ["EACCES", "EPERM"].includes(err.code) ? "unusable" : "unknown";
+      if (next === "unknown" || next === "unusable" && state !== "unknown") state = next;
+    }
+  }
+  return { state, scope: "gateway-path" };
+};
 const onPath = (program) => String(process.env.PATH ?? "").split(path.delimiter).some((dir) => dir && existsSync(path.join(dir, program)));
 
 const warnedEnvConflicts = new Set();
@@ -664,9 +692,12 @@ export default {
         repos: [],
         warnings: [],
       };
-      // The tunnel providers whose client the gateway has, and whether its
-      // tailnet is the team's, so that a Tailscale tunnel is worth offering.
-      result.tunnelProviders = Object.keys(TUNNEL_PROGRAMS).filter((p) => onPath(TUNNEL_PROGRAMS[p]));
+      // Every provider gets gateway lookup evidence; only available clients
+      // appear in the badge list.
+      result.tunnelProviderAvailability = Object.fromEntries(Object.entries(TUNNEL_PROGRAMS).map(([provider, program]) => [provider, pathAvailability(program)]));
+      result.tunnelProviders = Object.keys(TUNNEL_PROGRAMS).filter((p) => result.tunnelProviderAvailability[p].state === "available");
+      // Whether the gateway's tailnet is the team's, so that a Tailscale
+      // tunnel is worth offering.
       result.teamTailnet = api.pluginConfig?.teamTailnet === true;
       // Whether a portal gets an address beyond the gateway's own: a
       // wildcard domain or Tailscale run by the gateway.
@@ -853,7 +884,7 @@ export default {
       if (group && (!(op === "logs" ? /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+$/ : /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/).test(group) || group.length > 512 || group.split("/").some(part => part === "." || part === ".."))) return { ok: false, error: "name a service as <repo>/<service>" };
       if (op === "logs" && !group) return { ok: false, error: "name the service whose logs to read" };
       if (op === "tunnel" && !group) return { ok: false, error: "name the service to tunnel to" };
-      if (op === "tunnel" && !TUNNEL_PROGRAMS[provider]) return { ok: false, error: `the provider is one of ${Object.keys(TUNNEL_PROGRAMS).join(", ")}` };
+      if (op === "tunnel" && !Object.hasOwn(TUNNEL_PROGRAMS, provider)) return { ok: false, error: `the provider is one of ${Object.keys(TUNNEL_PROGRAMS).join(", ")}` };
       if (!action.sessionKey || !action.agentId) return { ok: false, error: "sessionKey and agentId are required" };
       const { children } = await collectionOf(action.agentId, action.sessionKey);
       const name = op === "logs" ? collectionIdentity(children).task : children.map((c) => String(c.entry.worktree?.branch ?? "").replace(/^openclaw\//, "")).find(Boolean);
@@ -868,7 +899,10 @@ export default {
         // This click approves potential public exposure for this exact
         // definition. It never grants project policy or global credentials.
         if (payload.public && ["start", "register"].includes(tunnelAction)) argv.push("--public");
-        if (payload.add) return { ok: true, result: { setup: true, message: `Configure a collection-local ${provider} entry in .config/tunnels.toml with explicit receiving credential files or an authorized socket. Use: taba svc tunnel ${group} --name preview --action configure --definition /absolute/entry.toml. The definition file contains one [tunnels.<registered-repo>.<service>.preview] table; see the runtime instructions for provider fields. This action has not installed, logged into, or started a provider, and grants no project-default authority.` } };
+        if (payload.add) {
+          const availability = pathAvailability(TUNNEL_PROGRAMS[provider]);
+          return { ok: true, result: { setup: true, availability, message: `Gateway PATH lookup: ${availability.state}. This does not establish collection runtime capability; check the executable, helper or socket selected by the collection policy before installing anything. Configure a collection-local ${provider} entry in .config/tunnels.toml with explicit receiving credential files or an authorized socket. Use: taba svc tunnel ${group} --name preview --action configure --definition /absolute/entry.toml. The definition file contains one [tunnels.<registered-repo>.<service>.preview] table; see the runtime instructions for provider fields. This action has not installed, logged into, or started a provider, and grants no project-default authority.` } };
+        }
       }
       const cwd = collectionFolder(stateDir, name);
       if (!cwd) return { ok: false, error: `collection ${name} has no folder yet: wtc status ${name} makes it` };
