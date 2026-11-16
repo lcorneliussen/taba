@@ -80,8 +80,9 @@ func validateBaseReason(reason string) error {
 	return nil
 }
 
-// baseDirectory anchors all state operations to directory descriptors. No
-// namespace, state or lock symlink is followed, including during replacement.
+// baseDirectory opens directory descriptors for state reads and writes.
+// Updates also reopen the path to check its identity before publishing.
+// Namespace, state and lock symlinks are never followed.
 func baseDirectory(collection string, create bool) (*os.File, error) {
 	root, err := unix.Open(collection, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
@@ -360,7 +361,8 @@ func (c *Context) updateRepositoryBases(change func(*repoBaseStore) error) error
 	if err != nil {
 		return err
 	}
-	// Refuse a swapped namespace instead of claiming success in an orphaned dir.
+	// Detect a namespace swap before publishing through the held descriptor.
+	// The identity check and rename are separate syscalls, not one atomic check.
 	current, err := baseDirectory(c.Collection, false)
 	if err != nil {
 		return err
@@ -443,9 +445,10 @@ func (c *Context) writeNewBases(opt NewOptions, destination string) error {
 	return nil
 }
 
-// worktreeReceiver uses the receiving registry and owner mapping once its
-// harness exists. Bootstrap reuses the invoking registry; overrides are always
-// read from the receiving collection, never inherited from the caller.
+// worktreeReceiver opens a different destination with a collection marker
+// using its own registry and owner mapping. Creation bootstrap, whose destination
+// equals the calling collection, keeps the invoking registry. Overrides are
+// always read from the receiving collection, never inherited from the caller.
 func (c *Context) worktreeReceiver(destination string) (*Context, error) {
 	if filepath.Clean(destination) != filepath.Clean(c.Collection) {
 		marked, err := collectionMarker(destination)
