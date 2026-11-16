@@ -30,6 +30,7 @@ local fill_hunk_buf
 local reveal_hunk
 local watch_timer
 local ref_cache = {}
+local comparison_errors = {} -- Last verified unavailable comparison, not a ref cache.
 local last_tree_dir, last_tree_source
 local tabline_hl_done = false
 local buf_meta = {} -- bufnr → { index, snapshots, hunk_at } — keep off vim.b (slow / E5101)
@@ -89,15 +90,32 @@ local function receiving_base_for(dir_name)
   return result.data.effective_ref
 end
 
+local comparison_error_mt = { __tostring = function(err) return err.message end }
+
+local function comparison_call(fn)
+  local ok, value, extra = pcall(fn)
+  if ok then
+    return value, extra
+  end
+  if getmetatable(value) == comparison_error_mt then
+    return nil, value.message
+  end
+  error(value, 0)
+end
+
 local function checked_comparison_ref(wt, ref, kind, label)
   if git(wt, { "rev-parse", "--verify", ref .. "^{commit}" }) == "" then
-    error("unavailable comparison ref " .. string.format("%q", ref) .. " for " .. string.format("%q", label or wt))
+    local message = "unavailable comparison ref " .. string.format("%q", ref) .. " for " .. string.format("%q", label or wt)
+    message = message:gsub("%c", function(c) return string.format("\\x%02x", string.byte(c)) end)
+    comparison_errors[wt] = message
+    error(setmetatable({ message = message }, comparison_error_mt), 0)
   end
+  comparison_errors[wt] = nil
   return ref, kind
 end
 
 local function comparison_error_level(err)
-  if tostring(err):find("unavailable comparison ref", 1, true) then
+  if getmetatable(err) == comparison_error_mt then
     return vim.log.levels.ERROR
   end
   return vim.log.levels.DEBUG
@@ -201,6 +219,11 @@ local function collect_changes(tree)
   }
 end
 
+local function snapshot_for(tree)
+  local snap, err = comparison_call(function() return collect_changes(tree) end)
+  return snap or { tree = tree, files = {}, comparison_error = err }
+end
+
 local tree_ns = vim.api.nvim_create_namespace("wtc_ctree")
 
 local function file_mtime(path)
@@ -217,7 +240,7 @@ end
 local function snapshots_all()
   local snaps = {}
   for _, t in ipairs(worktrees()) do
-    snaps[#snaps + 1] = collect_changes(t)
+    snaps[#snaps + 1] = snapshot_for(t)
   end
   return snaps
 end
@@ -232,9 +255,13 @@ local function fingerprint(snaps)
         s.tree.name, f.path, f.kind, f.add, f.del,
       }, "\t")
     end
-    parts[#parts + 1] = table.concat({
-      s.tree.name, "meta", s.ahead or 0, s.behind or 0, s.mb or "",
-    }, "\t")
+    if s.comparison_error then
+      parts[#parts + 1] = table.concat({ s.tree.name, "error", s.comparison_error }, "\t")
+    else
+      parts[#parts + 1] = table.concat({
+        s.tree.name, "meta", s.ahead or 0, s.behind or 0, s.mb or "",
+      }, "\t")
+    end
   end
   table.sort(parts)
   return table.concat(parts, "\n")
@@ -263,18 +290,19 @@ local function nest_changes(snaps)
     top[repo] = top[repo] or {
       name = repo,
       kids = {},
-      clean = #snap.files == 0,
+      clean = not snap.comparison_error and #snap.files == 0,
       ref = snap.ref,
       mb = snap.mb,
-      ahead = snap.ahead or 0,
-      behind = snap.behind or 0,
+      ahead = snap.ahead,
+      behind = snap.behind,
     }
     local root_node = top[repo]
-    root_node.clean = #snap.files == 0
+    root_node.comparison_error = snap.comparison_error
+    root_node.clean = not snap.comparison_error and #snap.files == 0
     root_node.ref = snap.ref
     root_node.mb = snap.mb
-    root_node.ahead = snap.ahead or 0
-    root_node.behind = snap.behind or 0
+    root_node.ahead = snap.ahead
+    root_node.behind = snap.behind
     for _, f in ipairs(snap.files) do
       local node = root_node.kids
       local parts = {}
@@ -346,6 +374,8 @@ local function flatten_tree(top)
           mb = node.mb,
           kind = "file",
         }, f.kind, virt)
+      elseif node.comparison_error then
+        add("! " .. node.comparison_error, nil, "error")
       elseif node.ref then
         -- Path only on the left; since / ↑ / ↓ sit on the right.
         local virt = {}
@@ -446,7 +476,8 @@ local function render_change_tree(buf, snaps)
     local kind = h[2]
     local virt = h[3]
     local line = lines[lnum] or ""
-    local row_hl = (kind == "repo" and "Title")
+    local row_hl = (kind == "error" and "DiagnosticError")
+      or (kind == "repo" and "Title")
       or (kind == "dir" and "Directory")
       or (kind == "catchup" and "DiagnosticWarn")
       or nil
@@ -517,7 +548,10 @@ local function refresh_collection_tab(tab)
 end
 
 local function hunk_section(tree)
-  local ref = select(1, compare_ref(tree.path, tree.name))
+  local ref, err = comparison_call(function() return compare_ref(tree.path, tree.name) end)
+  if not ref then
+    return { "# ERROR " .. err, "" }, {}
+  end
   local mb = merge_base(tree.path, ref)
   local ahead = count_revs(tree.path, ref .. "..HEAD")
   local behind = count_revs(tree.path, "HEAD.." .. ref)
@@ -1075,7 +1109,7 @@ local function render_index(buf, scope)
   local snapshots = {}
   for _, t in ipairs(worktrees()) do
     if not scope or t.name == scope then
-      snapshots[#snapshots + 1] = collect_changes(t)
+      snapshots[#snapshots + 1] = snapshot_for(t)
     end
   end
 
@@ -1095,42 +1129,46 @@ local function render_index(buf, scope)
   end
 
   for _, snap in ipairs(snapshots) do
-    local n = #snap.files
-    local bits = {
-      string.format("%-22s  since %s", snap.tree.name, (snap.mb or "?"):sub(1, 7)),
-    }
-    if (snap.ahead or 0) > 0 then
-      bits[#bits + 1] = "↑" .. snap.ahead
-    end
-    if n == 0 then
-      bits[#bits + 1] = "clean"
+    if snap.comparison_error then
+      add("ERROR " .. snap.comparison_error)
     else
-      bits[#bits + 1] = n .. (n == 1 and " file" or " files")
-    end
-    if (snap.behind or 0) > 0 then
-      bits[#bits + 1] = "↓" .. snap.behind .. " " .. snap.ref
-    end
-    add(table.concat(bits, "  "), { repo = snap.tree.name })
-    if (snap.behind or 0) > 0 then
-      local noun = snap.behind == 1 and "commit" or "commits"
-      add(string.format("    ↓ catch-up  %s is %d %s ahead", snap.ref, snap.behind, noun))
-    end
-    if n == 0 then
-      add("    ·  no changes since branch-off")
-    else
-      for _, f in ipairs(snap.files) do
-        local counts
-        if f.kind == "untracked" then
-          counts = "  ?    "
-        elseif f.kind == "dirty" then
-          counts = string.format("*+%-4d −%-4d", f.add, f.del)
-        else
-          counts = string.format(" +%-4d −%-4d", f.add, f.del)
+      local n = #snap.files
+      local bits = {
+        string.format("%-22s  since %s", snap.tree.name, (snap.mb or "?"):sub(1, 7)),
+      }
+      if (snap.ahead or 0) > 0 then
+        bits[#bits + 1] = "↑" .. snap.ahead
+      end
+      if n == 0 then
+        bits[#bits + 1] = "clean"
+      else
+        bits[#bits + 1] = n .. (n == 1 and " file" or " files")
+      end
+      if (snap.behind or 0) > 0 then
+        bits[#bits + 1] = "↓" .. snap.behind .. " " .. snap.ref
+      end
+      add(table.concat(bits, "  "), { repo = snap.tree.name })
+      if (snap.behind or 0) > 0 then
+        local noun = snap.behind == 1 and "commit" or "commits"
+        add(string.format("    ↓ catch-up  %s is %d %s ahead", snap.ref, snap.behind, noun))
+      end
+      if n == 0 then
+        add("    ·  no changes since branch-off")
+      else
+        for _, f in ipairs(snap.files) do
+          local counts
+          if f.kind == "untracked" then
+            counts = "  ?    "
+          elseif f.kind == "dirty" then
+            counts = string.format("*+%-4d −%-4d", f.add, f.del)
+          else
+            counts = string.format(" +%-4d −%-4d", f.add, f.del)
+          end
+          add(string.format("    %s  %s", counts, f.path), {
+            repo = snap.tree.name,
+            path = f.path,
+          })
         end
-        add(string.format("    %s  %s", counts, f.path), {
-          repo = snap.tree.name,
-          path = f.path,
-        })
       end
     end
     add("")
@@ -1389,6 +1427,10 @@ local function map_search()
   vim.keymap.set("n", "<leader>gD", function()
     local path = current_repo_path()
     local base = rawget(vim.t, "wtc_base")
+    if path and comparison_errors[path] then
+      vim.notify(comparison_errors[path], vim.log.levels.ERROR)
+      return
+    end
     if not path then
       vim.notify("diffview is per-repo — open a sibling tab first", vim.log.levels.INFO)
       return
@@ -1440,7 +1482,7 @@ local function start()
       vim.cmd.tabnew()
       vim.cmd.tcd(vim.fn.fnameescape(t.path))
       vim.api.nvim_tabpage_set_var(0, "wtc_repo", t.name)
-      local snap = collect_changes(t)
+      local snap = snapshot_for(t)
       vim.t.wtc_base = snap.mb
       local dbuf = ensure_index_buf(t.name, t.name)
       vim.t.wtc_diff_buf = dbuf

@@ -263,7 +263,7 @@ func TestRepositoryBaseBrowseFinalComparison(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := git("merge-base", "HEAD", "origin/main")
-	commands := [][]string{{"branch", "--show-current"}, {"status", "--porcelain=v1", "-uno"}, {"ls-files", "-o", "--exclude-standard"}, {"diff", "--numstat", base}}
+	commands := [][]string{{"branch", "--show-current"}, {"status", "--porcelain=v1", "-uno"}, {"ls-files", "-o", "--exclude-standard"}, {"diff", "--numstat", base}, {"diff", "--no-ext-diff", base}}
 	for _, ref := range []string{"origin/main", "origin/missing"} {
 		commands = append(commands, []string{"rev-parse", "--verify", ref + "^{commit}"}, []string{"merge-base", "HEAD", ref}, []string{"rev-list", "--count", ref + "..HEAD"}, []string{"rev-list", "--count", "HEAD.." + ref}, []string{"diff", "--numstat", ref})
 	}
@@ -287,12 +287,21 @@ func TestRepositoryBaseBrowseFinalComparison(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix, _, found := strings.Cut(string(view), "local tree_ns =")
+	prefix, _, found := strings.Cut(string(view), "local function start()")
 	if !found {
 		t.Fatal("comparison test boundary missing")
 	}
-	// Run the actual comparison/collection functions without loading UI plugins.
+	_, startup, found := strings.Cut(string(view), "    for _, t in ipairs(trees) do\n")
+	if !found {
+		t.Fatal("startup loop boundary missing")
+	}
+	startup, _, found = strings.Cut(startup, "    vim.cmd.tabfirst()")
+	if !found {
+		t.Fatal("startup loop end missing")
+	}
+	// Run the actual comparison/rendering functions and startup loop without UI plugins.
 	script.WriteString("local source=[====[" + prefix + "]====]\n")
+	script.WriteString("local startup_source=[====[for _, t in ipairs(trees) do\n" + startup + "]====]\n")
 	script.WriteString(`
 local cases={
  {name='missing configured',configured='origin/missing',error='unavailable comparison ref'},
@@ -301,7 +310,7 @@ local cases={
  {name='corrupt state before valid PR',configured='origin/main',pr='main',corrupt=true,error='cannot resolve receiving repository base'},
 }
 for _,case in ipairs(cases) do
- vim={g={wtc_browse_root='/fixture',wtc_base_command='serving-cli'},fs={normalize=function(x)return x end},uv={now=function()return 0 end},fn={getcwd=function()return '/fixture' end,executable=function()return case.pr and 1 or 0 end},json={decode=function()return {data={effective_ref=case.configured}} end},log={levels={ERROR=1,DEBUG=2}}}
+ vim={api={nvim_create_namespace=function()return 1 end},g={wtc_browse_root='/fixture',wtc_base_command='serving-cli'},fs={normalize=function(x)return x end},uv={now=function()return 0 end},fn={getcwd=function()return '/fixture' end,executable=function()return case.pr and 1 or 0 end},json={decode=function()return {data={effective_ref=case.configured}} end},log={levels={ERROR=1,DEBUG=2}}}
  vim.list_extend=function(a,b)for _,v in ipairs(b)do a[#a+1]=v end;return a end
  vim.system=function(args,opts)
   local result
@@ -328,6 +337,107 @@ for _,case in ipairs(cases) do
   assert(api.level('unrelated watch failure')==vim.log.levels.DEBUG,'unrelated watch error policy changed')
  end
  print('PASS '..case.name)
+end
+
+for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
+ local healthy_name='m-healthy'
+ local missing,corrupt,now=true,false,0
+ local current_name=bad_name
+ local buffers,commands,notifications,keys={},{},{},{}
+ vim={g={wtc_browse_root='/fixture',wtc_base_command='serving-cli'},t={},
+  fs={normalize=function(x)return x end,basename=function()return 'fixture'end},
+  uv={now=function()return now end,fs_scandir=function()return {i=0}end,
+   fs_scandir_next=function(fd)fd.i=fd.i+1;return ({bad_name,healthy_name})[fd.i],'directory'end,
+   fs_stat=function()return {mtime={sec=1}}end},
+  fn={getcwd=function()return '/fixture'end,executable=function()return 0 end,exists=function()return 2 end,fnameescape=function(s)return s end},
+  json={decode=function(ref)return {data={effective_ref=ref}}end},
+  log={levels={ERROR=1,DEBUG=2}},
+  api={nvim_create_namespace=function()return 1 end,
+   nvim_buf_set_lines=function(buf,_,_,_,lines)buffers[buf]=lines end,
+   nvim_buf_clear_namespace=function()end,nvim_buf_set_extmark=function()end,
+   nvim_tabpage_get_var=function(_,key)assert(key=='wtc_repo');return current_name end},
+  keymap={set=function(_,key,fn)keys[key]=fn end},
+  cmd=function(s)commands[#commands+1]=s end,
+  notify=function(message,level)notifications[#notifications+1]={message=message,level=level}end}
+ vim.bo=setmetatable({},{__index=function(t,k)local v={};rawset(t,k,v);return v end})
+ vim.list_extend=function(a,b)for _,v in ipairs(b)do a[#a+1]=v end;return a end
+ vim.system=function(args,opts)
+  local result
+  if args[1]=='serving-cli'then
+   if corrupt then result={code=1,stdout='',stderr='malformed or ambiguous receiving state: unavailable comparison ref text'}
+   else result={code=0,stdout=args[6]==bad_name and missing and 'origin/missing' or 'origin/main',stderr=''}end
+  elseif args[1]=='git'then
+   local parts={};for i=4,#args do parts[#parts+1]=args[i]end
+   local key=table.concat(parts,'|');result=responses[key];assert(result,'unexpected Git command '..key)
+   if missing and args[3]=='/fixture/'..bad_name and args[4]=='rev-parse'then result={code=128,stdout='',stderr='deleted ref'}end
+  else error('unexpected command')end
+  return {wait=function()return result end}
+ end
+ local startup_function='\nlocal function test_startup(trees) local ensure_index_buf=function(_,repo)return repo end;local ensure_unified=function()return false end; '..startup_source..' end\n'
+ local api=assert((loadstring or load)(source..startup_function..'return {all=snapshots_all,flat=flatten_tree,nest=nest_changes,fp=fingerprint,fill=fill_hunk_buf,render=render_index,meta=buf_meta,map=map_search,startup=test_startup}'))()
+ local snaps=api.all()
+ local bad,healthy
+ for _,snap in ipairs(snaps)do if snap.tree.name==bad_name then bad=snap else healthy=snap end end
+ assert(#snaps==2 and bad.comparison_error and not bad.ref and not bad.mb and not bad.ahead and not bad.behind,'error snapshot invented comparison facts')
+ assert(healthy.ahead==1 and healthy.behind==0 and #healthy.files==1 and healthy.files[1].path=='tracked.txt','healthy counts/files lost')
+ local nested=api.nest(snaps)
+ assert(not nested[bad_name].clean and not nested[bad_name].ahead and not nested[bad_name].behind,'error node invented clean/counts')
+ local lines,meta,hls=api.flat(nested)
+ local error_row,healthy_file=false,false
+ for i,line in ipairs(lines)do
+  if line:find('unavailable comparison ref',1,true)then
+   assert(not meta[i] and not line:find('clean',1,true) and not line:find('[%c]'),'error row actionable, clean or unescaped')
+   assert(hls[i][2]=='error','error row lacks diagnostic kind');error_row=true
+  end
+  if meta[i]and meta[i].repo==healthy_name and meta[i].path=='tracked.txt'then healthy_file=true end
+ end
+ assert(error_row and healthy_file,'tree lost error or healthy navigation mapping')
+ api.fill(1)
+ local hunks=table.concat(buffers[1],'\n')
+ assert(hunks:find('# ERROR unavailable comparison ref',1,true)and hunks:find('tracked.txt',1,true),'combined hunks lost error or healthy content')
+ assert(api.meta[1].hunk_at[healthy_name] and api.meta[1].hunk_at[healthy_name..'/tracked.txt'] and not api.meta[1].hunk_at[bad_name],'combined hunk marks lost or fabricated')
+ api.render(2,nil)
+ error_row,healthy_file=false,false
+ for i,line in ipairs(buffers[2])do
+  if line:find('ERROR unavailable comparison ref',1,true)then assert(not api.meta[2].index[i]and not line:find('[%c]')and not line:find('clean',1,true),'alternate error row actionable/clean/unescaped');error_row=true end
+  if api.meta[2].index[i]and api.meta[2].index[i].repo==healthy_name and api.meta[2].index[i].path=='tracked.txt'then healthy_file=true end
+ end
+ assert(error_row and healthy_file,'alternate index lost error or healthy navigation')
+ local tabs={}
+ local command=vim.cmd
+ vim.cmd={tabnew=function()vim.t={};tabs[#tabs+1]=vim.t end,tcd=function()end}
+ vim.api.nvim_tabpage_set_var=function(_,key,value)vim.t[key]=value end
+ vim.api.nvim_set_current_buf=function(buf)vim.t.selected=buf end
+ local trees={};for _,snap in ipairs(snaps)do trees[#trees+1]=snap.tree end
+ api.startup(trees)
+ local bad_tab,healthy_tab
+ for _,tab in ipairs(tabs)do if tab.wtc_repo==bad_name then bad_tab=tab else healthy_tab=tab end end
+ assert(#tabs==2 and bad_tab and not bad_tab.wtc_base and bad_tab.selected==bad_name and healthy_tab and healthy_tab.wtc_base==healthy.mb and healthy_tab.selected==healthy_name,'startup loop aborted or lost healthy/error repo tabs')
+ vim.cmd=command
+ api.map()
+ vim.t.wtc_base='stale-base'
+ keys['<leader>gD']()
+ assert(#commands==0 and #notifications==1 and notifications[1].level==vim.log.levels.ERROR and notifications[1].message==bad.comparison_error,'known unavailable comparison fell back in Diffview')
+ current_name=healthy_name;vim.t.wtc_base='valid-base';keys['<leader>gD']()
+ assert(commands[1]=='DiffviewOpen valid-base -- /fixture/'..healthy_name,'healthy Diffview action changed')
+ vim.t.wtc_base=nil;keys['<leader>gD']()
+ assert(commands[2]=='DiffviewOpen HEAD -- /fixture/'..healthy_name,'missing base alone invented known failure')
+ local before=api.fp(snaps);missing=false
+ local recovered=api.all();assert(api.fp(recovered)~=before,'error recovery did not change fingerprint')
+ local recovered_bad
+ for _,snap in ipairs(recovered)do if snap.tree.name==bad_name then recovered_bad=snap end end
+ assert(not recovered_bad.comparison_error and recovered_bad.ahead==1 and #recovered_bad.files==1,'recovery lost actual comparison')
+ current_name=bad_name;vim.t.wtc_base=recovered_bad.mb;keys['<leader>gD']()
+ assert(#commands==3 and commands[3]:find('DiffviewOpen '..recovered_bad.mb,1,true),'known error not cleared on verified recovery')
+ missing=true
+ local disappeared=api.all();local failed_again
+ for _,snap in ipairs(disappeared)do if snap.tree.name==bad_name then failed_again=snap end end
+ assert(failed_again.comparison_error and api.fp(disappeared)~=api.fp(recovered),'cached ref disappearance did not refresh error')
+ keys['<leader>gD']();assert(#commands==3 and #notifications==2,'cached disappearance allowed stale comparison action')
+ corrupt=true;now=60001
+ local ok,err=pcall(api.all)
+ assert(not ok and tostring(err):find('malformed or ambiguous receiving state',1,true),'untyped configured-state error swallowed by comparison text')
+ print('PASS sibling isolation '..(bad_name:sub(1,1)=='a'and'broken first'or'broken last')..': tree/index/hunks/startup, counts/content/navigation, nonactionable escaped errors, cached disappearance/recovery, typed guards and Diffview')
 end
 `)
 	path := filepath.Join(root, "comparison.lua")

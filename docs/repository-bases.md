@@ -114,3 +114,11 @@ Browse checks that its final comparison resolves to a commit after choosing a
 readable PR target. An unavailable final comparison is a visible error, not zero
 ahead/behind counts or an empty tracked-change list. A readable PR target can
 replace an unavailable configured development base.
+
+An unavailable comparison affects only that repository: browse shows an explicit
+error in its tree, index and combined hunks while healthy siblings retain their
+files and navigation. Error rows carry no actions or invented clean/count facts.
+An explicit per-repository Diffview request refuses a known unavailable comparison
+instead of falling back to HEAD; a verified recovery clears that diagnostic.
+Malformed or ambiguous receiving state still refuses rather than being treated
+as a missing comparison.
