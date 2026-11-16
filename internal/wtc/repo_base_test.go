@@ -585,8 +585,8 @@ func TestRepositoryBaseOrphanDoesNotReassociateThroughReusedAlias(t *testing.T) 
 	c.Registry.Repos[1].Remote = "https://example.invalid/replacement.git"
 	c.Registry.Repos[1].Aliases = []string{"widget"}
 	base, err := c.RepositoryBase("replacement")
-	if err != nil || base.EffectiveRef != "origin/main" || base.Source != "registry" || base.Reason != "" {
-		t.Errorf("new alias owner inherited orphan intent: %+v %v", base, err)
+	if err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Errorf("alias-linked retained intent did not refuse implicit reassociation/fallback: %+v %v", base, err)
 	}
 	if _, err := c.SetRepositoryBase("agent-harness", "beta", "Independent update"); err != nil {
 		t.Fatal(err)
@@ -653,5 +653,97 @@ func TestRepositoryBaseBrowseKeepsConfiguredHarnessIdentity(t *testing.T) {
 	base, err := c.RepositoryBase("harness", true)
 	if err != nil || base.Repository != "agent-harness" || base.EffectiveRef != "origin/beta" || base.Source != "collection" {
 		t.Fatalf("configured harness role lost: %+v %v", base, err)
+	}
+}
+
+func TestRepositoryBaseAliasRetainedIntentNeedsDiagnostic(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if err := c.AddWorktree("widget", "widget", c.Collection, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SetRepositoryBase("widget", "beta", "Existing collection intent"); err != nil {
+		t.Fatal(err)
+	}
+	c.Registry.Repos[1].Name = "replacement"
+	c.Registry.Repos[1].Aliases = []string{"widget"}
+	registryFile := filepath.Join(c.Harness, ".harness-repos.yml")
+	body, err := os.ReadFile(registryFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, registryFile, strings.Replace(string(body), "- name: widget\n", "- name: replacement\n    aliases: [widget]\n", 1), 0600)
+	for _, selector := range []string{"widget", "replacement"} {
+		base, err := c.RepositoryBase(selector)
+		if err == nil || !strings.Contains(err.Error(), "clear widget") {
+			t.Errorf("retained alias intent looks like ordinary fallback for %s: %+v %v", selector, base, err)
+		}
+	}
+	if err := c.AddWorktree("replacement", "added", c.Collection, ""); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Errorf("worktree creation silently selected registry default: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(c.Collection, "added")); !os.IsNotExist(err) {
+		t.Errorf("refused worktree creation changed the destination: %v", err)
+	}
+	if _, _, err := c.CatchUpInventory(CatchUpOptions{DryRun: true}); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Errorf("catch-up silently selected registry default: %v", err)
+	}
+}
+
+func TestRepositoryBaseAliasClearRefusesBeforeMutation(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if _, err := c.SetRepositoryBase("widget", "beta", "Retained old intent"); err != nil {
+		t.Fatal(err)
+	}
+	c.Registry.Repos[1].Name = "replacement"
+	c.Registry.Repos[1].Aliases = []string{"widget"}
+	if base, err := c.RepositoryBase("agent-harness"); err != nil || base.Source != "registry" {
+		t.Fatalf("related-intent refusal blocked an unrelated repository: %+v %v", base, err)
+	}
+	if base, err := c.SetRepositoryBase("replacement", "gamma", "Explicit canonical recovery"); err != nil || base.EffectiveRef != "origin/gamma" {
+		t.Fatalf("explicit recovery depended on refused implicit resolution: %+v %v", base, err)
+	}
+	file := filepath.Join(c.Collection, ".wtc", "repo-bases.toml")
+	before, _ := os.ReadFile(file)
+	if _, err := c.ClearRepositoryBase("replacement"); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Fatalf("canonical clear exposed retained alias intent: %v", err)
+	}
+	after, _ := os.ReadFile(file)
+	if string(before) != string(after) {
+		t.Fatal("refused canonical clear mutated persistence")
+	}
+	if _, err := c.SetRepositoryBase("replacement", "", ""); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Fatalf("empty-ref setter bypassed clear guard: %v", err)
+	}
+	after, _ = os.ReadFile(file)
+	if string(before) != string(after) {
+		t.Fatal("refused empty-ref setter mutated persistence")
+	}
+	if outcome, err := c.ClearRepositoryBase("widget"); err != nil || !outcome.Orphaned || outcome.Resolution != nil {
+		t.Fatalf("exact orphan recovery failed: %+v %v", outcome, err)
+	}
+	outcome, err := c.ClearRepositoryBase("replacement")
+	if err != nil || outcome.Orphaned || outcome.Resolution == nil || outcome.Resolution.Source != "registry" || outcome.Resolution.EffectiveRef != "origin/main" {
+		t.Fatalf("canonical clear after recovery has no real resolution: %+v %v", outcome, err)
+	}
+}
+
+func TestRepositoryBaseExplicitSetValidatesCanonicalInput(t *testing.T) {
+	for _, kind := range []string{"unsafe canonical", "ambiguous canonical"} {
+		t.Run(kind, func(t *testing.T) {
+			c := newWorkspaceFixture(t)
+			c.Registry.Repos[1].Aliases = []string{"selected"}
+			if kind == "unsafe canonical" {
+				c.Registry.Repos[1].Name = "../outside"
+			} else {
+				c.Registry.Repos[1].Name = "replacement"
+				c.Registry.Repos[0].Aliases = []string{"replacement"}
+			}
+			if _, err := c.SetRepositoryBase("selected", "beta", "Explicit choice"); err == nil {
+				t.Fatal("explicit setter bypassed canonical identity validation")
+			}
+			if _, err := os.Lstat(filepath.Join(c.Collection, ".wtc", "repo-bases.toml")); !os.IsNotExist(err) {
+				t.Fatalf("invalid canonical selection persisted state: %v", err)
+			}
+		})
 	}
 }

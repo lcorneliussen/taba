@@ -45,7 +45,7 @@ names, reject ambiguous aliases, malformed state and symlinked state paths, and
 serialize updates under a lock. Do not commit the file or copy it into a shared
 registry. Malformed data must be corrected locally before it can be read or changed.
 A valid stored key orphaned by a registry removal or rename is retained and does
-not block other repositories. `show` explains how to clear that exact old key;
+not block unrelated repositories. `show` explains how to clear that exact old key;
 `clear` removes it without inventing a new effective base. Unrelated updates
 preserve orphaned entries. Stored keys are exact canonical identities: a later
 repository that reuses an old name as an alias does not inherit or migrate its
@@ -53,6 +53,14 @@ intent. Explicit command aliases select the current repository and persist its
 canonical name. If `clear` names an exact stored orphan key, that cleanup takes
 priority over a newer alias; use the current canonical name to clear the newer
 repository's setting.
+
+If a selected repository has no canonical override but a retained key matches
+one of its current aliases, implicit resolution refuses with an exact recovery
+instruction. Explicitly set the current canonical repository or clear the old
+key; the resolver never guesses that a rename or matching remote transfers
+ownership. Explicit new intent can coexist with the retained old key. Clearing
+that canonical override refuses before mutation until the related old key is
+cleared, so a successful clear always has a real resulting base.
 
 Browse's explicit unmanaged compatibility mode treats an unregistered folder
 literally and uses `origin/HEAD` for an existing Git worktree when no current

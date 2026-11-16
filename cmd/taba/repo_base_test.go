@@ -152,17 +152,26 @@ func TestRepositoryBaseCommandsKeepReusedAliasOrphanSeparate(t *testing.T) {
 		}
 		return result.Data
 	}
-	base := call("repo", "base", "show", "replacement")
-	if base["effective_ref"] != "origin/main" || base["source"] != "registry" || base["reason"] != nil {
-		t.Fatalf("CLI inherited stored alias intent: %+v", base)
+	for _, selector := range []string{"widget", "replacement"} {
+		if _, err := repositoryBaseCLI(t, "repo", "base", "show", selector, "--collection", collection); err == nil || !strings.Contains(err.Error(), "clear widget") {
+			t.Fatalf("CLI hid retained alias intent for %s: %v", selector, err)
+		}
 	}
-	base = call("repo", "base", "set", "widget", "gamma", "--reason", "Explicit new owner")
+	base := call("repo", "base", "set", "replacement", "gamma", "--reason", "Explicit new owner")
 	if base["repository"] != "replacement" || base["effective_ref"] != "origin/gamma" {
 		t.Fatalf("explicit alias did not select current canonical owner: %+v", base)
 	}
 	base = call("repo", "base", "show", "widget", "--unmanaged")
 	if base["effective_ref"] != "origin/HEAD" || base["source"] != "fallback" || base["reason"] != nil {
 		t.Fatalf("CLI browse applied orphan or alias owner override: %+v", base)
+	}
+	before, _ := os.ReadFile(file)
+	if _, err := repositoryBaseCLI(t, "repo", "base", "clear", "replacement", "--collection", collection); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Fatalf("CLI canonical clear hid retained related intent: %v", err)
+	}
+	after, _ := os.ReadFile(file)
+	if string(before) != string(after) {
+		t.Fatal("CLI refused canonical clear mutated store")
 	}
 	cleared := call("repo", "base", "clear", "widget")
 	if cleared["orphaned"] != true || cleared["exact_key"] != "widget" || cleared["resolution"] != nil {

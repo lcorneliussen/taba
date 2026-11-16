@@ -207,6 +207,28 @@ func resolveRepositoryBase(receivingCollection string, registry Registry, select
 	} else if err != nil {
 		return RepositoryBase{}, err
 	}
+	if !external {
+		if _, configured := store.Repos[repo.Name]; !configured {
+			if old, ok := retainedAliasBase(repo, store); ok {
+				return RepositoryBase{}, fmt.Errorf("repository %q has retained base intent under alias %q; explicitly set a base for %s or run repo base clear %s", repo.Name, old, repo.Name, old)
+			}
+		}
+	}
+	return repositoryBaseFacts(repo, store, external), nil
+}
+
+func retainedAliasBase(repo Repo, store repoBaseStore) (string, bool) {
+	for _, alias := range repo.Aliases {
+		if _, exists := store.Repos[alias]; exists && alias != repo.Name {
+			return alias, true
+		}
+	}
+	return "", false
+}
+
+// repositoryBaseFacts describes already validated state. Write callers capture
+// it under the lock and return it only after publishing that exact update.
+func repositoryBaseFacts(repo Repo, store repoBaseStore, external bool) RepositoryBase {
 	result := RepositoryBase{Repository: repo.Name, RegistryRef: repo.DefaultRef, EffectiveRef: repo.DefaultRef, Source: "registry", ProductionRef: repo.ProductionRef, ReleaseRef: repo.ReleaseRef}
 	if result.EffectiveRef == "" {
 		result.EffectiveRef = "origin/main"
@@ -218,8 +240,22 @@ func resolveRepositoryBase(receivingCollection string, registry Registry, select
 	if entry, ok := store.Repos[repo.Name]; ok && !external {
 		result.EffectiveRef, result.Reason, result.Source = entry.Base, entry.Reason, "collection"
 	}
-	return result, nil
+	return result
 }
+
+func (c *Context) selectedBaseRepository(selector string) (Repo, error) {
+	if selector == "harness" {
+		if name, err := c.catchUpHarnessRepo(); err == nil && name != "" {
+			selector = name
+		}
+	}
+	repo, err := baseRepository(c.Registry, selector)
+	if err != nil {
+		return Repo{}, err
+	}
+	return canonicalBaseRepository(c.Registry, repo.Name)
+}
+
 func (c *Context) RepositoryBase(selector string, unmanaged ...bool) (RepositoryBase, error) {
 	browse := len(unmanaged) > 0 && unmanaged[0]
 	// The harness folder has an explicit configured role, not an inferred alias.
@@ -241,30 +277,40 @@ func (c *Context) RepositoryBase(selector string, unmanaged ...bool) (Repository
 // SetRepositoryBase changes local intent only; it never moves a checkout or
 // contacts a remote. An empty ref clears the entry.
 func (c *Context) SetRepositoryBase(selector, ref, reason string) (RepositoryBase, error) {
-	resolved, err := c.RepositoryBase(selector)
+	repo, err := c.selectedBaseRepository(selector)
 	if err != nil {
-		return resolved, err
+		return RepositoryBase{}, err
 	}
 	if ref != "" {
 		ref, err = normalizeRepoBase(ref)
 		if err != nil {
-			return resolved, err
+			return RepositoryBase{}, err
 		}
 		if err = validateBaseReason(reason); err != nil {
-			return resolved, err
+			return RepositoryBase{}, err
 		}
 	}
+	// Explicit intent can recover an alias-linked refusal, but never bypasses
+	// validation of existing state. The locked update validates it again.
+	if _, err := readReceivingRepoBases(c.Collection, c.Registry); err != nil {
+		return RepositoryBase{}, err
+	}
+	var result RepositoryBase
 	if err := c.updateRepositoryBases(func(store *repoBaseStore) error {
 		if ref == "" {
-			delete(store.Repos, resolved.Repository)
+			if old, ok := retainedAliasBase(repo, *store); ok {
+				return fmt.Errorf("cannot clear %s while retained base intent under alias %q remains; run repo base clear %s first", repo.Name, old, old)
+			}
+			delete(store.Repos, repo.Name)
 		} else {
-			store.Repos[resolved.Repository] = repoBaseEntry{Base: ref, Reason: reason}
+			store.Repos[repo.Name] = repoBaseEntry{Base: ref, Reason: reason}
 		}
+		result = repositoryBaseFacts(repo, *store, false)
 		return nil
 	}); err != nil {
-		return resolved, err
+		return RepositoryBase{}, err
 	}
-	return c.RepositoryBase(selector)
+	return result, nil
 }
 
 // RepositoryBaseClear is a command outcome. Orphan cleanup has no resolution.
