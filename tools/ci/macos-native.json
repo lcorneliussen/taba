@@ -1,0 +1,51 @@
+{
+  "darwin_sources": [
+    "internal/wtc/status_watcher_process_darwin.go"
+  ],
+  "groups": [
+    {
+      "package": "./internal/wtc",
+      "risk": "Native process argv/cwd/start identity and ownership-safe signals, including a real orphan child.",
+      "tests": [
+        "TestRegisteredStatusWatchersRetireByResolvedCollection",
+        "TestRetireLegacyWatcherProcesses",
+        "TestRetiredWatcherRevalidatesProcessIdentity",
+        "TestTunnelHostCrashRetainsLiveExternalChildAndStopsExactInstance",
+        "TestTunnelOwnedProcessRefusesObservedReplacementOrUncertainExecution"
+      ]
+    },
+    {
+      "package": "./internal/wtc",
+      "risk": "Native flock, O_NOFOLLOW, inode replacement, concurrent publication and FIFO semantics.",
+      "tests": [
+        "TestStatusWatcherStaleAndReplacedLeases",
+        "TestStatusWatcherRejectsRetiredAndSymlinkedRegistries",
+        "TestStatusWatcherRegistrationCannotReviveRetirement",
+        "TestStatusWatcherConcurrentRegistrationAndCleanup",
+        "TestRepositoryBaseNoFollow",
+        "TestRepositoryBaseConcurrentUpdates",
+        "TestEnlistPreservesMetadataWrittenWhileWaitingForLock",
+        "TestStatusForgeCacheIsPrivateFreshAndDoesNotReadSymlinks",
+        "TestDevFollowBuildLockAndSharedSuccessfulGeneration",
+        "TestDevFollowRetirementRejectsWaitingAndReplacementLocks",
+        "TestStatus319FIFOAndAbandonedPane",
+        "TestStatus319QueueIsBoundedAndDoesNotFollowSymlinks"
+      ]
+    },
+    {
+      "package": "./cmd/taba",
+      "risk": "Native executable replacement preserves arguments, identity and exit status.",
+      "tests": [
+        "TestDevFollowCLIOverridesSemverPreservesArgsAndCanExit",
+        "TestPinnedBinaryHandsOverToDevBuild"
+      ]
+    },
+    {
+      "package": "./cmd/taba",
+      "risk": "macOS PTY accounting and holder diagnostics (fixture-based; no host terminal mutation).",
+      "tests": [
+        "TestOpenPtyReportNamesHoldersWhenLow"
+      ]
+    }
+  ]
+}
