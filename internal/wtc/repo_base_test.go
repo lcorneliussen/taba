@@ -40,7 +40,7 @@ func TestRepositoryBaseRejectsInvalidState(t *testing.T) {
 	for _, input := range []string{
 		"schema_version = 2\n", "schema_version = 1\nunknown = true\n",
 		"schema_version = 1\n[repos.widget]\nbase='beta'\nreason=''\n",
-		"schema_version = 1\n[repos.widget]\nbase='beta'\nreason='reason'\n[repos.legacy]\nbase='main'\nreason='other'\n",
+		"schema_version = 1\n[repos.widget]\nbase='beta'\nreason='reason'\n[repos.widget]\nbase='main'\nreason='other'\n",
 	} {
 		t.Run(input, func(t *testing.T) {
 			c := newWorkspaceFixture(t)
@@ -546,5 +546,112 @@ func TestRepositoryBaseNewDoesNotReportOrphanIntentAsApplied(t *testing.T) {
 				t.Fatalf("new orphan intent reported as applied: %v", err)
 			}
 		})
+	}
+}
+
+func TestRepositoryBaseBrowseRetainedOrphanUsesUnmanagedFallback(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if _, err := c.SetRepositoryBase("widget", "beta", "Removed repository intent"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(c.Collection, "widget")
+	fixtureGit(t, "init", "-q", "-b", "main", path)
+	c.Registry.Repos = c.Registry.Repos[:1]
+	file := filepath.Join(c.Collection, ".wtc", "repo-bases.toml")
+	before, _ := os.ReadFile(file)
+	if _, err := c.RepositoryBase("widget"); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Fatalf("ordinary orphan show must retain recovery refusal: %v", err)
+	}
+	base, err := c.RepositoryBase("widget", true)
+	if err != nil || base.EffectiveRef != "origin/HEAD" || base.Source != "fallback" || base.Reason != "" {
+		t.Errorf("retained orphan broke explicit unmanaged browse: %+v %v", base, err)
+	}
+	after, _ := os.ReadFile(file)
+	if string(before) != string(after) {
+		t.Fatal("browse rewrote retained intent")
+	}
+	fixtureFile(t, file, "schema_version=1\n[repos.widget]\nbase='beta'\nreason=''\n", 0600)
+	if _, err := c.RepositoryBase("widget", true); err == nil {
+		t.Fatal("unmanaged orphan fallback ignored corrupt state")
+	}
+}
+
+func TestRepositoryBaseOrphanDoesNotReassociateThroughReusedAlias(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if _, err := c.SetRepositoryBase("widget", "beta", "Old canonical owner"); err != nil {
+		t.Fatal(err)
+	}
+	c.Registry.Repos[1].Name = "replacement"
+	c.Registry.Repos[1].Remote = "https://example.invalid/replacement.git"
+	c.Registry.Repos[1].Aliases = []string{"widget"}
+	base, err := c.RepositoryBase("replacement")
+	if err != nil || base.EffectiveRef != "origin/main" || base.Source != "registry" || base.Reason != "" {
+		t.Errorf("new alias owner inherited orphan intent: %+v %v", base, err)
+	}
+	if _, err := c.SetRepositoryBase("agent-harness", "beta", "Independent update"); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(c.Collection, ".wtc", "repo-bases.toml")
+	body, _ := os.ReadFile(file)
+	if !strings.Contains(string(body), "[repos.widget]") || strings.Contains(string(body), "[repos.replacement]") {
+		t.Errorf("unrelated update reassociated orphan ownership: %s", body)
+	}
+	// Explicit selection of the new alias owner stores a separate canonical key.
+	if base, err := c.SetRepositoryBase("widget", "gamma", "Explicit new owner"); err != nil || base.Repository != "replacement" {
+		t.Fatalf("explicit alias selection: %+v %v", base, err)
+	}
+	if _, err := ResolveRepositoryBase(c.Collection, c.Registry, "widget"); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Fatalf("canonical core followed alias: %v", err)
+	}
+	path := filepath.Join(c.Collection, "widget")
+	fixtureGit(t, "init", "-q", "-b", "main", path)
+	base, err = c.RepositoryBase("widget", true)
+	if err != nil || base.EffectiveRef != "origin/HEAD" || base.Source != "fallback" || base.Reason != "" {
+		t.Fatalf("browse inferred alias ownership: %+v %v", base, err)
+	}
+	outcome, err := c.ClearRepositoryBase("widget")
+	if err != nil || !outcome.Orphaned || outcome.ExactKey != "widget" || outcome.Resolution != nil {
+		t.Errorf("exact orphan clear followed reused alias: %+v %v", outcome, err)
+	}
+	base, err = c.RepositoryBase("replacement")
+	if err != nil || base.EffectiveRef != "origin/gamma" || base.Reason != "Explicit new owner" {
+		t.Fatalf("orphan cleanup removed current canonical intent: %+v %v", base, err)
+	}
+}
+
+func TestRepositoryBaseCanonicalGuardsSurviveAliasRetention(t *testing.T) {
+	for _, kind := range []string{"ambiguous aliases", "duplicate canonical"} {
+		t.Run(kind, func(t *testing.T) {
+			c := newWorkspaceFixture(t)
+			if _, err := c.SetRepositoryBase("widget", "beta", "Existing intent"); err != nil {
+				t.Fatal(err)
+			}
+			other := c.Registry.Repos[1]
+			if kind == "ambiguous aliases" {
+				c.Registry.Repos[1].Name = "replacement"
+				c.Registry.Repos[1].Aliases = []string{"widget"}
+				other.Name, other.Aliases = "another", []string{"widget"}
+			}
+			c.Registry.Repos = append(c.Registry.Repos, other)
+			path := filepath.Join(c.Collection, "widget")
+			fixtureGit(t, "init", "-q", "-b", "main", path)
+			if _, err := c.RepositoryBase("widget", true); err == nil {
+				t.Fatal("unmanaged mode relaxed ambiguous identity guard")
+			}
+			if _, err := c.ClearRepositoryBase("widget"); err == nil {
+				t.Fatal("exact cleanup relaxed ambiguous identity guard")
+			}
+		})
+	}
+}
+
+func TestRepositoryBaseBrowseKeepsConfiguredHarnessIdentity(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if _, err := c.SetRepositoryBase("agent-harness", "beta", "Harness development"); err != nil {
+		t.Fatal(err)
+	}
+	base, err := c.RepositoryBase("harness", true)
+	if err != nil || base.Repository != "agent-harness" || base.EffectiveRef != "origin/beta" || base.Source != "collection" {
+		t.Fatalf("configured harness role lost: %+v %v", base, err)
 	}
 }

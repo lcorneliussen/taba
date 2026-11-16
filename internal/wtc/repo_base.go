@@ -58,6 +58,16 @@ func baseRepository(registry Registry, selector string) (Repo, error) {
 	}
 	return found[0], nil
 }
+
+// Persisted keys and programmatic folder lookups never acquire ownership
+// through a current alias. Explicit command inputs can select aliases separately.
+func canonicalBaseRepository(registry Registry, name string) (Repo, error) {
+	repo, err := baseRepository(registry, name)
+	if err == nil && repo.Name != name {
+		err = fmt.Errorf("%w: %q", errUnregisteredBaseRepository, name)
+	}
+	return repo, err
+}
 func normalizeRepoBase(ref string) (string, error) {
 	branch := strings.TrimPrefix(ref, "origin/")
 	if len(branch) == 40 || len(branch) == 64 {
@@ -134,15 +144,9 @@ func readRepoBases(dir *os.File, registry Registry) (repoBaseStore, error) {
 		return store, fmt.Errorf("invalid repository bases schema (expected schema_version = 1)")
 	}
 	for name, entry := range parsed.Repos {
-		repo, err := baseRepository(registry, name)
-		key := name
-		if err == nil {
-			key = repo.Name
-		} else if !errors.Is(err, errUnregisteredBaseRepository) {
+		// Validate identity syntax and ambiguity without reassigning a stored key.
+		if _, err := canonicalBaseRepository(registry, name); err != nil && !errors.Is(err, errUnregisteredBaseRepository) {
 			return store, err
-		}
-		if _, exists := store.Repos[key]; exists {
-			return store, fmt.Errorf("duplicate base identity %q", key)
 		}
 		ref, err := normalizeRepoBase(entry.Base)
 		if err != nil {
@@ -151,7 +155,7 @@ func readRepoBases(dir *os.File, registry Registry) (repoBaseStore, error) {
 		if err := validateBaseReason(entry.Reason); err != nil {
 			return store, err
 		}
-		store.Repos[key] = repoBaseEntry{Base: ref, Reason: entry.Reason}
+		store.Repos[name] = repoBaseEntry{Base: ref, Reason: entry.Reason}
 	}
 	return store, nil
 }
@@ -178,12 +182,12 @@ func ResolveRepositoryBase(receivingCollection string, registry Registry, select
 }
 
 func resolveRepositoryBase(receivingCollection string, registry Registry, selector string, unmanaged bool) (RepositoryBase, error) {
-	repo, err := baseRepository(registry, selector)
+	repo, err := canonicalBaseRepository(registry, selector)
 	store, storeErr := readReceivingRepoBases(receivingCollection, registry)
 	if storeErr != nil {
 		return RepositoryBase{}, storeErr
 	}
-	if errors.Is(err, errUnregisteredBaseRepository) {
+	if !unmanaged && errors.Is(err, errUnregisteredBaseRepository) {
 		if _, exists := store.Repos[selector]; exists {
 			return RepositoryBase{}, fmt.Errorf("%w; stored intent is orphaned; run repo base clear %s", err, selector)
 		}
@@ -211,19 +215,27 @@ func resolveRepositoryBase(receivingCollection string, registry Registry, select
 			result.EffectiveRef = "origin/HEAD"
 		}
 	}
-	if entry, ok := store.Repos[repo.Name]; ok {
+	if entry, ok := store.Repos[repo.Name]; ok && !external {
 		result.EffectiveRef, result.Reason, result.Source = entry.Base, entry.Reason, "collection"
 	}
 	return result, nil
 }
 func (c *Context) RepositoryBase(selector string, unmanaged ...bool) (RepositoryBase, error) {
+	browse := len(unmanaged) > 0 && unmanaged[0]
+	// The harness folder has an explicit configured role, not an inferred alias.
 	if selector == "harness" {
 		name, err := c.catchUpHarnessRepo()
 		if err == nil && name != "" {
 			selector = name
 		}
 	}
-	return resolveRepositoryBase(c.Collection, c.Registry, selector, len(unmanaged) > 0 && unmanaged[0])
+	if !browse {
+		// Normalize selected input only; never normalize keys loaded from disk.
+		if repo, err := baseRepository(c.Registry, selector); err == nil {
+			selector = repo.Name
+		}
+	}
+	return resolveRepositoryBase(c.Collection, c.Registry, selector, browse)
 }
 
 // SetRepositoryBase changes local intent only; it never moves a checkout or
@@ -265,37 +277,37 @@ type RepositoryBaseClear struct {
 
 func (c *Context) ClearRepositoryBase(selector string) (RepositoryBaseClear, error) {
 	result := RepositoryBaseClear{}
-	resolved, err := c.RepositoryBase(selector)
-	if err == nil {
-		resolved, err = c.SetRepositoryBase(selector, "", "")
-		if err != nil {
+	store, err := readReceivingRepoBases(c.Collection, c.Registry)
+	if err != nil {
+		return result, err
+	}
+	_, identityErr := canonicalBaseRepository(c.Registry, selector)
+	_, exact := store.Repos[selector]
+	if exact && errors.Is(identityErr, errUnregisteredBaseRepository) {
+		// An exact retained key takes priority over a later repository's alias.
+		if err := c.updateRepositoryBases(func(store *repoBaseStore) error {
+			if _, err := canonicalBaseRepository(c.Registry, selector); !errors.Is(err, errUnregisteredBaseRepository) {
+				return fmt.Errorf("orphan cleanup requires an unregistered exact key")
+			}
+			if _, exists := store.Repos[selector]; !exists {
+				return fmt.Errorf("no stored orphan base for %q", selector)
+			}
+			delete(store.Repos, selector)
+			return nil
+		}); err != nil {
 			return result, err
 		}
-		return RepositoryBaseClear{Cleared: true, ExactKey: resolved.Repository, Resolution: &resolved}, nil
+		return RepositoryBaseClear{Cleared: true, ExactKey: selector, Orphaned: true}, nil
 	}
-	if !errors.Is(err, errUnregisteredBaseRepository) {
+	resolved, err := c.RepositoryBase(selector)
+	if err != nil {
 		return result, err
 	}
-	store, readErr := readReceivingRepoBases(c.Collection, c.Registry)
-	if readErr != nil {
-		return result, readErr
-	}
-	if _, exists := store.Repos[selector]; !exists {
-		return result, fmt.Errorf("no stored orphan base for %q", selector)
-	}
-	if err := c.updateRepositoryBases(func(store *repoBaseStore) error {
-		if _, identityErr := baseRepository(c.Registry, selector); !errors.Is(identityErr, errUnregisteredBaseRepository) {
-			return fmt.Errorf("orphan cleanup requires an unregistered exact key")
-		}
-		if _, exists := store.Repos[selector]; !exists {
-			return fmt.Errorf("no stored orphan base for %q", selector)
-		}
-		delete(store.Repos, selector)
-		return nil
-	}); err != nil {
+	resolved, err = c.SetRepositoryBase(resolved.Repository, "", "")
+	if err != nil {
 		return result, err
 	}
-	return RepositoryBaseClear{Cleared: true, ExactKey: selector, Orphaned: true}, nil
+	return RepositoryBaseClear{Cleared: true, ExactKey: resolved.Repository, Resolution: &resolved}, nil
 }
 
 func (c *Context) updateRepositoryBases(change func(*repoBaseStore) error) error {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,5 +115,67 @@ func TestRepositoryBaseCommandOrphanOutcomeHasNoResolution(t *testing.T) {
 	}
 	if _, err := repositoryBaseCLI(t, "repo", "base", "clear", "widget"); err == nil {
 		t.Fatal("unknown unstored key cleared")
+	}
+}
+
+func TestRepositoryBaseCommandsKeepReusedAliasOrphanSeparate(t *testing.T) {
+	collection := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(collection, "harness"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := "repos:\n  - name: replacement\n    aliases: [widget]\n    remote: https://example.invalid/replacement.git\n    default_ref: origin/main\n"
+	if err := os.WriteFile(filepath.Join(collection, "harness", ".harness-repos.yml"), []byte(registry), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(collection, ".wtc"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(collection, ".wtc", "repo-bases.toml")
+	if err := os.WriteFile(file, []byte("schema_version=1\n[repos.widget]\nbase='beta'\nreason='Old canonical owner'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "init", "-q", "-b", "main", filepath.Join(collection, "widget")).CombinedOutput(); err != nil {
+		t.Fatalf("synthetic worktree: %s %v", out, err)
+	}
+	call := func(args ...string) map[string]any {
+		t.Helper()
+		args = append(args, "--collection", collection, "--json")
+		out, err := repositoryBaseCLI(t, args...)
+		if err != nil {
+			t.Fatalf("%v: %s %v", args, out, err)
+		}
+		var result struct {
+			Data map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result.Data
+	}
+	base := call("repo", "base", "show", "replacement")
+	if base["effective_ref"] != "origin/main" || base["source"] != "registry" || base["reason"] != nil {
+		t.Fatalf("CLI inherited stored alias intent: %+v", base)
+	}
+	base = call("repo", "base", "set", "widget", "gamma", "--reason", "Explicit new owner")
+	if base["repository"] != "replacement" || base["effective_ref"] != "origin/gamma" {
+		t.Fatalf("explicit alias did not select current canonical owner: %+v", base)
+	}
+	base = call("repo", "base", "show", "widget", "--unmanaged")
+	if base["effective_ref"] != "origin/HEAD" || base["source"] != "fallback" || base["reason"] != nil {
+		t.Fatalf("CLI browse applied orphan or alias owner override: %+v", base)
+	}
+	cleared := call("repo", "base", "clear", "widget")
+	if cleared["orphaned"] != true || cleared["exact_key"] != "widget" || cleared["resolution"] != nil {
+		t.Fatalf("CLI orphan cleanup followed alias: %+v", cleared)
+	}
+	base = call("repo", "base", "show", "replacement")
+	if base["effective_ref"] != "origin/gamma" || base["reason"] != "Explicit new owner" {
+		t.Fatalf("CLI orphan cleanup lost current intent: %+v", base)
+	}
+	if err := os.WriteFile(file, []byte("schema_version=2\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repositoryBaseCLI(t, "repo", "base", "show", "widget", "--unmanaged", "--collection", collection); err == nil {
+		t.Fatal("CLI unmanaged fallback bypassed corrupt store")
 	}
 }

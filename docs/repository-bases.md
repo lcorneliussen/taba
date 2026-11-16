@@ -47,7 +47,19 @@ registry. Malformed data must be corrected locally before it can be read or chan
 A valid stored key orphaned by a registry removal or rename is retained and does
 not block other repositories. `show` explains how to clear that exact old key;
 `clear` removes it without inventing a new effective base. Unrelated updates
-preserve orphaned entries.
+preserve orphaned entries. Stored keys are exact canonical identities: a later
+repository that reuses an old name as an alias does not inherit or migrate its
+intent. Explicit command aliases select the current repository and persist its
+canonical name. If `clear` names an exact stored orphan key, that cleanup takes
+priority over a newer alias; use the current canonical name to clear the newer
+repository's setting.
+
+Browse's explicit unmanaged compatibility mode treats an unregistered folder
+literally and uses `origin/HEAD` for an existing Git worktree when no current
+canonical override applies. A retained orphan does not apply to that folder.
+The entire local store is still validated first: corruption, ambiguous identities
+and unsafe paths remain errors, including in unmanaged mode. The configured
+harness folder role retains its explicit canonical repository mapping.
 
 Worktree creation, catch-up, status, browse and review defaults use the same
 receiving-local resolver: explicit override, registry `default_ref`, then
