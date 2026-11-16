@@ -158,11 +158,15 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 		return fallback, statusObservationFailure(err)
 	}
 	defer unlock()
-	if known, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
+	known, ok, readErr := statusReadObservedDetailContext(ctx, record, slug, forge, 365*24*time.Hour)
+	if ok {
 		fallback = known
-		if known.State == "MERGED" {
-			return known, statusDetailObservation(known)
-		}
+	}
+	if readErr != nil {
+		return statusFailedPRObservation(fallback, readErr)
+	}
+	if ok && known.State == "MERGED" {
+		return known, statusDetailObservation(known)
 	}
 	if err := statusTakeForegroundToken(ctx, forge); err != nil {
 		outcome := statusObservationFailure(err)
@@ -200,8 +204,16 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
 		return fallback, outcome
 	}
-	if !statusWriteForgeEntrySinceObserved("pr", forge, slug, record.Number, raw, started, observed) {
-		if winner, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
+	publication, publishErr := statusWriteForgeEntrySinceObservedContext(ctx, "pr", forge, slug, record.Number, raw, started, observed)
+	if !publication.Written && !publication.Retained {
+		if publishErr != nil {
+			return statusFailedPRObservation(fallback, publishErr)
+		}
+		winner, ok, readErr := statusReadObservedDetailContext(ctx, record, slug, forge, 365*24*time.Hour)
+		if readErr != nil {
+			return statusFailedPRObservation(fallback, readErr)
+		}
+		if ok {
 			outcome := statusDetailObservation(winner)
 			outcome.Reason = "superseded"
 			if winner.State != detail.State {
@@ -212,9 +224,38 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 		fallback.Freshness = "unavailable"
 		return fallback, StatusObservation{Freshness: "unavailable", Reason: "cache-publication-failed", ObservedAt: fallback.ObservedAt, Source: fallback.StateSource}
 	}
-	statusMarkFullRefresh(forge, slug, record.Number)
 	detail.ObservedAt, detail.StateSource, detail.Freshness = observed.UTC().Format(time.RFC3339Nano), "foreground", "live"
-	return detail, StatusObservation{Freshness: "live", ObservedAt: detail.ObservedAt, Source: "foreground", ProviderConfirmed: true}
+	if publication.Retained {
+		// Retention can commit before cancellation prevents ordinary detail
+		// publication. Read that independent authority without another lock or
+		// migration; never revoke a persisted merge because the request ended.
+		if retained, ok := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge()); ok && retained.State == "MERGED" {
+			if retained.ObservedAt != detail.ObservedAt || retained.State != detail.State || retained.HeadCommit != detail.HeadCommit || retained.Title != detail.Title {
+				outcome := statusDetailObservation(retained)
+				outcome.Reason = "superseded"
+				return retained, outcome
+			}
+		}
+	}
+	outcome := StatusObservation{Freshness: "live", ObservedAt: detail.ObservedAt, Source: "foreground", ProviderConfirmed: true}
+	switch {
+	case errors.Is(publishErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled):
+		outcome.Reason = "cancelled-after-observation"
+	case errors.Is(publishErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded):
+		outcome.Reason = "deadline-after-observation"
+	case publishErr != nil:
+		outcome.Reason = "detail-publication-failed"
+	default:
+		statusMarkFullRefresh(forge, slug, record.Number)
+	}
+	return detail, outcome
+}
+
+func statusFailedPRObservation(detail statusPRDetail, err error) (statusPRDetail, StatusObservation) {
+	outcome := statusObservationFailure(err)
+	detail.Freshness = outcome.Freshness
+	outcome.ObservedAt, outcome.Source = detail.ObservedAt, detail.StateSource
+	return detail, outcome
 }
 
 // The admission caller already debited the shared bucket. No second token and

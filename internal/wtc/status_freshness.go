@@ -1,6 +1,9 @@
 package wtc
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Older records have no admission reason. Observation age alone can establish
 // expiration, never a budget or provider rate-limit explanation.
@@ -66,12 +69,20 @@ func statusFreshnessLabel(freshness, observed string) string {
 // timestamps. Age bounds ordinary detail; retained MERGED state is bounded by
 // statusMergedCacheAge.
 func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
-	// A fresh active detail from a released writer cannot supersede retained
-	// merge state. Its original age still controls freshness and action gates.
 	if detail, ok := statusRetainedMerge(record, slug, forge); ok {
 		return detail, true
 	}
 	return statusReadObservedDetailKind("pr", record, slug, forge, age)
+}
+
+func statusReadObservedDetailContext(ctx context.Context, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool, error) {
+	// A fresh active detail from a released writer cannot supersede retained
+	// merge state. Its original age still controls freshness and action gates.
+	if detail, ok, err := statusRetainedMergeContext(ctx, record, slug, forge); ok || err != nil {
+		return detail, ok, err
+	}
+	detail, ok := statusReadObservedDetailKind("pr", record, slug, forge, age)
+	return detail, ok, ctx.Err()
 }
 
 func statusReadObservedDetailKind(kind string, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
@@ -87,8 +98,16 @@ func statusReadObservedDetailKind(kind string, record PRRecord, slug, forge stri
 }
 
 func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
+	detail, known, _ := statusRetainedMergeContext(context.Background(), record, slug, forge)
+	return detail, known
+}
+
+func statusRetainedMergeContext(ctx context.Context, record PRRecord, slug, forge string) (statusPRDetail, bool, error) {
 	detail, known := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
 	known = known && detail.State == "MERGED"
+	if err := ctx.Err(); err != nil {
+		return detail, known, err
+	}
 	raw, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusMergedCacheAge())
 	if ok {
 		current, err := statusParseForgeDetail(forge, raw, record)
@@ -96,13 +115,17 @@ func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, b
 		if err == nil && current.State == "MERGED" && (!known || observed.After(retainedAt)) {
 			// Accept legacy authority only after preserving the same bytes and age
 			// independently of released writers' ordinary cache publications.
-			if statusRetainMergeObservation(forge, slug, record.Number, raw, observed) {
+			retained, retainErr := statusRetainMergeObservationContext(ctx, forge, slug, record.Number, raw, observed)
+			if retained {
 				winner, found := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
 				if found && winner.State == "MERGED" {
-					return winner, true
+					return winner, true, retainErr
 				}
+			}
+			if retainErr != nil {
+				return detail, known, retainErr
 			}
 		}
 	}
-	return detail, known
+	return detail, known, ctx.Err()
 }

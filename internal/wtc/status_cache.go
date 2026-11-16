@@ -1,8 +1,10 @@
 package wtc
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -112,64 +114,110 @@ func statusWriteForgeEntrySince(kind, forge, slug, key string, data []byte, star
 // List-backed detail carries the list's observation time through atomic
 // publication, so later cache reads cannot mistake publication for a new read.
 func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []byte, started, observed time.Time) bool {
-	if len(data) == 0 {
-		return false
+	result, _ := statusWriteForgeEntrySinceObservedContext(context.Background(), kind, forge, slug, key, data, started, observed)
+	return result.Written
+}
+
+// A retained merge is an independently committed fact even when cancellation
+// prevents the ordinary detail publication. Keep persistence separate from the
+// request's outcome. Filesystem operations themselves are not universally
+// cancellable; once an atomic publication finishes, its evidence is retained.
+type statusCachePublication struct {
+	Written  bool
+	Retained bool
+}
+
+func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge, slug, key string, data []byte, started, observed time.Time) (result statusCachePublication, err error) {
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
-	promotesMerge := false
-	isMerge := false
+	if len(data) == 0 {
+		return result, nil
+	}
+	promotesMerge, isMerge := false, false
 	if kind == "pr" {
 		candidate, parseErr := statusParseForgeDetail(forge, data, PRRecord{Number: key})
-		current, known := statusRetainedMerge(PRRecord{Number: key}, slug, forge)
+		current, known, err := statusRetainedMergeContext(ctx, PRRecord{Number: key}, slug, forge)
+		if err != nil {
+			// Legacy migration may itself have committed retention before the
+			// request ended. Preserve that authority independently of whether
+			// this candidate can still be published.
+			result.Retained = known
+			return result, err
+		}
 		if known && current.State == "MERGED" && (parseErr != nil || candidate.State != "MERGED") {
-			return false
+			return result, nil
 		}
 		isMerge = parseErr == nil && candidate.State == "MERGED"
 		promotesMerge = isMerge && !known
 	}
-	// A first confirmed merge supersedes non-MERGED or absent state regardless
-	// of request order. Later replies follow request-start provenance; retained
-	// merge state still controls readers.
+	// Preserve request ordering and first-merge promotion, including released
+	// writers that still publish the existing two-file protocol.
 	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
-		return false
+		return result, nil
 	}
-	// Released publishers can overwrite the ordinary detail without this guard.
-	// Retain confirmed merge evidence independently, with its actual observation
-	// time and the same retention policy; reading it never renews authority.
 	if isMerge {
 		if observed.IsZero() {
 			observed = time.Now()
 		}
-		if !statusRetainMergeObservation(forge, slug, key, data, observed) {
-			return false
+		retained, err := statusRetainMergeObservationContext(ctx, forge, slug, key, data, observed)
+		result.Retained = retained
+		if err != nil || !retained {
+			return result, err
 		}
 	}
-	if !statusWriteForgeEntryObserved(kind, forge, slug, key, data, observed) {
-		return false
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
+	if !statusWriteForgeEntryObserved(kind, forge, slug, key, data, observed) {
+		return result, errors.New("forge observation publication failed")
+	}
+	result.Written = true
+	// Complete the existing ordering receipt after a successful publication,
+	// even if cancellation arrived during the filesystem operation.
 	statusWriteForgeEntry("since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)))
-	return true
+	return result, ctx.Err()
 }
 
 // Serialize new publications and legacy migrations on the independent record.
 // Observation time, not migration time, controls both ordering and expiry.
 // Callers may already hold the ordinary PR lock; this path never acquires it.
 func statusRetainMergeObservation(forge, slug, key string, data []byte, observed time.Time) bool {
-	if observed.IsZero() || time.Since(observed) >= statusMergedCacheAge() {
-		return false
+	retained, _ := statusRetainMergeObservationContext(context.Background(), forge, slug, key, data, observed)
+	return retained
+}
+
+func statusRetainMergeObservationContext(ctx context.Context, forge, slug, key string, data []byte, observed time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
-	unlock, err := statusLockCache(statusForgeEntryPath("merge", forge, slug, key))
+	if observed.IsZero() || time.Since(observed) >= statusMergedCacheAge() {
+		return false, nil
+	}
+	unlock, err := statusLockCacheContext(ctx, statusForgeEntryPath("merge", forge, slug, key))
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	saved, at, ok := statusReadForgeEntryObserved("merge", forge, slug, key, statusMergedCacheAge())
 	if ok {
 		prior, err := statusParseForgeDetail(forge, saved, PRRecord{Number: key})
 		if err == nil && prior.State == "MERGED" && !observed.After(at) {
-			return true
+			return true, nil
 		}
 	}
-	return statusWriteForgeEntryObserved("merge", forge, slug, key, data, observed)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	retained := statusWriteForgeEntryObserved("merge", forge, slug, key, data, observed)
+	if !retained {
+		return false, errors.New("merge observation publication failed")
+	}
+	// Cancellation cannot revoke a confirmed merge that has been committed.
+	return true, ctx.Err()
 }
 
 func statusForgeEntrySince(kind, forge, slug, key string) (time.Time, bool) {
