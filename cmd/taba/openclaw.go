@@ -581,17 +581,15 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 			add.destination = reg.destinations[entry.Name]
 			if add.branch == "" {
 				ref := entry.DefaultRef
-				folder, err := plannerCollectionFolder(gatewayStateDir(), worktree)
-				if err != nil {
-					return nil, nil, err
-				}
-				if folder != "" {
-					if _, err := os.Stat(folder); err == nil {
-						receiver, err := wtc.OpenCollection(folder)
-						if err != nil {
-							return nil, nil, fmt.Errorf("receiving base requires a readable local collection: %w", err)
-						}
-						base, err := receiver.RepositoryBase(entry.Name)
+				if openclaw.GatewayFromEnv(os.Getenv) == nil {
+					folder, err := plannerCollectionFolder(gatewayStateDir(), worktree)
+					if err != nil {
+						return nil, nil, err
+					}
+					if folder != "" {
+						// The selected receiving harness registry owns names/aliases;
+						// linked folder registries can still contain only added repos.
+						base, err := wtc.ResolveRepositoryBase(folder, wtc.Registry{Repos: reg.repos}, entry.Name)
 						if err != nil {
 							return nil, nil, err
 						}
@@ -603,8 +601,6 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 							}
 						}
 						ref = base.EffectiveRef
-					} else if !os.IsNotExist(err) {
-						return nil, nil, err
 					}
 				}
 				add.branch = strings.TrimPrefix(ref, "origin/")

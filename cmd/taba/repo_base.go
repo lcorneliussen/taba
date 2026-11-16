@@ -9,6 +9,7 @@ import (
 
 func addRepoBaseCommands(root *cobra.Command, asJSON *bool) {
 	var collection, reason string
+	var unmanaged bool
 	repo := &cobra.Command{Use: "repo", Short: "Inspect collection repository settings"}
 	base := &cobra.Command{Use: "base", Short: "Set, show or clear a receiving-local development base"}
 	base.PersistentFlags().StringVar(&collection, "collection", "", "Receiving collection directory (default: current)")
@@ -29,6 +30,10 @@ func addRepoBaseCommands(root *cobra.Command, asJSON *bool) {
 			args, use = 2, action+" <repo> <ref>"
 		}
 		cmd := &cobra.Command{Use: use, Short: action + " the local development base", Args: cobra.ExactArgs(args)}
+		if action == "show" {
+			cmd.Flags().BoolVar(&unmanaged, "unmanaged", false, "Allow an existing unregistered Git worktree (browse compatibility)")
+			_ = cmd.Flags().MarkHidden("unmanaged")
+		}
 		if action == "set" {
 			cmd.Flags().StringVar(&reason, "reason", "", "Human reason for this collection's base (required)")
 			_ = cmd.MarkFlagRequired("reason")
@@ -41,7 +46,7 @@ func addRepoBaseCommands(root *cobra.Command, asJSON *bool) {
 			var result wtc.RepositoryBase
 			switch action {
 			case "show":
-				result, err = c.RepositoryBase(args[0])
+				result, err = c.RepositoryBase(args[0], unmanaged)
 			case "set":
 				result, err = c.SetRepositoryBase(args[0], args[1], reason)
 			case "clear":

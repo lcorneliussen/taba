@@ -27,7 +27,8 @@ launch note.
 1. **Create the branch at the first commit**, named `<issue-id>-<short-slug>`
    (e.g. `ops-yhzi-port-call-logic`), off the working branch:
    `git switch -c <issue-id>-<short-slug>`. Working branches per repo:
-   `default_ref` in `.harness-repos.yml`; release-cut branches (`release_ref`)
+   effective base from `taba repo base show <repo>` (registry `default_ref`
+   unless explicitly overridden; see `docs/repository-bases.md`); release-cut branches (`release_ref`)
    deploy to production on merge — only touch them when intentionally
    shipping, and confirm in the target repo's `AGENTS.md`.
 2. **Do all the issue's code work on that branch.** Multiple commits are fine

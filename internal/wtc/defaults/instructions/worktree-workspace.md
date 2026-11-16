@@ -112,8 +112,7 @@ This works because the tools are worktree-driven, not registry-driven:
 - `write_collection_env` iterates the registry, so an unmanaged repo simply
   gets no port — which is correct; it has no `port_offset` to claim.
 
-One consequence remains: `default_ref_for` is name-keyed and falls back to
-`origin/main` for anything unregistered, so the `↓ behind` column measures
+Unregistered worktrees retain the `origin/main` fallback for status, so the `↓ behind` column measures
 against `main` regardless of the repo's actual working branch. An `ext.`
 sibling that develops on `develop` will read as behind when it is not.
 
@@ -138,7 +137,8 @@ or `<repo>-pr<n>`. That name is the branch the work is *expected* to get — it
 goes into the launch note, and a tracker wtc's linking issue is created while
 consuming that note.
 
-**Siblings are created detached at their `default_ref`**, with no branch. A
+**Siblings are created detached at their receiving effective base**
+(`repo base show`; see `docs/repository-bases.md`), with no branch. A
 branch can only be checked out in one worktree, so branch-per-collection made
 the development tip a resource collections queued for; detached HEADs let
 every collection sit on it at once, and the branch is created at the first

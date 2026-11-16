@@ -73,10 +73,11 @@ to regenerate a local tool configuration after the collection env changes.
 
 `taba status` follows builds for every registered repository out of the box.
 Each repository has up to two tiers. The **test** tier (`tip`) is the
-`default_ref` branch. The **prod** tier (`prod`) is `production_ref`, or
+receiving effective development base (`repo base show`; see
+`docs/repository-bases.md`). The **prod** tier (`prod`) is `production_ref`, or
 `release_ref` if that is what the registry sets. When `production_ref` names
-the `default_ref` branch itself, production deploys from the development tip
-and that branch is reported as `prod` only.
+the registry `default_ref` branch itself, that registry branch is production.
+A collection override adds a separate test tier without changing production.
 
 The built-in provider asks the forge about the newest build of each tier's
 branch:

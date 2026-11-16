@@ -217,18 +217,22 @@ func (c *Context) ensureBare(repo Repo) (string, error) {
 // AddWorktree checks out the current development tip without claiming a branch.
 // An explicit branch is used for a PR head or the uncommon -b override.
 func (c *Context) AddWorktree(name, directory, destination, branch string) error {
-	repo, err := c.Repository(name)
-	if err != nil {
-		return err
-	}
 	if !validRepoName.MatchString(directory) {
 		return fmt.Errorf("invalid worktree directory %q", directory)
 	}
-	base, err := c.worktreeBase(destination, name)
+	receiver, err := c.worktreeReceiver(destination)
 	if err != nil {
 		return err
 	}
-	bare, err := c.ensureBare(repo)
+	repo, err := baseRepository(receiver.Registry, name)
+	if err != nil {
+		return err
+	}
+	base, err := ResolveRepositoryBase(destination, receiver.Registry, repo.Name)
+	if err != nil {
+		return err
+	}
+	bare, err := receiver.ensureBare(repo)
 	if err != nil {
 		return err
 	}

@@ -217,8 +217,8 @@ the per-issue record, which is the one thing catch-up must not do.
 ### 3.1 A merged branch: back to the tip, prune the local ref
 
 ```bash
-git -C <wt> rev-list --count <default_ref>..HEAD   # 0 establishes ancestry
-git -C <wt> checkout --detach <default_ref>
+git -C <wt> rev-list --count <effective-base>..HEAD   # 0 establishes ancestry
+git -C <wt> checkout --detach <effective-base>
 git -C <wt> branch -d <branch>
 ```
 
@@ -254,7 +254,7 @@ git -C <wt> switch -c <issue-id>-<slug>-followup
 git -C <wt> branch -d <old-branch>      # the old ref, now redundant
 
 # uncommitted changes only: they follow you across
-git -C <wt> checkout --detach <default_ref>
+git -C <wt> checkout --detach <effective-base>
 ```
 
 Uncommitted changes survive a `checkout --detach` as long as they don't
@@ -432,7 +432,7 @@ spring on someone. Report the choice offered and the answer taken.
 same repo may also be finished — merged, with no worktree on them:
 
 ```bash
-git -C <wt> branch --merged <default_ref>
+git -C <wt> branch --merged <effective-base>
 ```
 
 Those are prunable with `git branch -d`, which will refuse anything not

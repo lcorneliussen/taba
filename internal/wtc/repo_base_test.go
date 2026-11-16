@@ -384,3 +384,45 @@ func TestRepositoryBaseConcurrentClearKeepsOtherIntent(t *testing.T) {
 		t.Fatalf("separate update lost: %+v %v", b, err)
 	}
 }
+
+func TestRepositoryBaseCreationUsesReceivingRegistryIdentity(t *testing.T) {
+	source, receiver, beta := repositoryBaseFixture(t)
+	registry := filepath.Join(receiver.Harness, ".harness-repos.yml")
+	body, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body = []byte(strings.Replace(string(body), "- name: widget\n", "- name: widget\n    aliases: [receiver-only]\n", 1))
+	if err := os.WriteFile(registry, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AddWorktree("receiver-only", "widget", receiver.Collection, ""); err != nil {
+		t.Fatal(err)
+	}
+	if fixtureGit(t, "-C", receiver.WorktreeDir("widget"), "rev-parse", "HEAD") != beta {
+		t.Fatal("receiving identity used caller's base")
+	}
+}
+
+func TestRepositoryBaseBrowseFallbackDoesNotPermitUnknownOverrides(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	path := filepath.Join(c.Collection, "ext.widget")
+	fixtureGit(t, "init", "-q", "-b", "main", path)
+	if _, err := c.RepositoryBase("ext.widget"); err == nil {
+		t.Fatal("ordinary show accepted unknown identity")
+	}
+	base, err := c.RepositoryBase("ext.widget", true)
+	if err != nil || base.EffectiveRef != "origin/HEAD" || base.Source != "fallback" {
+		t.Fatalf("legacy unmanaged browse fallback: %+v %v", base, err)
+	}
+	if _, err := c.SetRepositoryBase("ext.widget", "beta", "unregistered"); err == nil {
+		t.Fatal("unmanaged mode permitted an override")
+	}
+	if _, err := c.RepositoryBase("missing", true); err == nil {
+		t.Fatal("unmanaged mode accepted missing worktree")
+	}
+	fixtureFile(t, filepath.Join(c.Collection, ".wtc", "repo-bases.toml"), "schema_version=1\n[repos.unknown]\nbase='beta'\nreason='Unregistered intent'\n", 0600)
+	if _, err := c.RepositoryBase("ext.widget", true); err == nil {
+		t.Fatal("unmanaged fallback masked malformed receiving state")
+	}
+}

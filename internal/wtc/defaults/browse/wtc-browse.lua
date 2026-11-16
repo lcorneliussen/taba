@@ -73,7 +73,7 @@ local function default_ref_for(dir_name)
   if type(command) ~= "string" or command == "" then
     error("browse needs its serving CLI to resolve repository bases")
   end
-  local r = vim.system({ command, "--json", "repo", "base", "show", dir_name,
+  local r = vim.system({ command, "--json", "repo", "base", "show", dir_name, "--unmanaged",
     "--collection", root }, { text = true }):wait()
   if r.code ~= 0 then
     error("cannot resolve receiving repository base: " .. (r.stderr or "unknown error"))

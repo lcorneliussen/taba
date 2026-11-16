@@ -39,7 +39,7 @@ turn out to need changes, `git switch -c <issue-id>-<slug>` at the first
 commit.
 
 - `-b <branch>` — check out a real branch instead. An existing branch of that
-  name is used; otherwise it is created from `default_ref`. Use it when
+  name is used; otherwise it is created from the receiving effective base. Use it when
   picking up a branch someone else pushed.
 - `--tip` — accepted and ignored; detached at the tip is the default now.
 

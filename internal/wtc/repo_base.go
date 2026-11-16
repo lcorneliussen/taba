@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -37,6 +38,8 @@ type repoBaseStore struct {
 	Repos         map[string]repoBaseEntry `toml:"repos"`
 }
 
+var errUnregisteredBaseRepository = errors.New("repository is not registered")
+
 func baseRepository(registry Registry, selector string) (Repo, error) {
 	if !prRepoName.MatchString(selector) || strings.Contains(selector, "..") {
 		return Repo{}, fmt.Errorf("invalid repository selector")
@@ -46,6 +49,9 @@ func baseRepository(registry Registry, selector string) (Repo, error) {
 		if r.Answers(selector) {
 			found = append(found, r)
 		}
+	}
+	if len(found) == 0 {
+		return Repo{}, fmt.Errorf("%w: %q", errUnregisteredBaseRepository, selector)
 	}
 	if len(found) != 1 {
 		return Repo{}, fmt.Errorf("repository %q must identify exactly one registered repository", selector)
@@ -149,14 +155,33 @@ func readRepoBases(dir *os.File, registry Registry) (repoBaseStore, error) {
 // ResolveRepositoryBase reads only receivingCollection, never the caller's
 // environment, PR destination, shared owner or registry output files.
 func ResolveRepositoryBase(receivingCollection string, registry Registry, selector string) (RepositoryBase, error) {
+	return resolveRepositoryBase(receivingCollection, registry, selector, false)
+}
+
+func resolveRepositoryBase(receivingCollection string, registry Registry, selector string, unmanaged bool) (RepositoryBase, error) {
 	repo, err := baseRepository(registry, selector)
-	if err != nil {
+	external := unmanaged && errors.Is(err, errUnregisteredBaseRepository)
+	if external {
+		path := filepath.Join(receivingCollection, selector)
+		info, pathErr := os.Lstat(path)
+		if pathErr != nil || !info.IsDir() {
+			return RepositoryBase{}, fmt.Errorf("unmanaged base needs an existing Git worktree")
+		}
+		top, pathErr := gitOutput("-C", path, "rev-parse", "--show-toplevel")
+		if pathErr != nil || !sameCanonicalPath(top, path) {
+			return RepositoryBase{}, fmt.Errorf("unmanaged base needs an existing Git worktree")
+		}
+		repo = Repo{Name: selector}
+	} else if err != nil {
 		return RepositoryBase{}, err
 	}
 	result := RepositoryBase{Repository: repo.Name, RegistryRef: repo.DefaultRef, EffectiveRef: repo.DefaultRef, Source: "registry", ProductionRef: repo.ProductionRef, ReleaseRef: repo.ReleaseRef}
 	if result.EffectiveRef == "" {
 		result.EffectiveRef = "origin/main"
 		result.Source = "fallback"
+		if external {
+			result.EffectiveRef = "origin/HEAD"
+		}
 	}
 	dir, err := baseDirectory(receivingCollection, false)
 	if err != nil && !os.IsNotExist(err) {
@@ -174,14 +199,14 @@ func ResolveRepositoryBase(receivingCollection string, registry Registry, select
 	}
 	return result, nil
 }
-func (c *Context) RepositoryBase(selector string) (RepositoryBase, error) {
+func (c *Context) RepositoryBase(selector string, unmanaged ...bool) (RepositoryBase, error) {
 	if selector == "harness" {
 		name, err := c.catchUpHarnessRepo()
 		if err == nil && name != "" {
 			selector = name
 		}
 	}
-	return ResolveRepositoryBase(c.Collection, c.Registry, selector)
+	return resolveRepositoryBase(c.Collection, c.Registry, selector, len(unmanaged) > 0 && unmanaged[0])
 }
 
 // SetRepositoryBase changes local intent only; it never moves a checkout or
@@ -298,6 +323,13 @@ func (c *Context) validateNewBases(opt NewOptions, selected []string) error {
 	}
 	seen := map[string]bool{}
 	for selector, ref := range opt.RepoBases {
+		if selector == "harness" {
+			name, err := c.catchUpHarnessRepo()
+			if err != nil {
+				return err
+			}
+			selector = name
+		}
 		repo, err := baseRepository(c.Registry, selector)
 		if err != nil {
 			return err
@@ -330,22 +362,19 @@ func (c *Context) writeNewBases(opt NewOptions, destination string) error {
 	return nil
 }
 
-// worktreeBase uses an existing receiver's registry when present; a receiver
-// being bootstrapped uses the declared template registry, never its overrides.
-func (c *Context) worktreeBase(destination, name string) (RepositoryBase, error) {
-	registry := c.Registry
+// worktreeReceiver uses the receiving registry and owner mapping once its
+// harness exists. Bootstrap uses the declared template, never caller overrides.
+func (c *Context) worktreeReceiver(destination string) (*Context, error) {
 	if filepath.Clean(destination) != filepath.Clean(c.Collection) {
 		marked, err := collectionMarker(destination)
 		if err != nil {
-			return RepositoryBase{}, err
+			return nil, err
 		}
 		if marked {
-			receiver, err := OpenCollection(destination)
-			if err != nil {
-				return RepositoryBase{}, err
-			}
-			registry = receiver.Registry
+			return OpenCollection(destination)
 		}
 	}
-	return ResolveRepositoryBase(destination, registry, name)
+	receiver := *c
+	receiver.Collection = destination
+	return &receiver, nil
 }
