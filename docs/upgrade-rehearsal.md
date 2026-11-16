@@ -15,13 +15,13 @@ tools/upgrade-rehearsal/rehearse.sh \
 3. With `--cli-checkout`, adds an unmanaged `ext.wtc-cli` sibling whose owner is a clone outside `.bare/`, cloned from the old CLI URL. This is how some collections carry the CLI next to their own repositories.
 4. Records the collection: versions, environment variable names (never values), the generated `mise.toml` and MCP files, rendered skills (files and links into the harness), sibling origins, `status --json` with volatile fields masked, and `doctor`.
 5. Runs `upgrade --dry-run` and `upgrade --version <to>` with the pinned binary. A pin older than the `upgrade` command is moved by the new release instead.
-6. Puts the new release on `PATH`, checks that `wtc` and `taba` both run (from 0.2.0), catches the collection up, and records it again.
+6. Resolves release executables inside the throwaway mise installs tree before running them, checks their reported versions from the physical throwaway collection directory, then puts the new release on `PATH`, catches the collection up, and records it again. Both `TABA_DEV_BUILD=off` and `WTC_DEV_BUILD=off` keep probes and rehearsal commands on the chosen releases rather than caller or receiving local dev builds. Both `wtc` and `taba` are required from 0.2.0. An invalid target skips catch-up and the registry follow-up.
 7. With `--registry-followup`, renames the harness's `wtc-cli` registry entry to `taba` with `aliases: [wtc-cli]` and points that entry's remote at `taba`; other entries are left alone. Then it catches up again and records a third time.
 8. Lists hard-coded references to the CLI repository and to `wtc_<version>` release archives in the harness, and counts its `WTC_*` variables.
 
 Releases are installed from, and `ext.wtc-cli` is cloned from, `--cli-repo` (default `lcorneliussen/wtc-cli`, the name 0.1.x pins use); the pin file holds only a version. `--work DIR` sets the work directory, which must not exist or be empty. `--help` lists every option.
 
-`report.md` in the work directory has the step results, the diffs between the recorded states, and the harness references. Logs for every step are under `logs/`. The exit status is 1 when a step failed or the rehearsal stopped early, for example on a repository without `.harness-repos.yml`; the report then lists the steps that ran.
+`report.md` in the work directory has the step results, the diffs between the recorded states, and the harness references. Logs for setup and upgrade steps are under `logs/`; snapshot observations retain their output beside each snapshot. Required version, environment-list, status and doctor observations each have a result row. A failed observation makes the exit status 1 while the remaining observations are still collected. The exit status is also 1 when a step failed or the rehearsal stopped early, for example on a repository without `.harness-repos.yml`; the report then lists the steps that ran.
 
 ## What to look for
 
@@ -33,6 +33,6 @@ Releases are installed from, and `ext.wtc-cli` is cloned from, `--cli-repo` (def
 
 ## Boundaries
 
-Nothing outside the work directory is written: no pushes or forge writes, and the only commit is the local `--from` pin. Forge reads (clone, fetch, release lookups) use the caller's git and `gh` authentication. The harness's own hooks run, as they would in a real collection, so rehearse only harnesses whose code you would run anyway. Secrets are not linked: the throwaway config root is empty, so a step that needs a credential fails without it instead of using the real one.
+The script places its workspace, release installs and mise state inside the work directory. It does not push or write to the forge; its only commit is the local `--from` pin. Forge reads (clone, fetch, release lookups) use the caller's git and `gh` authentication. The harness's own hooks run, as they would in a real collection, so rehearse only harnesses whose code you would run anyway. This is not a sandbox: hooks, caller tool configuration and an explicitly external harness secrets policy can access paths outside the work directory. Review those inputs before running; an empty default throwaway control root does not guarantee that no external secrets are read or linked.
 
 Reports name the harness and its files. Keep reports for private harnesses out of public issues; file what they find as generic cases.
