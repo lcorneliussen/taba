@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // RuntimeItem is a repository-owned dekit task. Ready means its startup probe
@@ -323,10 +325,14 @@ func runtimeTaskPath(path string) bool {
 	return true
 }
 
+const runtimeObservationTimeout = 5 * time.Second
+
 // RuntimeStatus reads recorded tunnel facts and the existing runner. Provider
 // credentials, accounts and daemon state are never probed by a read/status.
 func (c *Context) RuntimeStatus() []RuntimeItem {
-	items := runtimeTaskDiagnostics(c.runtimeStatusOnly())
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeObservationTimeout)
+	defer cancel()
+	items := runtimeTaskDiagnostics(c.runtimeStatusOnlyContext(ctx))
 	// Ready non-tunnel application addresses can be checked for answering.
 	runtimeAnswering(items, runtimeAnswerCheck)
 	return c.runtimeWithDeclarations(items)
@@ -335,6 +341,10 @@ func (c *Context) RuntimeStatus() []RuntimeItem {
 // runtimeStatusOnly is the runner's view, without looking at addresses: what
 // up's own wait loop polls, with its own reachability check and deadline.
 func (c *Context) runtimeStatusOnly() []RuntimeItem {
+	return c.runtimeStatusOnlyContext(context.Background())
+}
+
+func (c *Context) runtimeStatusOnlyContext(ctx context.Context) []RuntimeItem {
 	m, err := c.runtimeManifest()
 	if err != nil {
 		return []RuntimeItem{{Collection: filepath.Base(c.Collection), Path: "runtime", State: "unknown", Error: err.Error()}}
@@ -342,7 +352,7 @@ func (c *Context) runtimeStatusOnly() []RuntimeItem {
 	if m == nil {
 		return nil
 	}
-	return c.runtimeStatus(m)
+	return c.runtimeStatusContext(ctx, m)
 }
 
 // RuntimeEnlisted lists recorded tasks as checking and newly discovered tasks
@@ -418,10 +428,20 @@ func runtimeTaskDiagnostics(items []RuntimeItem) []RuntimeItem {
 }
 
 func (c *Context) runtimeStatus(m *runtimeManifest) []RuntimeItem {
+	return c.runtimeStatusContext(context.Background(), m)
+}
+
+func (c *Context) runtimeStatusObservation(m *runtimeManifest) []RuntimeItem {
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeObservationTimeout)
+	defer cancel()
+	return c.runtimeStatusContext(ctx, m)
+}
+
+func (c *Context) runtimeStatusContext(ctx context.Context, m *runtimeManifest) []RuntimeItem {
 	items := make([]RuntimeItem, len(m.Tasks))
 	items = append(items, c.runtimeResourceItems(m, false)...)
 	defer func() { runtimeTunnelLifecycle(items) }()
-	state, err := runtimeRunnerState(m)
+	state, err := runtimeRunnerStateContext(ctx, m)
 	for i, task := range m.Tasks {
 		items[i] = task.RuntimeItem
 		if items[i].Kind == "endpoint" && !items[i].ManagedTunnel && items[i].DefinitionID == "" {
@@ -444,7 +464,7 @@ func (c *Context) runtimeStatus(m *runtimeManifest) []RuntimeItem {
 			}
 		}
 	}()
-	data, err := runtimeCommand(m, false, "ls")
+	data, err := runtimeCommandContext(ctx, m, false, "ls")
 	var response struct {
 		Tasks []RuntimeItem `json:"tasks"`
 	}

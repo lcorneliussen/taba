@@ -84,7 +84,14 @@ func (d *runtimeDiagnostics) Write(p []byte) (int, error) {
 func (d *runtimeDiagnostics) String() string { return string(d.data) }
 
 func runtimeCommand(m *runtimeManifest, sourceEnv bool, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return runtimeCommandContext(context.Background(), m, sourceEnv, args...)
+}
+
+func runtimeCommandContext(parent context.Context, m *runtimeManifest, sourceEnv bool, args ...string) ([]byte, error) {
+	if err := parent.Err(); err != nil {
+		return nil, fmt.Errorf("dekit %s: %w", strings.Join(args, " "), err)
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	argv := append([]string{"-C", m.Root, "--json"}, args...)
 	receiver, err := OpenCollection(filepath.Dir(filepath.Dir(m.Root)))
@@ -115,13 +122,20 @@ func runtimeCommand(m *runtimeManifest, sourceEnv bool, args ...string) ([]byte,
 	stderr := runtimeDiagnostics{limit: 4096}
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
+		if parent.Err() != nil {
+			err = parent.Err()
+		}
 		return nil, fmt.Errorf("dekit %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
 }
 
 func runtimeRunnerState(m *runtimeManifest) (string, error) {
-	data, err := runtimeCommand(m, false, "runner", "status")
+	return runtimeRunnerStateContext(context.Background(), m)
+}
+
+func runtimeRunnerStateContext(ctx context.Context, m *runtimeManifest) (string, error) {
+	data, err := runtimeCommandContext(ctx, m, false, "runner", "status")
 	if err != nil {
 		return "", err
 	}
