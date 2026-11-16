@@ -2,6 +2,22 @@ package wtc
 
 import "time"
 
+// Older records have no admission reason. Observation age alone can establish
+// expiration, never a budget or provider rate-limit explanation.
+func statusDetailObservation(detail statusPRDetail) StatusObservation {
+	out := StatusObservation{Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, Source: detail.StateSource}
+	switch detail.Freshness {
+	case "stale":
+		out.Reason = "observation-expired"
+	case "deferred", "unavailable":
+		out.Reason = "unknown"
+	}
+	if detail.ObservedAt == "" && (detail.State == "UNKNOWN" || detail.State == "") {
+		out.Reason = "never-observed"
+	}
+	return out
+}
+
 func statusObservationUnavailable(freshness string) bool {
 	return freshness == "stale" || freshness == "deferred" || freshness == "unavailable"
 }

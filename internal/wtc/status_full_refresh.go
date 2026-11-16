@@ -1,8 +1,11 @@
 package wtc
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -122,6 +125,136 @@ func statusIncrementalMissLog() string {
 
 func statusFetchPRRaw(record PRRecord, slug, forge string) ([]byte, error) {
 	return statusFetchPRRawWithRequest(record, slug, forge, nil)
+}
+
+// statusRefreshRecord is the explicit local metadata primitive. It does not
+// enumerate repositories or read an open list, so stale membership cannot
+// suppress the selected record's foreground observation. Collector integration
+// supplies only active records; recorded and retained terminal state is also
+// excluded here as a second safety boundary.
+func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (statusPRDetail, StatusObservation) {
+	if intent != StatusRefreshForeground {
+		detail := statusEnrichRecordMetadata(record, slug, forge)
+		return detail, statusDetailObservation(detail)
+	}
+	ctx, cancel := statusRefreshContext(ctx)
+	defer cancel()
+	fallback := statusUnknownDetail(record)
+	if record.MergedOn != "" {
+		checks := record.FinalChecks
+		if checks == "" {
+			checks = "NONE"
+		}
+		detail := statusPRDetail{Number: record.Number, State: "MERGED", Checks: checks, Merge: "MERGED", Review: "merged", Title: record.Title,
+			MergedOn: record.MergedOn, MergeCommit: record.MergeCommit, HeadCommit: record.MergeHead, Base: record.MergeBase,
+			Freshness: "recorded", StateSource: "registry"}
+		return detail, statusDetailObservation(detail)
+	}
+	if _, valid := statusPRInventoryKey(forge, slug, record.Number); !valid {
+		return fallback, statusObservationFailure(fmt.Errorf("invalid PR identity"))
+	}
+	unlock, err := statusLockCacheContext(ctx, statusForgeEntryPath("pr", forge, slug, record.Number))
+	if err != nil {
+		return fallback, statusObservationFailure(err)
+	}
+	defer unlock()
+	if known, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
+		fallback = known
+		if known.State == "MERGED" {
+			return known, statusDetailObservation(known)
+		}
+	}
+	if err := statusTakeForegroundToken(ctx, forge); err != nil {
+		outcome := statusObservationFailure(err)
+		fallback.Freshness = outcome.Freshness
+		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
+		return fallback, outcome
+	}
+	// Cancellation after admission can waste a token, never start queued work.
+	if err := ctx.Err(); err != nil {
+		outcome := statusObservationFailure(err)
+		fallback.Freshness = outcome.Freshness
+		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
+		return fallback, outcome
+	}
+	started := time.Now()
+	raw, err := statusFetchPRRawContext(ctx, record, slug, forge)
+	observed := time.Now()
+	if err != nil {
+		if statusRateLimited(err) {
+			statusForgeCool(forge, statusRetryAfter(err))
+			err = &statusAdmissionError{cause: errForgeCooling, retry: statusForgeCoolingUntil(forge)}
+		}
+		outcome := statusObservationFailure(err)
+		fallback.Freshness = outcome.Freshness
+		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
+		return fallback, outcome
+	}
+	detail, err := statusParseForgeDetail(forge, raw, record)
+	if err == nil && (detail.State == "" || detail.State == "UNKNOWN") {
+		err = errors.New("provider returned no PR state")
+	}
+	if err != nil {
+		fallback.Freshness = "unavailable"
+		outcome := statusObservationFailure(err)
+		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
+		return fallback, outcome
+	}
+	if !statusWriteForgeEntrySinceObserved("pr", forge, slug, record.Number, raw, started, observed) {
+		if winner, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
+			outcome := statusDetailObservation(winner)
+			outcome.Reason = "superseded"
+			if winner.State != detail.State {
+				winner.Freshness, outcome.Freshness, outcome.Reason = "unavailable", "unavailable", "conflicting-observation"
+			}
+			return winner, outcome
+		}
+		fallback.Freshness = "unavailable"
+		return fallback, StatusObservation{Freshness: "unavailable", Reason: "cache-publication-failed", ObservedAt: fallback.ObservedAt, Source: fallback.StateSource}
+	}
+	statusMarkFullRefresh(forge, slug, record.Number)
+	detail.ObservedAt, detail.StateSource, detail.Freshness = observed.UTC().Format(time.RFC3339Nano), "foreground", "live"
+	return detail, StatusObservation{Freshness: "live", ObservedAt: detail.ObservedAt, Source: "foreground", ProviderConfirmed: true}
+}
+
+// The admission caller already debited the shared bucket. No second token and
+// no independent TTL path is allowed here. Commands observe cancellation while
+// running; stdout remains separate from provider diagnostics on stderr.
+func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var name string
+	var args []string
+	switch forge {
+	case "github.com":
+		name, args = "gh", []string{"pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid"}
+	case "bitbucket.org":
+		parts := strings.SplitN(slug, "/", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid Bitbucket repository slug")
+		}
+		name, args = "bb", []string{"pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json"}
+	default:
+		return nil, fmt.Errorf("unsupported forge")
+	}
+	if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
+		return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 200 * time.Millisecond
+	raw, err := forgeOutput(cmd)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return nil, fmt.Errorf("%s PR observation: %w: %s", name, err, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, fmt.Errorf("%s PR observation: %w", name, err)
+	}
+	return raw, nil
 }
 
 func statusFetchPRRawWithRequest(record PRRecord, slug, forge string, onRequest func()) ([]byte, error) {

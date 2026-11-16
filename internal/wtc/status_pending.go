@@ -11,16 +11,18 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Only unresolved Bitbucket by-number confirmations reserve admission. The
-// existing budget lock guards this bounded FIFO. Ordinary reads may spend
-// unreserved tokens; reservations leave when served, resolved, or not retried
-// within statusPendingLifetime. Older clients do not honor these reservations.
+// The existing budget lock guards background Bitbucket confirmations and
+// finite explicit requests on either forge. Ordinary reads yield to foreground
+// leases; background confirmations otherwise retain their bounded FIFO. Older
+// clients share accounting but do not understand foreground priority.
 const statusPendingLifetime = 5 * time.Minute
 const statusPendingLimit = 256
 
 type statusPendingConfirmation struct {
-	Key  string    `json:"key"`
-	Seen time.Time `json:"seen"`
+	Key        string    `json:"key"`
+	Seen       time.Time `json:"seen"`
+	Foreground bool      `json:"foreground,omitempty"`
+	Expires    time.Time `json:"expires,omitempty"`
 }
 
 func statusConfirmationKey(identity string) string {
@@ -34,7 +36,7 @@ func statusConfirmationKey(identity string) string {
 // Caller holds the forge budget lock. Never follow a queue symlink or read
 // unbounded/corrupt state into the admission decision.
 func statusReadPendingConfirmations(forge string, now time.Time) []statusPendingConfirmation {
-	if forge != "bitbucket.org" {
+	if forge != "bitbucket.org" && forge != "github.com" {
 		return nil
 	}
 	path := statusForgeStatePath("pending", forge)
@@ -56,6 +58,9 @@ func statusReadPendingConfirmations(forge string, now time.Time) []statusPending
 	queue := make([]statusPendingConfirmation, 0, len(saved))
 	seen := map[string]bool{}
 	for _, item := range saved {
+		if item.Foreground && (item.Expires.IsZero() || !now.Before(item.Expires)) {
+			continue
+		}
 		if len(item.Key) != 64 || item.Seen.After(now) || now.Sub(item.Seen) >= statusPendingLifetime || seen[item.Key] {
 			continue
 		}
@@ -81,14 +86,52 @@ func statusQueueConfirmation(queue []statusPendingConfirmation, key string, now 
 	return queue
 }
 
-func statusSavePendingConfirmations(forge string, queue []statusPendingConfirmation) {
-	if forge != "bitbucket.org" {
-		return
+func statusSavePendingConfirmations(forge string, queue []statusPendingConfirmation) bool {
+	if forge != "bitbucket.org" && forge != "github.com" {
+		return false
 	}
 	raw, err := json.Marshal(queue)
-	if err == nil {
-		statusWriteForgeEntry("pending", forge, "", "", raw)
+	if err != nil {
+		return false
 	}
+	return statusWriteForgeEntryObserved("pending", forge, "", "", raw, time.Time{})
+}
+
+// A foreground lease is owned by one finite request, not by the next poll of a
+// view. Seen also expires at the deadline in released readers that ignore the
+// additive fields. Queue entries grant admission only; they never execute work.
+func statusQueueForeground(queue []statusPendingConfirmation, key string, deadline time.Time) ([]statusPendingConfirmation, bool) {
+	for _, item := range queue {
+		if item.Key == key {
+			return queue, true
+		}
+	}
+	if len(queue) >= statusPendingLimit {
+		// A manual request may displace a background reservation, never another
+		// foreground request. Its owner can retry through ordinary admission.
+		last := len(queue) - 1
+		if queue[last].Foreground {
+			return queue, false
+		}
+		queue = queue[:last]
+	}
+	at := 0
+	for at < len(queue) && queue[at].Foreground {
+		at++
+	}
+	queue = append(queue, statusPendingConfirmation{})
+	copy(queue[at+1:], queue[at:])
+	queue[at] = statusPendingConfirmation{Key: key, Foreground: true, Expires: deadline, Seen: deadline.Add(-statusPendingLifetime)}
+	return queue, true
+}
+
+func statusRemovePending(queue []statusPendingConfirmation, key string) []statusPendingConfirmation {
+	for i, item := range queue {
+		if item.Key == key {
+			return append(queue[:i], queue[i+1:]...)
+		}
+	}
+	return queue
 }
 
 // A list or settled cache can resolve a queued confirmation before its turn.
