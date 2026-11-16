@@ -534,3 +534,17 @@ func TestRepositoryBaseKeepsExistingUnderscoreIdentity(t *testing.T) {
 		t.Fatalf("existing identity rejected: %+v %v", base, err)
 	}
 }
+
+func TestRepositoryBaseNewDoesNotReportOrphanIntentAsApplied(t *testing.T) {
+	for _, selector := range []string{"renamed", "widget"} {
+		t.Run(selector, func(t *testing.T) {
+			source, _, _ := repositoryBaseFixture(t)
+			source.Registry.Repos[1].Name = "renamed"
+			source.Registry.Repos[1].Aliases = []string{"widget"}
+			_, err := source.NewCollection(NewOptions{Slug: "inconsistent-base", Repos: []string{"widget"}, RepoBases: map[string]string{selector: "beta"}, BaseReason: "Staging work"})
+			if err == nil || !strings.Contains(err.Error(), "receiving registry") {
+				t.Fatalf("new orphan intent reported as applied: %v", err)
+			}
+		})
+	}
+}

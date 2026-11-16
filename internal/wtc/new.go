@@ -205,6 +205,11 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	if err := c.writeNewBases(opt, result.Collection); err != nil {
 		return result, err
 	}
+	// Keep the chosen creation registry throughout bootstrap: a freshly checked
+	// out harness may predate a rename already visible in the invoking registry.
+	// The receiver's local base file remains the only override input.
+	creating := *c
+	creating.Collection = result.Collection
 	// Preserve the shell command's ordering: harness first, then the primary
 	// issue/PR repository, then explicit siblings.
 	for _, name := range result.Repositories {
@@ -230,7 +235,7 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 				result.Review = err == nil
 			}
 		} else {
-			err = c.AddWorktree(name, directory, result.Collection, branch)
+			err = creating.AddWorktree(name, directory, result.Collection, branch)
 		}
 		if err != nil {
 			return result, fmt.Errorf("add %s: %w (partial collection at %s)", name, err, result.Collection)
@@ -240,6 +245,23 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	if err != nil {
 		return result, err
 	}
+	// New explicit intent must also be meaningful to the completed receiver.
+	for selector, ref := range opt.RepoBases {
+		name := selector
+		if name == "harness" {
+			name = harnessRepo
+		}
+		repo, _ := baseRepository(c.Registry, name) // validated before creation
+		base, err := target.RepositoryBase(repo.Name)
+		if err != nil {
+			return result, fmt.Errorf("receiving registry cannot resolve requested base: %w (partial collection at %s)", err, result.Collection)
+		}
+		expected, _ := normalizeRepoBase(ref)
+		if base.Source != "collection" || base.EffectiveRef != expected {
+			return result, fmt.Errorf("receiving registry does not apply requested base for %q (partial collection at %s)", repo.Name, result.Collection)
+		}
+	}
+
 	// Resolve the target permission independently of the creating collection.
 	if _, err := target.ValidateControlRoot(); err != nil {
 		return result, err
