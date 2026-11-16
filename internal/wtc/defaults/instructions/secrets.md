@@ -208,21 +208,13 @@ Rule 4 below says a credential the tool resolves globally belongs in that
 tool's global config. That is right about *not per worktree*, and it stops one
 step short of the whole story.
 
-`gh` resolves auth from one store (`~/.config/gh/hosts.yml` plus the keychain)
-and `jira-cli` from `~/.config/.jira/.config.yml`. Both are machine-wide, so
-**every project on this machine shares whichever account is logged in** — a
-collection here can reach repositories and issues belonging to unrelated work,
-and that unrelated project can reach this workspace's.
+Without explicit configuration, CLI config lookup can select machine defaults.
+That makes existing credentials eligible; it does not prove that every project
+shares a login or can access another account's resources. Config-file routing
+and credential isolation are separate properties.
 
-**Whether that matters is a judgement about your machine, not a defect to
-fix.** If this workspace is the only thing you use those CLIs for — one
-employer, one org, one Atlassian account — the machine-global store is the
-right answer and this whole section is skippable. It earns its cost the moment
-a second, unrelated project shares the machine.
-
-Where it does matter, both CLIs can be pointed at a different config
-location, so the fix is to give this workspace its own store. `twg` needs a
-different lever:
+These variables select filesystem configuration for this workspace; `TWG_SITE`
+selects a site:
 
 ```sh
 GH_CONFIG_DIR=$WTC_CONFIG_ROOT/gh
@@ -230,11 +222,27 @@ JIRA_CONFIG_FILE=$WTC_CONFIG_ROOT/jira/.config.yml
 TWG_SITE=<your-site-prefix>
 ```
 
-| Tool | Lever | Credential at rest |
+| Tool | Lever | Limits |
 |---|---|---|
-| `gh` | `GH_CONFIG_DIR` — whole config dir | **keychain**; `hosts.yml` names the accounts |
+| `gh` | `GH_CONFIG_DIR` — config directory | Token environment variables take precedence; the OS keychain namespace is not scoped by this path. |
 | `twg` | `TWG_SITE` pins the site; `TWG_TOKEN` for a different *account* | OAuth tokens in `~/.config/twg/auth.conf`, 600 |
-| `jira-cli` | `JIRA_CONFIG_FILE` — the config file | Provider-dependent; config selection does not relocate netrc or keychain |
+| `jira-cli` | `JIRA_CONFIG_FILE` — config file | Does not relocate `JIRA_API_TOKEN`, netrc or keyring credentials. |
+
+For [GitHub CLI v2.83.1](https://github.com/cli/cli/blob/v2.83.1/internal/config/config.go),
+`GH_TOKEN` / `GITHUB_TOKEN` (or the enterprise equivalents for enterprise hosts)
+can supply the token before config or keychain lookup. If no token is found in
+env or config, keychain lookup can still use a host entry, even with an empty
+config directory. A nonempty `GH_CONFIG_DIR` selects that directory without
+falling back to the default filesystem config when its files are absent; an
+empty value permits default lookup ([go-gh v2.13.0](https://github.com/cli/go-gh/blob/v2.13.0/pkg/config/config.go)).
+An empty directory therefore does **not** guarantee logout or isolation.
+
+[Jira CLI v1.7.0](https://github.com/ankitpokhrel/jira-cli/blob/v1.7.0/internal/cmd/root/root.go)
+selects config by command flag, then nonempty `JIRA_CONFIG_FILE`, then the default
+location. An explicit file does not trigger default-file search if missing;
+missing-file command behavior is not a logout guarantee. Credentials can still
+come from environment, netrc or keyring. These are version-bounded contracts,
+not validation of every provider or the installed tool version.
 
 `twg`'s config dir does move with `XDG_CONFIG_HOME` (relocating it makes `twg
 auth refresh` answer "No TWG credentials are configured"). Do not use that as
@@ -244,9 +252,8 @@ documents for the purpose.
 
 ### Opt-in by presence
 
-`write_collection_env` emits each variable **only when the store it names
-already exists**, so a workspace that never opts in keeps the machine default
-and nothing changes:
+`RenderEnv` emits the filesystem hints **only when the tool directory exists**.
+If a hint is omitted, inherited variables or tool defaults remain eligible:
 
 | Variable | Emitted when |
 |---|---|
@@ -254,10 +261,8 @@ and nothing changes:
 | `JIRA_CONFIG_FILE` | `$WTC_CONFIG_ROOT/jira/` is a directory |
 | `TWG_SITE` | `WTC_TWG_SITE` is set — in `wtc.env`, or in the generating environment |
 
-That condition is deliberate. Emitting `GH_CONFIG_DIR` unconditionally would
-point `gh` at an empty directory and log you out inside every collection
-before you had asked for anything; making the directory *be* the opt-in cannot
-do that. Turning it on:
+Directory presence is the current opt-in; it says nothing about valid config
+files, credentials or the selected account. To enable the filesystem hint:
 
 ```sh
 cd <collection>                        # collection root, where .env.collection lives
@@ -265,18 +270,29 @@ mkdir -p "$WTC_CONFIG_ROOT"/gh         # creating the store IS the opt-in
 taba env setup           # regenerate — GH_CONFIG_DIR now appears
 ```
 
-Then re-enter the collection (or reopen the herdr workspace) so the new
-variable is actually exported — see the table below for why that step is not
-optional:
+Then reload the collection environment (or reopen the herdr workspace).
+Inspect the intended filesystem path without printing token values:
 
 ```sh
-echo "$GH_CONFIG_DIR"                  # non-empty = it reached this shell
-gh auth login                          # populates the scoped store
-gh auth status                         # confirm the identity
+printf '%s\n' "${GH_CONFIG_DIR:-<unset or empty>}"
 ```
 
-Turning it back off is `rm -rf "$WTC_CONFIG_ROOT"/gh` (the keychain entry
-survives) followed by `taba env setup`.
+The path alone does not identify the credential source. Consult the provider's
+storage policy before authenticating: `gh auth login` normally uses secure
+storage, so it must not be treated as populating a path-isolated token store
+([provider guidance](https://cli.github.com/manual/gh_auth_login)).
+
+Preserve existing stores and credentials when changing configuration; do not
+delete a store to opt out or migrate. Deliberately choose the intended tool
+configuration, regenerate if needed, and reload the environment. Removing a
+generated assignment does not unset an export in an already-running shell.
+
+Receiving commands load `.env.collection`, then `.env.collection.local`, so
+local tool-path overrides win. Trusted `env.post` hooks can customize the
+generated file. Inherited tool variables remain eligible when neither layer
+replaces them, including token variables that can override a generated config
+path. `ReceivingEnvironment` itself replaces receiving root/collection aliases;
+it does not load generated provider hints or isolate credentials.
 
 `twg` has no store to create — its lever is a site name rather than a config
 location, so setting it once in the control root is the opt-in:
@@ -304,9 +320,9 @@ Not "everywhere", and the difference bites:
   the file for new collections; `taba env setup` applies generator changes to
   an existing collection. Catch-up runs the same native environment action.
 
-Check where you actually stand with `echo "$GH_CONFIG_DIR"` — empty means
-either you have not opted in or one of the rows above is not satisfied, and
-`gh` is still on the machine-global store.
+Check the effective config path after reloading. An unset or empty
+`GH_CONFIG_DIR` permits default filesystem lookup; it does not identify an
+active account or rule out token environment variables and keychain lookup.
 
 ### Two properties worth being explicit about
 
@@ -323,9 +339,9 @@ either you have not opted in or one of the rows above is not satisfied, and
   `mkdir -m 700 -p "$WTC_CONFIG_ROOT"/jira`. Nothing in the tools enforces
   the mode; the directory is the opt-in, and how you create it is the only
   moment you get to set it.
-- **It is opt-out by absence, not by default.** A shell outside any collection
-  has neither variable set and falls back to the machine-global store — which
-  is the correct behaviour for a project that is not this one.
+- **Directory presence controls generated filesystem hints.** A shell outside
+  a collection can still inherit explicit tool configuration. With no nonempty
+  override, default filesystem lookup remains eligible.
 
 Other projects with other accounts point their own env elsewhere, or set
 nothing and keep the machine default.
