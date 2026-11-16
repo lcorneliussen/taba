@@ -1,5 +1,8 @@
 version: 2
 project_name: taba
+before:
+  hooks:
+    - python3 -B tools/release-provenance/check.py preflight
 # One program under two names: `taba`, and `wtc` for scripts, mise pins and
 # older `wtc upgrade` runs that still call it. The binary picks its display
 # name from argv[0] (internal/branding).
@@ -18,6 +21,9 @@ builds:
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}}
+    hooks:
+      post:
+        - python3 -B tools/release-provenance/check.py binary {{ .Path }}
   - <<: *build
     id: wtc
     binary: wtc
