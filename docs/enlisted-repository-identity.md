@@ -41,6 +41,14 @@ duplicates; an ambiguous spelling removes only its exact-key rows. Status reads
 existing rows without requiring a migration. Forge caches continue to use the
 full forge/repository identity and PR number.
 
+Re-enlisting a single existing PR preserves its title when the incoming title is
+empty and its URL when `--url` is omitted. A supplied nonempty title or URL
+replaces that value. With no existing or supplied URL, enlistment still derives
+a link from a verified supported repository remote; it does not fetch a title.
+An omitted `--branch` still defaults to the checked-out branch, including an
+empty branch for a detached checkout. Native publication retries retain an
+existing title while applying the receipt's captured branch and URL.
+
 When an enlisted PR is absent from the open list, status already looks it up
 by number. A missing branch or merge marker does not prevent that lookup once
 the repository resolves. Scoped status records final merged facts only after

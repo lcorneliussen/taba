@@ -248,18 +248,31 @@ func (c *Context) rewritePRsLocked(removeRepo, removeNumber string, add *PRRecor
 		}
 	}
 	previous := 0
+	var existing PRRecord
 	for _, line := range strings.Split(string(data), "\n") {
 		if record, ok := parsePR(line); ok && matching[record.Repo] && record.Number == removeNumber {
 			previous++
-			if add != nil {
-				// Keep a legacy row's key: its merge markers and older clients
-				// still refer to that spelling. New enlistments use the canonical key.
-				add.Repo = record.Repo
-			}
+			existing = record
 		}
 	}
 	if previous > 1 && add != nil {
 		return fmt.Errorf("multiple enlisted rows for repository %q PR %s; reconcile duplicate rows first", removeRepo, removeNumber)
+	}
+	if add != nil {
+		if previous == 1 {
+			// Keep the legacy key for merge markers and older clients. Resolve
+			// omitted metadata under the lock, before considering URL defaults.
+			add.Repo = existing.Repo
+			if add.Title == "" {
+				add.Title = existing.Title
+			}
+			if add.URL == "" {
+				add.URL = existing.URL
+			}
+		}
+		if add.URL == "" && identity != nil {
+			add.URL = prURL(identity.remote, add.Number)
+		}
 	}
 	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
 		if record, ok := parsePR(line); ok && matching[record.Repo] && record.Number == removeNumber {
@@ -436,15 +449,25 @@ func (c *Context) EnlistPR(r PRRecord) (PRRecord, error) {
 			r.Branch = strings.TrimSpace(string(b))
 		}
 	}
-	if r.URL == "" {
-		if repo != nil {
-			r.URL = prURL(repo.remote, r.Number)
+	err = c.withPRLock(func() error {
+		if err := c.rewritePRsLocked(r.Repo, r.Number, &r); err != nil {
+			return err
 		}
-	}
-	if err := c.rewritePRs(r.Repo, r.Number, &r); err != nil {
-		return r, err
-	}
-	return r, nil
+		// Return the persisted row, including retained merge evidence, before
+		// another writer can replace it.
+		records, err := c.ListPRs()
+		if err != nil {
+			return err
+		}
+		for _, record := range records {
+			if record.Repo == r.Repo && record.Number == r.Number {
+				r = record
+				return nil
+			}
+		}
+		return fmt.Errorf("enlisted PR was not present after writing")
+	})
+	return r, err
 }
 
 func (c *Context) UnlistPR(repo, number string) error {
