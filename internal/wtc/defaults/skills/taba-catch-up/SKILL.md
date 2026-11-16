@@ -193,7 +193,8 @@ git -C <worktree> rev-list --count HEAD..<base_ref>     # how stale
 ```
 
 `<base_ref>` is the fetched `origin/` ref for an open or draft PR's actual merge
-target. Otherwise it is the repo's `<default_ref>` in
+target. Otherwise use `taba repo base show <repo>` for the receiving effective
+base (see `docs/repository-bases.md`), whose registry default is in
 `harness/.harness-repos.yml` (`origin/main` or another configured working
 branch). A missing, invalid or inconsistent PR target needs its owner; the
 tool must not silently substitute `default_ref`.

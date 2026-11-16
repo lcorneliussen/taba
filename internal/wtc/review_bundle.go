@@ -26,23 +26,25 @@ type ReviewBundleOptions struct {
 }
 
 type ReviewManifest struct {
-	Repo       string `json:"repo"`
-	PR         string `json:"pr"`
-	Forge      string `json:"forge"`
-	Slug       string `json:"slug"`
-	URL        string `json:"url"`
-	BaseRef    string `json:"base_ref"`
-	BaseSHA    string `json:"base_sha"`
-	HeadSHA    string `json:"head_sha"`
-	HeadBranch string `json:"head_branch"`
-	Round      int    `json:"round"`
-	RepoDir    string `json:"repo_dir"`
-	Collection string `json:"collection"`
-	Public     bool   `json:"public"`
-	Audience   string `json:"audience"`
-	ModeReason string `json:"mode_reason"`
-	Downstream string `json:"downstream,omitempty"`
-	Upstream   string `json:"upstream,omitempty"`
+	DevelopmentBase *RepositoryBase `json:"development_base,omitempty"`
+	ObservedPRBase  string          `json:"observed_pr_base,omitempty"`
+	Repo            string          `json:"repo"`
+	PR              string          `json:"pr"`
+	Forge           string          `json:"forge"`
+	Slug            string          `json:"slug"`
+	URL             string          `json:"url"`
+	BaseRef         string          `json:"base_ref"`
+	BaseSHA         string          `json:"base_sha"`
+	HeadSHA         string          `json:"head_sha"`
+	HeadBranch      string          `json:"head_branch"`
+	Round           int             `json:"round"`
+	RepoDir         string          `json:"repo_dir"`
+	Collection      string          `json:"collection"`
+	Public          bool            `json:"public"`
+	Audience        string          `json:"audience"`
+	ModeReason      string          `json:"mode_reason"`
+	Downstream      string          `json:"downstream,omitempty"`
+	Upstream        string          `json:"upstream,omitempty"`
 }
 
 type ReviewBundle struct {
@@ -100,6 +102,13 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	worktree, slug, forge, err := c.ReviewRepo(opt.Repo)
 	if err != nil {
 		return ReviewBundle{}, err
+	}
+	// Validate receiving-local state before any PR checkout or catch-up. It is
+	// resolved again after catch-up, which can refresh the receiving registry.
+	if repo, ok := c.reviewRegistryRepo(opt.Repo); ok {
+		if _, err := ResolveRepositoryBase(c.Collection, c.Registry, repo.Name); err != nil {
+			return ReviewBundle{}, err
+		}
 	}
 	reviewOnly := reviewOnlyWorktree(worktree)
 	if reviewOnly {
@@ -248,17 +257,33 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	if baseRef == "" && prBase != "" {
 		baseRef = "origin/" + prBase
 	}
-	if baseRef == "" {
-		baseRef = "origin/main"
-		for _, r := range c.Registry.Repos {
-			if r.Answers(opt.Repo) || opt.Repo == "harness" && r.Name == c.Config.Harness.Name {
-				if r.DefaultRef != "" {
-					baseRef = r.DefaultRef
+
+	var developmentBase *RepositoryBase
+	if repo, ok := c.reviewRegistryRepo(opt.Repo); ok {
+		resolved, err := ResolveRepositoryBase(c.Collection, c.Registry, repo.Name)
+		if err != nil {
+			return ReviewBundle{}, err
+		}
+		if baseRef == "" {
+			baseRef = resolved.EffectiveRef
+		}
+		if resolved.Source == "collection" {
+			if opt.Public {
+				// Public bundles carry only development facts justified by their public
+				// diff target. Local registry/deployment policy and human prose stay local.
+				if resolved.EffectiveRef == baseRef && (prBase != "" || opt.Base != "") {
+					resolved = RepositoryBase{EffectiveRef: resolved.EffectiveRef, Source: resolved.Source, Reason: "Collection-local reason redacted", ReasonRedacted: true}
+					developmentBase = &resolved
 				}
-				break
+			} else {
+				developmentBase = &resolved
 			}
 		}
 	}
+	if baseRef == "" {
+		baseRef = "origin/main"
+	}
+
 	if _, err := reviewRef(worktree, baseRef); err != nil {
 		return ReviewBundle{}, fmt.Errorf("base ref %q not found: %w", baseRef, err)
 	}
@@ -326,7 +351,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	if err := os.MkdirAll(filepath.Join(dir, "concerns"), 0755); err != nil {
 		return ReviewBundle{}, err
 	}
-	manifest := ReviewManifest{Repo: opt.Repo, PR: opt.PR, Forge: forge, Slug: slug, URL: prURL, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA, HeadBranch: branch, Round: round, RepoDir: worktree, Collection: filepath.Base(c.Collection), Public: opt.Public, Audience: audience, ModeReason: reason}
+	manifest := ReviewManifest{Repo: opt.Repo, PR: opt.PR, Forge: forge, Slug: slug, URL: prURL, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA, HeadBranch: branch, Round: round, RepoDir: worktree, Collection: filepath.Base(c.Collection), Public: opt.Public, Audience: audience, ModeReason: reason, DevelopmentBase: developmentBase, ObservedPRBase: prBase}
 	prText := fmt.Sprintf("# %s\n\n%s\n", prTitle, prBody)
 	if opt.PR == "" {
 		prText = fmt.Sprintf("# %s\n\n(branch-only review)\n", branch)
@@ -416,6 +441,16 @@ func writeReviewManifest(dir string, m ReviewManifest) error {
 		return err
 	}
 	fields := [][2]string{{"REPO", m.Repo}, {"PR", m.PR}, {"FORGE", m.Forge}, {"SLUG", m.Slug}, {"URL", m.URL}, {"BASE_REF", m.BaseRef}, {"BASE_SHA", m.BaseSHA}, {"HEAD_SHA", m.HeadSHA}, {"HEAD_BRANCH", m.HeadBranch}, {"ROUND", strconv.Itoa(m.Round)}, {"REPO_DIR", m.RepoDir}, {"COLLECTION", m.Collection}, {"PUBLIC", strconv.FormatBool(m.Public)}, {"REVIEW_MODE", m.Mode()}, {"AUDIENCE", m.Audience}, {"MODE_REASON", m.ModeReason}, {"DOWNSTREAM", m.Downstream}, {"UPSTREAM", m.Upstream}}
+	if m.DevelopmentBase != nil {
+		base := m.DevelopmentBase
+		fields = append(fields, [][2]string{{"DEVELOPMENT_BASE_REF", base.EffectiveRef}, {"DEVELOPMENT_BASE_SOURCE", base.Source}, {"DEVELOPMENT_BASE_REASON", base.Reason}, {"DEVELOPMENT_BASE_REASON_REDACTED", strconv.FormatBool(base.ReasonRedacted)}}...)
+		if !m.Public {
+			fields = append(fields, [][2]string{{"REGISTRY_DEFAULT_REF", base.RegistryRef}, {"PRODUCTION_REF", base.ProductionRef}, {"RELEASE_REF", base.ReleaseRef}}...)
+		}
+	}
+	if m.ObservedPRBase != "" {
+		fields = append(fields, [2]string{"OBSERVED_PR_BASE", m.ObservedPRBase})
+	}
 	var b strings.Builder
 	b.WriteString("# review bundle manifest (sourceable)\n")
 	for _, field := range fields {

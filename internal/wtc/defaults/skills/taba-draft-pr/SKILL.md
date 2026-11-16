@@ -25,7 +25,8 @@ Resumable — run it whenever, it does the outstanding part.
 Follow **`.agents/skills/taba-pr/SKILL.md` §1 through §5.1**, unchanged:
 
 1. §1 — read the branch, tree, and any existing PR; resolve the base from
-   `default_ref` in `harness/.harness-repos.yml`.
+   `taba --json repo base show <repo>` (`data.effective_ref`); see
+   `docs/repository-bases.md`. Existing PR targets remain distinct.
 2. §2 — route on state. Same table, with one substitution: an **open ready
    PR** is *not* demoted to draft on your own initiative. Converting a PR back
    to draft retracts a review request people may already be acting on — ask

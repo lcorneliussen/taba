@@ -1,0 +1,80 @@
+# Collection-local repository bases
+
+A collection can explicitly use a different development branch for one repository
+without changing its harness registry or other collections:
+
+```sh
+taba repo base set widget origin/beta --reason 'Feature work for the staging line'
+taba repo base show widget
+taba repo base clear widget
+```
+
+Use `--collection <directory>` to name the receiving collection. Names and aliases
+must identify exactly one registered repository. `set` accepts a branch name or
+`origin/<branch>` and requires a nonempty reason of at most 1024 UTF-8 bytes,
+without control characters. It records intent only: it does not fetch, switch,
+reset, merge, push or modify existing dirty or unpublished work. The branch must
+be available when a consumer needs it; an unavailable override is an error.
+`clear` restores the registry default, or `origin/main` when no default is set.
+
+For a new collection, select bases before its worktrees are created:
+
+```sh
+taba new staging widget --repo-base widget=origin/beta --base-reason 'Staging work'
+```
+
+Repeat `--repo-base` for multiple selected repositories. Each receives the
+explicit reason. A new collection never inherits the invoking collection's
+local overrides. `add-repo` uses the receiving collection's setting, including
+when invoked from another collection. An explicit existing branch or exact PR
+head retains its existing checkout semantics; a missing explicit branch starts
+from the effective development base.
+
+The single local file is `.wtc/repo-bases.toml` in the receiving collection:
+
+```toml
+schema_version = 1
+[repos.widget]
+base = "origin/beta"
+reason = "Feature work for the staging line"
+```
+
+This file is disposable local state, outside repository worktrees. There is no
+parallel `.taba` file or environment override. Commands use canonical repository
+names, reject ambiguous aliases, malformed state and symlinked state paths, and
+serialize updates under a lock. Do not commit the file or copy it into a shared
+registry. A corrupt file must be corrected locally before it can be read or
+changed through the command.
+
+Worktree creation, catch-up, status, browse and review defaults use the same
+receiving-local resolver: explicit override, registry `default_ref`, then
+`origin/main`. Status exposes the configured base and reason separately from
+its PR comparison ref. Ahead counts retain their upstream basis when a branch
+tracks an upstream. An open PR's actual destination remains authoritative for
+catch-up and PR comparisons; it never creates an override. Merged branches
+return to the effective tip only when existing landing and work-preservation
+checks succeed.
+
+New PR preparation reads `taba --json repo base show <repo>` and uses
+`data.effective_ref` without `origin/` as the default target. An existing PR's
+actual target stays distinct; disagreement requires inspection, not automatic
+retargeting. Production and release refs remain registry-owned. A development
+override does not grant permission to target production, merge, deploy or delete
+branches. TEST follows the effective development base; PROD keeps the existing
+registry-derived deployment branch.
+
+Review `BASE_REF` remains the actual diff target: explicit review `--base`, then
+a readable PR destination, then the effective development default. Private
+bundles include separate configured-base/reason and observed-PR-base facts;
+related patches and development containment use the effective base while old
+production snapshots retain registry refs. Public bundles never copy the raw
+local reason or registry deployment policy. A public diff target may justify a
+redacted development-base fact; other private configuration stays omitted.
+These facts do not change review criteria or waive valid branch-target findings.
+
+Local OpenClaw receiving collections use this base for default checkout selection.
+Gateway publication destinations and worker authorization records remain separate
+and authoritative; local settings are not copied into project or sandbox
+metadata. Prepare an override-dependent plan in the receiving gateway collection
+when the sandbox cannot read its local state. Browse uses the serving CLI's
+resolver rather than parsing another configuration format.

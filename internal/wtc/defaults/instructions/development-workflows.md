@@ -55,7 +55,8 @@ the workspace is still being stood up.
 Treat "catch up" as: reconcile this collection with development outside it.
 
 1. Fetch/prune every sibling owner (`.bare/` and unmanaged `ext.*` clones).
-2. Worktrees detached at tip → fast-forward to current `default_ref`. If
+2. Worktrees detached at tip → fast-forward to the receiving effective base
+   (`taba repo base show <repo>`; see `docs/repository-bases.md`). If
    dirty, stash (including untracked), move HEAD, then stash pop. Already at
    the tip is left alone regardless of dirty state — there is nothing to move.
 3. Active unmerged branches → merge the tip in; same stash-around-the-move;

@@ -50,16 +50,16 @@ func addRepoBaseCommands(root *cobra.Command, asJSON *bool) {
 			if err != nil {
 				return err
 			}
-			summary := fmt.Sprintf("%s: %s (%s)", result.Repository, result.EffectiveRef, result.Source)
+			summary := fmt.Sprintf("%s: %q (%s)", result.Repository, result.EffectiveRef, result.Source)
 			if *asJSON {
 				return emit(envelope{OK: true, Data: result, Summary: summary}, true)
 			}
 			fmt.Println(summary)
 			if result.RegistryRef != "" {
-				fmt.Printf("registry: %s\n", result.RegistryRef)
+				fmt.Printf("registry: %q\n", result.RegistryRef)
 			}
 			if result.Reason != "" {
-				fmt.Printf("reason: %s\n", result.Reason)
+				fmt.Printf("reason: %q\n", result.Reason)
 			}
 			if action != "show" {
 				fmt.Println("Local base setting updated; checkout unchanged.")

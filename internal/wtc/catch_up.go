@@ -71,12 +71,13 @@ type CatchUpReport struct {
 }
 
 type catchUpTarget struct {
-	collection string
-	path       string
-	repo       string
-	owner      string
-	ref        string
-	harness    bool
+	collection      string
+	path            string
+	repo            string
+	owner           string
+	ref             string
+	developmentBase *RepositoryBase
+	harness         bool
 	// managed records registry membership at inventory time. An unmanaged
 	// ext. sibling has no entry, so the control root holds nothing for it and
 	// the secret linker would reject its directory name. Hooks re-resolve it
@@ -330,9 +331,15 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			// which catchUpLocalRef maps to local main for an owner without any
 			// remote. An owner with only other remotes still fails its fetch.
 			repo, repoErr := target.Repository(repoName)
-			ref := repo.DefaultRef
-			if ref == "" {
-				ref = "origin/main"
+			ref := "origin/main"
+			var base *RepositoryBase
+			if repoErr == nil {
+				resolved, err := target.RepositoryBase(repo.Name)
+				if err != nil {
+					return report, nil, err
+				}
+				ref = resolved.EffectiveRef
+				base = &resolved
 			}
 			remotes, remoteErr := gitOutput("--git-dir="+owner, "remote")
 			t := catchUpTarget{collection: name, path: path, repo: repoName, owner: owner,
@@ -341,6 +348,7 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 				t.renamed = repo.Name
 			}
 			t.ref = catchUpLocalRef(t, ref)
+			t.developmentBase = base
 			targets = append(targets, t)
 		}
 	}

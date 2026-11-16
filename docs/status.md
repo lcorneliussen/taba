@@ -216,3 +216,9 @@ archived PRs; `q` quits. Available repository, branch, PR and build targets
 use terminal hyperlinks. Modifier-click follows the terminal's convention;
 `--no-click` disables ordinary TUI targets, not native links. `NO_COLOR` keeps
 links; `TERM=dumb` uses plain text.
+
+A collection override adds `development_base` and `comparison_ref` to repository
+JSON facts. Normal status shows a bounded base/reason detail with a full-value
+hint when truncated; Markdown and `repo base show` retain the full reason.
+TEST follows the effective base; PROD keeps the registry mapping above. See
+[repository bases](repository-bases.md).

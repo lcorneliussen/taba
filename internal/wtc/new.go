@@ -41,6 +41,9 @@ var githubSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9
 
 func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	result := NewResult{}
+	if err := validateNewBaseInputs(opt); err != nil {
+		return result, err
+	}
 	if _, err := c.ValidateControlRoot(); err != nil {
 		return result, err
 	}
@@ -189,11 +192,17 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 			return result, err
 		}
 	}
+	if err := c.validateNewBases(opt, result.Repositories); err != nil {
+		return result, err
+	}
 	values := map[string]string{"collection": result.Collection, "source": result.Source, "branch": result.IntendedBranch}
 	if err := c.RunHook("new.pre", values); err != nil {
 		return result, err
 	}
 	if err := os.Mkdir(result.Collection, 0755); err != nil {
+		return result, err
+	}
+	if err := c.writeNewBases(opt, result.Collection); err != nil {
 		return result, err
 	}
 	// Preserve the shell command's ordering: harness first, then the primary

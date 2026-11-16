@@ -38,6 +38,9 @@ type repoBaseStore struct {
 }
 
 func baseRepository(registry Registry, selector string) (Repo, error) {
+	if !prRepoName.MatchString(selector) || strings.Contains(selector, "..") {
+		return Repo{}, fmt.Errorf("invalid repository selector")
+	}
 	var found []Repo
 	for _, r := range registry.Repos {
 		if r.Answers(selector) {
@@ -51,6 +54,11 @@ func baseRepository(registry Registry, selector string) (Repo, error) {
 }
 func normalizeRepoBase(ref string) (string, error) {
 	branch := strings.TrimPrefix(ref, "origin/")
+	if len(branch) == 40 || len(branch) == 64 {
+		if _, err := hex.DecodeString(branch); err == nil {
+			return "", fmt.Errorf("base must name a branch, not a commit ID")
+		}
+	}
 	if branch == "" || strings.HasPrefix(branch, "-") || strings.HasPrefix(branch, "refs/") || strings.HasPrefix(branch, "origin/") || strings.ContainsAny(branch, " \t\r\n@^~:?\\*[\x00") {
 		return "", fmt.Errorf("base must be a branch name or origin/<branch>")
 	}
@@ -71,6 +79,9 @@ func validateBaseReason(reason string) error {
 func baseDirectory(collection string, create bool) (*os.File, error) {
 	root, err := unix.Open(collection, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
+		if err == unix.ENOENT {
+			return nil, fmt.Errorf("receiving collection directory is unavailable")
+		}
 		return nil, fmt.Errorf("receiving collection: %w", err)
 	}
 	defer unix.Close(root)
@@ -260,7 +271,7 @@ func (c *Context) SetRepositoryBase(selector, ref, reason string) (RepositoryBas
 	return c.RepositoryBase(selector)
 }
 
-func (c *Context) validateNewBases(opt NewOptions, selected []string) error {
+func validateNewBaseInputs(opt NewOptions) error {
 	if len(opt.RepoBases) == 0 {
 		if opt.BaseReason != "" {
 			return fmt.Errorf("--base-reason needs --repo-base")
@@ -268,6 +279,21 @@ func (c *Context) validateNewBases(opt NewOptions, selected []string) error {
 		return nil
 	}
 	if err := validateBaseReason(opt.BaseReason); err != nil {
+		return err
+	}
+	for selector, ref := range opt.RepoBases {
+		if !prRepoName.MatchString(selector) || strings.Contains(selector, "..") {
+			return fmt.Errorf("invalid base repository selector")
+		}
+		if _, err := normalizeRepoBase(ref); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Context) validateNewBases(opt NewOptions, selected []string) error {
+	if err := validateNewBaseInputs(opt); err != nil {
 		return err
 	}
 	seen := map[string]bool{}

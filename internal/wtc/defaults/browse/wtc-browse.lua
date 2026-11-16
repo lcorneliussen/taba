@@ -68,38 +68,21 @@ local function worktrees()
   return found
 end
 
-local function harness_dir()
-  if vim.uv.fs_stat(root .. "/harness/.harness-repos.yml") then
-    return root .. "/harness"
-  end
-  if vim.uv.fs_stat(root .. "/.harness-repos.yml") then
-    return root
-  end
-  return nil
-end
-
 local function default_ref_for(dir_name)
-  local h = harness_dir()
-  if not h then
-    return "origin/HEAD"
+  local command = vim.g.wtc_base_command
+  if type(command) ~= "string" or command == "" then
+    error("browse needs its serving CLI to resolve repository bases")
   end
-  local repo = dir_name == "harness" and (vim.g.wtc_harness_repo or "agent-harness") or dir_name
-  local ok, lines = pcall(vim.fn.readfile, h .. "/.harness-repos.yml")
-  if not ok then
-    return "origin/HEAD"
+  local r = vim.system({ command, "--json", "repo", "base", "show", dir_name,
+    "--collection", root }, { text = true }):wait()
+  if r.code ~= 0 then
+    error("cannot resolve receiving repository base: " .. (r.stderr or "unknown error"))
   end
-  local cur
-  for _, line in ipairs(lines) do
-    local name = line:match("^%s*%-%s*name:%s*(%S+)")
-    if name then
-      cur = name
-    end
-    local ref = line:match("^%s*default_ref:%s*(%S+)")
-    if ref and cur == repo then
-      return ref
-    end
+  local ok, result = pcall(vim.json.decode, r.stdout or "")
+  if not ok or not result.data or not result.data.effective_ref then
+    error("invalid repository base result from serving CLI")
   end
-  return "origin/HEAD"
+  return result.data.effective_ref
 end
 
 local function compare_ref(wt, dir_name)

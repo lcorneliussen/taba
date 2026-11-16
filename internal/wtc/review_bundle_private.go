@@ -170,10 +170,11 @@ func (c *Context) snapshotReviewRepository(dir, kind, name string) (bool, error)
 	refs := fmt.Sprintf("old=%s %s\n", oldRef, oldSHA)
 	if _, err := os.Stat(filepath.Join(worktree, ".git")); err == nil {
 		head, headErr := reviewRef(worktree, "HEAD")
-		defaultRef := repo.DefaultRef
-		if defaultRef == "" {
-			defaultRef = "origin/main"
+		resolved, err := ResolveRepositoryBase(c.Collection, c.Registry, repo.Name)
+		if err != nil {
+			return false, err
 		}
+		defaultRef := resolved.EffectiveRef
 		branch, branchErr := reviewGit(worktree, "branch", "--show-current")
 		label := strings.TrimSpace(string(branch))
 		if headErr == nil && branchErr == nil && c.reviewBranchIsEnlisted(name, label) {
@@ -306,10 +307,11 @@ func (c *Context) copyRelatedReviewPatches(dir, reviewed, number string) (int, e
 		if !ok {
 			continue
 		}
-		defaultRef := repo.DefaultRef
-		if defaultRef == "" {
-			defaultRef = "origin/main"
+		resolved, err := ResolveRepositoryBase(c.Collection, c.Registry, repo.Name)
+		if err != nil {
+			return count, err
 		}
+		defaultRef := resolved.EffectiveRef
 		mergeBase, err := reviewGit(worktree, "merge-base", defaultRef, "HEAD")
 		if err != nil {
 			continue

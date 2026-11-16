@@ -241,6 +241,14 @@ func (c *Context) statusBuildFacts(snapshot *StatusSnapshot) error {
 			continue
 		}
 		tiers[repo.Name] = statusBuildTiers(repo)
+		if base := row.DevelopmentBase; base != nil && base.Source == "collection" {
+			prod := tiers[repo.Name][len(tiers[repo.Name])-1]
+			tip := strings.TrimPrefix(base.EffectiveRef, "origin/")
+			tiers[repo.Name] = []statusBuildTier{prod}
+			if tip != prod.Branch {
+				tiers[repo.Name] = append([]statusBuildTier{{"tip", tip}}, tiers[repo.Name]...)
+			}
+		}
 		for _, tier := range tiers[repo.Name] {
 			jobs = append(jobs, job{repo.Name, tier, statusBuildRequest{Collection: filepath.Base(c.Collection),
 				Repo: row.Repo, Worktree: row.Worktree, Slug: slug, Forge: forge, Branch: tier.Branch, Tier: tier.Tier}})

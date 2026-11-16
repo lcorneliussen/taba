@@ -224,14 +224,15 @@ func (c *Context) AddWorktree(name, directory, destination, branch string) error
 	if !validRepoName.MatchString(directory) {
 		return fmt.Errorf("invalid worktree directory %q", directory)
 	}
+	base, err := c.worktreeBase(destination, name)
+	if err != nil {
+		return err
+	}
 	bare, err := c.ensureBare(repo)
 	if err != nil {
 		return err
 	}
-	ref := repo.DefaultRef
-	if ref == "" {
-		ref = "origin/main"
-	}
+	ref := base.EffectiveRef
 	if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", ref); err != nil {
 		return fmt.Errorf("%s development tip %s is unavailable: %w", name, ref, err)
 	}

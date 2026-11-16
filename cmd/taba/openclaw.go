@@ -580,7 +580,34 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 			add.project = reg.projectIDs[entry.Name]
 			add.destination = reg.destinations[entry.Name]
 			if add.branch == "" {
-				add.branch = strings.TrimPrefix(entry.DefaultRef, "origin/")
+				ref := entry.DefaultRef
+				folder, err := plannerCollectionFolder(gatewayStateDir(), worktree)
+				if err != nil {
+					return nil, nil, err
+				}
+				if folder != "" {
+					if _, err := os.Stat(folder); err == nil {
+						receiver, err := wtc.OpenCollection(folder)
+						if err != nil {
+							return nil, nil, fmt.Errorf("receiving base requires a readable local collection: %w", err)
+						}
+						base, err := receiver.RepositoryBase(entry.Name)
+						if err != nil {
+							return nil, nil, err
+						}
+						if base.Source == "collection" {
+							projectDir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(entry.Remote))
+							desired := strings.TrimPrefix(base.EffectiveRef, "origin/")
+							if worker || projectDir == "" || openclaw.RecordedBase(projectDir, worktree) != desired {
+								return nil, nil, fmt.Errorf("local development base cannot change a gateway publication destination; prepare the destination explicitly in the receiving gateway collection before adding this repository")
+							}
+						}
+						ref = base.EffectiveRef
+					} else if !os.IsNotExist(err) {
+						return nil, nil, err
+					}
+				}
+				add.branch = strings.TrimPrefix(ref, "origin/")
 			}
 		}
 		url := add.arg
