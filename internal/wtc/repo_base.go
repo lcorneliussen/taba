@@ -41,7 +41,7 @@ type repoBaseStore struct {
 var errUnregisteredBaseRepository = errors.New("repository is not registered")
 
 func baseRepository(registry Registry, selector string) (Repo, error) {
-	if !prRepoName.MatchString(selector) || strings.Contains(selector, "..") {
+	if (!prRepoName.MatchString(selector) && !validRepoName.MatchString(selector)) || strings.Contains(selector, "..") {
 		return Repo{}, fmt.Errorf("invalid repository selector")
 	}
 	var found []Repo
@@ -93,12 +93,12 @@ func baseDirectory(collection string, create bool) (*os.File, error) {
 	defer unix.Close(root)
 	if create {
 		if err := unix.Mkdirat(root, ".wtc", 0700); err != nil && err != unix.EEXIST {
-			return nil, err
+			return nil, fmt.Errorf("create repository base namespace: %w", err)
 		}
 	}
 	fd, err := unix.Openat(root, ".wtc", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open repository base namespace: %w", err)
 	}
 	return os.NewFile(uintptr(fd), ".wtc"), nil
 }
@@ -134,11 +134,14 @@ func readRepoBases(dir *os.File, registry Registry) (repoBaseStore, error) {
 	}
 	for name, entry := range parsed.Repos {
 		repo, err := baseRepository(registry, name)
-		if err != nil {
+		key := name
+		if err == nil {
+			key = repo.Name
+		} else if !errors.Is(err, errUnregisteredBaseRepository) {
 			return store, err
 		}
-		if _, exists := store.Repos[repo.Name]; exists {
-			return store, fmt.Errorf("duplicate base identity %q", repo.Name)
+		if _, exists := store.Repos[key]; exists {
+			return store, fmt.Errorf("duplicate base identity %q", key)
 		}
 		ref, err := normalizeRepoBase(entry.Base)
 		if err != nil {
@@ -147,7 +150,22 @@ func readRepoBases(dir *os.File, registry Registry) (repoBaseStore, error) {
 		if err := validateBaseReason(entry.Reason); err != nil {
 			return store, err
 		}
-		store.Repos[repo.Name] = repoBaseEntry{Base: ref, Reason: entry.Reason}
+		store.Repos[key] = repoBaseEntry{Base: ref, Reason: entry.Reason}
+	}
+	return store, nil
+}
+
+func readReceivingRepoBases(collection string, registry Registry) (repoBaseStore, error) {
+	dir, err := baseDirectory(collection, false)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return repoBaseStore{}, fmt.Errorf("repository bases: %w", err)
+	}
+	if dir != nil {
+		defer dir.Close()
+	}
+	store, err := readRepoBases(dir, registry)
+	if err != nil {
+		return store, fmt.Errorf("repository bases: %w", err)
 	}
 	return store, nil
 }
@@ -160,6 +178,15 @@ func ResolveRepositoryBase(receivingCollection string, registry Registry, select
 
 func resolveRepositoryBase(receivingCollection string, registry Registry, selector string, unmanaged bool) (RepositoryBase, error) {
 	repo, err := baseRepository(registry, selector)
+	store, storeErr := readReceivingRepoBases(receivingCollection, registry)
+	if storeErr != nil {
+		return RepositoryBase{}, storeErr
+	}
+	if errors.Is(err, errUnregisteredBaseRepository) {
+		if _, exists := store.Repos[selector]; exists {
+			return RepositoryBase{}, fmt.Errorf("%w; stored intent is orphaned; run repo base clear %s", err, selector)
+		}
+	}
 	external := unmanaged && errors.Is(err, errUnregisteredBaseRepository)
 	if external {
 		path := filepath.Join(receivingCollection, selector)
@@ -182,17 +209,6 @@ func resolveRepositoryBase(receivingCollection string, registry Registry, select
 		if external {
 			result.EffectiveRef = "origin/HEAD"
 		}
-	}
-	dir, err := baseDirectory(receivingCollection, false)
-	if err != nil && !os.IsNotExist(err) {
-		return result, fmt.Errorf("repository bases: %w", err)
-	}
-	if dir != nil {
-		defer dir.Close()
-	}
-	store, err := readRepoBases(dir, registry)
-	if err != nil {
-		return result, fmt.Errorf("repository bases: %w", err)
 	}
 	if entry, ok := store.Repos[repo.Name]; ok {
 		result.EffectiveRef, result.Reason, result.Source = entry.Base, entry.Reason, "collection"
@@ -225,46 +241,111 @@ func (c *Context) SetRepositoryBase(selector, ref, reason string) (RepositoryBas
 			return resolved, err
 		}
 	}
-	dir, err := baseDirectory(c.Collection, true)
-	if err != nil {
+	if err := c.updateRepositoryBases(func(store *repoBaseStore) error {
+		if ref == "" {
+			delete(store.Repos, resolved.Repository)
+		} else {
+			store.Repos[resolved.Repository] = repoBaseEntry{Base: ref, Reason: reason}
+		}
+		return nil
+	}); err != nil {
 		return resolved, err
 	}
-	defer dir.Close()
-	fd, err := unix.Openat(int(dir.Fd()), "repo-bases.lock", unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0600)
+	return c.RepositoryBase(selector)
+}
+
+// RepositoryBaseClear is a command outcome. Orphan cleanup has no resolution.
+type RepositoryBaseClear struct {
+	Cleared    bool            `json:"cleared"`
+	ExactKey   string          `json:"exact_key"`
+	Orphaned   bool            `json:"orphaned"`
+	Resolution *RepositoryBase `json:"resolution,omitempty"`
+}
+
+func (c *Context) ClearRepositoryBase(selector string) (RepositoryBaseClear, error) {
+	result := RepositoryBaseClear{}
+	resolved, err := c.RepositoryBase(selector)
+	if err == nil {
+		resolved, err = c.SetRepositoryBase(selector, "", "")
+		if err != nil {
+			return result, err
+		}
+		return RepositoryBaseClear{Cleared: true, ExactKey: resolved.Repository, Resolution: &resolved}, nil
+	}
+	if !errors.Is(err, errUnregisteredBaseRepository) {
+		return result, err
+	}
+	store, readErr := readReceivingRepoBases(c.Collection, c.Registry)
+	if readErr != nil {
+		return result, readErr
+	}
+	if _, exists := store.Repos[selector]; !exists {
+		return result, fmt.Errorf("no stored orphan base for %q", selector)
+	}
+	if err := c.updateRepositoryBases(func(store *repoBaseStore) error {
+		if _, identityErr := baseRepository(c.Registry, selector); !errors.Is(identityErr, errUnregisteredBaseRepository) {
+			return fmt.Errorf("orphan cleanup requires an unregistered exact key")
+		}
+		if _, exists := store.Repos[selector]; !exists {
+			return fmt.Errorf("no stored orphan base for %q", selector)
+		}
+		delete(store.Repos, selector)
+		return nil
+	}); err != nil {
+		return result, err
+	}
+	return RepositoryBaseClear{Cleared: true, ExactKey: selector, Orphaned: true}, nil
+}
+
+func (c *Context) updateRepositoryBases(change func(*repoBaseStore) error) error {
+	dir, err := baseDirectory(c.Collection, true)
 	if err != nil {
-		return resolved, err
+		return err
+	}
+	defer dir.Close()
+	// Avoid Darwin's concurrent openat(O_CREAT) create-or-open race by
+	// separating exclusive creation from opening an existing lock (go.dev/issue/81246).
+	flags := unix.O_RDWR | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_NONBLOCK
+	fd, err := unix.Openat(int(dir.Fd()), "repo-bases.lock", flags, 0)
+	if err == unix.ENOENT {
+		fd, err = unix.Openat(int(dir.Fd()), "repo-bases.lock", flags|unix.O_CREAT|unix.O_EXCL, 0600)
+		if err == unix.EEXIST {
+			fd, err = unix.Openat(int(dir.Fd()), "repo-bases.lock", flags, 0)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("open repository base lock: %w", err)
 	}
 	lock := os.NewFile(uintptr(fd), "repo-bases.lock")
 	defer lock.Close()
 	info, err := lock.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return resolved, fmt.Errorf("repository bases lock must be regular")
+		return fmt.Errorf("repository bases lock must be regular")
 	}
 	if err = unix.Flock(fd, unix.LOCK_EX); err != nil {
-		return resolved, err
+		return fmt.Errorf("lock repository bases: %w", err)
 	}
 	defer unix.Flock(fd, unix.LOCK_UN)
 	store, err := readRepoBases(dir, c.Registry)
 	if err != nil {
-		return resolved, err
+		return err
 	}
-	if ref == "" {
-		delete(store.Repos, resolved.Repository)
-	} else {
-		store.Repos[resolved.Repository] = repoBaseEntry{Base: ref, Reason: reason}
+	if err := change(&store); err != nil {
+		return err
 	}
+
 	var body bytes.Buffer
 	if err = toml.NewEncoder(&body).Encode(store); err != nil {
-		return resolved, err
+		return err
 	}
 	var nonce [12]byte
 	if _, err = rand.Read(nonce[:]); err != nil {
-		return resolved, err
+		return err
 	}
 	temp := ".repo-bases-" + hex.EncodeToString(nonce[:])
 	outfd, err := unix.Openat(int(dir.Fd()), temp, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0600)
 	if err != nil {
-		return resolved, err
+		return fmt.Errorf("create repository base replacement: %w", err)
 	}
 	out := os.NewFile(uintptr(outfd), temp)
 	defer unix.Unlinkat(int(dir.Fd()), temp, 0)
@@ -277,23 +358,23 @@ func (c *Context) SetRepositoryBase(selector, ref, reason string) (RepositoryBas
 		err = closeErr
 	}
 	if err != nil {
-		return resolved, err
+		return err
 	}
 	// Refuse a swapped namespace instead of claiming success in an orphaned dir.
 	current, err := baseDirectory(c.Collection, false)
 	if err != nil {
-		return resolved, err
+		return err
 	}
 	defer current.Close()
 	a, _ := dir.Stat()
 	b, _ := current.Stat()
 	if !os.SameFile(a, b) {
-		return resolved, fmt.Errorf("repository bases directory changed; retry")
+		return fmt.Errorf("repository bases directory changed; retry")
 	}
 	if err = unix.Renameat(int(dir.Fd()), temp, int(dir.Fd()), "repo-bases.toml"); err != nil {
-		return resolved, err
+		return fmt.Errorf("replace repository bases: %w", err)
 	}
-	return c.RepositoryBase(selector)
+	return nil
 }
 
 func validateNewBaseInputs(opt NewOptions) error {
@@ -307,7 +388,7 @@ func validateNewBaseInputs(opt NewOptions) error {
 		return err
 	}
 	for selector, ref := range opt.RepoBases {
-		if !prRepoName.MatchString(selector) || strings.Contains(selector, "..") {
+		if (!prRepoName.MatchString(selector) && !validRepoName.MatchString(selector)) || strings.Contains(selector, "..") {
 			return fmt.Errorf("invalid base repository selector")
 		}
 		if _, err := normalizeRepoBase(ref); err != nil {

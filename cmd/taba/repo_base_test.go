@@ -75,3 +75,44 @@ func TestRepositoryBaseCommandsUseExplicitReceiver(t *testing.T) {
 		t.Fatalf("text output: %s %v", out, err)
 	}
 }
+
+func TestRepositoryBaseCommandOrphanOutcomeHasNoResolution(t *testing.T) {
+	collection := filepath.Join(t.TempDir(), "receiver")
+	if err := os.MkdirAll(filepath.Join(collection, "harness"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	registry := filepath.Join(collection, "harness", ".harness-repos.yml")
+	original := "repos:\n  - name: widget\n    remote: https://example.invalid/widget.git\n    default_ref: origin/main\n"
+	if err := os.WriteFile(registry, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(collection)
+	if _, err := repositoryBaseCLI(t, "repo", "base", "set", "widget", "beta", "--reason", "Staging work"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(registry, []byte(strings.ReplaceAll(original, "widget", "renamed")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repositoryBaseCLI(t, "repo", "base", "show", "widget"); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Fatalf("missing recovery instruction: %v", err)
+	}
+	out, err := repositoryBaseCLI(t, "repo", "base", "clear", "widget", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct{ Data map[string]any }
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Data["cleared"] != true || result.Data["orphaned"] != true || result.Data["exact_key"] != "widget" {
+		t.Fatalf("wrong cleanup outcome: %s", out)
+	}
+	for _, key := range []string{"resolution", "effective_ref", "source"} {
+		if _, exists := result.Data[key]; exists {
+			t.Fatalf("fabricated resolution in cleanup: %s", out)
+		}
+	}
+	if _, err := repositoryBaseCLI(t, "repo", "base", "clear", "widget"); err == nil {
+		t.Fatal("unknown unstored key cleared")
+	}
+}

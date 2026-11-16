@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,7 +39,6 @@ func TestRepositoryBaseStoreAndIdentity(t *testing.T) {
 func TestRepositoryBaseRejectsInvalidState(t *testing.T) {
 	for _, input := range []string{
 		"schema_version = 2\n", "schema_version = 1\nunknown = true\n",
-		"schema_version = 1\n[repos.unknown]\nbase='beta'\nreason='reason'\n",
 		"schema_version = 1\n[repos.widget]\nbase='beta'\nreason=''\n",
 		"schema_version = 1\n[repos.widget]\nbase='beta'\nreason='reason'\n[repos.legacy]\nbase='main'\nreason='other'\n",
 	} {
@@ -421,7 +421,7 @@ func TestRepositoryBaseBrowseFallbackDoesNotPermitUnknownOverrides(t *testing.T)
 	if _, err := c.RepositoryBase("missing", true); err == nil {
 		t.Fatal("unmanaged mode accepted missing worktree")
 	}
-	fixtureFile(t, filepath.Join(c.Collection, ".wtc", "repo-bases.toml"), "schema_version=1\n[repos.unknown]\nbase='beta'\nreason='Unregistered intent'\n", 0600)
+	fixtureFile(t, filepath.Join(c.Collection, ".wtc", "repo-bases.toml"), "schema_version=1\n[repos.unknown]\nbase='beta'\nreason=''\n", 0600)
 	if _, err := c.RepositoryBase("ext.widget", true); err == nil {
 		t.Fatal("unmanaged fallback masked malformed receiving state")
 	}
@@ -457,4 +457,80 @@ func TestRepositoryBaseInventoryIsolatesBrokenReceiver(t *testing.T) {
 		t.Fatal("broken single receiver did not fail closed")
 	}
 
+}
+
+func TestRepositoryBaseOrphanRecovery(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if _, err := c.SetRepositoryBase("widget", "beta", "Retain staging intent"); err != nil {
+		t.Fatal(err)
+	}
+	// A receiving harness update removes the old identity without an alias.
+	c.Registry.Repos = c.Registry.Repos[:1]
+	if _, err := c.RepositoryBase("agent-harness"); err != nil {
+		t.Fatalf("orphan blocked unrelated repository: %v", err)
+	}
+	if _, err := c.RepositoryBase("widget"); err == nil || !strings.Contains(err.Error(), "clear widget") {
+		t.Fatalf("orphan show lacks recovery instruction: %v", err)
+	}
+	if _, err := c.SetRepositoryBase("widget", "main", "Unregistered"); err == nil {
+		t.Fatal("set admitted orphan identity")
+	}
+	if _, err := c.SetRepositoryBase("agent-harness", "beta", "Separate intent"); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := os.ReadFile(filepath.Join(c.Collection, ".wtc", "repo-bases.toml"))
+	if !strings.Contains(string(body), "Retain staging intent") {
+		t.Fatal("unrelated set deleted orphan")
+	}
+}
+
+func TestRepositoryBaseExactOrphanClearAndConcurrentPreservation(t *testing.T) {
+	for _, renamed := range []bool{false, true} {
+		t.Run(fmt.Sprint(renamed), func(t *testing.T) {
+			c := newWorkspaceFixture(t)
+			if _, err := c.SetRepositoryBase("widget", "beta", "Old intent"); err != nil {
+				t.Fatal(err)
+			}
+			if renamed {
+				c.Registry.Repos[1].Name = "renamed"
+				c.Registry.Repos[1].Aliases = nil
+			} else {
+				c.Registry.Repos = c.Registry.Repos[:1]
+			}
+			start := make(chan struct{})
+			errs := make(chan error, 2)
+			var outcome RepositoryBaseClear
+			go func() { <-start; var err error; outcome, err = c.ClearRepositoryBase("widget"); errs <- err }()
+			go func() {
+				<-start
+				_, err := c.SetRepositoryBase("agent-harness", "beta", "Independent intent")
+				errs <- err
+			}()
+			close(start)
+			for range 2 {
+				if err := <-errs; err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !outcome.Cleared || !outcome.Orphaned || outcome.ExactKey != "widget" || outcome.Resolution != nil {
+				t.Fatalf("fabricated orphan resolution: %+v", outcome)
+			}
+			if _, err := c.ClearRepositoryBase("widget"); err == nil {
+				t.Fatal("unknown clear without stored key succeeded")
+			}
+			base, err := c.RepositoryBase("agent-harness")
+			if err != nil || base.EffectiveRef != "origin/beta" {
+				t.Fatalf("concurrent update lost: %+v %v", base, err)
+			}
+		})
+	}
+}
+
+func TestRepositoryBaseKeepsExistingUnderscoreIdentity(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	c.Registry.Repos[1].Name = "_widget"
+	base, err := c.SetRepositoryBase("_widget", "beta", "Existing valid identity")
+	if err != nil || base.Repository != "_widget" {
+		t.Fatalf("existing identity rejected: %+v %v", base, err)
+	}
 }

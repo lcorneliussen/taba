@@ -50,7 +50,15 @@ func addRepoBaseCommands(root *cobra.Command, asJSON *bool) {
 			case "set":
 				result, err = c.SetRepositoryBase(args[0], args[1], reason)
 			case "clear":
-				result, err = c.SetRepositoryBase(args[0], "", "")
+				outcome, clearErr := c.ClearRepositoryBase(args[0])
+				if clearErr != nil {
+					return clearErr
+				}
+				if outcome.Orphaned {
+					summary := fmt.Sprintf("Cleared orphan repository base %q; checkout unchanged.", outcome.ExactKey)
+					return emit(envelope{OK: true, Data: outcome, Summary: summary}, *asJSON)
+				}
+				result = *outcome.Resolution
 			}
 			if err != nil {
 				return err

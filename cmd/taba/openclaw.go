@@ -565,7 +565,14 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 	}
 	var adds []repoToAdd
 	if !reg.hasHarnessWorktree() && !worker {
-		adds = append(adds, repoToAdd{arg: h.Remote, branch: h.Ref, resolved: true, project: reg.projectID, destination: reg.destination})
+		harnessBase := h.Ref
+		if openclaw.GatewayFromEnv(os.Getenv) != nil && reg.projectID != "" {
+			if reg.destination == "" {
+				return nil, nil, fmt.Errorf("harness needs a gateway base record; prepare this add-repo plan in the gateway collection session")
+			}
+			harnessBase = reg.destination
+		}
+		adds = append(adds, repoToAdd{arg: h.Remote, branch: harnessBase, resolved: true, project: reg.projectID, destination: reg.destination})
 	}
 	var unlisted []string
 	for _, r := range repos {
@@ -582,6 +589,12 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 			add.destination = reg.destinations[entry.Name]
 			if add.branch == "" {
 				ref := entry.DefaultRef
+				if openclaw.GatewayFromEnv(os.Getenv) != nil && add.project != "" {
+					if add.destination == "" {
+						return nil, nil, fmt.Errorf("%s needs a gateway base record; prepare this add-repo plan in the gateway collection session", entry.Name)
+					}
+					ref = "origin/" + add.destination
+				}
 				if openclaw.GatewayFromEnv(os.Getenv) == nil {
 					folder, err := plannerCollectionFolder(gatewayStateDir(), worktree)
 					if err != nil {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,5 +106,59 @@ func TestRepositoryBaseBrowseUsesServingExecutable(t *testing.T) {
 	}
 	if strings.Contains(string(view), "default_ref:%") || !strings.Contains(string(view), `"repo", "base", "show"`) {
 		t.Fatal("browse retained an independent registry parser")
+	}
+}
+
+func TestRepositoryBaseSandboxPreservesRecordedAuthorityWithoutLocalReads(t *testing.T) {
+	for _, destination := range []string{"develop", "beta"} {
+		t.Run(destination, func(t *testing.T) {
+			body := strings.Replace(sandboxMetadata, `"destination":"develop"`, `"destination":"`+destination+`"`, 1)
+			sandboxMetadataServer(t, 200, body)
+			state := t.TempDir()
+			folder := filepath.Join(state, "wtc", "platform", "42-fix", ".wtc")
+			if err := os.MkdirAll(folder, 0700); err != nil {
+				t.Fatal(err)
+			}
+			poison := filepath.Join(folder, "repo-bases.toml")
+			data := []byte("PRIVATE_INACCESSIBLE_REASON_CANARY malformed local file")
+			if err := os.WriteFile(poison, data, 0000); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("OPENCLAW_STATE_DIR", state)
+			plan, err := addRepoPlan(t, "api", "--worktree", "42-fix", "--separate")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan) != 2 || plan[1].Args.WorktreeBaseRef != "origin/"+destination {
+				t.Fatalf("recorded destination ignored: %+v", plan)
+			}
+			payload, err := json.Marshal(plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(payload), "PRIVATE_INACCESSIBLE") || strings.Contains(string(payload), state) {
+				t.Fatal("local state leaked into sandbox intent")
+			}
+			info, err := os.Stat(poison)
+			if err != nil || info.Mode().Perm() != 0 {
+				t.Fatal("sandbox changed inaccessible local state")
+			}
+			if err := os.Chmod(poison, 0600); err != nil {
+				t.Fatal(err)
+			}
+			after, err := os.ReadFile(poison)
+			if err := os.Chmod(poison, 0000); err != nil {
+				t.Fatal(err)
+			}
+			if err != nil || !bytes.Equal(after, data) {
+				t.Fatal("sandbox changed local state")
+			}
+			if _, err := addRepoPlan(t, "api", "--worktree", "42-fix", "--base", destination, "--separate"); err != nil {
+				t.Fatalf("matching explicit base refused: %v", err)
+			}
+			if _, err := addRepoPlan(t, "api", "--worktree", "42-fix", "--base", "different", "--separate"); err == nil {
+				t.Fatal("different explicit base admitted")
+			}
+		})
 	}
 }

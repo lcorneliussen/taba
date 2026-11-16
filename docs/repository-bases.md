@@ -43,8 +43,11 @@ This file is disposable local state, outside repository worktrees. There is no
 parallel `.taba` file or environment override. Commands use canonical repository
 names, reject ambiguous aliases, malformed state and symlinked state paths, and
 serialize updates under a lock. Do not commit the file or copy it into a shared
-registry. A corrupt file must be corrected locally before it can be read or
-changed through the command.
+registry. Malformed data must be corrected locally before it can be read or changed.
+A valid stored key orphaned by a registry removal or rename is retained and does
+not block other repositories. `show` explains how to clear that exact old key;
+`clear` removes it without inventing a new effective base. Unrelated updates
+preserve orphaned entries.
 
 Worktree creation, catch-up, status, browse and review defaults use the same
 receiving-local resolver: explicit override, registry `default_ref`, then
@@ -75,6 +78,8 @@ These facts do not change review criteria or waive valid branch-target findings.
 Local OpenClaw receiving collections use this base for default checkout selection.
 Gateway publication destinations and worker authorization records remain separate
 and authoritative; local settings are not copied into project or sandbox
-metadata. Prepare an override-dependent plan in the receiving gateway collection
-when the sandbox cannot read its local state. Browse uses the serving CLI's
+metadata. A sandbox uses an existing authorized project's recorded publication destination
+when its base is omitted; it never reads or claims to apply a host-local override.
+Explicit sandbox bases must still match that destination. Prepare a different
+publication destination through the existing explicit gateway workflow. Browse uses the serving CLI's
 resolver rather than parsing another configuration format.
