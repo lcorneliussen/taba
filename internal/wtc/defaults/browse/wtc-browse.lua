@@ -74,7 +74,11 @@ local function default_ref_for(dir_name)
     error("browse needs its serving CLI to resolve repository bases")
   end
   local r = vim.system({ command, "--json", "repo", "base", "show", dir_name, "--unmanaged",
-    "--collection", root }, { text = true }):wait()
+    "--collection", root }, {
+    text = true,
+    -- Keep the serving executable selected even if the receiver follows a dev build.
+    env = { TABA_DEV_BUILD = "off", WTC_DEV_BUILD = "off" },
+  }):wait()
   if r.code ~= 0 then
     error("cannot resolve receiving repository base: " .. (r.stderr or "unknown error"))
   end
