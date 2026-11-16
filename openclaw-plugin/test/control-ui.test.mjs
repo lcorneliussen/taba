@@ -273,6 +273,7 @@ test("panel: no collection yet says what one is, not the conversation's label", 
   // Without versions, no footer, and no "null" for it.
   const bare = await mount("panel", collection([]));
   assert.ok(!texts(bare.host).some((t) => t === "null" || /^plugin /.test(t ?? "")));
+  assert.ok([...bare.host.all()].some(n => n.className === "wtc-brand-suffix" && n.textContent === "Collection"));
   bare.view.dispose();
 });
 
@@ -310,6 +311,7 @@ test("running gateway version is visible in both headers, including partial obse
       assert.equal(badge?.textContent, label);
       assert.equal(badge.title, `Running gateway CLI: Taba ${version.wtc || "unknown"}\nLoaded plugin: ${version.plugin || "unknown"}`);
       assert.equal(badge.parentNode.className, "wtc-brand wtc-brand-versioned");
+      assert.ok(![...host.all()].some(n => n.className === "wtc-brand-suffix"), "reported versions replace the Collection suffix");
     } finally { view.dispose(); }
   }
 });

@@ -50,13 +50,14 @@ try {
       const box = badge.getBoundingClientRect(), bounds = root.getBoundingClientRect(), controls = root.querySelector(".wtc-header-controls")?.getBoundingClientRect();
       const word = anchor.querySelector(".wtc-brand-word");
       const baselineError = getComputedStyle(word).display === "none" ? null : Math.abs(baseline(badge.firstElementChild) - baseline(word));
-      return { text: badge.textContent, title: badge.title, baselineError, headerChildren: [...(root.querySelector("summary")?.children ?? [])].map(n => ({className:n.className,display:getComputedStyle(n).display,width:n.getBoundingClientRect().width})), brandWidth:brand.getBoundingClientRect().width, badge: box.toJSON(), root: bounds.toJSON(), controls: controls?.toJSON(), clipped: badge.firstElementChild.scrollWidth > badge.firstElementChild.clientWidth };
+      return { text: badge.textContent, title: badge.title, baselineError, wordVisible: getComputedStyle(word).display !== "none", headerChildren: [...(root.querySelector("summary")?.children ?? [])].map(n => ({className:n.className,display:getComputedStyle(n).display,width:n.getBoundingClientRect().width})), brandWidth:brand.getBoundingClientRect().width, badge: box.toJSON(), root: bounds.toJSON(), controls: controls?.toJSON(), clipped: badge.firstElementChild.scrollWidth > badge.firstElementChild.clientWidth };
     });
     assert.deepEqual(errors, []);
     assert.equal(metrics.text, version.wtc ? `v${version.wtc}` : "version ?");
     assert.ok(metrics.title.includes(`Taba ${version.wtc || "unknown"}`));
     assert.ok(metrics.title.includes(`plugin: ${version.plugin}`));
     assert.ok(metrics.badge.width > 0 && metrics.badge.height > 0);
+    assert.equal(metrics.wordVisible, view === "panel" || width > 320, "only the narrowest card uses logo and version without the wordmark");
     assert.ok(metrics.baselineError === null || metrics.baselineError <= .5, `version baseline differs: ${JSON.stringify({scenario,theme,width,view,...metrics})}`);
     assert.ok(metrics.badge.x >= metrics.root.x && metrics.badge.right <= metrics.root.right + .5);
     if (scenario === "release" || scenario === "failed") assert.equal(metrics.clipped, false, "release number must remain readable");
