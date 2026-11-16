@@ -31,14 +31,15 @@ Run from this collection. An explicitly requested other collection can be
 selected with `--collection <name>`, where the name is its directory under
 the same workspace root.
 
-Default: the new worktree is **detached at the repo's `default_ref`** — no
+Default: the new worktree is **detached at the receiving effective base**
+(`taba repo base show <repo>`; see `docs/repository-bases.md`) — no
 branch. A repo added purely for context (reading a sibling's code, checking an
 API shape) then never grows a branch at all and needs no cleanup. If it does
 turn out to need changes, `git switch -c <issue-id>-<slug>` at the first
 commit.
 
 - `-b <branch>` — check out a real branch instead. An existing branch of that
-  name is used; otherwise it is created from `default_ref`. Use it when
+  name is used; otherwise it is created from the receiving effective base. Use it when
   picking up a branch someone else pushed.
 - `--tip` — accepted and ignored; detached at the tip is the default now.
 

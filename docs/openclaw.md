@@ -1025,3 +1025,7 @@ unconfirmed, not permission to retry. Changing views, branches or checkout
 observations does not cancel an outstanding request. After checking the owning
 conversation or native operation, **I checked: request has finished** releases
 that exact request across views without canceling work or starting another action.
+
+Existing local receiving collections can select a development checkout base
+with `repo base set`; see `docs/repository-bases.md`. This does not change gateway
+publication destinations or grant sandbox access to private local settings.

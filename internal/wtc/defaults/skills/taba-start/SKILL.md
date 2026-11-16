@@ -83,8 +83,9 @@ git -C <repo> log --oneline origin/<working-branch>..HEAD   # ahead: your work
 git -C <repo> rev-list --count HEAD..origin/<working-branch> # behind: staleness
 ```
 
-The working branch is that repo's `default_ref` in
-`harness/.harness-repos.yml` (`origin/main` or `origin/develop`).
+Read the effective working base with `taba repo base show <repo>`: a receiving
+collection override, the registry default, or `origin/main`. See
+`docs/repository-bases.md`. PR destinations are separate observed facts.
 
 - **Detached, 0 behind** → at the tip, ready. Start working.
 - **Detached, N behind** → the tip moved since this wtc was made. Run

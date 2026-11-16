@@ -150,7 +150,12 @@ func browseHere(c *wtc.Context) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "==> %s: browse Neovim already listens on %s; opening another window\n", filepath.Base(c.Collection), socket)
 	}
+	servingCLI, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	argv = append(argv,
+		"-c", "lua vim.g.wtc_base_command = "+strconv.Quote(servingCLI),
 		"-c", "lua vim.g.wtc_browse_root = "+strconv.Quote(c.Collection),
 		"-c", "lua dofile("+strconv.Quote(lua.Name())+")")
 	process := exec.Command("nvim", argv...)

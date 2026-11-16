@@ -12,13 +12,16 @@ import (
 )
 
 func addNewCommand(root *cobra.Command, asJSON *bool) {
-	var issue, tracker, pr, branch string
+	var issue, tracker, pr, branch, baseReason string
+	var repoBases map[string]string
 	var open, noOpen, tip, review bool
 	cmd := &cobra.Command{Use: "new [slug] [repo ...]", Short: "Create a worktree collection", Args: cobra.ArbitraryArgs}
 	cmd.Flags().StringVar(&issue, "issue", "", "Issue ID whose repository becomes the primary sibling")
 	cmd.Flags().StringVar(&tracker, "tracker", "", "Tracker key for the launch note")
 	cmd.Flags().StringVar(&pr, "pr", "", "Pull request in <repo>#<number> form")
 	cmd.Flags().StringVarP(&branch, "branch", "b", "", "Explicitly check out this branch in each sibling")
+	cmd.Flags().StringToStringVar(&repoBases, "repo-base", nil, "Receiving repository base: repo=origin/branch (repeatable)")
+	cmd.Flags().StringVar(&baseReason, "base-reason", "", "Human reason for explicitly selected repository bases")
 	cmd.Flags().BoolVar(&review, "review", false, "With --pr: review someone else's PR without writing to its branch")
 	cmd.Flags().BoolVar(&tip, "tip", false, "Compatibility flag; detached tip is the default")
 	cmd.Flags().BoolVar(&open, "open", false, "Open the new collection in herdr")
@@ -36,7 +39,7 @@ func addNewCommand(root *cobra.Command, asJSON *bool) {
 		if tip {
 			fmt.Fprintln(os.Stderr, "note: --tip is already the default")
 		}
-		opt := wtc.NewOptions{Issue: issue, Tracker: tracker, PR: pr, Branch: branch, Review: review}
+		opt := wtc.NewOptions{Issue: issue, Tracker: tracker, PR: pr, Branch: branch, Review: review, RepoBases: repoBases, BaseReason: baseReason}
 		if pr == "" {
 			opt.Slug, opt.Repos = args[0], args[1:]
 		} else {
