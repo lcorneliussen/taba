@@ -17,6 +17,7 @@ const versions = {
   release: { plugin: "0.2.4", wtc: "0.2.5" },
   development: { plugin: "0.2.5-dev.18+dev.g1234567", wtc: "0.2.5-dev.19+dev.gabcdef0" },
   unknown: { plugin: "0.2.5", wtc: null },
+  failed: { plugin: "0.2.5", wtc: "0.2.5" },
 };
 const browser = await chromium.launch({ headless: true }), results = [];
 try {
@@ -24,15 +25,22 @@ try {
     const palette = theme === "light"
       ? "--bg:#fff;--card:#f8f9fb;--text:#333;--text-strong:#111;--muted:#63636d;--border:#ddd;--border-strong:#aaa"
       : "--bg:#0e1015;--card:#161920;--text:#bcbcc0;--text-strong:#f4f4f5;--muted:#8b8b94;--border:#252830;--border-strong:#404450";
-    const html = template.replace(" collection:", ` version:${JSON.stringify(version)},\n collection:`)
+    let html = template.replace(" collection:", ` version:${JSON.stringify(version)},\n collection:`)
       .replace("</style>", `:root{color-scheme:${theme};${palette}}body{padding:16px;font:14px/1.55 system-ui,sans-serif}#stage>h1,#stage>p,#stage>footer,.composer{display:none}#panel{min-height:0}</style>`);
+    if (scenario === "failed") html = html.replace(/ repos:\[.*\],/, ' repos:[repo("api",{error:"checkout unavailable",recovery:{state:"restorable",key:"demo-api"}}),repo("web",{error:"checkout unavailable",recovery:{state:"restorable",key:"demo-web"}})],')
+      .replace(/ services:\[.*\]/, ' services:[],subSessions:[{name:"retained-task",collection:"retained-task",repos:[repo("api",{mergeError:"Comparison checkout unavailable",toMerge:null})]}]')
+      .replace("const request = async (method, params) => {", 'const request = async (method, params) => {\n if(method==="plugins.sessionAction" && params.actionId==="restore-checkout") return {ok:false,error:"Synthetic restore blocked for inspection"};');
     const page = await browser.newPage({ viewport: { width, height: 1000 }, deviceScaleFactor: 2 }), errors = [];
     page.on("pageerror", e => errors.push(e.message));
     await page.route("**/*", route => route.request().url() === "https://demo.invalid/"
       ? route.fulfill({ contentType: "text/html", body: html }) : serveControlUIFixtureAsset(route, assets));
     await page.goto("https://demo.invalid/");
     await page.locator("#card details").waitFor();
-    if (view === "panel") await page.getByRole("button", { name: "Open the taba Collection panel", exact: true }).click();
+    if (scenario === "failed") {
+      await page.locator("#card summary .wtc-restore-control").click();
+      await page.waitForFunction(() => document.querySelector("#card summary")?.textContent.includes("Failed"));
+    }
+    if (view === "panel") await page.getByRole("button", { name: /Open (the|Activity in the) taba Collection panel/ }).click();
     else await page.locator("#card details").evaluate((n, open) => { n.open = open; }, view === "expanded");
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const root = page.locator(view === "panel" ? "#panel" : "#card details");
@@ -51,7 +59,7 @@ try {
     assert.ok(metrics.badge.width > 0 && metrics.badge.height > 0);
     assert.ok(metrics.baselineError === null || metrics.baselineError <= .5, `version baseline differs: ${JSON.stringify({scenario,theme,width,view,...metrics})}`);
     assert.ok(metrics.badge.x >= metrics.root.x && metrics.badge.right <= metrics.root.right + .5);
-    if (scenario === "release") assert.equal(metrics.clipped, false, "release number must remain readable");
+    if (scenario === "release" || scenario === "failed") assert.equal(metrics.clipped, false, "release number must remain readable");
     if (metrics.controls) {
       assert.ok(metrics.controls.right <= metrics.root.right + .5, "version displaced controls outside the card");
       assert.ok(metrics.badge.right <= metrics.controls.x + .5, `version overlaps controls: ${JSON.stringify({scenario,theme,width,view,...metrics})}`);
