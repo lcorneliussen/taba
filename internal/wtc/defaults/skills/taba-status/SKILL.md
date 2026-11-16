@@ -88,7 +88,8 @@ in `$WTC_CONFIG_ROOT/wtc.env`.
   An `unknown` state means the forge lookup was unavailable; it does not prove
   the PR is open. Older merged entries can be hidden behind the `a` toggle.
   The refresh log distinguishes recorded merges from live PR checks.
-- TEST and PROD cells show the newest build of `default_ref` and of
+- TEST and PROD cells show the newest build of the receiving effective base
+  (`repo base show`; see `docs/repository-bases.md`) and registry-owned
   `production_ref` (or `release_ref`), from GitHub checks or Bitbucket
   Pipelines by default, or from a harness `hooks/wtc/status.build.sh`. A
   column appears only when some repository has a build in that tier. `○`

@@ -690,6 +690,12 @@ func (c *Context) newAdHoc(opt NewOptions) (NewResult, error) {
 			result.Repositories = append(result.Repositories, repo.Name)
 		}
 	}
+	if err := target.validateNewBases(opt, result.Repositories); err != nil {
+		return result, err
+	}
+	if err := target.writeNewBases(opt, result.Collection); err != nil {
+		return result, err
+	}
 	registered = true
 	if len(result.Repositories) > 0 {
 		if _, err := target.AddRepositories(AddRepoOptions{Repos: result.Repositories, Branch: opt.Branch}); err != nil {

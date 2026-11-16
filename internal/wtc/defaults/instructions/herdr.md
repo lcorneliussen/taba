@@ -150,7 +150,7 @@ LazyVim **bufferline** in `tabs` mode (click a tab, or `gt` / `gT`).
 `<leader><space>` / `<leader>ff` and `<leader>/` / `<leader>sg` search
 **every sibling**; `<leader>fF` / `<leader>sG` stay in the current repo.
 `<leader>fp` picks a repo tab. Tab 1 is a **live change tree** (changed
-files only, fully expanded) of every sibling vs its PR base / `default_ref`.
+files only, fully expanded) of every sibling vs its actual PR base / receiving effective base (`repo base show`).
 It refreshes every 2s and, with follow on (`f` to toggle), peeks the
 file the agent just wrote. `<CR>` peeks, `o` opens in the repo tab.
 `<leader>gd` returns to the index; `]f`/`[f` walk files; `<leader>gD`

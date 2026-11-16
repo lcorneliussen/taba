@@ -217,23 +217,31 @@ func (c *Context) ensureBare(repo Repo) (string, error) {
 // AddWorktree checks out the current development tip without claiming a branch.
 // An explicit branch is used for a PR head or the uncommon -b override.
 func (c *Context) AddWorktree(name, directory, destination, branch string) error {
-	repo, err := c.Repository(name)
-	if err != nil {
-		return err
-	}
 	if !validRepoName.MatchString(directory) {
 		return fmt.Errorf("invalid worktree directory %q", directory)
 	}
-	bare, err := c.ensureBare(repo)
+	receiver, err := c.worktreeReceiver(destination)
 	if err != nil {
 		return err
 	}
-	ref := repo.DefaultRef
-	if ref == "" {
-		ref = "origin/main"
+	repo, err := baseRepository(receiver.Registry, name)
+	if err != nil {
+		return err
 	}
-	if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", ref); err != nil {
-		return fmt.Errorf("%s development tip %s is unavailable: %w", name, ref, err)
+	base, err := ResolveRepositoryBase(destination, receiver.Registry, repo.Name)
+	if err != nil {
+		return err
+	}
+	bare, err := receiver.ensureBare(repo)
+	if err != nil {
+		return err
+	}
+	ref := base.EffectiveRef
+	requireBase := func() error {
+		if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", ref); err != nil {
+			return fmt.Errorf("%s development tip %s is unavailable: %w", name, ref, err)
+		}
+		return nil
 	}
 	path := filepath.Join(destination, directory)
 	if _, err := os.Lstat(path); err == nil {
@@ -243,6 +251,9 @@ func (c *Context) AddWorktree(name, directory, destination, branch string) error
 	}
 	args := []string{"--git-dir=" + bare, "worktree", "add"}
 	if branch == "" {
+		if err := requireBase(); err != nil {
+			return err
+		}
 		args = append(args, "--detach", path, ref)
 	} else {
 		if _, err := gitOutput("check-ref-format", "--branch", branch); err != nil {
@@ -253,6 +264,9 @@ func (c *Context) AddWorktree(name, directory, destination, branch string) error
 		} else if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", "refs/remotes/origin/"+branch); err == nil {
 			args = append(args, "-b", branch, path, "origin/"+branch)
 		} else {
+			if err := requireBase(); err != nil {
+				return err
+			}
 			args = append(args, "-b", branch, path, ref)
 		}
 	}

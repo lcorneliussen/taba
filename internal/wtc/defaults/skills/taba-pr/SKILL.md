@@ -32,8 +32,10 @@ gh pr view --json number,state,isDraft,url,baseRefName,headRefName,\
 reviewDecision,mergeStateStatus,statusCheckRollup 2>/dev/null
 ```
 
-The **base** is that repo's `default_ref` in `harness/.harness-repos.yml`,
-minus the `origin/` prefix (`main` or `develop`). Never target a `release_ref`
+Read the receiving development base with `taba --json repo base show <repo>`;
+use `data.effective_ref` minus `origin/` for a new PR's default target. Existing
+PR targets stay observed facts and never create an override. See
+`docs/repository-bases.md` for local set/show/clear and initial-new usage. Never target a `release_ref`
 — merging one deploys to production; that is a deliberate release action, not
 a PR flow, and it needs the repo's `AGENTS.md` consulted and a human's say-so.
 

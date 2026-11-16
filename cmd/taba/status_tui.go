@@ -1196,6 +1196,27 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 	return statusTUIFitANSI(cell, width)
 }
 
+// Base descriptions have no position callback: they are text, not action rows.
+func statusTUIBaseDetails(base *wtc.RepositoryBase, width int, styled bool) []string {
+	if base == nil || base.Source != "collection" {
+		return nil
+	}
+	width = max(1, width)
+	text := "base " + fmt.Sprintf("%q", base.EffectiveRef) + " (collection): " + fmt.Sprintf("%q", base.Reason)
+	lines := strings.Split(ansi.Wrap(statusTUISafe(text), width, ""), "\n")
+	if len(lines) > 3 {
+		lines = append(lines[:2], statusTUIFit("… repo base show", width))
+	}
+	for i, line := range lines {
+		line = statusTUIFit(line, width)
+		if styled {
+			line = statusTUIStyle(line, statusToneDim)
+		}
+		lines[i] = line
+	}
+	return lines
+}
+
 func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, position ...func(int, wtc.StatusRepo)) []string {
 	l := statusTUIRepoLayout(snapshot, width)
 	header := statusTUIFit("REPO", l.name) + " " + statusTUIFit("BRANCH", l.branch)
@@ -1309,6 +1330,7 @@ func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, pos
 			position[0](len(lines), row)
 		}
 		lines = append(lines, line)
+		lines = append(lines, statusTUIBaseDetails(row.DevelopmentBase, width, styled)...)
 	}
 	if len(snapshot.Repos) == 0 {
 		lines = append(lines, "(no worktrees)")

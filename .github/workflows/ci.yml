@@ -27,6 +27,13 @@ jobs:
           mkdir -p "$runtime_dir"
           tar -xzf "$runtime_archive" -C "$runtime_dir" dekit
           docker pull postgres@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+      - name: Ensure Lua comparison test runtime
+        run: |
+          if ! command -v luajit >/dev/null 2>&1 && ! command -v lua >/dev/null 2>&1 && ! command -v lua5.4 >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends lua5.4
+          fi
+          command -v luajit || command -v lua || command -v lua5.4
       - name: Test timing helper
         run: python3 -B -m unittest discover -s tools/ci -p '*_test.py'
       - name: Test upgrade rehearsal

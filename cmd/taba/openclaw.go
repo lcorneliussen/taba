@@ -508,11 +508,13 @@ type repoToAdd struct {
 	resolved    bool
 }
 
-// harnessRepos chooses the collection's harness and resolves the
-// repositories through it: a name in its registry becomes that entry's
-// remote, based on its default_ref unless --base says otherwise. When the
-// collection has no worktree of the harness yet, it comes first, except for
-// a worker.
+// harnessRepos resolves requested repositories through the chosen harness.
+// For an omitted base, a registered repository with a native receiving folder
+// uses its effective development base; project-bound sandbox entries use their
+// recorded destination. Automatic harness bootstrap uses its configured ref
+// natively and the recorded destination for a project-bound sandbox.
+// An override cannot grant publication authority. A missing harness is added
+// first, except for a worker.
 func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker bool) ([]repoToAdd, *openclaw.Harness, error) {
 	plain := func() []repoToAdd {
 		var adds []repoToAdd
@@ -564,7 +566,14 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 	}
 	var adds []repoToAdd
 	if !reg.hasHarnessWorktree() && !worker {
-		adds = append(adds, repoToAdd{arg: h.Remote, branch: h.Ref, resolved: true, project: reg.projectID, destination: reg.destination})
+		harnessBase := h.Ref
+		if openclaw.GatewayFromEnv(os.Getenv) != nil && reg.projectID != "" {
+			if reg.destination == "" {
+				return nil, nil, fmt.Errorf("harness needs a gateway base record; prepare this add-repo plan in the gateway collection session")
+			}
+			harnessBase = reg.destination
+		}
+		adds = append(adds, repoToAdd{arg: h.Remote, branch: harnessBase, resolved: true, project: reg.projectID, destination: reg.destination})
 	}
 	var unlisted []string
 	for _, r := range repos {
@@ -580,7 +589,36 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 			add.project = reg.projectIDs[entry.Name]
 			add.destination = reg.destinations[entry.Name]
 			if add.branch == "" {
-				add.branch = strings.TrimPrefix(entry.DefaultRef, "origin/")
+				ref := entry.DefaultRef
+				if openclaw.GatewayFromEnv(os.Getenv) != nil && add.project != "" {
+					if add.destination == "" {
+						return nil, nil, fmt.Errorf("%s needs a gateway base record; prepare this add-repo plan in the gateway collection session", entry.Name)
+					}
+					ref = "origin/" + add.destination
+				}
+				if openclaw.GatewayFromEnv(os.Getenv) == nil {
+					folder, err := plannerCollectionFolder(gatewayStateDir(), worktree)
+					if err != nil {
+						return nil, nil, err
+					}
+					if folder != "" {
+						// The selected receiving harness registry owns names/aliases;
+						// linked folder registries can still contain only added repos.
+						base, err := wtc.ResolveRepositoryBase(folder, wtc.Registry{Repos: reg.repos}, entry.Name)
+						if err != nil {
+							return nil, nil, err
+						}
+						if base.Source == "collection" {
+							projectDir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(entry.Remote))
+							desired := strings.TrimPrefix(base.EffectiveRef, "origin/")
+							if worker || projectDir == "" || openclaw.RecordedBase(projectDir, worktree) != desired {
+								return nil, nil, fmt.Errorf("local development base cannot change a gateway publication destination; prepare the destination explicitly in the receiving gateway collection before adding this repository")
+							}
+						}
+						ref = base.EffectiveRef
+					}
+				}
+				add.branch = strings.TrimPrefix(ref, "origin/")
 			}
 		}
 		url := add.arg

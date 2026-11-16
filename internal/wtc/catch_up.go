@@ -71,12 +71,13 @@ type CatchUpReport struct {
 }
 
 type catchUpTarget struct {
-	collection string
-	path       string
-	repo       string
-	owner      string
-	ref        string
-	harness    bool
+	collection      string
+	path            string
+	repo            string
+	owner           string
+	ref             string
+	developmentBase *RepositoryBase
+	harness         bool
 	// managed records registry membership at inventory time. An unmanaged
 	// ext. sibling has no entry, so the control root holds nothing for it and
 	// the secret linker would reject its directory name. Hooks re-resolve it
@@ -281,6 +282,9 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			report.add("collection", name, "", "failed", err.Error(), "", "", "")
 			continue
 		}
+		// No partial targets from a broken receiver may become eligible to move.
+		collectionStart := len(targets)
+		var bases *repositoryBaseSnapshot
 		// The harness is first, as its hooks and registry govern this target.
 		paths := []string{target.Harness}
 		for _, entry := range entries {
@@ -330,9 +334,26 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			// which catchUpLocalRef maps to local main for an owner without any
 			// remote. An owner with only other remotes still fails its fetch.
 			repo, repoErr := target.Repository(repoName)
-			ref := repo.DefaultRef
-			if ref == "" {
-				ref = "origin/main"
+			ref := "origin/main"
+			var base *RepositoryBase
+			if repoErr == nil {
+				if bases == nil {
+					bases, err = newRepositoryBaseSnapshot(target.Collection, target.Registry)
+				}
+				var resolved RepositoryBase
+				if err == nil {
+					resolved, err = bases.resolve(repo.Name, false)
+				}
+				if err != nil {
+					report.add("collection", name, repoName, "failed", err.Error(), "", "", "")
+					targets = targets[:collectionStart]
+					if len(collections) == 1 {
+						return report, nil, fmt.Errorf("collection %s repository bases: %w", name, err)
+					}
+					break
+				}
+				ref = resolved.EffectiveRef
+				base = &resolved
 			}
 			remotes, remoteErr := gitOutput("--git-dir="+owner, "remote")
 			t := catchUpTarget{collection: name, path: path, repo: repoName, owner: owner,
@@ -341,6 +362,7 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 				t.renamed = repo.Name
 			}
 			t.ref = catchUpLocalRef(t, ref)
+			t.developmentBase = base
 			targets = append(targets, t)
 		}
 	}
