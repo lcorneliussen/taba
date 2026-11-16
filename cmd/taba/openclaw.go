@@ -510,7 +510,8 @@ type repoToAdd struct {
 
 // harnessRepos chooses the collection's harness and resolves the
 // repositories through it: a name in its registry becomes that entry's
-// remote, based on its default_ref unless --base says otherwise. When the
+// remote, based on the receiving effective development base unless --base
+// says otherwise. An override cannot grant publication authority. When the
 // collection has no worktree of the harness yet, it comes first, except for
 // a worker.
 func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker bool) ([]repoToAdd, *openclaw.Harness, error) {

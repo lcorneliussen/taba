@@ -282,6 +282,8 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			report.add("collection", name, "", "failed", err.Error(), "", "", "")
 			continue
 		}
+		// No partial targets from a broken receiver may become eligible to move.
+		collectionStart := len(targets)
 		// The harness is first, as its hooks and registry govern this target.
 		paths := []string{target.Harness}
 		for _, entry := range entries {
@@ -336,7 +338,12 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			if repoErr == nil {
 				resolved, err := target.RepositoryBase(repo.Name)
 				if err != nil {
-					return report, nil, err
+					report.add("collection", name, repoName, "failed", err.Error(), "", "", "")
+					targets = targets[:collectionStart]
+					if len(collections) == 1 {
+						return report, nil, fmt.Errorf("collection %s repository bases: %w", name, err)
+					}
+					break
 				}
 				ref = resolved.EffectiveRef
 				base = &resolved

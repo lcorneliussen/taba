@@ -363,7 +363,8 @@ func (c *Context) writeNewBases(opt NewOptions, destination string) error {
 }
 
 // worktreeReceiver uses the receiving registry and owner mapping once its
-// harness exists. Bootstrap uses the declared template, never caller overrides.
+// harness exists. Bootstrap reuses the invoking registry; overrides are always
+// read from the receiving collection, never inherited from the caller.
 func (c *Context) worktreeReceiver(destination string) (*Context, error) {
 	if filepath.Clean(destination) != filepath.Clean(c.Collection) {
 		marked, err := collectionMarker(destination)

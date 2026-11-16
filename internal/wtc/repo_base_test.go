@@ -426,3 +426,35 @@ func TestRepositoryBaseBrowseFallbackDoesNotPermitUnknownOverrides(t *testing.T)
 		t.Fatal("unmanaged fallback masked malformed receiving state")
 	}
 }
+
+func TestRepositoryBaseInventoryIsolatesBrokenReceiver(t *testing.T) {
+	source, receiver, _ := repositoryBaseFixture(t)
+	fixtureFile(t, filepath.Join(receiver.Collection, ".wtc", "repo-bases.toml"), "schema_version = not-valid-toml\n", 0600)
+	report, targets, err := source.CatchUpInventory(CatchUpOptions{Collections: []string{filepath.Base(source.Collection), filepath.Base(receiver.Collection)}, DryRun: true})
+	if err != nil {
+		t.Fatalf("broken receiver aborted healthy inventory: %v", err)
+	}
+	if report.ExitStatus != 1 || len(targets) == 0 {
+		t.Fatalf("missing partial inventory: %+v targets=%d", report, len(targets))
+	}
+	failed := false
+	for _, row := range report.Outcomes {
+		if row.Collection == filepath.Base(receiver.Collection) && row.Outcome == "failed" {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatal("broken receiver not identified")
+	}
+	for _, target := range targets {
+		if target.collection != filepath.Base(source.Collection) {
+			t.Fatal("broken receiver remained eligible for mutation")
+		}
+	}
+	// Single-receiver callers include runtime renderers that consume the error,
+	// not report outcomes. Never let malformed state look like an empty task set.
+	if _, single, err := receiver.CatchUpInventory(CatchUpOptions{DryRun: true}); err == nil || len(single) != 0 {
+		t.Fatal("broken single receiver did not fail closed")
+	}
+
+}
