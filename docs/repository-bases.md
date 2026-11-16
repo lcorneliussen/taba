@@ -119,6 +119,8 @@ An unavailable comparison affects only that repository: browse shows an explicit
 error in its tree, index and combined hunks while healthy siblings retain their
 files and navigation. Error rows carry no actions or invented clean/count facts.
 An explicit per-repository Diffview request refuses a known unavailable comparison
-instead of falling back to HEAD; a verified recovery clears that diagnostic.
+instead of falling back to HEAD. When a known failure recovers, browse restores
+the existing repository tab base from the verified comparison merge-base before
+clearing the diagnostic; later inline and Diffview actions use that base.
 Malformed or ambiguous receiving state still refuses rather than being treated
 as a missing comparison.

@@ -343,7 +343,7 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
  local healthy_name='m-healthy'
  local missing,corrupt,now=true,false,0
  local current_name=bad_name
- local buffers,commands,notifications,keys={},{},{},{}
+ local buffers,commands,notifications,keys,tabs={},{},{},{},{}
  vim={g={wtc_browse_root='/fixture',wtc_base_command='serving-cli'},t={},
   fs={normalize=function(x)return x end,basename=function()return 'fixture'end},
   uv={now=function()return now end,fs_scandir=function()return {i=0}end,
@@ -355,7 +355,8 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
   api={nvim_create_namespace=function()return 1 end,
    nvim_buf_set_lines=function(buf,_,_,_,lines)buffers[buf]=lines end,
    nvim_buf_clear_namespace=function()end,nvim_buf_set_extmark=function()end,
-   nvim_tabpage_get_var=function(_,key)assert(key=='wtc_repo');return current_name end},
+   nvim_tabpage_get_var=function(tab,key)assert(key=='wtc_repo');return tab==0 and current_name or tabs[tab].wtc_repo end,
+   nvim_list_tabpages=function()local ids={};for i=1,#tabs do ids[i]=i end;return ids end},
   keymap={set=function(_,key,fn)keys[key]=fn end},
   cmd=function(s)commands[#commands+1]=s end,
   notify=function(message,level)notifications[#notifications+1]={message=message,level=level}end}
@@ -403,10 +404,10 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
   if api.meta[2].index[i]and api.meta[2].index[i].repo==healthy_name and api.meta[2].index[i].path=='tracked.txt'then healthy_file=true end
  end
  assert(error_row and healthy_file,'alternate index lost error or healthy navigation')
- local tabs={}
+ tabs={}
  local command=vim.cmd
  vim.cmd={tabnew=function()vim.t={};tabs[#tabs+1]=vim.t end,tcd=function()end}
- vim.api.nvim_tabpage_set_var=function(_,key,value)vim.t[key]=value end
+ vim.api.nvim_tabpage_set_var=function(tab,key,value)if tab==0 then vim.t[key]=value else tabs[tab][key]=value end end
  vim.api.nvim_set_current_buf=function(buf)vim.t.selected=buf end
  local trees={};for _,snap in ipairs(snaps)do trees[#trees+1]=snap.tree end
  api.startup(trees)
@@ -415,10 +416,10 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
  assert(#tabs==2 and bad_tab and not bad_tab.wtc_base and bad_tab.selected==bad_name and healthy_tab and healthy_tab.wtc_base==healthy.mb and healthy_tab.selected==healthy_name,'startup loop aborted or lost healthy/error repo tabs')
  vim.cmd=command
  api.map()
- vim.t.wtc_base='stale-base'
+ vim.t=bad_tab;vim.t.wtc_base='stale-base'
  keys['<leader>gD']()
  assert(#commands==0 and #notifications==1 and notifications[1].level==vim.log.levels.ERROR and notifications[1].message==bad.comparison_error,'known unavailable comparison fell back in Diffview')
- current_name=healthy_name;vim.t.wtc_base='valid-base';keys['<leader>gD']()
+ current_name=healthy_name;vim.t=healthy_tab;vim.t.wtc_base='valid-base';keys['<leader>gD']()
  assert(commands[1]=='DiffviewOpen valid-base -- /fixture/'..healthy_name,'healthy Diffview action changed')
  vim.t.wtc_base=nil;keys['<leader>gD']()
  assert(commands[2]=='DiffviewOpen HEAD -- /fixture/'..healthy_name,'missing base alone invented known failure')
@@ -427,13 +428,20 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
  local recovered_bad
  for _,snap in ipairs(recovered)do if snap.tree.name==bad_name then recovered_bad=snap end end
  assert(not recovered_bad.comparison_error and recovered_bad.ahead==1 and #recovered_bad.files==1,'recovery lost actual comparison')
- current_name=bad_name;vim.t.wtc_base=recovered_bad.mb;keys['<leader>gD']()
+ current_name=bad_name;vim.t=bad_tab;keys['<leader>gD']()
+ assert(bad_tab.wtc_base==recovered_bad.mb and commands[3]=='DiffviewOpen '..recovered_bad.mb..' -- /fixture/'..bad_name,'actual recovered startup tab kept unset base or compared HEAD: '..tostring(bad_tab.wtc_base)..' / '..tostring(commands[3]))
  assert(#commands==3 and commands[3]:find('DiffviewOpen '..recovered_bad.mb,1,true),'known error not cleared on verified recovery')
  missing=true
  local disappeared=api.all();local failed_again
  for _,snap in ipairs(disappeared)do if snap.tree.name==bad_name then failed_again=snap end end
  assert(failed_again.comparison_error and api.fp(disappeared)~=api.fp(recovered),'cached ref disappearance did not refresh error')
  keys['<leader>gD']();assert(#commands==3 and #notifications==2,'cached disappearance allowed stale comparison action')
+ missing=false;bad_tab.wtc_base=nil
+ api.fill(3)
+ assert(bad_tab.wtc_base==recovered_bad.mb,'hunk-only recovery did not repair actual startup tab base')
+ keys['<leader>gD']()
+ assert(#commands==4 and commands[4]=='DiffviewOpen '..recovered_bad.mb..' -- /fixture/'..bad_name,'hunk recovery compared HEAD')
+ assert(healthy_tab.wtc_base==nil,'known-error recovery changed unrelated missing-base-only tab')
  corrupt=true;now=60001
  local ok,err=pcall(api.all)
  assert(not ok and tostring(err):find('malformed or ambiguous receiving state',1,true),'untyped configured-state error swallowed by comparison text')

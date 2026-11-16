@@ -110,7 +110,6 @@ local function checked_comparison_ref(wt, ref, kind, label)
     comparison_errors[wt] = message
     error(setmetatable({ message = message }, comparison_error_mt), 0)
   end
-  comparison_errors[wt] = nil
   return ref, kind
 end
 
@@ -144,11 +143,25 @@ local function compare_ref(wt, dir_name)
   return ref, kind
 end
 
+local function recover_comparison(wt, mb)
+  if not comparison_errors[wt] then
+    return
+  end
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    local ok, name = pcall(vim.api.nvim_tabpage_get_var, tab, "wtc_repo")
+    if ok and type(name) == "string" and root .. "/" .. name == wt then
+      vim.api.nvim_tabpage_set_var(tab, "wtc_base", mb)
+    end
+  end
+  comparison_errors[wt] = nil
+end
+
 local function merge_base(wt, ref)
   local mb = git(wt, { "merge-base", "HEAD", ref })
   if mb == "" then
-    return ref
+    mb = ref
   end
+  recover_comparison(wt, mb)
   return mb
 end
 
