@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,46 @@ func catchUpHerdr(session string, args ...string) ([]byte, error) {
 	return exec.Command("herdr", command...).Output()
 }
 
+// One reload shares a deadline across inspection, control and observation. Leave
+// headroom below the eight-second guard for cancellation and inherited pipe EOF.
+const catchUpStatusReloadTimeout = 7500 * time.Millisecond
+const catchUpReloadWaitDelay = 200 * time.Millisecond
+
+func catchUpReloadContextErr(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+func catchUpReloadOutput(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
+	if err := catchUpReloadContextErr(ctx); err != nil {
+		return nil, err
+	}
+	cmd.WaitDelay = catchUpReloadWaitDelay
+	data, err := cmd.Output()
+	// A successful reply arriving after the deadline is not an in-budget
+	// observation or confirmed acknowledgement of a control write.
+	if expired := catchUpReloadContextErr(ctx); expired != nil {
+		return nil, expired
+	}
+	return data, err
+}
+
+func catchUpReloadWait(ctx context.Context) error {
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return catchUpReloadContextErr(ctx)
+	}
+}
+
 func catchUpSession(c *Context) string {
 	for _, value := range []string{os.Getenv("HARNESS_HERDR_SESSION"), os.Getenv("HERDR_SESSION"), c.Config.Herdr.Session} {
 		if value != "" {
@@ -60,7 +101,11 @@ func catchUpSession(c *Context) string {
 }
 
 func catchUpPane(c *Context, session, collection string) (string, bool, error) {
-	workspaces, err := catchUpHerdr(session, "workspace", "list")
+	return catchUpPaneWithHerdr(session, collection, catchUpHerdr)
+}
+
+func catchUpPaneWithHerdr(session, collection string, herdr func(string, ...string) ([]byte, error)) (string, bool, error) {
+	workspaces, err := herdr(session, "workspace", "list")
 	if err != nil {
 		return "", false, fmt.Errorf("herdr workspace lookup failed; no pane control attempted")
 	}
@@ -78,7 +123,7 @@ func catchUpPane(c *Context, session, collection string) (string, bool, error) {
 	if id == "" {
 		return "", false, nil
 	}
-	panes, err := catchUpHerdr(session, "pane", "list", "--workspace", id)
+	panes, err := herdr(session, "pane", "list", "--workspace", id)
 	if err != nil {
 		return "", false, fmt.Errorf("herdr pane lookup failed; no pane control attempted")
 	}
@@ -149,7 +194,11 @@ func (c *Context) AgentBusy() (string, error) {
 }
 
 func catchUpForeground(session, pane string) ([]string, error) {
-	data, err := catchUpHerdr(session, "pane", "process-info", "--pane", pane)
+	return catchUpForegroundWithHerdr(session, pane, catchUpHerdr)
+}
+
+func catchUpForegroundWithHerdr(session, pane string, herdr func(string, ...string) ([]byte, error)) ([]string, error) {
+	data, err := herdr(session, "pane", "process-info", "--pane", pane)
 	if err != nil {
 		return nil, err
 	}
@@ -201,6 +250,13 @@ func catchUpStatusProcess(argv []string) bool {
 }
 
 func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, opt CatchUpOptions) {
+	ctx, cancel := context.WithTimeout(context.Background(), catchUpStatusReloadTimeout)
+	defer cancel()
+	herdr := func(session string, args ...string) ([]byte, error) {
+		command := append([]string{"--session", session}, args...)
+		return catchUpReloadOutput(ctx, exec.CommandContext(ctx, "herdr", command...))
+	}
+
 	add := func(outcome, reason string) {
 		report.add("pane", t.collection, "status", outcome, reason, "", "", "")
 	}
@@ -214,7 +270,7 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		return
 	}
 	session := catchUpSession(target)
-	pane, occupied, err := catchUpPane(target, session, t.collection)
+	pane, occupied, err := catchUpPaneWithHerdr(session, t.collection, herdr)
 	if err != nil {
 		add("failed", err.Error())
 		return
@@ -227,7 +283,7 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		add("needs-owner", "status-labelled pane contains an agent; untouched")
 		return
 	}
-	argv, err := catchUpForeground(session, pane)
+	argv, err := catchUpForegroundWithHerdr(session, pane, herdr)
 	if err != nil {
 		add("failed", "foreground lookup failed; no pane control attempted")
 		return
@@ -285,9 +341,9 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 			return
 		}
 		if !opt.DryRun {
-			installed := exec.Command(mise, "where", cliMiseTool+"@"+version.String())
+			installed := exec.CommandContext(ctx, mise, "where", cliMiseTool+"@"+version.String())
 			installed.Dir = target.Collection
-			if out, err := installed.Output(); err != nil || strings.TrimSpace(string(out)) == "" {
+			if out, err := catchUpReloadOutput(ctx, installed); err != nil || strings.TrimSpace(string(out)) == "" {
 				add("failed", "pinned release unavailable after install; pane left running")
 				return
 			}
@@ -315,7 +371,7 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 	}
 	// Tool/input inspection can be slow. Herdr reads are snapshots; validate
 	// the pane and current foreground again before each control write.
-	currentPane, occupied, err := catchUpPane(target, session, t.collection)
+	currentPane, occupied, err := catchUpPaneWithHerdr(session, t.collection, herdr)
 	if err != nil || currentPane != pane {
 		add("failed", "status pane identity changed; no interruption attempted")
 		return
@@ -324,27 +380,32 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		add("needs-owner", "agent appeared in status pane; untouched")
 		return
 	}
-	argv, err = catchUpForeground(session, pane)
+	argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
 	if err != nil || (!catchUpShell(argv) && !catchUpStatusProcess(argv)) {
 		add("needs-owner", "foreground changed; no interruption attempted")
 		return
 	}
 	if !catchUpShell(argv) {
-		if _, err := catchUpHerdr(session, "pane", "send-keys", pane, "ctrl+c"); err != nil {
-			add("failed", "could not interrupt "+pane)
+		if _, err := herdr(session, "pane", "send-keys", pane, "ctrl+c"); err != nil {
+			add("failed", "interrupt delivery unconfirmed for "+pane+"; inspect pane before retrying reload")
 			return
 		}
 	}
 	idle := false
 	for attempt := 0; attempt < 5; attempt++ {
-		argv, err = catchUpForeground(session, pane)
+		argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
 		// A foreground group can disappear while the interrupted process exits.
 		// An unknown observation consumes the same budget as a busy process.
-		if err == nil && catchUpShell(argv) {
+		if err == nil && catchUpReloadContextErr(ctx) == nil && catchUpShell(argv) {
 			idle = true
 			break
 		}
-		time.Sleep(time.Second)
+		if attempt < 4 {
+			if waitErr := catchUpReloadWait(ctx); waitErr != nil {
+				err = waitErr
+				break
+			}
+		}
 	}
 	if !idle {
 		if err != nil {
@@ -354,7 +415,7 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		add("needs-owner", "pane "+pane+" did not become a verified shell; no command sent; inspect pane before retrying reload")
 		return
 	}
-	checkPane, agent, err := catchUpPane(target, session, t.collection)
+	checkPane, agent, err := catchUpPaneWithHerdr(session, t.collection, herdr)
 	if err != nil || checkPane != pane {
 		add("failed", "status pane identity changed; no command sent")
 		return
@@ -363,23 +424,28 @@ func (c *Context) catchUpReloadStatus(report *CatchUpReport, t catchUpTarget, op
 		add("needs-owner", "agent appeared in status pane "+pane+"; no command sent")
 		return
 	}
-	argv, err = catchUpForeground(session, pane)
+	argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
 	if err != nil || !catchUpShell(argv) {
 		add("needs-owner", "foreground changed before restart; no command sent")
 		return
 	}
-	if _, err := catchUpHerdr(session, "pane", "run", pane, command); err != nil {
-		add("failed", "restart failed for "+pane)
+	if _, err := herdr(session, "pane", "run", pane, command); err != nil {
+		add("failed", "restart delivery unconfirmed for "+pane+"; inspect pane before retrying reload")
 		return
 	}
 	for attempt := 0; attempt < 5; attempt++ {
-		argv, err = catchUpForeground(session, pane)
+		argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
 		// Command delivery is not proof that the status process has started.
-		if err == nil && catchUpStatusProcess(argv) {
+		if err == nil && catchUpReloadContextErr(ctx) == nil && catchUpStatusProcess(argv) {
 			add("restarted", "observed status process in "+pane+"; ongoing health not monitored")
 			return
 		}
-		time.Sleep(time.Second)
+		if attempt < 4 {
+			if waitErr := catchUpReloadWait(ctx); waitErr != nil {
+				err = waitErr
+				break
+			}
+		}
 	}
 	add("failed", "command delivered to "+pane+" but status restart not observed; inspect pane before retrying reload")
 }
