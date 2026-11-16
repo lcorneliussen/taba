@@ -508,12 +508,13 @@ type repoToAdd struct {
 	resolved    bool
 }
 
-// harnessRepos resolves registered names through the collection's chosen harness.
-// Outside a gateway session, an omitted base uses the receiving effective
-// development base. Project-bound sandbox plans retain the recorded publication
-// destination. A local override cannot grant publication authority. When the
-// collection has no worktree of the harness yet, it comes first, except for
-// a worker.
+// harnessRepos resolves requested repositories through the chosen harness.
+// For an omitted base, a registered repository with a native receiving folder
+// uses its effective development base; project-bound sandbox entries use their
+// recorded destination. Automatic harness bootstrap uses its configured ref
+// natively and the recorded destination for a project-bound sandbox.
+// An override cannot grant publication authority. A missing harness is added
+// first, except for a worker.
 func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker bool) ([]repoToAdd, *openclaw.Harness, error) {
 	plain := func() []repoToAdd {
 		var adds []repoToAdd

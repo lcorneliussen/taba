@@ -1,9 +1,9 @@
 -- wtc-browse.lua — one LazyVim, one vim tab per sibling (`:tcd`).
 --
 -- Tab 1 (`diff`) is a change index across every sibling, against the
--- branch-off point (merge-base with the PR base / default_ref) — not
--- the current tip of that target. If origin/main (or the PR base) has
--- moved, the tree shows ↓ catch-up instead of mixing those commits
+-- branch-off point (merge-base with the PR base / receiving effective base),
+-- not the current tip of that target. If that target has moved, the tree
+-- shows ↓ catch-up instead of mixing those commits
 -- into the file list.
 --
 -- The right pane (and each repo tab) shows the real file with
@@ -68,7 +68,7 @@ local function worktrees()
   return found
 end
 
-local function default_ref_for(dir_name)
+local function receiving_base_for(dir_name)
   local command = vim.g.wtc_base_command
   if type(command) ~= "string" or command == "" then
     error("browse needs its serving CLI to resolve repository bases")
@@ -94,7 +94,7 @@ local function compare_ref(wt, dir_name)
   if hit and (vim.uv.now() - hit.t) < 60000 then
     return hit.ref, hit.kind
   end
-  local ref, kind = default_ref_for(dir_name), "tip"
+  local ref, kind = receiving_base_for(dir_name), "tip"
   local branch = git(wt, { "branch", "--show-current" })
   if branch ~= "" and vim.fn.executable("gh") == 1 then
     local r = vim.system({
