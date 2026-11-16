@@ -13,12 +13,14 @@ import (
 )
 
 type NewOptions struct {
-	Slug    string
-	Repos   []string
-	Issue   string
-	Tracker string
-	PR      string
-	Branch  string
+	RepoBases  map[string]string
+	BaseReason string
+	Slug       string
+	Repos      []string
+	Issue      string
+	Tracker    string
+	PR         string
+	Branch     string
 	// Review makes a PR collection review-only: pushing from the PR worktree
 	// is disabled and the author's review steps refuse to run.
 	Review bool
