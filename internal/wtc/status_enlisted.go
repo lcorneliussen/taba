@@ -404,7 +404,12 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 			select {
 			case limit <- struct{}{}:
 			case <-ctx.Done():
-				details[i], observations[i] = statusFailedPRObservation(statusUnknownDetail(record), ctx.Err())
+				if intent == StatusRefreshForeground {
+					slug, forge := identities[i][0], identities[i][1]
+					details[i], observations[i] = statusRefreshRecord(ctx, intent, record, slug, forge)
+				} else {
+					details[i], observations[i] = statusFailedPRObservation(statusUnknownDetail(record), ctx.Err())
+				}
 				done <- struct{}{}
 				return
 			}
@@ -440,10 +445,10 @@ func (c *Context) StatusForgePreview() (StatusSnapshot, error) {
 }
 
 func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSnapshot, error) {
-	return c.statusForgePreviewWithIntent(context.Background(), StatusRefreshBackground, includeBuild, recordMerges)
+	return c.statusForgePreviewWithIntent(context.Background(), StatusRefreshBackground, includeBuild, recordMerges, 0)
 }
 
-func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent StatusRefreshIntent, includeBuild, recordMerges bool) (StatusSnapshot, error) {
+func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent StatusRefreshIntent, includeBuild, recordMerges bool, metadataBudget time.Duration) (StatusSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return StatusSnapshot{}, err
 	}
@@ -472,7 +477,12 @@ func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent Statu
 	if err := ctx.Err(); err != nil {
 		return snapshot, err
 	}
-	details, observations, err := c.statusEnrichRecordsWithIntent(ctx, intent, records, snapshot.Repos)
+	observationCtx, stopObserving := ctx, func() {}
+	if intent == StatusRefreshForeground {
+		observationCtx, stopObserving = context.WithTimeout(ctx, metadataBudget)
+	}
+	details, observations, err := c.statusEnrichRecordsWithIntent(observationCtx, intent, records, snapshot.Repos)
+	stopObserving()
 	if err != nil {
 		return snapshot, err
 	}

@@ -145,12 +145,27 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 	defer unlock()
 	now := time.Now()
 	queue := statusReadPendingConfirmations(forge, now)
+	if forge != "bitbucket.org" {
+		// GitHub has no legacy confirmation FIFO. Only an owned foreground lease
+		// may defer its ordinary reads; unrelated queue bytes remain untouched.
+		for _, item := range queue {
+			if item.Foreground {
+				return false
+			}
+		}
+		queue = nil
+	}
+	saveQueue := func() {
+		if forge == "bitbucket.org" {
+			statusSavePendingConfirmations(forge, queue)
+		}
+	}
 	admitted := len(queue) == 0 || queue[0].Key == confirmation
-	if confirmation != "" {
+	if confirmation != "" && forge == "bitbucket.org" {
 		queue = statusQueueConfirmation(queue, confirmation, now)
 	}
 	if len(queue) > 0 && queue[0].Foreground {
-		statusSavePendingConfirmations(forge, queue)
+		saveQueue()
 		return false
 	}
 	tokens, updated := statusReadForgeBudget(path, burst, every, now)
@@ -160,7 +175,7 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 	if forge == "bitbucket.org" && confirmation != "" && admitted && tokens == 0 && !statusForgeCooling(forge) {
 		delay := updated.Add(every).Sub(now)
 		if delay > 0 && delay <= statusBitbucketEvery {
-			statusSavePendingConfirmations(forge, queue)
+			saveQueue()
 			// Wait at most statusBitbucketEvery while holding the budget lock;
 			// provider I/O must stay outside this wait.
 			timer := time.NewTimer(delay)
@@ -178,13 +193,13 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 		admitted = true
 	}
 	if tokens < 1 || !admitted {
-		statusSavePendingConfirmations(forge, queue)
+		saveQueue()
 		return false
 	}
 	if confirmation != "" && len(queue) > 0 && queue[0].Key == confirmation {
 		queue = queue[1:]
 	}
-	statusSavePendingConfirmations(forge, queue)
+	saveQueue()
 	tokens--
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil
 }

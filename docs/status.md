@@ -189,7 +189,9 @@ rechecks active enlisted PR metadata by number, bypassing detail TTL and stale
 open-list membership. It uses the same shared request budget and provider
 cooldown as background readers, with finite foreground priority. Repeated keys
 coalesce; a request made during collection runs immediately after that collection.
-Manual Refresh is not delayed by the background interval. Recorded/retained
+Manual Refresh is not delayed by the background interval. A 30-second metadata
+phase budget returns completed live observations alongside deferred deadline
+outcomes for unfinished records; it does not date their old facts as new reads. Recorded/retained
 merges are reused without metadata queries. Periodic collection, branch discovery,
 local refs, runtime and build coverage retain their existing policies.
 

@@ -118,15 +118,16 @@ func statusWriteForgeEntrySinceObserved(kind, forge, slug, key string, data []by
 	return result.Written
 }
 
-// A retained merge is an independently committed fact even when cancellation
-// prevents the ordinary detail publication. Keep persistence separate from the
-// request's outcome. Filesystem operations themselves are not universally
-// cancellable; once an atomic publication finishes, its evidence is retained.
+// statusCachePublication separates detail persistence from terminal authority.
 type statusCachePublication struct {
 	Written  bool
 	Retained bool
 }
 
+// A retained merge is an independently committed fact even when cancellation
+// prevents the ordinary detail publication. Keep persistence separate from the
+// request's outcome. Filesystem operations themselves are not universally
+// cancellable; once an atomic publication finishes, its evidence is retained.
 func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge, slug, key string, data []byte, started, observed time.Time) (result statusCachePublication, err error) {
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -156,6 +157,8 @@ func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge,
 	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return result, nil
 	}
+	// Released writers can replace ordinary detail, so terminal evidence is
+	// retained independently; reading it never renews its observation age.
 	if isMerge {
 		if observed.IsZero() {
 			observed = time.Now()
@@ -179,14 +182,14 @@ func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge,
 	return result, ctx.Err()
 }
 
-// Serialize new publications and legacy migrations on the independent record.
-// Observation time, not migration time, controls both ordering and expiry.
-// Callers may already hold the ordinary PR lock; this path never acquires it.
 func statusRetainMergeObservation(forge, slug, key string, data []byte, observed time.Time) bool {
 	retained, _ := statusRetainMergeObservationContext(context.Background(), forge, slug, key, data, observed)
 	return retained
 }
 
+// Serialize new publications and legacy migrations on the independent record.
+// Observation time, not migration time, controls both ordering and expiry.
+// Callers may already hold the ordinary PR lock; this path never acquires it.
 func statusRetainMergeObservationContext(ctx context.Context, forge, slug, key string, data []byte, observed time.Time) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err

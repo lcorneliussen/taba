@@ -155,9 +155,13 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 // Periodic/one-shot collection retains branch discovery, refs and build coverage.
 // This intent does not imply cancellation of legacy local/runtime/build reads.
 func (c *Context) StatusForegroundSnapshot(ctx context.Context) (StatusSnapshot, error) {
-	ctx, cancel := statusRefreshContext(ctx)
-	defer cancel()
-	snapshot, err := c.statusForgePreviewWithIntent(ctx, StatusRefreshForeground, true, true)
+	return c.statusForegroundSnapshot(ctx, statusForegroundTimeout)
+}
+
+func (c *Context) statusForegroundSnapshot(ctx context.Context, metadataBudget time.Duration) (StatusSnapshot, error) {
+	// A metadata-phase deadline is a deferred per-record outcome. The caller's
+	// cancellation still prevents subsequent snapshot publication.
+	snapshot, err := c.statusForgePreviewWithIntent(ctx, StatusRefreshForeground, true, true, metadataBudget)
 	if err != nil {
 		return snapshot, err
 	}

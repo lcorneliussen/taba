@@ -153,9 +153,16 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 	if _, valid := statusPRInventoryKey(forge, slug, record.Number); !valid {
 		return fallback, statusObservationFailure(fmt.Errorf("invalid PR identity"))
 	}
+	// Pure cache reads retain known facts even if cancellation prevents lock
+	// admission. The locked path below still revalidates/migrates authority.
+	if known, ok := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge()); ok && known.State == "MERGED" {
+		fallback = known
+	} else if known, ok := statusReadObservedDetailKind("pr", record, slug, forge, 365*24*time.Hour); ok {
+		fallback = known
+	}
 	unlock, err := statusLockCacheContext(ctx, statusForgeEntryPath("pr", forge, slug, record.Number))
 	if err != nil {
-		return fallback, statusObservationFailure(err)
+		return statusFailedPRObservation(fallback, err)
 	}
 	defer unlock()
 	known, ok, readErr := statusReadObservedDetailContext(ctx, record, slug, forge, 365*24*time.Hour)

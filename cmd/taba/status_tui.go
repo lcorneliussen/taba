@@ -514,11 +514,8 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.revealNext()
 		}
 	case tea.FocusMsg:
-		wasFocused := m.focused
 		m.focused = true
-		if !wasFocused {
-			m.nextRefresh = time.Now()
-		}
+		m.nextRefresh = time.Now().Add(m.interval)
 	case tea.BlurMsg:
 		m.focused = false
 		m.nextRefresh = time.Now().Add(m.background)
@@ -1915,7 +1912,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			if row.Archived && !m.showArchived {
 				continue
 			}
-			help = append(help, wtc.StatusPRObservationDetail(row))
+			help = append(help, statusTUISafe(wtc.StatusPRObservationDetail(row)))
 			if row.OnBranch && row.Landing != nil {
 				help = append(help, row.LandingLabel())
 			}

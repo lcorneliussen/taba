@@ -397,3 +397,35 @@ func TestStatusForeground424UnsafeLockFailsClosed(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+func TestStatusForeground424GitHubBackgroundYieldsOnlyToLiveForeground(t *testing.T) {
+	foreground424Fixture(t, "exit 99\n")
+	forge := "github.com"
+	now := time.Now()
+	queue := []statusPendingConfirmation{{Key: statusConfirmationKey("background"), Seen: now}}
+	queue, _ = statusQueueForeground(queue, statusConfirmationKey("foreground"), now.Add(time.Second))
+	if !statusSavePendingConfirmations(forge, queue) {
+		t.Fatal("fixture queue unavailable")
+	}
+	path := statusForgeStatePath("pending", forge)
+	before, _ := os.ReadFile(path)
+	foreground424Budget(t, forge, 8, now)
+	if statusTakeForgeToken(forge) {
+		t.Fatal("background bypassed owned foreground")
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("background modified queue it does not own")
+	}
+	queue[0].Expires = now.Add(-time.Second)
+	queue[0].Seen = now.Add(-statusPendingLifetime - time.Second)
+	statusSavePendingConfirmations(forge, queue)
+	before, _ = os.ReadFile(path)
+	if !statusTakeForgeToken(forge) {
+		t.Fatal("expired foreground or legacy reservation blocked GitHub")
+	}
+	after, _ = os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("legacy pending bytes changed")
+	}
+}

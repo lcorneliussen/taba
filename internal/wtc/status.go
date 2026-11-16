@@ -392,14 +392,20 @@ func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnaps
 	if incoming.Collection != current.Collection {
 		return incoming
 	}
+	knownMerge := func(row StatusPRRow) bool {
+		return row.State == "MERGED" && (row.Merge != nil && *row.Merge == "MERGED" || !statusObservationUnavailable(row.Freshness))
+	}
 	for i, row := range incoming.PRs {
 		for _, old := range current.PRs {
 			if row.Repo != old.Repo || row.Number != old.Number || row.URL == nil || old.URL == nil || *row.URL != *old.URL {
 				continue
 			}
+			if knownMerge(row) && !knownMerge(old) {
+				continue
+			}
 			at, err := time.Parse(time.RFC3339Nano, row.ObservedAt)
 			before, oldErr := time.Parse(time.RFC3339Nano, old.ObservedAt)
-			terminal := old.State == "MERGED" && !statusObservationUnavailable(old.Freshness) && row.State != "MERGED"
+			terminal := knownMerge(old) && !knownMerge(row)
 			if !terminal && (oldErr != nil || (err == nil && !before.After(at))) {
 				continue
 			}
