@@ -48,9 +48,11 @@ try {
       const badge = root.querySelector(".wtc-brand-version"), brand = badge.closest(".wtc-brand"), anchor = brand.querySelector("a");
       const baseline = n => { const p = document.createElement("span"); p.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline"; n.append(p); const y = p.getBoundingClientRect().top; p.remove(); return y; };
       const box = badge.getBoundingClientRect(), bounds = root.getBoundingClientRect(), controls = root.querySelector(".wtc-header-controls")?.getBoundingClientRect();
+      const slot = root.querySelector(".wtc-toolbar-primary"), action = slot?.querySelector(".wtc-action-control");
+      const primary = action ? { slotWidth: slot.getBoundingClientRect().width, buttonWidth: action.getBoundingClientRect().width, title: action.title, text: action.textContent } : null;
       const word = anchor.querySelector(".wtc-brand-word");
       const baselineError = getComputedStyle(word).display === "none" ? null : Math.abs(baseline(badge.firstElementChild) - baseline(word));
-      return { text: badge.textContent, title: badge.title, baselineError, wordVisible: getComputedStyle(word).display !== "none", headerChildren: [...(root.querySelector("summary")?.children ?? [])].map(n => ({className:n.className,display:getComputedStyle(n).display,width:n.getBoundingClientRect().width})), brandWidth:brand.getBoundingClientRect().width, badge: box.toJSON(), root: bounds.toJSON(), controls: controls?.toJSON(), clipped: badge.firstElementChild.scrollWidth > badge.firstElementChild.clientWidth };
+      return { text: badge.textContent, title: badge.title, baselineError, primary, headerHeight: root.querySelector("summary")?.getBoundingClientRect().height, wordVisible: getComputedStyle(word).display !== "none", headerChildren: [...(root.querySelector("summary")?.children ?? [])].map(n => ({className:n.className,display:getComputedStyle(n).display,width:n.getBoundingClientRect().width})), brandWidth:brand.getBoundingClientRect().width, badge: box.toJSON(), root: bounds.toJSON(), controls: controls?.toJSON(), clipped: badge.firstElementChild.scrollWidth > badge.firstElementChild.clientWidth };
     });
     assert.deepEqual(errors, []);
     assert.equal(metrics.text, version.wtc ? `v${version.wtc}` : "version ?");
@@ -66,10 +68,21 @@ try {
       assert.ok(metrics.badge.right <= metrics.controls.x + .5, `version overlaps controls: ${JSON.stringify({scenario,theme,width,view,...metrics})}`);
       assert.ok(metrics.controls.y < metrics.badge.bottom && metrics.badge.y < metrics.controls.bottom, `version wrapped controls: ${JSON.stringify({scenario,theme,width,view,...metrics})}`);
     }
+    assert.ok(metrics.primary?.title?.trim(), "primary action details must remain available on hover");
+    assert.ok(metrics.primary.buttonWidth <= metrics.primary.slotWidth + .5, "primary action exceeds its reserved slot");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await root.screenshot({ path: resolve(out, `${scenario}-${theme}-${width}-${view}.png`), animations: "disabled" });
     results.push({ scenario, theme, width, view, ...metrics });
     await page.close();
+  }
+  for (const scenario of Object.keys(versions)) for (const theme of ["dark", "light"]) {
+    const card = width => results.find(r => r.scenario === scenario && r.theme === theme && r.width === width && r.view === "collapsed");
+    assert.ok(card(320).primary.slotWidth < card(390).primary.slotWidth && card(390).primary.slotWidth < card(760).primary.slotWidth, "primary slots must compact across the narrow layout bands");
+    for (const width of [320, 390, 760, 1100]) {
+      const expanded = results.find(r => r.scenario === scenario && r.theme === theme && r.width === width && r.view === "expanded");
+      assert.equal(expanded.primary.slotWidth, card(width).primary.slotWidth, "expanding the card must not resize its primary slot");
+      assert.equal(expanded.headerHeight, card(width).headerHeight, "expanding the card must not change the header height");
+    }
   }
   await writeFile(resolve(out, "results.json"), JSON.stringify(results, null, 2));
   console.log(`${results.length} version visibility/baseline cases passed`);

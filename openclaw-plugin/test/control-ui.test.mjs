@@ -272,7 +272,7 @@ test("panel: no collection yet says what one is, not the conversation's label", 
   view.dispose();
   // Without versions, no footer, and no "null" for it.
   const bare = await mount("panel", collection([]));
-  assert.ok(!texts(bare.host).some((t) => t === "null" || /^plugin /.test(t ?? "")));
+  assert.ok(!texts(bare.host).some((t) => t === "null" || /^(Taba |plugin )/.test(t ?? "")));
   assert.ok([...bare.host.all()].some(n => n.className === "wtc-brand-suffix" && n.textContent === "Collection"));
   bare.view.dispose();
 });
