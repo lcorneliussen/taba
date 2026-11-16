@@ -56,6 +56,12 @@ Often the human (or you) starts the agent in a bare workspace, then opens:
 3. If that pane is empty (or the agent exited), `taba-open` starts one —
    unless `--no-agent`.
 
+If startup reports `agent started; waiting for input`, the process was verified
+in the intended pane. Startup remains incomplete and no first prompt was sent.
+Inspect that pane and finish startup manually; submit the initial task only
+when ready. A rerun leaves the live agent alone and does not submit its task.
+Never automatically answer trust, update, or approval dialogs.
+
 Do not restart a working agent to "apply" a layout. Do not close panes to
 force a reshape — pass `--narrow` or `--wide` and let the command move panes.
 

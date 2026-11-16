@@ -310,7 +310,10 @@ func openStartPanes(item *openItem, target *wtc.Context, panes []openPaneInfo, o
 			}
 			if err := openStartAgent(target, opt, pane.ID); err != nil {
 				failures = append(failures, fmt.Errorf("agent: %w", err))
-				if strings.Contains(err.Error(), "first prompt") {
+				var pending *openAgentStartedError
+				if errors.As(err, &pending) {
+					item.Actions = append(item.Actions, err.Error())
+				} else if strings.Contains(err.Error(), "first prompt") {
 					item.Actions = append(item.Actions, "agent started; "+err.Error())
 				} else {
 					item.Actions = append(item.Actions, "agent start failed: "+err.Error())
@@ -406,18 +409,27 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 		command = append(command, "--")
 		command = append(command, strings.Fields(args)...)
 	}
-	var last error
-	for attempt := 0; attempt < 15; attempt++ {
-		if _, err := openHerdr(opt.Session, command...); err == nil {
-			last = nil
+	for attempt := 0; ; attempt++ {
+		_, err := openHerdr(opt.Session, command...)
+		if err == nil {
 			break
-		} else {
-			last = err
+		}
+		var failure *openHerdrError
+		if !errors.As(err, &failure) {
+			return err
+		}
+		if failure.Code == "agent_not_ready" {
+			return openReconcileStartedAgent(target, opt.Session, command[2], kind, pane, err)
+		}
+		// A busy shell can settle during cold startup. No other failure is
+		// proof that retrying will not launch a second process.
+		if failure.Code != "agent_pane_busy" || attempt >= 14 {
+			return err
+		}
+		if !openWaitIdle(opt.Session, pane, 0) {
+			return err
 		}
 		time.Sleep(time.Second)
-	}
-	if last != nil {
-		return last
 	}
 	if opt.NoFirstPrompt {
 		return nil
@@ -438,6 +450,55 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 		return fmt.Errorf("first prompt was not taken: %w", err)
 	}
 	return nil
+}
+
+// A verified partial launch remains incomplete. Never submit the initial task
+// after an interrupted startup: the owner must inspect and finish its UI first.
+type openAgentStartedError struct{ State string }
+
+func (e *openAgentStartedError) Error() string {
+	return "agent started; " + e.State + "; inspect the agent pane, finish startup manually, and submit the initial task when ready (no first prompt sent)"
+}
+
+func openReconcileStartedAgent(target *wtc.Context, session, name, kind, pane string, startErr error) error {
+	byName, err := openHerdr(session, "agent", "get", name)
+	if err != nil {
+		return fmt.Errorf("%w; live startup identity lookup failed: %v", startErr, err)
+	}
+	byPane, err := openHerdr(session, "agent", "get", pane)
+	if err != nil {
+		return fmt.Errorf("%w; live startup pane lookup failed: %v", startErr, err)
+	}
+	a, b := byName.Result.Agent, byPane.Result.Agent
+	workspaces, err := openWorkspaces(session)
+	if err != nil {
+		return fmt.Errorf("%w; live startup workspace lookup failed: %v", startErr, err)
+	}
+	workspace := ""
+	for _, w := range workspaces {
+		if w.Label == filepath.Base(target.Collection) {
+			if workspace != "" {
+				return fmt.Errorf("%w; ambiguous startup workspace", startErr)
+			}
+			workspace = w.ID
+		}
+	}
+	matches := func(a openAgentInfo) bool {
+		return a.Name == name && a.Kind == kind && a.Pane == pane &&
+			a.Terminal != "" && workspace != "" && a.Workspace == workspace &&
+			a.Cwd == target.Collection && a.ForegroundCwd == target.Collection
+	}
+	if !matches(a) || !matches(b) || a.Terminal != b.Terminal {
+		return fmt.Errorf("%w; live startup identity could not be verified; inspect the intended pane before retrying", startErr)
+	}
+	state := "not ready (" + b.Status + ")"
+	if b.Status == "blocked" {
+		state = "waiting for input"
+	}
+	if (b.Status == "idle" || b.Status == "done") && b.InteractiveReady && !b.LaunchPending {
+		state = "now ready after interrupted startup"
+	}
+	return &openAgentStartedError{State: state}
 }
 
 // startSkill is the orientation skill this collection's pinned CLI rendered:
