@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
 )
 
@@ -64,6 +65,22 @@ func prURLForStatus(forge, slug, number string) string {
 		return ""
 	}
 	return prURL("https://"+forge+"/"+slug, number)
+}
+
+// Inventory equality validates forge paths independently of local aliases.
+// An unresolved identity cannot suppress any other inventory row.
+func statusPRInventoryKey(forge, slug, number string) (string, bool) {
+	if forge != "github.com" && forge != "bitbucket.org" {
+		return "", false
+	}
+	parts := strings.Split(slug, "/")
+	if len(parts) != 2 || !statusPRForgePart(parts[0]) || !statusPRForgePart(parts[1]) || !prNumber.MatchString(number) || strings.HasPrefix(number, "0") {
+		return "", false
+	}
+	if forge == "github.com" {
+		slug = strings.ToLower(slug)
+	}
+	return forge + "/" + slug + "#" + number, true
 }
 
 func (c *Context) statusRecordForge(record PRRecord, _ []StatusRepo) (slug, forge string) {
@@ -442,6 +459,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 		c.statusReturnMerged(&snapshot, originalRecords, details)
 	}
 	repos := c.prRepositories()
+	inventoried := map[string]bool{}
 	for i, record := range records {
 		localSlug, localForge := repos.forge(record.Repo)
 		slug, forge, refErr := c.statusReadOnlyPRForge(repos, record)
@@ -507,6 +525,9 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 			row.DisplayTitle = "MERGED — " + row.LandingLabel() + "; still on " + record.Branch + "  " + detail.Title
 		}
 		snapshot.PRs = append(snapshot.PRs, row)
+		if identity, valid := statusPRInventoryKey(forge, slug, record.Number); refErr == nil && valid {
+			inventoried[identity] = true
+		}
 	}
 	for i, row := range snapshot.Repos {
 		if row.BranchKind != "branch" || row.PR != nil || enlistedBranches[row.Dir+"\x00"+row.Branch] {
@@ -526,6 +547,24 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 				URL: prURLForStatus(forge, slug, number), Merge: detail.Merge, Review: detail.Review, Draft: detail.State == "DRAFT",
 				Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
 				MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
+			identity, valid := statusPRInventoryKey(forge, slug, number)
+			if !valid || !inventoried[identity] {
+				command := branding.Text("{{command}} pr enlist ") + shellQuote(row.Repo) + " " + number + " --branch " + shellQuote(row.Branch)
+				snapshot.PRs = append(snapshot.PRs, StatusPRRow{
+					Repo: row.Repo, Number: detail.Number, State: detail.State,
+					NotEnlisted: true, EnlistCommand: command,
+					Title: detail.Title, DisplayTitle: "not enlisted — " + command + "  " + detail.Title,
+					Slug: slug, URL: statusString(prURLForStatus(forge, slug, number)),
+					Checks: statusString(detail.Checks), Merge: statusString(detail.Merge), Review: statusString(detail.Review),
+					Draft: detail.State == "DRAFT", HeadCommit: detail.HeadCommit, Base: detail.Base,
+					Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
+					MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase,
+					worktreeDir: row.Dir,
+				})
+				if valid {
+					inventoried[identity] = true
+				}
+			}
 		}
 	}
 	if includeBuild {
