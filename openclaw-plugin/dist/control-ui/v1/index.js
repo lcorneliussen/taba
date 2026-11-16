@@ -850,7 +850,13 @@ const leadSlot = (icon, width = 20) => css(el("span", { className: "wtc-lead-slo
 
 // Visible branding can change while the plugin and CLI keep their legacy IDs.
 // version is what the collection reports: the plugin's and the gateway's wtc.
-const versionText = (v) => (v?.plugin || v?.wtc ? `plugin ${v.plugin ?? "?"}, wtc ${v.wtc ?? "?"}` : "");
+const versionText = (v) => (v?.plugin || v?.wtc ? `Taba ${v.wtc || "?"}, plugin ${v.plugin || "?"}` : "");
+const runningVersion = (v) => versionText(v) ? css(el("span", {
+  className: "wtc-brand-version",
+  title: `Running gateway CLI: Taba ${v.wtc || "unknown"}\nLoaded plugin: ${v.plugin || "unknown"}`,
+}, css(el("span", { textContent: v.wtc ? String(v.wtc).replace(/^v?(?=\d)/, "v") : "version ?" }),
+  "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap")),
+"display:inline-flex;align-items:baseline;font-size:11px;font-weight:400;color:var(--muted,#888);max-width:12em;min-width:0") : null;
 // The published Taba mark, bundled as vectors so host fonts cannot change it.
 const brandMark = () => {
   const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
@@ -862,12 +868,12 @@ const brandMark = () => {
   return css(svg, "display:block;flex:none");
 };
 // Keep the centered logo out of text flow so it cannot supply the link baseline.
-const brand = (size, version, compact = false) => css(el("span", {},
+const brand = (size, version, compact = false) => css(el("span", { className: `wtc-brand${versionText(version) ? " wtc-brand-versioned" : ""}` },
   css(el("a", { href: HOME, target: "_blank", rel: "noopener noreferrer", ariaLabel: "taba home", title: `taba — Make room for the whole task. (opens taba.sh)${version ? `\n${versionText(version)}` : ""}` },
     leadSlot(brandMark()),
     " ", el("span", { className: "wtc-brand-word", textContent: "taba" })),
     "display:inline-flex;align-items:baseline;gap:6px;min-height:1.5em;color:var(--text-strong, inherit);text-decoration:none;font-weight:700"),
-  compact ? null : el("span", { className: "wtc-brand-suffix", textContent: "Collection" })), `display:inline-flex;align-items:baseline;gap:.3em;flex:none;white-space:nowrap;font-weight:600;font-size:${size}`);
+  runningVersion(version) ?? (compact ? null : el("span", { className: "wtc-brand-suffix", textContent: "Collection" }))), `display:inline-flex;align-items:baseline;gap:.3em;flex:none;white-space:nowrap;font-weight:600;font-size:${size}`);
 
 const sectionHeading = (text, ...extra) => css(el("div", {},
   css(el("h3", { textContent: text }), "margin:0;font-size:14px;font-weight:600;color:var(--text-strong,inherit)"), ...extra),
@@ -1029,6 +1035,7 @@ const actionFeedback = () => el("style", { textContent: `
 
 .wtc-count-value { min-width:0;text-align:right;font-size:11px;overflow:hidden;text-overflow:ellipsis; }
 @container wtc-panel (max-width:326px) { .wtc-brand-suffix { display:none; } }
+@container wtc-panel (max-width:400px) { .wtc-brand-version { max-width:48px !important; } }
 .wtc-collection>header>div:first-child { flex-wrap:nowrap !important; }
 .wtc-action-control:not(:disabled):active { --wtc-control-bg:var(--secondary,rgba(128,128,128,.22)); }
 @media(min-width:521px) { .wtc-header-controls .wtc-header-icon { transform:translateY(-.16em); } }
@@ -1053,14 +1060,20 @@ const actionFeedback = () => el("style", { textContent: `
   .wtc-repo-identity { min-height:20px !important; }
   .wtc-header-controls .wtc-toolbar-primary-required { max-width:104px; }
 }
-@container wtc-card (max-width:520px) { .wtc-summary-facts { display:none !important; } }
+@container wtc-card (max-width:520px) { .wtc-summary-facts-slot { display:none !important; } }
+@container wtc-card (max-width:520px) {
+  .wtc-brand-version { max-width:46px !important; }
+  .wtc-collection-card:has(.wtc-brand-version) .wtc-header-controls .wtc-toolbar-primary { width:88px !important;min-width:88px !important;flex-basis:88px !important; }
+}
 @container wtc-card (max-width:340px) {
+  .wtc-brand-versioned .wtc-brand-word { display:none; }
   .wtc-brand-word { font-size:11px; }
   .wtc-collection-card>summary { column-gap:4px !important; }
   .wtc-header-controls { gap:0 !important; }
   .wtc-header-controls .wtc-toolbar-primary { width:88px !important;min-width:88px !important;flex-basis:88px !important; }
   .wtc-header-controls>button { min-width:min(32px,var(--wtc-icon-size,24px)) !important; }
   .wtc-header-controls .wtc-action-toolbar>button { width:28px !important;min-width:28px !important; }
+  .wtc-collection-card:has(.wtc-brand-version) .wtc-header-controls .wtc-toolbar-primary { width:64px !important;min-width:64px !important;flex-basis:64px !important; }
 }
 @container wtc-card (max-width:260px) { .wtc-brand-word { display:none; } .wtc-collection-card>summary>span:first-child { align-self:center; } }
 
@@ -2669,7 +2682,7 @@ function mountComposer(container, context) {
   const summary = css(el("summary"), "list-style:none;display:flex;align-items:baseline;height:calc(var(--wtc-icon-size,24px) + 8px + var(--wtc-header-top-extra,6px));box-sizing:border-box;gap:6px;padding:calc(3px + var(--wtc-header-top-extra,6px)) 12px 3px;cursor:pointer;white-space:nowrap;overflow:hidden");
   const detail = css(el("div"), "padding:2px 12px 8px;display:grid;gap:6px");
   const headerBrand = el("span");
-  const headerFacts = el("span");
+  const headerFacts = el("span", { className: "wtc-summary-facts-slot" });
   const headerControls = el("span");
   const diagnostic = css(el("button", { type:"button", className:"wtc-header-feedback wtc-action-control" }), "border:0;background:transparent;padding:0;text-align:left;font:inherit;font-size:12px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;flex:1");
   const diagnosticAnnouncement = css(el("span", { ariaLive:"polite", ariaAtomic:"true" }), "position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap");
