@@ -268,11 +268,12 @@ test("panel: no collection yet says what one is, not the conversation's label", 
   assert.ok(all.some((t) => /^A collection is this conversation's worktrees of a taba project's repositories/.test(t ?? "")));
   assert.ok(all.includes("Add a repository"));
   assert.ok(!all.some((t) => /heartbeat poll|^null$|0 repositories|None running/.test(t ?? "")));
-  assert.ok(all.includes("plugin 0.1.50-dev+g317ca2a.20261023.0912, wtc 0.1.50-dev+g317ca2a.20261023.0912"));
+  assert.ok(all.includes("Taba 0.1.50-dev+g317ca2a.20261023.0912, plugin 0.1.50-dev+g317ca2a.20261023.0912"));
   view.dispose();
   // Without versions, no footer, and no "null" for it.
   const bare = await mount("panel", collection([]));
-  assert.ok(!texts(bare.host).some((t) => t === "null" || /^plugin /.test(t ?? "")));
+  assert.ok(!texts(bare.host).some((t) => t === "null" || /^(Taba |plugin )/.test(t ?? "")));
+  assert.ok([...bare.host.all()].some(n => n.className === "wtc-brand-suffix" && n.textContent === "Collection"));
   bare.view.dispose();
 });
 
@@ -290,8 +291,28 @@ test("the branded link names the plugin's and gateway's versions in both views",
     await settle();
     const brandLink = [...host.all()].find((n) => n.tagName === "A" && n.ariaLabel === "taba home");
     assert.equal(brandLink.href, "https://taba.sh/");
-    assert.match(brandLink.title, /\nplugin 1\.2\.3, wtc 1\.2\.4-dev\+gabc1234$/);
+    assert.match(brandLink.title, /\nTaba 1\.2\.4-dev\+gabc1234, plugin 1\.2\.3$/);
     view.dispose();
+  }
+});
+
+test("running gateway version is visible in both headers, including partial observations", async () => {
+  for (const kind of ["composer", "panel"]) for (const [version, label] of [
+    [{ plugin: "1.2.3", wtc: "1.2.4" }, "v1.2.4"],
+    [{ plugin: "1.2.3", wtc: "v1.2.4" }, "v1.2.4"],
+    [{ plugin: "1.2.3", wtc: "1.2.4-dev+gabc1234" }, "v1.2.4-dev+gabc1234"],
+    [{ plugin: "1.2.3", wtc: "dev" }, "dev"],
+    [{ plugin: "1.2.3", wtc: null }, "version ?"],
+    [{ plugin: null, wtc: "1.2.4" }, "v1.2.4"],
+  ]) {
+    const { host, view } = await mount(kind, { ...busy, version });
+    try {
+      const badge = [...host.all()].find(n => n.className === "wtc-brand-version");
+      assert.equal(badge?.textContent, label);
+      assert.equal(badge.title, `Running gateway CLI: Taba ${version.wtc || "unknown"}\nLoaded plugin: ${version.plugin || "unknown"}`);
+      assert.equal(badge.parentNode.className, "wtc-brand wtc-brand-versioned");
+      assert.ok(![...host.all()].some(n => n.className === "wtc-brand-suffix"), "reported versions replace the Collection suffix");
+    } finally { view.dispose(); }
   }
 });
 
