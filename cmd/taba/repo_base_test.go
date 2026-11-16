@@ -299,9 +299,22 @@ func TestRepositoryBaseBrowseFinalComparison(t *testing.T) {
 	if !found {
 		t.Fatal("startup loop end missing")
 	}
-	// Run the actual comparison/rendering functions and startup loop without UI plugins.
+	_, events, found := strings.Cut(string(view), "  vim.api.nvim_create_autocmd({ \"TabEnter\", \"UIEnter\" }, {")
+	if !found {
+		t.Fatal("tab event boundary missing")
+	}
+	_, tabenter, found := strings.Cut(events, "    callback = function()\n")
+	if !found {
+		t.Fatal("tab callback boundary missing")
+	}
+	tabenter, _, found = strings.Cut(tabenter, "    end,\n  })\nend\n\nlocal function start_once()")
+	if !found {
+		t.Fatal("tab callback end missing")
+	}
+	// Run actual functions, callbacks and the startup loop without UI plugins.
 	script.WriteString("local source=[====[" + prefix + "]====]\n")
 	script.WriteString("local startup_source=[====[for _, t in ipairs(trees) do\n" + startup + "]====]\n")
+	script.WriteString("local tabenter_source=[====[" + tabenter + "]====]\n")
 	script.WriteString(`
 local cases={
  {name='missing configured',configured='origin/missing',error='unavailable comparison ref'},
@@ -344,7 +357,8 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
  local missing,corrupt,now=true,false,0
  local current_name=bad_name
  local buffers,commands,notifications,keys,tabs={},{},{},{},{}
- vim={g={wtc_browse_root='/fixture',wtc_base_command='serving-cli'},t={},
+ local function tabvars()local values={};return setmetatable({},{__index=values,__newindex=values})end
+ vim={g={wtc_browse_root='/fixture',wtc_base_command='serving-cli'},t=tabvars(),
   fs={normalize=function(x)return x end,basename=function()return 'fixture'end},
   uv={now=function()return now end,fs_scandir=function()return {i=0}end,
    fs_scandir_next=function(fd)fd.i=fd.i+1;return ({bad_name,healthy_name})[fd.i],'directory'end,
@@ -355,7 +369,10 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
   api={nvim_create_namespace=function()return 1 end,
    nvim_buf_set_lines=function(buf,_,_,_,lines)buffers[buf]=lines end,
    nvim_buf_clear_namespace=function()end,nvim_buf_set_extmark=function()end,
-   nvim_tabpage_get_var=function(tab,key)assert(key=='wtc_repo');return tab==0 and current_name or tabs[tab].wtc_repo end,
+   nvim_tabpage_get_var=function(tab,key)if key=='wtc_kind'then return 'repo'end;assert(key=='wtc_repo');return tab==0 and current_name or tabs[tab].wtc_repo end,
+   nvim_set_current_tabpage=function(tab)vim.t=tabs[tab];current_name=tabs[tab].wtc_repo end,
+   nvim_get_current_win=function()return 1 end,nvim_get_current_buf=function()return 1 end,
+   nvim_buf_get_name=function()return '/fixture/'..current_name..'/tracked.txt'end,
    nvim_list_tabpages=function()local ids={};for i=1,#tabs do ids[i]=i end;return ids end},
   keymap={set=function(_,key,fn)keys[key]=fn end},
   cmd=function(s)commands[#commands+1]=s end,
@@ -375,7 +392,9 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
   return {wait=function()return result end}
  end
  local startup_function='\nlocal function test_startup(trees) local ensure_index_buf=function(_,repo)return repo end;local ensure_unified=function()return false end; '..startup_source..' end\n'
- local api=assert((loadstring or load)(source..startup_function..'return {all=snapshots_all,flat=flatten_tree,nest=nest_changes,fp=fingerprint,fill=fill_hunk_buf,render=render_index,meta=buf_meta,map=map_search,startup=test_startup}'))()
+ local event_function='local function test_tabenter() '..tabenter_source..' end\n'
+ local editor_seams='local observed_inline;apply_inline_diff=function(base)observed_inline=base end;load_file_in_win=function()end;show_tree=function()end;apply_tabline=function()end;'
+ local api=assert((loadstring or load)(source..startup_function..event_function..editor_seams..'return {all=snapshots_all,flat=flatten_tree,nest=nest_changes,fp=fingerprint,fill=fill_hunk_buf,render=render_index,meta=buf_meta,map=map_search,startup=test_startup,open=open_changed_file,tabenter=test_tabenter,inline=function()return observed_inline end,clear_inline=function()observed_inline=nil end}'))()
  local snaps=api.all()
  local bad,healthy
  for _,snap in ipairs(snaps)do if snap.tree.name==bad_name then bad=snap else healthy=snap end end
@@ -406,7 +425,7 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
  assert(error_row and healthy_file,'alternate index lost error or healthy navigation')
  tabs={}
  local command=vim.cmd
- vim.cmd={tabnew=function()vim.t={};tabs[#tabs+1]=vim.t end,tcd=function()end}
+ vim.cmd={tabnew=function()vim.t=tabvars();tabs[#tabs+1]=vim.t end,tcd=function()end}
  vim.api.nvim_tabpage_set_var=function(tab,key,value)if tab==0 then vim.t[key]=value else tabs[tab][key]=value end end
  vim.api.nvim_set_current_buf=function(buf)vim.t.selected=buf end
  local trees={};for _,snap in ipairs(snaps)do trees[#trees+1]=snap.tree end
@@ -442,10 +461,17 @@ for _,bad_name in ipairs({'a-broken\ncontrol','z-broken\ncontrol'})do
  keys['<leader>gD']()
  assert(#commands==4 and commands[4]=='DiffviewOpen '..recovered_bad.mb..' -- /fixture/'..bad_name,'hunk recovery compared HEAD')
  assert(healthy_tab.wtc_base==nil,'known-error recovery changed unrelated missing-base-only tab')
+ assert(rawget(bad_tab,'wtc_base')==nil and bad_tab.wtc_base==recovered_bad.mb,'fixture must model actual Neovim tab-variable proxy')
+ vim.cmd=setmetatable({tcd=function()end},{__call=function(_,command)commands[#commands+1]=command end})
+ vim.b={};vim.bo.buftype=''
+ api.clear_inline();api.open(bad_name,'tracked.txt')
+ assert(api.inline()==recovered_bad.mb,'open-file inline consumer missed recovered proxy base')
+ api.clear_inline();api.tabenter()
+ assert(api.inline()==recovered_bad.mb,'TabEnter inline consumer missed recovered proxy base')
  corrupt=true;now=60001
  local ok,err=pcall(api.all)
  assert(not ok and tostring(err):find('malformed or ambiguous receiving state',1,true),'untyped configured-state error swallowed by comparison text')
- print('PASS sibling isolation '..(bad_name:sub(1,1)=='a'and'broken first'or'broken last')..': tree/index/hunks/startup, counts/content/navigation, nonactionable escaped errors, cached disappearance/recovery, typed guards and Diffview')
+ print('PASS sibling isolation '..(bad_name:sub(1,1)=='a'and'broken first'or'broken last')..': tree/index/hunks/startup, counts/content/navigation, nonactionable escaped errors, cached disappearance/recovery, typed guards and proxy Diffview/open-file/TabEnter readers')
 end
 `)
 	path := filepath.Join(root, "comparison.lua")

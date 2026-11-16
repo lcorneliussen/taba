@@ -1065,7 +1065,7 @@ function open_changed_file(repo, rel)
   if vim.uv.fs_stat(path) then
     load_file_in_win(vim.api.nvim_get_current_win(), path)
   end
-  local mb = rawget(vim.t, "wtc_base")
+  local mb = vim.t.wtc_base
   apply_inline_diff(mb, vim.api.nvim_get_current_buf())
   show_tree(root .. "/" .. repo, "filesystem", true)
 end
@@ -1439,7 +1439,7 @@ local function map_search()
   end, { desc = "Prev hunk" })
   vim.keymap.set("n", "<leader>gD", function()
     local path = current_repo_path()
-    local base = rawget(vim.t, "wtc_base")
+    local base = vim.t.wtc_base
     if path and comparison_errors[path] then
       vim.notify(comparison_errors[path], vim.log.levels.ERROR)
       return
@@ -1568,7 +1568,7 @@ local function start()
       if path then
         show_tree(path, "filesystem", is_file or false)
         if is_file then
-          apply_inline_diff(rawget(vim.t, "wtc_base"), vim.api.nvim_get_current_buf())
+          apply_inline_diff(vim.t.wtc_base, vim.api.nvim_get_current_buf())
         end
       end
     end,
