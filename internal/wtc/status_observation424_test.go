@@ -313,3 +313,24 @@ func TestStatusObservation424CancellationAfterLegacyMigrationRetainsAuthority(t 
 		t.Fatalf("committed migration authority lost: %+v", retained)
 	}
 }
+
+func TestStatusObservation424CooldownPublicationHonorsDeadline(t *testing.T) {
+	calls := foreground424Fixture(t, "echo 'HTTP 429 Retry-After: 30' >&2\nexit 1\n")
+	forge := "github.com"
+	unlock, err := statusLockCache(statusForgeStatePath("cool", forge))
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() { time.Sleep(2 * time.Second); unlock(); close(released) }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	_, out := statusRefreshRecord(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", forge)
+	elapsed := time.Since(started)
+	<-released
+	retry, parseErr := time.Parse(time.RFC3339Nano, out.RetryAt)
+	if elapsed > 1500*time.Millisecond || out.Reason != "provider-cooldown-unrecorded" || out.ProviderConfirmed || foreground424Count(calls) != 1 || parseErr != nil || retry.Before(started.Add(30*time.Second)) {
+		t.Fatalf("deadline=1s held cooldown lock=2s elapsed=%s outcome=%+v retry=%v calls=%d", elapsed, out, parseErr, foreground424Count(calls))
+	}
+}

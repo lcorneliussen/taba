@@ -98,20 +98,34 @@ func statusForgeCoolingUntil(forge string) time.Time {
 }
 
 func statusForgeCool(forge string, retry time.Duration) {
+	_, _ = statusForgeCoolContext(context.Background(), forge, retry)
+}
+
+// Return the actual provider cooldown even if cancellation prevents recording
+// it. Computing the deadline before waiting avoids dating a delayed write as a
+// new provider observation. Existing callers retain their compatibility entry.
+func statusForgeCoolContext(ctx context.Context, forge string, retry time.Duration) (time.Time, error) {
 	if retry <= 0 {
 		retry = statusForgeCoolDefault
 	}
+	until := time.Now().Add(retry)
 	path := statusForgeStatePath("cool", forge)
-	unlock, err := statusLockCache(path)
+	unlock, err := statusLockCacheContext(ctx, path)
 	if err != nil {
-		return
+		return until, err
 	}
 	defer unlock()
-	until := time.Now().Add(retry)
 	if existing := statusForgeCoolingUntil(forge); existing.After(until) {
-		return
+		return existing, nil
 	}
-	statusWriteForgeEntryObserved("cool", forge, "", "", []byte(strconv.FormatInt(until.UnixNano(), 10)), time.Time{})
+	if err := ctx.Err(); err != nil {
+		return until, err
+	}
+	if !statusWriteForgeEntryObserved("cool", forge, "", "", []byte(strconv.FormatInt(until.UnixNano(), 10)), time.Time{}) {
+		return until, errors.New("provider cooldown publication failed")
+	}
+	// A completed atomic write remains valid after late cancellation.
+	return until, nil
 }
 
 func statusTakeForgeToken(forge string) bool {

@@ -186,8 +186,13 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 	observed := time.Now()
 	if err != nil {
 		if statusRateLimited(err) {
-			statusForgeCool(forge, statusRetryAfter(err))
-			err = &statusAdmissionError{cause: errForgeCooling, retry: statusForgeCoolingUntil(forge)}
+			until, coolErr := statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
+			if coolErr != nil {
+				outcome := StatusObservation{Freshness: "deferred", Reason: "provider-cooldown-unrecorded", RetryAt: until.UTC().Format(time.RFC3339Nano), ObservedAt: fallback.ObservedAt, Source: fallback.StateSource}
+				fallback.Freshness = outcome.Freshness
+				return fallback, outcome
+			}
+			err = &statusAdmissionError{cause: errForgeCooling, retry: until}
 		}
 		outcome := statusObservationFailure(err)
 		fallback.Freshness = outcome.Freshness
