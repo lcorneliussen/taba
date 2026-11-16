@@ -53,7 +53,7 @@ jobs:
         run: node --test openclaw-plugin/test/decisions-live.test.mjs
         env:
           WTC_DECISIONS_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-  # Unit tests only: the pinned runtime and Docker trials run in the Linux job.
+  # Full native regression coverage runs in macos-full.yml nightly/manual.
   test-macos:
     runs-on: macos-latest
     steps:
@@ -61,17 +61,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.14.0'
-      - name: Verify locked embedded devtunnel helper
-        run: node tools/devtunnel-host/check.mjs
-      # Keep the full suite and its failure diagnostics; report per-test timings.
-      - name: Test timing helper
+      - name: Validate native selection tooling
         run: python3 -B -m unittest discover -s tools/ci -p '*_test.py'
-      - name: Test upgrade rehearsal
-        run: python3 -B -m unittest discover -s tools/upgrade-rehearsal -p '*_test.py'
-      - run: |
-          export WTC_TEST_NODE="$(node -p 'process.execPath')"
-          python3 tools/ci/test-timings.py -timeout 20m ./...
-      - run: go build ./cmd/taba
+      - name: Native build, smoke and Darwin-sensitive tests
+        run: python3 tools/ci/macos-native.py
