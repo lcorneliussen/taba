@@ -37,7 +37,7 @@ class Node {
     });
   }
   append(...kids) { this.children.push(...this.#adopt(kids)); }
-  insertBefore(node, next) { node.remove(); const at = next ? this.children.indexOf(next) : this.children.length; node.parentNode = this; this.children.splice(at, 0, node); return node; }
+  insertBefore(node, next) { if (next && next.parentNode !== this) throw new DOMException("Reference node is not a child", "NotFoundError"); node.remove(); const at = next ? this.children.indexOf(next) : this.children.length; node.parentNode = this; this.children.splice(at, 0, node); return node; }
   prepend(...kids) { this.children.unshift(...this.#adopt(kids)); }
   replaceChildren(...kids) {
     for (const c of this.children) if (typeof c === "object") c.parentNode = null;
@@ -193,8 +193,9 @@ async function reviewAction(host) {
   let action = [...host.all()].find(n => n.tagName === "BUTTON" && n.textContent === "Review PR text");
   if (action) return action;
   const trigger = [...host.all()].find(n => n.className?.includes("wtc-header-feedback"));
-  assert.ok(trigger, "publication outcome opens its sidebar details");
-  trigger.onclick({ preventDefault() {}, stopPropagation() {} });
+  assert.ok(trigger, "publication outcome renders its diagnostic control");
+  titled(host, "More collection actions").click();
+  [...host.all()].find(n => n.ariaLabel === "Activity" && n.role === "menuitem").click();
   const [, props] = openedPanels.at(-1);
   assert.equal(props.focus, "activity");
   const ctx = contexts.get(host);
@@ -1438,9 +1439,9 @@ test("composer: a catch-up that fails reads as a failure, without wtc's prefix",
   await [...card.all()].find((n) => n.tagName === "BUTTON" && /^3 new on main\. Catch up/.test(n.title)).onclick();
   catchUpResult = { ok: true, result: { code: 0, json: { summary: "merged" } } };
   const note = [...card.all()].find(n => n.className?.includes("wtc-header-feedback"));
-  assert.equal(note.role, "alert");
+  assert.equal(note.tagName, "BUTTON");
   assert.match(note.ariaLabel, /api: cannot fetch main from origin: exit status 128/);
-  assert.match(note.style.cssText, /color:var\(--danger/);
+  assert.match(note.style.color, /var\(--danger/);
   assert.match([...host.all()].find(n => n.className?.startsWith("wtc-toolbar-primary")).textContent, /Failed/, "failure remains visible in the fixed primary slot at narrow widths");
   view.dispose();
 });
@@ -1815,13 +1816,19 @@ test("collapsed card exposes the top action without expanding for local work", a
   await clickText(summary, "Catch up 2");
   assert.equal(card.open, false, "local execution keeps the one-line card collapsed");
   assert.equal(calls.filter(c => c.actionId === "next").length, 1);
+  controlledCollection = () => ({ ok:false, error:"Synthetic batch refresh failure" });
+  await [...summary.all()].find(n => n.className === "wtc-refresh-control").onclick({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(titled(host, "More collection actions"), undefined, "batch cancellation occupies the menu slot");
+  titled(host, "Open Activity in the taba Collection panel").click();
+  assert.equal(openedPanels.at(-1)[1].focus, "activity", "Activity stays reachable during a batch diagnostic");
+  controlledCollection = undefined;
   await clickText(summary, "Cancel queued");
   release({ ok: true, result: { performed: true, repo: rows[0], code: 0 } });
   for (let i = 0; i < 6; i++) await settle();
   assert.equal(card.open, false);
   await clickText(summary, "Choose steps…");
   assert.equal(card.open, true, "opening the chooser reveals its controls");
- } finally { view.dispose(); nextResult = undefined; }
+ } finally { controlledCollection = undefined; view.dispose(); nextResult = undefined; }
 });
 
 test("collapsed PR update uses the existing personal preparation and confirmation", async () => {
@@ -3647,4 +3654,132 @@ test("offered provider setup and named/declared controls reach the scoped gatewa
   const forged=await actions.get("svc").handler({sessionKey,agentId:"main",payload:{op:"tunnel",group:"api/web",provider:"ngrok",name:"preview",action:"start",public:true,project:true,expectedDefinition:desired}});
   assert.equal(forged.ok,false);assert.equal(commands.length,count);
  }finally{svcResult=previous;rmSync(state,{recursive:true,force:true})}
+});
+
+const diagnosticControl = host => [...host.all()].find(n => n.className?.split(" ").includes("wtc-header-feedback"));
+const diagnosticError = "Synthetic transport failure: <img src=x onerror=alert(1)>\n" + "complete diagnostic detail ".repeat(200) + "END";
+async function failedDiagnostic() {
+  const mounted = await mount("composer", collection([repo("api")]));
+  controlledCollection = () => ({ ok: false, error: diagnosticError });
+  await titled(mounted.host, "Updated just now. Refresh").onclick({ preventDefault() {}, stopPropagation() {} });
+  await settle();
+  return mounted;
+}
+
+test("diagnostic click copies the full synthetic error without opening Activity", async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const copied = [];
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { clipboard: { writeText: async text => copied.push(text) } } });
+  const { host, view } = await failedDiagnostic();
+  try {
+    const opened = openedPanels.length;
+    await diagnosticControl(host).onclick({ preventDefault() {}, stopPropagation() {} });
+    assert.deepEqual(copied, ["Refresh failed: " + diagnosticError]);
+    assert.equal(openedPanels.length, opened);
+    assert.match(host.textContent, /Copied/);
+  } finally {
+    controlledCollection = undefined; view.dispose();
+    if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator;
+  }
+});
+
+test("diagnostic keeps its connected focused node through a delayed repeated failure", async () => {
+  const { host, view } = await failedDiagnostic();
+  let release;
+  try {
+    const note = diagnosticControl(host); note.focus();
+    controlledCollection = () => new Promise(resolve => { release = resolve; });
+    const refresh = [...host.all()].find(n => n.className === "wtc-refresh-control");
+    const pending = refresh.onclick({ preventDefault() {}, stopPropagation() {} });
+    await settle();
+    assert.equal(diagnosticControl(host), note);
+    release({ ok: false, error: diagnosticError }); await pending; await settle();
+    assert.equal(diagnosticControl(host), note);
+    assert.equal(note.isConnected, true);
+    assert.equal(document.activeElement, note);
+  } finally { release?.({ ok: false, error: diagnosticError }); controlledCollection = undefined; view.dispose(); }
+});
+
+for (const clipboard of [undefined, { writeText: async () => { throw new Error("denied"); } }]) test(`diagnostic ${clipboard ? "denied" : "unavailable"} clipboard exposes full manual-copy text`, async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { configurable:true, value:{ clipboard } });
+  const { host, view } = await failedDiagnostic();
+  try {
+    const note = diagnosticControl(host); note.focus();
+    const status = [...host.all()].find(n => n.role === "status" && n.ariaLive === "polite");
+    const exposed = () => { for (let n = status; n; n = n.parentNode) if (n.hidden) return false; return status.isConnected; };
+    const initiallyExposed = exposed(), mutations = [];
+    const text = Object.getOwnPropertyDescriptor(Node.prototype, "textContent");
+    Object.defineProperty(status, "textContent", { get() { return text.get.call(this); }, set(value) {
+      if (value) mutations.push({ text:value, exposed:exposed() });
+      text.set.call(this, value);
+    } });
+    await note.onclick({ preventDefault() {}, stopPropagation() {} });
+    const manual = [...host.all()].find(n => n.tagName === "TEXTAREA");
+    assert.equal(manual.value, "Refresh failed: " + diagnosticError);
+    assert.equal(manual.readOnly, true); assert.equal(manual.parentNode.hidden, false);
+    assert.match(host.textContent, /Could not copy/); assert.doesNotMatch(host.textContent, /Copied/);
+    assert.equal(document.activeElement, note);
+    assert.deepEqual(mutations, [{ text:"Could not copy. Select the full diagnostic below and copy it manually.", exposed:true }], "failure is written into an already exposed live region");
+    assert.equal(initiallyExposed, true, "empty live status is exposed before the clipboard attempt");
+    view.update(contexts.get(host));
+    assert.equal(manual.value, "Refresh failed: " + diagnosticError);
+    assert.equal([...host.all()].find(n => n.role === "status" && n.ariaLive === "polite"), status);
+  } finally {
+    controlledCollection = undefined; view.dispose();
+    if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator;
+  }
+});
+
+for (const change of ["message", "session", "hidden", "abort", "dispose"]) for (const denied of [false, true]) test(`diagnostic ignores late ${denied ? "failure" : "success"} after ${change}`, async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  let resolve, reject;
+  Object.defineProperty(globalThis, "navigator", { configurable:true, value:{ clipboard:{ writeText: () => new Promise((yes, no) => { resolve = yes; reject = no; }) } } });
+  const { host, view, context, abort } = await failedDiagnostic();
+  try {
+    const note = diagnosticControl(host); note.focus();
+    const status = [...host.all()].find(n => n.role === "status" && n.ariaLive === "polite");
+    const pending = note.onclick({ preventDefault() {}, stopPropagation() {} });
+    if (change === "message") {
+      controlledCollection = () => ({ ok:false, error:"Different synthetic failure" });
+      await [...host.all()].find(n => n.className === "wtc-refresh-control").onclick({ preventDefault() {}, stopPropagation() {} });
+      assert.equal(diagnosticControl(host), note);
+      assert.match(note.title, /Different synthetic failure/);
+      assert.equal(document.activeElement, note);
+    } else if (change === "session") {
+      controlledCollection = undefined;
+      const nextKey = `agent:main:diagnostic:${++sessions}`;
+      collections.set(nextKey, collection([repo("web")]));
+      view.update({ ...context, props:{ ...context.props, sessionKey:nextKey } }); await settle();
+    } else if (change === "hidden") view.update({ ...context, presented:false });
+    else if (change === "abort") abort();
+    else view.dispose();
+    const focused = document.activeElement;
+    denied ? reject(new Error("denied")) : resolve(); await pending;
+    assert.equal(document.activeElement, focused, "stale completion cannot steal focus");
+    if (change === "dispose") assert.equal(status.isConnected, false, "persistent live status is disposed too");
+    assert.doesNotMatch(host.textContent, /Copied|Could not copy/);
+    const manual = [...host.all()].find(n => n.tagName === "TEXTAREA");
+    if (manual) assert.equal(manual.parentNode.hidden, true);
+  } finally {
+    controlledCollection = undefined; view.dispose();
+    if (previous) Object.defineProperty(globalThis, "navigator", previous); else delete globalThis.navigator;
+  }
+});
+
+test("composer restores diagnostic header controls after a suggestion in the same mount", async () => {
+  const { host, view, context } = await mount("composer", collection([]), [{ role:"user", content:"work on the site" }]);
+  await settle();
+  try {
+    assert.ok([...host.all()].some(n => n.tagName === "BUTTON" && n.textContent === "Start"));
+    const nextKey = `agent:main:diagnostic:${++sessions}`;
+    collections.set(nextKey, collection([repo("api")]));
+    view.update({ ...context, props:{ ...context.props, sessionKey:nextKey } }); await settle();
+    assert.ok([...host.all()].some(n => n.className === "wtc-refresh-control"), "collection refresh control is connected again");
+    assert.ok(titled(host, "Open the taba Collection panel"));
+    controlledCollection = () => ({ ok:false, error:diagnosticError });
+    await [...host.all()].find(n => n.className === "wtc-refresh-control").onclick({ preventDefault() {}, stopPropagation() {} });
+    assert.ok(diagnosticControl(host));
+    assert.ok(titled(host, "Open Activity in the taba Collection panel"));
+  } finally { controlledCollection = undefined; view.dispose(); }
 });
