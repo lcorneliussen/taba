@@ -210,10 +210,18 @@ func run() error {
 	root.AddCommand(commands)
 	doctor := &cobra.Command{Use: "doctor", Short: "Check this collection's configuration and dependencies, or under OpenClaw the gateway's", Args: cobra.NoArgs}
 	var doctorOpenClaw, doctorAll bool
+	var doctorRequirementFlags requirementsFlags
+	addRequirementsFlags(doctor, &doctorRequirementFlags)
 	doctor.Flags().BoolVar(&doctorOpenClaw, "openclaw", false, "Check the OpenClaw gateway on this host, also from outside an agent's command")
 	doctor.Flags().BoolVar(&doctorAll, "all", false, "Check every collection in the workspace for wtc conventions still in use; also works from the workspace root")
 	doctor.RunE = func(cmd *cobra.Command, args []string) error {
+		if (doctorOpenClaw || currentHost() == openclaw.HostOpenClaw || openclaw.GatewayFromEnv(os.Getenv) != nil) && (len(doctorRequirementFlags.examples) > 0 || doctorRequirementFlags.process) {
+			return fmt.Errorf("requirements flags apply only to one local collection")
+		}
 		if doctorAll {
+			if len(doctorRequirementFlags.examples) > 0 || doctorRequirementFlags.process {
+				return fmt.Errorf("requirements flags apply only to one local collection")
+			}
 			if doctorOpenClaw {
 				return fmt.Errorf("--all and --openclaw cannot be combined")
 			}
@@ -249,9 +257,14 @@ func run() error {
 		findings = append(findings, wtc.UserConventionFindings(c.ConfigRoot)...)
 		wtc.SortConventionFindings(findings)
 		checks = append(checks, conventionsCheck(findings))
+		requirements, inventory, err := doctorRequirements(c, doctorRequirementFlags)
+		if err != nil {
+			return err
+		}
+		checks = append(checks, requirements)
 		okay := true
 		for _, check := range checks {
-			if check["name"] == "git" || check["name"] == "registry" || check["name"] == "compatibility" {
+			if check["name"] == "git" || check["name"] == "registry" || check["name"] == "compatibility" || check["name"] == "requirements" {
 				if !check["ok"].(bool) {
 					okay = false
 				}
@@ -280,12 +293,14 @@ func run() error {
 			fmt.Printf("%-15s %-8s %v\n", check["name"], state, check["detail"])
 		}
 		printConventionSection(os.Stdout, findings)
+		printRequirementsRows(inventory)
 		if !okay {
 			return fmt.Errorf("required checks failed")
 		}
 		return nil
 	}
 	root.AddCommand(doctor)
+	addConfigCommands(root, &asJSON)
 	root.AddCommand(conventionsCommand(&asJSON))
 	eject := &cobra.Command{Use: "eject <glob>...", Short: "Copy embedded defaults into the harness for editing", Args: cobra.MinimumNArgs(1)}
 	eject.RunE = func(cmd *cobra.Command, args []string) error {
