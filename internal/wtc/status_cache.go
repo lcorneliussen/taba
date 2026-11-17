@@ -152,8 +152,8 @@ func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge,
 		isMerge = parseErr == nil && candidate.State == "MERGED"
 		promotesMerge = isMerge && !known
 	}
-	// Preserve request ordering and first-merge promotion, including released
-	// writers that still publish the existing two-file protocol.
+	// A first confirmed MERGED observation bypasses request order. Otherwise
+	// preserve ordering, including released writers using the two-file protocol.
 	if saved, ok := statusForgeEntrySince(kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return result, nil
 	}

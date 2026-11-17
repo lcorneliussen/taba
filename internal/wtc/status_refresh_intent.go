@@ -7,7 +7,8 @@ import (
 )
 
 // StatusRefreshIntent distinguishes a requested observation from periodic work.
-// Foreground bypasses reuse, not provider accounting or cooldowns.
+// Foreground bypasses ordinary detail TTL and periodic reuse for active records;
+// recorded and retained merges still bypass provider reads. Accounting and cooldowns apply.
 type StatusRefreshIntent uint8
 
 const (

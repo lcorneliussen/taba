@@ -132,13 +132,29 @@ func statusFetchPRRaw(record PRRecord, slug, forge string) ([]byte, error) {
 // suppress the selected record's foreground observation. Collector integration
 // supplies only active records; recorded and retained terminal state is also
 // excluded here as a second safety boundary.
-func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (statusPRDetail, StatusObservation) {
+func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (result statusPRDetail, observation StatusObservation) {
 	if intent != StatusRefreshForeground {
 		detail := statusEnrichRecordMetadata(record, slug, forge)
 		return detail, statusDetailObservation(detail)
 	}
 	ctx, cancel := statusRefreshContext(ctx)
 	defer cancel()
+	defer func() {
+		if forge != "bitbucket.org" || (result.State != "OPEN" && result.State != "DRAFT") {
+			return
+		}
+		checks, err := statusBBHeadChecksContext(ctx, intent, slug, result.HeadCommit, true)
+		result.Checks, result.ChecksUnsettled = checks.Result, !checks.Complete || checks.Result == "PENDING"
+		if result.State == "DRAFT" && result.Checks == "NONE" {
+			result.Checks = "draft"
+		}
+		if err != nil && observation.Freshness == "live" {
+			failure := statusObservationFailure(err)
+			failure.ObservedAt, failure.Source = observation.ObservedAt, observation.Source
+			observation = failure
+			result.Freshness = failure.Freshness
+		}
+	}()
 	fallback := statusUnknownDetail(record)
 	if record.MergedOn != "" {
 		checks := record.FinalChecks

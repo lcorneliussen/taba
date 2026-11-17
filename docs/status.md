@@ -192,7 +192,11 @@ coalesce; a request made during collection runs immediately after that collectio
 Manual Refresh is not delayed by the background interval. A 30-second metadata
 phase budget returns completed live observations alongside deferred deadline
 outcomes for unfinished records; it does not date their old facts as new reads. Recorded/retained
-merges are reused without metadata queries. Periodic collection, branch discovery,
+merges are reused without metadata queries. Bitbucket active-PR checks are
+rechecked for the reported commit under the same phase budget, charging each
+page, head-resolution request and redirect separately. Incomplete checks cannot
+claim success or absence; a known failure for that exact head keeps its original
+observation time when fresh checks are unavailable. Periodic collection, branch discovery,
 local refs, runtime and build coverage retain their existing policies.
 
 The PR STATE cell uses compact `s:age` (stale), `d:age` (deferred), and `u:age`
