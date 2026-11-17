@@ -273,6 +273,7 @@ func TestStatusHosted435NativeCanonicalMergedBranchWarning(t *testing.T) {
 					incoming.PRs[0].HeadCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 				case "changed-branch":
 					incoming.Repos[0].Branch = "another"
+					incoming.Repos[0].BranchDisplay = "another"
 				case "changed-dir":
 					incoming.Repos[0].Dir = "alias"
 				case "changed-worktree":
