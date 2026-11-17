@@ -8,6 +8,9 @@ import "context"
 func (c *Context) WithStatusContext(ctx context.Context) *Context {
 	copy := *c
 	copy.readCtx = ctx
+	if copy.runtimeDeclarationsCache == nil {
+		copy.runtimeDeclarationsCache = newRuntimeDeclarationCache()
+	}
 	if c.Project != nil {
 		project := *c.Project
 		project.readCtx = ctx
@@ -27,4 +30,20 @@ func (p *ProjectContext) resourceContext() context.Context {
 		return p.readCtx
 	}
 	return context.Background()
+}
+
+// StatusReadContext reopens the same receiver at an observation boundary. It
+// shares only advisory declaration data, never stale registry or scope grants.
+func (c *Context) StatusReadContext(ctx context.Context) (*Context, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	fresh, err := OpenCollectionContext(ctx, c.Collection)
+	if err != nil {
+		return nil, err
+	}
+	fresh.StatusProgress = c.StatusProgress
+	fresh.statusSweep = c.statusSweep
+	fresh.runtimeDeclarationsCache = c.runtimeDeclarationsCache
+	return fresh.WithStatusContext(ctx), nil
 }

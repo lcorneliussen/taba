@@ -14,7 +14,11 @@ type StatusFetchReport struct {
 }
 
 func statusCommonDir(worktree string) (string, error) {
-	common, err := statusGit(worktree, "rev-parse", "--git-common-dir")
+	return statusCommonDirContext(context.Background(), worktree)
+}
+
+func statusCommonDirContext(ctx context.Context, worktree string) (string, error) {
+	common, err := statusGitContext(ctx, worktree, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", err
 	}
@@ -43,7 +47,7 @@ func (c *Context) StatusRefreshRefsWithAge(all bool, maxAge time.Duration) (Stat
 		if target.noRemote {
 			continue // No remote to fetch from; local branches are the only refs.
 		}
-		common, err := statusCommonDir(target.path)
+		common, err := statusCommonDirContext(c.resourceContext(), target.path)
 		if err != nil {
 			report.Failed++
 			continue
@@ -124,7 +128,7 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 		CLIVersion:           RunningCLIVersion(),
 		ShowCollectionColumn: true, Repos: []StatusRepo{}, PRs: []StatusPRRow{}, Orphans: []StatusOrphan{}}
 	for i, dir := range collections {
-		collection, err := OpenCollection(dir)
+		collection, err := OpenCollectionContext(c.resourceContext(), dir)
 		if err != nil {
 			return snapshot, report, err
 		}
@@ -178,5 +182,9 @@ func (c *Context) statusForegroundSnapshot(ctx context.Context, metadataBudget t
 // StatusLiveSnapshotContext retains the complete collector and its accounting;
 // cancellation applies to context-aware reads and prevents queued publication.
 func (c *Context) StatusLiveSnapshotContext(ctx context.Context, all, noFetch bool, maxAge time.Duration) (StatusSnapshot, StatusFetchReport, error) {
-	return c.WithStatusContext(ctx).StatusLiveSnapshotWithFetchAge(all, noFetch, maxAge)
+	receiver, err := c.StatusReadContext(ctx)
+	if err != nil {
+		return StatusSnapshot{}, StatusFetchReport{}, err
+	}
+	return receiver.StatusLiveSnapshotWithFetchAge(all, noFetch, maxAge)
 }

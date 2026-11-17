@@ -97,15 +97,16 @@ type Config struct {
 	} `toml:"openclaw"`
 }
 type Context struct {
-	readCtx          context.Context
-	Collection       string          `json:"collection"`
-	Harness          string          `json:"harness"`
-	Workspace        string          `json:"workspace"`
-	Registry         Registry        `json:"registry"`
-	Config           Config          `json:"-"`
-	ConfigRoot       string          `json:"config_root"`
-	Project          *ProjectContext `json:"project,omitempty"`
-	creatingReceiver bool
+	readCtx                  context.Context
+	runtimeDeclarationsCache *runtimeDeclarationCache
+	Collection               string          `json:"collection"`
+	Harness                  string          `json:"harness"`
+	Workspace                string          `json:"workspace"`
+	Registry                 Registry        `json:"registry"`
+	Config                   Config          `json:"-"`
+	ConfigRoot               string          `json:"config_root"`
+	Project                  *ProjectContext `json:"project,omitempty"`
+	creatingReceiver         bool
 	// AdHoc marks a collection without a harness repository. Its Harness is the
 	// collection-local config directory and its registry is tracked nowhere.
 	AdHoc bool `json:"ad_hoc,omitempty"`

@@ -89,7 +89,7 @@ func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
 		})
 	}
 	go func() {
-		ticker := time.NewTicker(time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {

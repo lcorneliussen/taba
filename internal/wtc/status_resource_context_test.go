@@ -96,3 +96,21 @@ func TestStatusResourceWatcherCleanupDoesNotWaitForRetirementLock(t *testing.T) 
 	}
 	cleanup()
 }
+
+func TestStatusResourceReadContextRevalidatesRegistryAndScope(t *testing.T) {
+	t.Setenv("WTC_CONFIG_ROOT", "")
+	t.Setenv("TABA_CONFIG_ROOT", "")
+	c := watcherCollection(t).WithStatusContext(context.Background())
+	fixtureFile(t, c.registryPath(), "repos:\n  - name: widget\n    remote: https://example.invalid/widget.git\n    default_ref: origin/main\n", 0600)
+	fresh, err := c.StatusReadContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh.Registry.Repos) != 1 || len(c.Registry.Repos) != 0 {
+		t.Fatal("refresh reused or mutated old registry")
+	}
+	fixtureFile(t, filepath.Join(c.Collection, ".env.collection"), "WTC_CONFIG_ROOT="+filepath.Join(t.TempDir(), "unapproved-config")+"\n", 0600)
+	if _, err := c.StatusReadContext(context.Background()); err == nil {
+		t.Fatal("changed receiving policy was bypassed by an old context")
+	}
+}

@@ -84,11 +84,20 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 		if err != nil {
 			return err
 		}
-		c, err := wtc.Discover(cwd)
+		var c *wtc.Context
+		if interactive {
+			var handled bool
+			c, handled, err = runStatusStartup(cwd, args, statusStartupOptions{all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, click: click, reposChanged: cmd.Flags().Changed("repos"), noClickChanged: cmd.Flags().Changed("no-click"), watchSeconds: watchSeconds, fetchAgeSeconds: fetchAgeSeconds, incompatible: local || forge || cached || md || ansi || *asJSON})
+			if handled || err != nil {
+				return err
+			}
+		} else {
+			c, err = wtc.Discover(cwd)
+		}
 		if err != nil {
 			return err
 		}
-		if len(args) != 0 {
+		if !interactive && len(args) != 0 {
 			if args[0] == "." || args[0] == ".." || filepath.Base(args[0]) != args[0] {
 				return fmt.Errorf("expected a collection name")
 			}

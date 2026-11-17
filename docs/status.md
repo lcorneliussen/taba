@@ -196,8 +196,7 @@ merges are reused without metadata queries. Bitbucket active-PR checks are
 rechecked for the reported commit under the same phase budget, charging each
 page, head-resolution request and redirect separately. Incomplete checks cannot
 claim success or absence; a known failure for that exact head keeps its original
-observation time when fresh checks are unavailable. Periodic collection, branch discovery,
-local refs, runtime and build coverage retain their existing policies.
+observation time when fresh checks are unavailable. Periodic collection still includes branch discovery, local refs, runtime and build facts.
 
 The PR STATE cell uses compact `s:age` (stale), `d:age` (deferred), and `u:age`
 (unavailable) marks so titles remain visible. `never` means no known observation;
@@ -208,9 +207,29 @@ unknown. Age can establish observation expiration, but never a provider rate lim
 remain visible. JSON adds `observation_reason` and `retry_at` without changing
 the meaning of `observed_at`. Reading or rendering does not renew observations.
 
-This foreground metadata change does not provide cached-first startup or full
-collector child cancellation. Those lifecycle changes remain separate work;
-visibility/attachment information is not inferred from unsupported host APIs.
+Interactive startup paints a loading frame before expensive collection or service
+discovery. Saved rows appear only after receiving scope validates. Their ages
+come from the saved observation timestamps, including when cache files were
+copied; missing or future timestamps remain unknown. Help, resize and quit work
+while discovery or watcher admission is pending, and cached actions stay blocked
+until watcher admission succeeds. Explicit one-shot and cached output flags keep
+their existing contracts.
+
+Focus and input are bounded positive hints, not proof of an attached viewer.
+Without a current hint, the default full refresh interval is five minutes and
+service observations have a one-minute safety interval. A recent hint enables
+the normal 30-second full refresh and three-second service cadence for up to one
+minute. Local declaration/identity changes and service-change signals can wake
+observations sooner. Unchanged service declarations reuse validated local
+inventory instead of running Git discovery on every service read. Working-tree
+changes without a local change signal are caught by the bounded full refresh.
+`WTC_STATUS_WATCH` and `WTC_STATUS_WATCH_BG` tune full refresh intervals; manual
+`r` keeps its foreground admission, coalescing and shared cooldown behavior.
+No per-view host visibility command or unsupported attached-client API is used.
+
+Quit cancels context-aware discovery and watcher waits. Some legacy collector
+and receiver helpers still retain their own deadline rather than the view's
+cancellation; complete collector-child cancellation is not yet provided.
 
 ```sh
 taba status                 # interactive live view in a terminal

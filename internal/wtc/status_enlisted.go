@@ -625,7 +625,7 @@ func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent Statu
 		}
 	}
 	// The pull requests change what comes next.
-	statusNext(&snapshot)
+	statusNextContext(c.resourceContext(), &snapshot)
 	return snapshot, nil
 }
 
@@ -715,7 +715,7 @@ func (c *Context) statusReturnMerged(snapshot *StatusSnapshot, records []PRRecor
 				break
 			}
 			c.statusProgress(fmt.Sprintf("Returned %s to %s after its PR merged: %s", dir, t.ref, reason))
-			if updated, err := statusLocalRepo(t); err == nil {
+			if updated, err := statusLocalRepoContext(c.resourceContext(), t); err == nil {
 				updated.Runtime = row.Runtime // Services are untouched by the move.
 				if row.Behind != 0 {
 					snapshot.StaleCount--

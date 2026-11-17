@@ -15,9 +15,11 @@ import (
 // and, once ported, the live renderer. This is the local Git portion; forge
 // and process facts are added by later collection stages.
 type StatusSnapshot struct {
-	Schema      int    `json:"schema"`
-	Collection  string `json:"collection"`
-	GeneratedAt string `json:"generated_at"`
+	// RuntimeObservedAt orders concurrent in-process service reads. It is not a cache timestamp or wire field.
+	RuntimeObservedAt time.Time `json:"-"`
+	Schema            int       `json:"schema"`
+	Collection        string    `json:"collection"`
+	GeneratedAt       string    `json:"generated_at"`
 	// CLIVersion identifies the snapshot producer, not a later cache reader.
 	// Absent in older schema-1 snapshots.
 	CLIVersion           string         `json:"cli_version,omitempty"`
@@ -313,13 +315,15 @@ func (c *Context) StatusLocalSnapshot(all bool) (StatusSnapshot, error) {
 	if err := c.resourceContext().Err(); err != nil {
 		return snapshot, err
 	}
-	statusNext(&snapshot)
+	statusNextContext(c.resourceContext(), &snapshot)
 	c.statusRetirement(&snapshot, all)
 	return snapshot, nil
 }
 
 // statusNext reads each repository's next step from its row.
-func statusNext(snapshot *StatusSnapshot) {
+func statusNext(snapshot *StatusSnapshot) { statusNextContext(context.Background(), snapshot) }
+
+func statusNextContext(ctx context.Context, snapshot *StatusSnapshot) {
 	for i := range snapshot.Repos {
 		r := &snapshot.Repos[i]
 		r.Next = nil
@@ -333,7 +337,7 @@ func statusNext(snapshot *StatusSnapshot) {
 		if r.ReviewOnly || blocked {
 			continue
 		}
-		f := statusFacts(*r)
+		f := statusFactsContext(ctx, *r)
 		if r.PR == nil && r.BranchKind == "branch" {
 			for _, pr := range snapshot.PRs {
 				if !pr.OnBranch || statusObservationUnavailable(pr.Freshness) || pr.State != "MERGED" || !statusPRMatchesRepo(pr, *r) {
@@ -359,7 +363,9 @@ func statusNext(snapshot *StatusSnapshot) {
 // against the branch's upstream (the development tip when it has none), so
 // its development-tip fallback can include residual squash history.
 // Observational landing fields do not change next-action authority.
-func statusFacts(r StatusRepo) next.Facts {
+func statusFacts(r StatusRepo) next.Facts { return statusFactsContext(context.Background(), r) }
+
+func statusFactsContext(ctx context.Context, r StatusRepo) next.Facts {
 	f := next.Facts{Collection: r.Collection, Repo: r.Repo, Host: next.HostLocal, Base: r.baseRef,
 		Ahead: r.Ahead, Behind: r.Behind, Dirty: r.Changed, InProgress: r.Operation}
 	if r.Repo == "" {
@@ -372,11 +378,11 @@ func statusFacts(r StatusRepo) next.Facts {
 		f.Branch = r.Branch
 		f.ToPush = r.Ahead
 	}
-	f.Head, _ = statusGit(r.Worktree, "rev-parse", "HEAD")
+	f.Head, _ = statusGitContext(ctx, r.Worktree, "rev-parse", "HEAD")
 	if r.baseRef != "" {
-		f.BaseHead, _ = statusGit(r.Worktree, "rev-parse", r.baseRef)
+		f.BaseHead, _ = statusGitContext(ctx, r.Worktree, "rev-parse", r.baseRef)
 	}
-	if r.Behind > 0 && r.baseRef != "" && f.InProgress == "" {
+	if ctx.Err() == nil && r.Behind > 0 && r.baseRef != "" && f.InProgress == "" {
 		var ok bool
 		f.MergeConflicts, ok = next.PredictMerge(r.Worktree, r.baseRef)
 		f.MergeUnknown = !ok
