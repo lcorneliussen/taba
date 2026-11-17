@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -148,4 +149,24 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 	}
 	statusRetirementFacts(&snapshot)
 	return snapshot, report, nil
+}
+
+// StatusForegroundSnapshot explicitly observes active enlisted PR metadata.
+// Periodic/one-shot collection retains branch discovery, refs and build coverage.
+// This intent does not imply cancellation of legacy local/runtime/build reads.
+func (c *Context) StatusForegroundSnapshot(ctx context.Context) (StatusSnapshot, error) {
+	return c.statusForegroundSnapshot(ctx, statusForegroundTimeout)
+}
+
+func (c *Context) statusForegroundSnapshot(ctx context.Context, metadataBudget time.Duration) (StatusSnapshot, error) {
+	// A metadata-phase deadline is a deferred per-record outcome. The caller's
+	// cancellation still prevents subsequent snapshot publication.
+	snapshot, err := c.statusForgePreviewWithIntent(ctx, StatusRefreshForeground, true, true, metadataBudget)
+	if err != nil {
+		return snapshot, err
+	}
+	if err := ctx.Err(); err != nil {
+		return snapshot, err
+	}
+	return snapshot, c.WriteStatusSnapshot(snapshot)
 }

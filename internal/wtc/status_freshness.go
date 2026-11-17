@@ -1,6 +1,27 @@
 package wtc
 
-import "time"
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// Older records have no admission reason. Observation age alone can establish
+// expiration, never a budget or provider rate-limit explanation.
+func statusDetailObservation(detail statusPRDetail) StatusObservation {
+	out := StatusObservation{Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, Source: detail.StateSource}
+	switch detail.Freshness {
+	case "stale":
+		out.Reason = "observation-expired"
+	case "deferred", "unavailable":
+		out.Reason = "unknown"
+	}
+	if detail.ObservedAt == "" && (detail.State == "UNKNOWN" || detail.State == "") {
+		out.Reason = "never-observed"
+	}
+	return out
+}
 
 func statusObservationUnavailable(freshness string) bool {
 	return freshness == "stale" || freshness == "deferred" || freshness == "unavailable"
@@ -58,6 +79,16 @@ func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Dura
 	return statusReadObservedDetailKind("pr", record, slug, forge, age)
 }
 
+func statusReadObservedDetailContext(ctx context.Context, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool, error) {
+	// A fresh active detail from a released writer cannot supersede retained
+	// merge state. Its original age still controls freshness and action gates.
+	if detail, ok, err := statusRetainedMergeContext(ctx, record, slug, forge); ok || err != nil {
+		return detail, ok, err
+	}
+	detail, ok := statusReadObservedDetailKind("pr", record, slug, forge, age)
+	return detail, ok, ctx.Err()
+}
+
 func statusReadObservedDetailKind(kind string, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
 	raw, observed, ok := statusReadForgeEntryObserved(kind, forge, slug, record.Number, age)
 	if !ok {
@@ -71,8 +102,16 @@ func statusReadObservedDetailKind(kind string, record PRRecord, slug, forge stri
 }
 
 func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
+	detail, known, _ := statusRetainedMergeContext(context.Background(), record, slug, forge)
+	return detail, known
+}
+
+func statusRetainedMergeContext(ctx context.Context, record PRRecord, slug, forge string) (statusPRDetail, bool, error) {
 	detail, known := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
 	known = known && detail.State == "MERGED"
+	if err := ctx.Err(); err != nil {
+		return detail, known, err
+	}
 	raw, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusMergedCacheAge())
 	if ok {
 		current, err := statusParseForgeDetail(forge, raw, record)
@@ -80,13 +119,74 @@ func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, b
 		if err == nil && current.State == "MERGED" && (!known || observed.After(retainedAt)) {
 			// Accept legacy authority only after preserving the same bytes and age
 			// independently of released writers' ordinary cache publications.
-			if statusRetainMergeObservation(forge, slug, record.Number, raw, observed) {
+			retained, retainErr := statusRetainMergeObservationContext(ctx, forge, slug, record.Number, raw, observed)
+			if retained {
 				winner, found := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
 				if found && winner.State == "MERGED" {
-					return winner, true
+					return winner, true, retainErr
 				}
+			}
+			if retainErr != nil {
+				return detail, known, retainErr
 			}
 		}
 	}
-	return detail, known
+	return detail, known, ctx.Err()
+}
+
+// StatusPRFreshnessMark keeps observation age out of the title column. A
+// missing/invalid time never becomes a current observation or a rate-limit claim.
+func StatusPRFreshnessMark(freshness, observed string, now time.Time) string {
+	if !statusObservationUnavailable(freshness) && freshness != "refreshing" {
+		return ""
+	}
+	if observed == "" {
+		if freshness == "refreshing" {
+			return "reading"
+		}
+		return "never"
+	}
+	age := "?"
+	if at, err := time.Parse(time.RFC3339Nano, observed); err == nil && !at.After(now) {
+		seconds := int(now.Sub(at).Seconds())
+		switch {
+		case seconds < 60:
+			age = fmt.Sprintf("%ds", seconds)
+		case seconds < 3600:
+			age = fmt.Sprintf("%dm", seconds/60)
+		case seconds < 86400:
+			age = fmt.Sprintf("%dh", seconds/3600)
+		default:
+			age = fmt.Sprintf("%dd", seconds/86400)
+		}
+	}
+	prefix := map[string]string{"stale": "s", "deferred": "d", "unavailable": "u", "refreshing": "r"}[freshness]
+	return prefix + ":" + age
+}
+
+// StatusPRObservationDetail is for the existing help/log surface, not a PR row.
+func StatusPRObservationDetail(row StatusPRRow) string {
+	observation := "not yet observed"
+	if row.State != "" && row.State != "UNKNOWN" {
+		observation = "last " + strings.ToLower(row.State)
+	}
+	if row.ObservedAt != "" {
+		observation += "; observed " + row.ObservedAt
+	}
+	reason := row.ObservationReason
+	if reason == "" {
+		reason = statusDetailObservation(statusPRDetail{State: row.State, Freshness: row.Freshness, ObservedAt: row.ObservedAt}).Reason
+	}
+	if reason == "" {
+		reason = "unknown"
+	}
+	reasonLabel := "; reason "
+	if row.State == "MERGED" && (row.Merge != nil && *row.Merge == "MERGED" || !statusObservationUnavailable(row.Freshness)) && row.ObservationReason != "" && row.ObservationReason != "provider-confirmed" {
+		reasonLabel = "; recheck reason "
+	}
+	text := row.Repo + "#" + row.Number + ": " + row.Freshness + "; " + observation + reasonLabel + reason
+	if row.RetryAt != "" {
+		text += "; retry after " + row.RetryAt
+	}
+	return text
 }

@@ -90,6 +90,9 @@ type StatusPRFacts struct {
 	MergeSource    string   `json:"merge_source,omitempty"`
 	MergeHead      string   `json:"merge_head,omitempty"`
 	MergeBase      string   `json:"merge_base,omitempty"`
+
+	ObservationReason string `json:"observation_reason,omitempty"`
+	RetryAt           string `json:"retry_at,omitempty"`
 }
 
 type StatusBuild struct {
@@ -152,6 +155,9 @@ type StatusPRRow struct {
 	// worktreeDir carries a verified branch association during collection;
 	// cached snapshots already contain the resulting Next and Choices.
 	worktreeDir string
+
+	ObservationReason string `json:"observation_reason,omitempty"`
+	RetryAt           string `json:"retry_at,omitempty"`
 }
 
 type StatusRetired struct {
@@ -378,4 +384,134 @@ func statusFacts(r StatusRepo) next.Facts {
 		}
 	}
 	return f
+}
+
+// StatusPreferNewerObservations protects presentation from an older collector
+// completion. It never grants local action authority from retained UI facts.
+func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnapshot {
+	if incoming.Collection != current.Collection {
+		return incoming
+	}
+	knownMerge := func(row StatusPRRow) bool {
+		return row.State == "MERGED" && (row.Merge != nil && *row.Merge == "MERGED" || !statusObservationUnavailable(row.Freshness))
+	}
+	for i, row := range incoming.PRs {
+		for _, old := range current.PRs {
+			if row.Repo != old.Repo || row.Number != old.Number || row.URL == nil || old.URL == nil || *row.URL != *old.URL {
+				continue
+			}
+			if knownMerge(row) && !knownMerge(old) {
+				continue
+			}
+			at, err := time.Parse(time.RFC3339Nano, row.ObservedAt)
+			before, oldErr := time.Parse(time.RFC3339Nano, old.ObservedAt)
+			terminal := knownMerge(old) && !knownMerge(row)
+			if !terminal && (oldErr != nil || (err == nil && !before.After(at))) {
+				continue
+			}
+			retained := old
+			if statusObservationUnavailable(row.Freshness) {
+				// Recheck failure cannot revoke a confirmed terminal observation.
+				// Keep its reason/retry separate from the retained fact's age.
+				retained.ObservationReason, retained.RetryAt = row.ObservationReason, row.RetryAt
+				if !knownMerge(old) {
+					retained.Freshness = row.Freshness
+				}
+			}
+			var historicalBranch *StatusRepo
+			for j := range incoming.Repos {
+				repo := &incoming.Repos[j]
+				if repo.Repo != row.Repo {
+					continue
+				}
+				if retained.OnBranch && knownMerge(retained) && statusRetainedMergedBranch(*repo, current.Repos, retained) {
+					historicalBranch = repo
+				}
+				if repo.PR != nil && !statusRetainedPRIdentity(repo.PR, row) {
+					continue
+				}
+				var facts *StatusPRFacts
+				for _, prior := range current.Repos {
+					if statusRetainedPRAssociation(*repo, prior, retained) {
+						if !knownMerge(retained) {
+							facts = statusRetainedPRFacts(retained)
+						}
+						break
+					}
+				}
+				// Display evidence never supplies checkout/action authority.
+				// Without the exact association, show no active PR facts.
+				repo.PR = facts
+				repo.PRUnconfirmed = true
+				repo.Next, repo.Choices = nil, nil
+			}
+			if retained.OnBranch {
+				if historicalBranch == nil {
+					retained.OnBranch, retained.Landing = false, nil
+					retained.DisplayTitle = retained.Title
+				} else {
+					// The branch is still associated, but snapshots do not prove
+					// that its checkout head or landing classification is current.
+					retained.Landing = &StatusLanding{State: "unknown", Reason: "retained merge; current branch landing not established"}
+					historicalBranch.Landing = retained.Landing
+					retained.DisplayTitle = "MERGED — " + retained.LandingLabel() + "; still on " + historicalBranch.Branch + "  " + retained.Title
+				}
+			}
+			incoming.PRs[i] = retained
+		}
+	}
+	return incoming
+}
+
+func statusRetainedPRIdentity(facts *StatusPRFacts, row StatusPRRow) bool {
+	return facts != nil && row.URL != nil && *row.URL != "" && facts.URL == *row.URL && facts.Number == row.Number
+}
+
+// Snapshot association must agree on local identity and the reported PR head.
+// A matching repository name alone cannot transfer checks across checkouts.
+func statusRetainedPRAssociation(repo, prior StatusRepo, row StatusPRRow) bool {
+	return statusRetainedLocalAssociation(repo, prior, row) &&
+		statusRetainedPRIdentity(repo.PR, row) && statusRetainedPRIdentity(prior.PR, row) &&
+		row.HeadCommit != "" && repo.PR.Head == row.HeadCommit && prior.PR.Head == row.HeadCommit
+}
+
+func statusRetainedLocalAssociation(repo, prior StatusRepo, row StatusPRRow) bool {
+	return repo.Repo == row.Repo && prior.Repo == row.Repo &&
+		(row.worktreeDir == "" || row.worktreeDir == repo.Dir) &&
+		repo.Collection != "" && repo.Collection == prior.Collection &&
+		repo.Dir != "" && repo.Dir == prior.Dir && repo.Worktree != "" && repo.Worktree == prior.Worktree &&
+		repo.BranchKind == "branch" && prior.BranchKind == "branch" && repo.Branch != "" && repo.Branch == prior.Branch &&
+		repo.Slug != "" && repo.Slug == prior.Slug && repo.Slug == row.Slug && repo.Forge != "" && repo.Forge == prior.Forge
+}
+
+// A historical merged-branch warning is not active PR/check evidence. Its
+// stable local binding survives follow-up commits even though merged repos
+// have no active PR facts. Cached rows without a directory need a unique prior
+// branch candidate; an ambiguous alias must never inherit the warning.
+func statusRetainedMergedBranch(repo StatusRepo, priors []StatusRepo, row StatusPRRow) bool {
+	candidate := -1
+	for i, prior := range priors {
+		if prior.Repo != row.Repo || prior.BranchKind != "branch" || row.worktreeDir != "" && row.worktreeDir != prior.Dir {
+			continue
+		}
+		if candidate >= 0 {
+			return false
+		}
+		candidate = i
+	}
+	return candidate >= 0 && statusRetainedLocalAssociation(repo, priors[candidate], row)
+}
+
+func statusRetainedPRFacts(row StatusPRRow) *StatusPRFacts {
+	value := func(s *string) string {
+		if s != nil {
+			return *s
+		}
+		return ""
+	}
+	return &StatusPRFacts{Number: row.Number, URL: value(row.URL), Head: row.HeadCommit,
+		Checks: value(row.Checks), Merge: value(row.Merge), Review: value(row.Review), Draft: row.Draft,
+		Freshness: row.Freshness, ObservedAt: row.ObservedAt, StateSource: row.StateSource,
+		ObservationReason: row.ObservationReason, RetryAt: row.RetryAt,
+		MergeConflicts: append([]string(nil), row.MergeConflicts...), MergeSource: row.MergeSource, MergeHead: row.MergeHead, MergeBase: row.MergeBase}
 }

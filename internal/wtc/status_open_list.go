@@ -353,11 +353,18 @@ func statusParseBBBranchList(raw []byte, branch string) (string, error) {
 // The caller pays for the initial/page request. Redirects are additional forge
 // reads and must compete with ordinary reads for unreserved allowance.
 func statusBBGET(endpoint, user, pass string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return statusBBGETContext(context.Background(), StatusRefreshBackground, endpoint, user, pass)
+}
+
+func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endpoint, user, pass string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	origin := endpoint
 	for dispatched := 0; ; dispatched++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil || request.URL.User != nil || (request.URL.Scheme != "http" && request.URL.Scheme != "https") {
 			return nil, fmt.Errorf("invalid Bitbucket API request")
@@ -366,6 +373,9 @@ func statusBBGET(endpoint, user, pass string) ([]byte, error) {
 		request.Header.Set("Accept", "application/json")
 		response, err := client.Do(request)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			// net/http errors can include a credential-bearing URL or Location. Never
 			// expose those values through status diagnostics.
 			return nil, fmt.Errorf("Bitbucket API request failed")
@@ -380,11 +390,17 @@ func statusBBGET(endpoint, user, pass string) ([]byte, error) {
 			if dispatched >= 9 {
 				return nil, fmt.Errorf("Bitbucket API redirect limit reached")
 			}
-			if statusForgeCooling("bitbucket.org") {
-				return nil, errForgeCooling
-			}
-			if !statusTakeForgeToken("bitbucket.org") {
-				return nil, errForgeBudget
+			if intent == StatusRefreshForeground {
+				if err := statusTakeForegroundToken(ctx, "bitbucket.org"); err != nil {
+					return nil, err
+				}
+			} else {
+				if statusForgeCooling("bitbucket.org") {
+					return nil, errForgeCooling
+				}
+				if !statusTakeForgeToken("bitbucket.org") {
+					return nil, errForgeBudget
+				}
 			}
 			endpoint = location.String()
 			continue
@@ -392,12 +408,20 @@ func statusBBGET(endpoint, user, pass string) ([]byte, error) {
 		raw, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
 		response.Body.Close()
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, fmt.Errorf("Bitbucket API response read failed")
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			body := strings.TrimSpace(string(raw))
 			if len(body) > 200 {
 				body = body[:200]
+			}
+			if intent == StatusRefreshForeground && response.StatusCode == http.StatusTooManyRequests {
+				if retry, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && retry > 0 {
+					return nil, fmt.Errorf("Bitbucket API returned 429; Retry-After: %d", retry)
+				}
 			}
 			return nil, fmt.Errorf("Bitbucket pull request list API returned %s: %s", response.Status, body)
 		}

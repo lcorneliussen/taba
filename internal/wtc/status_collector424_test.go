@@ -1,0 +1,297 @@
+package wtc
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func collector424Collection(t *testing.T, forge string) *Context {
+	t.Helper()
+	c := watcherCollection(t)
+	fixtureFile(t, filepath.Join(c.Harness, adHocRegistryFile), "repos:\n  - name: widget\n    remote: https://"+forge+"/example/widget.git\n    default_ref: origin/main\n", 0600)
+	fixtureFile(t, c.PRFile(), "widget 7 - https://"+forge+"/example/widget/"+map[string]string{"github.com": "pull", "bitbucket.org": "pull-requests"}[forge]+"/7 Saved title\n", 0600)
+	var err error
+	c, err = OpenCollection(c.Collection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestStatusCollector424ExplicitTransitionsAndAccounting(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		for _, transition := range []string{"merged", "ready"} {
+			t.Run(forge+"/"+transition, func(t *testing.T) {
+				state := "MERGED"
+				if transition == "ready" {
+					state = "OPEN"
+				}
+				raw := fmt.Sprintf(`{"number":7,"id":7,"state":%q,"isDraft":false,"draft":false,"title":"Current title","mergedAt":"2026-11-16T10:00:00Z","merged_on":"2026-11-16T10:00:00Z"}`, state)
+				calls := foreground424Fixture(t, "printf '%s' '"+raw+"'\n")
+				c := collector424Collection(t, forge)
+				old := []byte(`{"number":7,"id":7,"state":"OPEN","isDraft":true,"draft":true,"title":"Cached title"}`)
+				at := time.Now()
+				statusWriteForgeEntrySinceObserved("pr", forge, "example/widget", "7", old, at, at)
+				list, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: old, Fingerprint: "cached"}}, false, at)
+				statusWriteForgeEntry("openprs", forge, "example/widget", "open", list)
+				statusMarkFullRefresh(forge, "example/widget", "7")
+				burst, _ := statusForgeAllowance(forge)
+				foreground424Budget(t, forge, burst, at)
+				snapshot, err := c.StatusForegroundSnapshot(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(snapshot.PRs) != 1 || snapshot.PRs[0].State != state || snapshot.PRs[0].Draft || snapshot.PRs[0].Title != "Current title" || snapshot.PRs[0].Freshness != "live" || foreground424Count(calls) != 1 {
+					t.Fatalf("snapshot=%+v calls=%d", snapshot, foreground424Count(calls))
+				}
+				observed := snapshot.PRs[0].ObservedAt
+				cache, err := c.ReadStatusSnapshot()
+				if err != nil || cache.PRs[0].ObservedAt != observed {
+					t.Fatalf("cache=%+v err=%v", cache, err)
+				}
+				budget, _ := os.ReadFile(statusForgeStatePath("budget", forge))
+				var tokens int
+				fmt.Sscanf(string(budget), "%d", &tokens)
+				if tokens != burst-1 {
+					t.Fatalf("budget=%s", budget)
+				}
+				if state == "MERGED" {
+					again, err := c.StatusForegroundSnapshot(context.Background())
+					if err != nil || again.PRs[0].State != "MERGED" || foreground424Count(calls) != 1 {
+						t.Fatalf("retained merge=%+v err=%v", again, err)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestStatusCollector424CooldownAndCancelledQueue(t *testing.T) {
+	for _, cancelQueue := range []bool{false, true} {
+		t.Run(fmt.Sprint(cancelQueue), func(t *testing.T) {
+			calls := foreground424Fixture(t, `printf '%s' '{"number":7,"state":"OPEN"}'`)
+			c := collector424Collection(t, "github.com")
+			if !cancelQueue {
+				until, _ := statusForgeCoolContext(context.Background(), "github.com", time.Minute)
+				got, err := c.StatusForegroundSnapshot(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(got.PRs) != 1 || got.PRs[0].Freshness != "deferred" || got.PRs[0].ObservationReason != "provider-cooldown" || got.PRs[0].RetryAt != until.UTC().Format(time.RFC3339Nano) || foreground424Count(calls) != 0 {
+					t.Fatalf("%+v", got)
+				}
+				return
+			}
+			foreground424Budget(t, "github.com", 0, time.Now())
+			fixtureFile(t, filepath.Join(c.Collection, ".wtc-status.json"), "original snapshot bytes", 0600)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, err := c.StatusForegroundSnapshot(ctx); done <- err }()
+			deadline := time.Now().Add(3 * time.Second)
+			queued := false
+			for time.Now().Before(deadline) {
+				for _, item := range statusReadPendingConfirmations("github.com", time.Now()) {
+					if item.Foreground {
+						queued = true
+					}
+				}
+				if queued {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if !queued {
+				t.Fatal("foreground did not enter shared admission queue")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("cancellation reported success")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("cancellation did not complete")
+			}
+			foreground424Budget(t, "github.com", 8, time.Now())
+			for _, item := range statusReadPendingConfirmations("github.com", time.Now()) {
+				if item.Foreground {
+					t.Fatal("cancelled foreground lease remains")
+				}
+			}
+			if foreground424Count(calls) != 0 {
+				t.Fatal("cancelled queue dispatched provider")
+			}
+			bytes, _ := os.ReadFile(filepath.Join(c.Collection, ".wtc-status.json"))
+			if string(bytes) != "original snapshot bytes" {
+				t.Fatal("cancelled queue persisted snapshot")
+			}
+		})
+	}
+}
+
+func TestStatusCollector424ArchivedRecordDoesNotDispatch(t *testing.T) {
+	calls := foreground424Fixture(t, "exit 91\n")
+	c := collector424Collection(t, "github.com")
+	f, err := os.OpenFile(c.PRFile(), os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintln(f, "# merged-pr widget 7 2020-01-01T00:00:00Z SUCCESS")
+	f.Close()
+	got, err := c.StatusForegroundSnapshot(context.Background())
+	if err != nil || len(got.PRs) != 1 || !got.PRs[0].Archived || foreground424Count(calls) != 0 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestStatusCollector424NewerWriterWins(t *testing.T) {
+	calls := foreground424Fixture(t, `touch "$STATUS_424_CALLS.entered"
+while [ ! -f "$STATUS_424_CALLS.release" ]; do sleep 0.01; done
+printf '%s' '{"number":7,"state":"OPEN","title":"Slow old response"}'`)
+	c := collector424Collection(t, "github.com")
+	done := make(chan StatusSnapshot, 1)
+	errs := make(chan error, 1)
+	go func() {
+		snapshot, err := c.StatusForegroundSnapshot(context.Background())
+		done <- snapshot
+		errs <- err
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(calls + ".entered"); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(calls + ".entered"); err != nil {
+		t.Fatal("provider not entered")
+	}
+	defer os.WriteFile(calls+".release", nil, 0600)
+	observed := time.Now()
+	raw := []byte(`{"number":7,"state":"MERGED","title":"New confirmed merge","mergedAt":"2026-11-16T10:00:00Z"}`)
+	if !statusWriteForgeEntrySinceObserved("pr", "github.com", "example/widget", "7", raw, observed, observed) {
+		t.Fatal("concurrent publication rejected")
+	}
+	os.WriteFile(calls+".release", nil, 0600)
+	select {
+	case got := <-done:
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+		if got.PRs[0].State != "MERGED" || got.PRs[0].Title != "New confirmed merge" || got.PRs[0].ObservedAt != observed.UTC().Format(time.RFC3339Nano) {
+			t.Fatalf("%+v", got.PRs)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("collector stuck")
+	}
+}
+
+func TestStatus424PresentationRetainsNewerAndTerminalAuthority(t *testing.T) {
+	url := "https://github.com/example/widget/pull/7"
+	for _, terminal := range []bool{false, true} {
+		now := time.Now()
+		state := "DRAFT"
+		oldTime := now
+		if terminal {
+			state = "MERGED"
+			oldTime = now.Add(-time.Hour)
+		}
+		current := StatusSnapshot{Collection: "fixture", PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: state, Title: "Authoritative", Freshness: "live", ObservedAt: oldTime.Format(time.RFC3339Nano)}}}
+		incoming := StatusSnapshot{Collection: "fixture", PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "OPEN", Title: "Old completion", ObservedAt: now.Add(-time.Second).Format(time.RFC3339Nano)}}, Repos: []StatusRepo{{Repo: "widget"}}}
+		got := StatusPreferNewerObservations(incoming, current)
+		if got.PRs[0].Title != "Authoritative" || !got.Repos[0].PRUnconfirmed || got.Repos[0].Next != nil || got.Repos[0].Choices != nil {
+			t.Fatalf("%+v", got)
+		}
+	}
+}
+
+func TestStatus424NewFailureKeepsOlderFactsWithoutClaimingLive(t *testing.T) {
+	url := "https://github.com/example/widget/pull/7"
+	current := StatusSnapshot{Collection: "fixture", PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "OPEN", Title: "Known title", Freshness: "live", ObservedAt: time.Now().Add(-time.Hour).Format(time.RFC3339Nano)}}}
+	incoming := StatusSnapshot{Collection: "fixture", PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "UNKNOWN", Freshness: "deferred", ObservationReason: "shared-budget", RetryAt: "2026-11-16T10:00:00Z"}}}
+	got := StatusPreferNewerObservations(incoming, current).PRs[0]
+	if got.State != "OPEN" || got.Title != "Known title" || got.ObservedAt != current.PRs[0].ObservedAt || got.Freshness != "deferred" || got.ObservationReason != "shared-budget" || got.RetryAt == "" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestStatusCollector424PhaseDeadlineReturnsPartialOutcomes(t *testing.T) {
+	// The short phase may expire during process startup. The second phase permits
+	// one real response but expires before the unchanged eight-second refill.
+	for _, budget := range []time.Duration{150 * time.Millisecond, 2 * time.Second} {
+		t.Run(budget.String(), func(t *testing.T) {
+			calls := foreground424Fixture(t, `printf '{"id":%s,"state":"OPEN","title":"Observed now"}' "$3"`)
+			forge := "bitbucket.org"
+			c := collector424Collection(t, forge)
+			file, err := os.OpenFile(c.PRFile(), os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fmt.Fprintln(file, "widget 8 - https://bitbucket.org/example/widget/pull-requests/8 Other title")
+			file.Close()
+			observed := time.Now().Add(-time.Hour)
+			for _, number := range []string{"7", "8"} {
+				raw := []byte(fmt.Sprintf(`{"id":%s,"state":"OPEN","draft":true,"title":"Cached draft"}`, number))
+				statusWriteForgeEntrySinceObserved("pr", forge, "example/widget", number, raw, observed, observed)
+			}
+			foreground424Budget(t, forge, 1, time.Now())
+			got, err := c.statusForegroundSnapshot(context.Background(), budget)
+			if err != nil {
+				t.Fatal(err)
+			}
+			live, deferred := 0, 0
+			for _, row := range got.PRs {
+				switch row.Freshness {
+				case "live":
+					live++
+					if row.Title != "Observed now" || row.State != "OPEN" {
+						t.Fatalf("%+v", row)
+					}
+				case "deferred":
+					deferred++
+					if row.Title != "Cached draft" || row.State != "DRAFT" || row.ObservedAt != observed.UTC().Format(time.RFC3339Nano) || row.ObservationReason != "deadline" {
+						t.Fatalf("%+v", row)
+					}
+				default:
+					t.Fatalf("%+v", row)
+				}
+			}
+			if live+deferred != 2 || deferred < 1 || foreground424Count(calls) > 1 {
+				t.Fatalf("live%d deferred%d calls%d rows=%+v", live, deferred, foreground424Count(calls), got.PRs)
+			}
+			if budget == 2*time.Second && (live != 1 || deferred != 1 || foreground424Count(calls) != 1) {
+				t.Fatalf("completed observation discarded: live%d deferred%d calls%d", live, deferred, foreground424Count(calls))
+			}
+			saved, err := c.ReadStatusSnapshot()
+			if err != nil || len(saved.PRs) != 2 {
+				t.Fatalf("%+v %v", saved, err)
+			}
+		})
+	}
+}
+
+func TestStatus424IncomingTerminalWinsOverLaterActiveTimestamp(t *testing.T) {
+	url := "https://github.com/example/widget/pull/7"
+	now := time.Now()
+	current := StatusSnapshot{Collection: "fixture", PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "OPEN", Freshness: "live", ObservedAt: now.Format(time.RFC3339Nano)}}}
+	incoming := StatusSnapshot{Collection: "fixture", PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "MERGED", Freshness: "recorded", ObservedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)}}}
+	if got := StatusPreferNewerObservations(incoming, current).PRs[0]; got.State != "MERGED" {
+		t.Fatalf("terminal authority lost: %+v", got)
+	}
+	confirmed := "MERGED"
+	for _, freshness := range []string{"stale", "unavailable"} {
+		incoming.PRs[0].Freshness, incoming.PRs[0].Merge = freshness, &confirmed
+		if got := StatusPreferNewerObservations(incoming, current).PRs[0]; got.State != "MERGED" {
+			t.Fatalf("confirmed terminal lost after ancillary failure/expiry: %+v", got)
+		}
+	}
+	incoming.PRs[0].Freshness, incoming.PRs[0].Merge = "unavailable", nil
+	if got := StatusPreferNewerObservations(incoming, current).PRs[0]; got.State != "OPEN" || got.Freshness != "unavailable" {
+		t.Fatalf("unconfirmed merge gained authority: %+v", got)
+	}
+}

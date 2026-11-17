@@ -1,6 +1,9 @@
 package wtc
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -79,23 +82,50 @@ func statusForgeStatePath(prefix, forge string) string {
 }
 
 func statusForgeCooling(forge string) bool {
+	return time.Now().Before(statusForgeCoolingUntil(forge))
+}
+
+func statusForgeCoolingUntil(forge string) time.Time {
 	raw, err := os.ReadFile(statusForgeStatePath("cool", forge))
 	if err != nil {
-		return false
+		return time.Time{}
 	}
 	until, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
-	return err == nil && time.Now().Before(time.Unix(0, until))
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(0, until)
 }
 
 func statusForgeCool(forge string, retry time.Duration) {
+	_, _ = statusForgeCoolContext(context.Background(), forge, retry)
+}
+
+// Return the actual provider cooldown even if cancellation prevents recording
+// it. Computing the deadline before waiting avoids dating a delayed write as a
+// new provider observation. Existing callers retain their compatibility entry.
+func statusForgeCoolContext(ctx context.Context, forge string, retry time.Duration) (time.Time, error) {
 	if retry <= 0 {
 		retry = statusForgeCoolDefault
 	}
+	until := time.Now().Add(retry)
 	path := statusForgeStatePath("cool", forge)
-	if !statusSecureCacheDir(statusForgeCacheDir()) {
-		return
+	unlock, err := statusLockCacheContext(ctx, path)
+	if err != nil {
+		return until, err
 	}
-	_ = os.WriteFile(path, []byte(strconv.FormatInt(time.Now().Add(retry).UnixNano(), 10)), 0600)
+	defer unlock()
+	if existing := statusForgeCoolingUntil(forge); existing.After(until) {
+		return existing, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return until, err
+	}
+	if !statusWriteForgeEntryObserved("cool", forge, "", "", []byte(strconv.FormatInt(until.UnixNano(), 10)), time.Time{}) {
+		return until, errors.New("provider cooldown publication failed")
+	}
+	// A completed atomic write remains valid after late cancellation.
+	return until, nil
 }
 
 func statusTakeForgeToken(forge string) bool {
@@ -115,9 +145,28 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 	defer unlock()
 	now := time.Now()
 	queue := statusReadPendingConfirmations(forge, now)
+	if forge != "bitbucket.org" {
+		// GitHub has no legacy confirmation FIFO. Only an owned foreground lease
+		// may defer its ordinary reads; unrelated queue bytes remain untouched.
+		for _, item := range queue {
+			if item.Foreground {
+				return false
+			}
+		}
+		queue = nil
+	}
+	saveQueue := func() {
+		if forge == "bitbucket.org" {
+			statusSavePendingConfirmations(forge, queue)
+		}
+	}
 	admitted := len(queue) == 0 || queue[0].Key == confirmation
-	if confirmation != "" {
+	if confirmation != "" && forge == "bitbucket.org" {
 		queue = statusQueueConfirmation(queue, confirmation, now)
+	}
+	if len(queue) > 0 && queue[0].Foreground {
+		saveQueue()
+		return false
 	}
 	tokens, updated := statusReadForgeBudget(path, burst, every, now)
 	// Released clients honor this existing lock but do not know the FIFO.
@@ -126,7 +175,7 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 	if forge == "bitbucket.org" && confirmation != "" && admitted && tokens == 0 && !statusForgeCooling(forge) {
 		delay := updated.Add(every).Sub(now)
 		if delay > 0 && delay <= statusBitbucketEvery {
-			statusSavePendingConfirmations(forge, queue)
+			saveQueue()
 			// Wait at most statusBitbucketEvery while holding the budget lock;
 			// provider I/O must stay outside this wait.
 			timer := time.NewTimer(delay)
@@ -144,15 +193,169 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 		admitted = true
 	}
 	if tokens < 1 || !admitted {
-		statusSavePendingConfirmations(forge, queue)
+		saveQueue()
 		return false
 	}
 	if confirmation != "" && len(queue) > 0 && queue[0].Key == confirmation {
 		queue = queue[1:]
 	}
-	statusSavePendingConfirmations(forge, queue)
+	saveQueue()
 	tokens--
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil
+}
+
+// Unlike background admission, an explicit request owns a finite cancellable
+// wait. It bypasses dormant background reservations, but debits the same bucket
+// under the same lock used by released clients. Holding that lock for at most
+// one standard refill prevents an older consumer from stealing the reservation.
+func statusTakeForegroundToken(ctx context.Context, forge string) error {
+	ctx, cancel := statusRefreshContext(ctx)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if forge != "github.com" && forge != "bitbucket.org" {
+		return errors.New("unsupported forge")
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return err
+	}
+	key := statusConfirmationKey(hex.EncodeToString(nonce[:]))
+	deadline, _ := ctx.Deadline()
+	registered := false
+	defer func() {
+		if !registered {
+			return
+		}
+		// Cleanup cannot inherit the cancelled request. If another process
+		// holds the lock, the finite lease still expires in old/new readers.
+		cleanup, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		unlock, err := statusLockCacheContext(cleanup, statusForgeStatePath("budget", forge))
+		if err == nil {
+			defer unlock()
+			queue := statusReadPendingConfirmations(forge, time.Now())
+			statusSavePendingConfirmations(forge, statusRemovePending(queue, key))
+		}
+	}()
+	for {
+		unlock, err := statusLockCacheContext(ctx, statusForgeStatePath("budget", forge))
+		if err != nil {
+			return err
+		}
+		err = func() error {
+			defer unlock()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			now := time.Now()
+			if until := statusForgeCoolingUntil(forge); now.Before(until) {
+				return &statusAdmissionError{cause: errForgeCooling, retry: until}
+			}
+			queue := statusReadPendingConfirmations(forge, now)
+			var queued bool
+			queue, queued = statusQueueForeground(queue, key, deadline)
+			if !queued {
+				return &statusAdmissionError{cause: errForgeBudget}
+			}
+			registered = true
+			if !statusSavePendingConfirmations(forge, queue) {
+				return errors.New("forge request reservation unavailable")
+			}
+			if queue[0].Key != key {
+				return errForgeBudget
+			}
+			burst, every := statusForgeAllowance(forge)
+			path := statusForgeStatePath("budget", forge)
+			tokens, updated := statusReadForgeBudget(path, burst, every, now)
+			if tokens < 1 {
+				retry := updated.Add(every)
+				delay := time.Until(retry)
+				// Custom intervals longer than a normal provider refill defer
+				// honestly instead of holding the shared lock for minutes.
+				limit := statusGitHubEvery
+				if forge == "bitbucket.org" {
+					limit = statusBitbucketEvery
+				}
+				if delay > limit {
+					return &statusAdmissionError{cause: errForgeBudget, retry: retry}
+				}
+				if err := statusWaitRefresh(ctx, max(0, delay)); err != nil {
+					return err
+				}
+				now = time.Now()
+				if until := statusForgeCoolingUntil(forge); now.Before(until) {
+					return &statusAdmissionError{cause: errForgeCooling, retry: until}
+				}
+				tokens, updated = statusReadForgeBudget(path, burst, every, now)
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if tokens < 1 {
+				return &statusAdmissionError{cause: errForgeBudget, retry: updated.Add(every)}
+			}
+			if err := os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens-1, updated.UnixNano())), 0600); err != nil {
+				return err
+			}
+			registered = !statusSavePendingConfirmations(forge, statusRemovePending(queue, key))
+			return nil
+		}()
+		if err == errForgeBudget {
+			if err = statusWaitRefresh(ctx, 25*time.Millisecond); err == nil {
+				continue
+			}
+		}
+		return err
+	}
+}
+
+func statusWaitRefresh(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return ctx.Err()
+	}
+}
+
+// Context-aware acquisition keeps cancellation finite even behind another
+// process's refill wait. A failed lock is never permission for an unaccounted
+// foreground request.
+func statusLockCacheContext(ctx context.Context, path string) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !statusSecureCacheDir(statusForgeCacheDir()) {
+		return nil, errors.New("forge cache")
+	}
+	fd, err := unix.Open(path+".lock", unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0600)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path+".lock")
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		return nil, errors.New("forge cache lock")
+	}
+	for {
+		err = unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			return func() { _ = unix.Flock(fd, unix.LOCK_UN); _ = file.Close() }, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			file.Close()
+			return nil, err
+		}
+		if err := statusWaitRefresh(ctx, 25*time.Millisecond); err != nil {
+			file.Close()
+			return nil, err
+		}
+	}
 }
 
 // Caller holds the existing budget lock; re-reading after a wait retains the

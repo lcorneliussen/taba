@@ -1,8 +1,11 @@
 package wtc
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -122,6 +125,206 @@ func statusIncrementalMissLog() string {
 
 func statusFetchPRRaw(record PRRecord, slug, forge string) ([]byte, error) {
 	return statusFetchPRRawWithRequest(record, slug, forge, nil)
+}
+
+// statusRefreshRecord is the explicit local metadata primitive. It does not
+// enumerate repositories or read an open list, so stale membership cannot
+// suppress the selected record's foreground observation. Collector integration
+// supplies only active records; recorded and retained terminal state is also
+// excluded here as a second safety boundary.
+func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (result statusPRDetail, observation StatusObservation) {
+	if intent != StatusRefreshForeground {
+		detail := statusEnrichRecordMetadata(record, slug, forge)
+		return detail, statusDetailObservation(detail)
+	}
+	ctx, cancel := statusRefreshContext(ctx)
+	defer cancel()
+	defer func() {
+		if forge != "bitbucket.org" || (result.State != "OPEN" && result.State != "DRAFT") {
+			return
+		}
+		checks, err := statusBBHeadChecksContext(ctx, intent, slug, result.HeadCommit, true)
+		result.Checks, result.ChecksUnsettled = checks.Result, !checks.Complete || checks.Result == "PENDING"
+		if result.State == "DRAFT" && result.Checks == "NONE" {
+			result.Checks = "draft"
+		}
+		if err != nil && observation.Freshness == "live" {
+			failure := statusObservationFailure(err)
+			failure.ObservedAt, failure.Source = observation.ObservedAt, observation.Source
+			observation = failure
+			result.Freshness = failure.Freshness
+		}
+	}()
+	fallback := statusUnknownDetail(record)
+	if record.MergedOn != "" {
+		checks := record.FinalChecks
+		if checks == "" {
+			checks = "NONE"
+		}
+		detail := statusPRDetail{Number: record.Number, State: "MERGED", Checks: checks, Merge: "MERGED", Review: "merged", Title: record.Title,
+			MergedOn: record.MergedOn, MergeCommit: record.MergeCommit, HeadCommit: record.MergeHead, Base: record.MergeBase,
+			Freshness: "recorded", StateSource: "registry"}
+		return detail, statusDetailObservation(detail)
+	}
+	if _, valid := statusPRInventoryKey(forge, slug, record.Number); !valid {
+		return fallback, statusObservationFailure(fmt.Errorf("invalid PR identity"))
+	}
+	// Pure cache reads retain known facts even if cancellation prevents lock
+	// admission. The locked path below still revalidates/migrates authority.
+	if known, ok := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge()); ok && known.State == "MERGED" {
+		fallback = known
+	} else if known, ok := statusReadObservedDetailKind("pr", record, slug, forge, 365*24*time.Hour); ok {
+		fallback = known
+	}
+	unlock, err := statusLockCacheContext(ctx, statusForgeEntryPath("pr", forge, slug, record.Number))
+	if err != nil {
+		return statusFailedPRObservation(fallback, err)
+	}
+	defer unlock()
+	known, ok, readErr := statusReadObservedDetailContext(ctx, record, slug, forge, 365*24*time.Hour)
+	if ok {
+		fallback = known
+	}
+	if readErr != nil {
+		return statusFailedPRObservation(fallback, readErr)
+	}
+	if ok && known.State == "MERGED" {
+		return known, statusDetailObservation(known)
+	}
+	if err := statusTakeForegroundToken(ctx, forge); err != nil {
+		outcome := statusObservationFailure(err)
+		fallback.Freshness = outcome.Freshness
+		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
+		return fallback, outcome
+	}
+	// Cancellation after admission can waste a token, never start queued work.
+	if err := ctx.Err(); err != nil {
+		outcome := statusObservationFailure(err)
+		fallback.Freshness = outcome.Freshness
+		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
+		return fallback, outcome
+	}
+	started := time.Now()
+	raw, err := statusFetchPRRawContext(ctx, record, slug, forge)
+	observed := time.Now()
+	if err != nil {
+		if statusRateLimited(err) {
+			until, coolErr := statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
+			if coolErr != nil {
+				outcome := StatusObservation{Freshness: "deferred", Reason: "provider-cooldown-unrecorded", RetryAt: until.UTC().Format(time.RFC3339Nano), ObservedAt: fallback.ObservedAt, Source: fallback.StateSource}
+				fallback.Freshness = outcome.Freshness
+				return fallback, outcome
+			}
+			err = &statusAdmissionError{cause: errForgeCooling, retry: until}
+		}
+		outcome := statusObservationFailure(err)
+		fallback.Freshness = outcome.Freshness
+		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
+		return fallback, outcome
+	}
+	detail, err := statusParseForgeDetail(forge, raw, record)
+	if err == nil && (detail.State == "" || detail.State == "UNKNOWN") {
+		err = errors.New("provider returned no PR state")
+	}
+	if err != nil {
+		fallback.Freshness = "unavailable"
+		outcome := statusObservationFailure(err)
+		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
+		return fallback, outcome
+	}
+	publication, publishErr := statusWriteForgeEntrySinceObservedContext(ctx, "pr", forge, slug, record.Number, raw, started, observed)
+	if !publication.Written && !publication.Retained {
+		if publishErr != nil {
+			return statusFailedPRObservation(fallback, publishErr)
+		}
+		winner, ok, readErr := statusReadObservedDetailContext(ctx, record, slug, forge, 365*24*time.Hour)
+		if readErr != nil {
+			return statusFailedPRObservation(fallback, readErr)
+		}
+		if ok {
+			outcome := statusDetailObservation(winner)
+			outcome.Reason = "superseded"
+			if winner.State != detail.State {
+				winner.Freshness, outcome.Freshness, outcome.Reason = "unavailable", "unavailable", "conflicting-observation"
+			}
+			return winner, outcome
+		}
+		fallback.Freshness = "unavailable"
+		return fallback, StatusObservation{Freshness: "unavailable", Reason: "cache-publication-failed", ObservedAt: fallback.ObservedAt, Source: fallback.StateSource}
+	}
+	detail.ObservedAt, detail.StateSource, detail.Freshness = observed.UTC().Format(time.RFC3339Nano), "foreground", "live"
+	if publication.Retained {
+		// Retention can commit before cancellation prevents ordinary detail
+		// publication. Read that independent authority without another lock or
+		// migration; never revoke a persisted merge because the request ended.
+		if retained, ok := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge()); ok && retained.State == "MERGED" {
+			if retained.ObservedAt != detail.ObservedAt || retained.State != detail.State || retained.HeadCommit != detail.HeadCommit || retained.Title != detail.Title {
+				outcome := statusDetailObservation(retained)
+				outcome.Reason = "superseded"
+				return retained, outcome
+			}
+		}
+	}
+	outcome := StatusObservation{Freshness: "live", ObservedAt: detail.ObservedAt, Source: "foreground", ProviderConfirmed: true}
+	switch {
+	case errors.Is(publishErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled):
+		outcome.Reason = "cancelled-after-observation"
+	case errors.Is(publishErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded):
+		outcome.Reason = "deadline-after-observation"
+	case publishErr != nil:
+		outcome.Reason = "detail-publication-failed"
+	default:
+		outcome.Reason = "provider-confirmed"
+		statusMarkFullRefresh(forge, slug, record.Number)
+	}
+	return detail, outcome
+}
+
+func statusFailedPRObservation(detail statusPRDetail, err error) (statusPRDetail, StatusObservation) {
+	outcome := statusObservationFailure(err)
+	detail.Freshness = outcome.Freshness
+	outcome.ObservedAt, outcome.Source = detail.ObservedAt, detail.StateSource
+	return detail, outcome
+}
+
+// The admission caller already debited the shared bucket. No second token and
+// no independent TTL path is allowed here. Commands observe cancellation while
+// running; stdout remains separate from provider diagnostics on stderr.
+func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var name string
+	var args []string
+	switch forge {
+	case "github.com":
+		name, args = "gh", []string{"pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid"}
+	case "bitbucket.org":
+		parts := strings.SplitN(slug, "/", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid Bitbucket repository slug")
+		}
+		name, args = "bb", []string{"pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json"}
+	default:
+		return nil, fmt.Errorf("unsupported forge")
+	}
+	if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
+		return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 200 * time.Millisecond
+	raw, err := forgeOutput(cmd)
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+			return nil, fmt.Errorf("%s PR observation: %w: %s", name, err, strings.TrimSpace(string(exitErr.Stderr)))
+		}
+		return nil, fmt.Errorf("%s PR observation: %w", name, err)
+	}
+	return raw, nil
 }
 
 func statusFetchPRRawWithRequest(record PRRecord, slug, forge string, onRequest func()) ([]byte, error) {

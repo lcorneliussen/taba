@@ -285,6 +285,12 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			} else if row.Title != "" {
 				bits = append(bits, row.Title)
 			}
+			if row.ObservationReason != "" {
+				bits = append(bits, "reason "+runtimeTextSafe(row.ObservationReason))
+				if row.RetryAt != "" {
+					bits = append(bits, "retry after "+runtimeTextSafe(row.RetryAt))
+				}
+			}
 			if !row.OnBranch {
 				follow := []string{}
 				if row.FollowTipBuild != nil && *row.FollowTipBuild != "" {

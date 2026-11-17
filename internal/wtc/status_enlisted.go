@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -344,14 +345,20 @@ func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requ
 // Forge CLIs spend most of their time waiting on network responses. Bound the
 // fan-out so a large enlistment refreshes promptly without flooding a forge.
 func (c *Context) statusEnrichRecords(records []PRRecord, rows []StatusRepo) ([]statusPRDetail, error) {
+	details, _, err := c.statusEnrichRecordsWithIntent(context.Background(), StatusRefreshBackground, records, rows)
+	return details, err
+}
+
+func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent StatusRefreshIntent, records []PRRecord, rows []StatusRepo) ([]statusPRDetail, []StatusObservation, error) {
 	repos := c.prRepositories()
 	identities := make([][2]string, len(records))
 	details := make([]statusPRDetail, len(records))
+	observations := make([]StatusObservation, len(records))
 	pending := make([]int, 0, len(records))
 	recorded := 0
 	for _, record := range records {
 		if err := ValidatePRIdentity(record.Repo, record.Number); err != nil {
-			return nil, fmt.Errorf("invalid enlisted PR: %w", err)
+			return nil, nil, fmt.Errorf("invalid enlisted PR: %w", err)
 		}
 	}
 	for i, record := range records {
@@ -394,10 +401,25 @@ func (c *Context) statusEnrichRecords(records []PRRecord, rows []StatusRepo) ([]
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			limit <- struct{}{}
+			select {
+			case limit <- struct{}{}:
+			case <-ctx.Done():
+				if intent == StatusRefreshForeground {
+					slug, forge := identities[i][0], identities[i][1]
+					details[i], observations[i] = statusRefreshRecord(ctx, intent, record, slug, forge)
+				} else {
+					details[i], observations[i] = statusFailedPRObservation(statusUnknownDetail(record), ctx.Err())
+				}
+				done <- struct{}{}
+				return
+			}
 			defer func() { <-limit }()
 			slug, forge := identities[i][0], identities[i][1]
-			details[i] = statusEnrichRecord(record, slug, forge)
+			if intent == StatusRefreshForeground {
+				details[i], observations[i] = statusRefreshRecord(ctx, intent, record, slug, forge)
+			} else {
+				details[i] = statusEnrichRecord(record, slug, forge)
+			}
 			done <- struct{}{}
 		}()
 	}
@@ -406,7 +428,12 @@ func (c *Context) statusEnrichRecords(records []PRRecord, rows []StatusRepo) ([]
 		c.statusProgress(fmt.Sprintf("Collected pull request facts %d/%d", i+1, len(pending)))
 	}
 	workers.Wait()
-	return details, nil
+	for i := range observations {
+		if observations[i].Freshness == "" {
+			observations[i] = statusDetailObservation(details[i])
+		}
+	}
+	return details, observations, nil
 }
 
 // StatusForgePreview adds enlisted PRs and discovers open PRs on active
@@ -418,6 +445,13 @@ func (c *Context) StatusForgePreview() (StatusSnapshot, error) {
 }
 
 func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSnapshot, error) {
+	return c.statusForgePreviewWithIntent(context.Background(), StatusRefreshBackground, includeBuild, recordMerges, 0)
+}
+
+func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent StatusRefreshIntent, includeBuild, recordMerges bool, metadataBudget time.Duration) (StatusSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return StatusSnapshot{}, err
+	}
 	snapshot, err := c.StatusLocalSnapshot(false)
 	if err != nil {
 		return snapshot, err
@@ -437,11 +471,22 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 	// Retain the original references for branch-return authority. A recovered
 	// URL repairs status metadata; it must not move a checkout in this refresh.
 	originalRecords := append([]PRRecord(nil), records...)
-	if recordMerges && !c.statusSweep {
+	if recordMerges && !c.statusSweep && intent != StatusRefreshForeground {
 		c.repairPRReferences(records)
 	}
-	details, err := c.statusEnrichRecords(records, snapshot.Repos)
+	if err := ctx.Err(); err != nil {
+		return snapshot, err
+	}
+	observationCtx, stopObserving := ctx, func() {}
+	if intent == StatusRefreshForeground {
+		observationCtx, stopObserving = context.WithTimeout(ctx, metadataBudget)
+	}
+	details, observations, err := c.statusEnrichRecordsWithIntent(observationCtx, intent, records, snapshot.Repos)
+	stopObserving()
 	if err != nil {
+		return snapshot, err
+	}
+	if err := ctx.Err(); err != nil {
 		return snapshot, err
 	}
 	if recordMerges {
@@ -496,6 +541,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 				snapshot.Repos[branchRow].PR = &StatusPRFacts{Number: detail.Number, Head: detail.HeadCommit, Checks: detail.Checks,
 					URL: prURL, Merge: detail.Merge, Review: detail.Review, Draft: detail.State == "DRAFT",
 					Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
+					ObservationReason: observations[i].Reason, RetryAt: observations[i].RetryAt,
 					MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase}
 			}
 		}
@@ -515,6 +561,7 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
 			Archived:  detail.State == "MERGED" && branchRow < 0 && statusArchived(detail.MergedOn, time.Now()),
 			Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
+			ObservationReason: observations[i].Reason, RetryAt: observations[i].RetryAt,
 			MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase,
 			worktreeDir: worktreeDir,
 		}
@@ -566,6 +613,9 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 				}
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return snapshot, err
 	}
 	if includeBuild {
 		c.statusProgress("Checking build providers")
