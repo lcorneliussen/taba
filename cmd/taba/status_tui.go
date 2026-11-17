@@ -2304,7 +2304,7 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	defer runtime.GOMAXPROCS(previous)
 	// The status view has no animation requiring the renderer's default
 	// sixty wakeups per second. Input and collector work run independently.
-	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(2)).Run()
+	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(1)).Run()
 	interrupted := ctx.Err() != nil
 	if start, ok := final.(statusStartupModel); ok && start.err != nil {
 		return final, start.err
