@@ -17,6 +17,7 @@ type RequirementInput struct {
 	State  string // inspected, missing, or unverified
 }
 type RequirementItem struct {
+	Target        string                `json:"target"`
 	Name          string                `json:"name"`
 	Kind          string                `json:"kind"`
 	Purpose       string                `json:"purpose,omitempty"`
@@ -31,8 +32,8 @@ type RequirementItem struct {
 	Condition     *RequirementCondition `json:"condition,omitempty"`
 }
 
-// ParseRequirementInput is shared by local diagnosis and CI lint. A malformed
-// input is never partly accepted. Errors disclose only a line and fixed code.
+// ParseRequirementInput rejects malformed inputs as a whole. Errors disclose
+// only a line and fixed code.
 func ParseRequirementInput(r io.Reader) (map[string]string, error) {
 	data, err := io.ReadAll(io.LimitReader(r, requirementMaxBytes+1))
 	if err != nil {
@@ -80,7 +81,9 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 	effective := map[string]requirementValue{}
 	declared := map[string]ConfigRequirement{}
 	for _, req := range schema.Requirements {
-		declared[req.Name] = req
+		if req.File == "" {
+			declared[req.Name] = req
+		}
 	}
 	unknown := map[string]RequirementItem{}
 	unresolved := false
@@ -113,7 +116,7 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 			}
 			effective[key] = requirementValue{value, source.Path, source.Scope, "present"}
 			if _, ok := declared[key]; !ok {
-				unknown[key] = RequirementItem{Name: key, Source: source.Path, Scope: source.Scope, Applicability: "unknown", State: "undocumented"}
+				unknown[key] = RequirementItem{Target: "key", Name: key, Source: source.Path, Scope: source.Scope, Applicability: "unknown", State: "undocumented"}
 			}
 		}
 	}
@@ -146,14 +149,14 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 				}
 				effective[k] = requirementValue{v, "process", "collection", "present"}
 				if _, ok := declared[k]; !ok {
-					unknown[k] = RequirementItem{Name: k, Source: "process", Scope: "collection", Applicability: "unknown", State: "undocumented"}
+					unknown[k] = RequirementItem{Target: "key", Name: k, Source: "process", Scope: "collection", Applicability: "unknown", State: "undocumented"}
 				}
 			}
 		}
 	}
 	result := make([]RequirementItem, 0, len(declared)+len(unknown))
 	for _, r := range schema.Requirements {
-		item := RequirementItem{Name: r.Name, Kind: r.Kind, Purpose: r.Purpose, Affects: r.Affects, Scope: r.Scope, Required: r.Required, Hint: r.Hint, Doc: r.Doc, Condition: r.When, Applicability: "applicable"}
+		item := RequirementItem{Target: "key", Name: r.Name, Kind: r.Kind, Purpose: r.Purpose, Affects: r.Affects, Scope: r.Scope, Required: r.Required, Hint: r.Hint, Doc: r.Doc, Condition: r.When, Applicability: "applicable"}
 		if r.When != nil {
 			v, ok := effective[r.When.Key]
 			if !ok || v.state == "unverified" || !requirementChoice(declared[r.When.Key], v.value) {
@@ -164,6 +167,7 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 		}
 		v, exists := effective[r.Name]
 		if r.File != "" {
+			item.Target = "file"
 			item.State = fileStates[r.File]
 			if item.State != "present" && item.State != "missing" {
 				item.State = "unverified"
@@ -197,6 +201,11 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 	for _, item := range unknown {
 		result = append(result, item)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name == result[j].Name {
+			return result[i].Target < result[j].Target
+		}
+		return result[i].Name < result[j].Name
+	})
 	return result
 }

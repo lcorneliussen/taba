@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -50,6 +51,9 @@ func TestConfigRequirementsConnectionMatrix(t *testing.T) {
 			}
 			inputs := []RequirementInput{{Source: schema.Sources.Files[0], Values: values, State: "inspected"}, {Source: schema.Sources.Files[1], State: "missing"}}
 			items := ConfigRequirementsInventory(schema, inputs, map[string]string{}, nil)
+			if test.selector == "garbage" && requirementItem(t, items, "WEB_CONNECTION").State != "malformed" {
+				t.Fatal("invalid selector not malformed")
+			}
 			got := requirementItem(t, items, "WEB_TEST_TOKEN")
 			if got.Applicability != test.app || got.State != test.state {
 				t.Fatalf("got %s/%s", got.Applicability, got.State)
@@ -124,6 +128,11 @@ func TestConfigRequirementsGrammarRejectsAmbiguity(t *testing.T) {
 	for _, test := range []struct{ name, body string }{
 		{"unknown version", strings.Replace(fixture, "requirements v1", "requirements v2", 1)},
 		{"unknown field", strings.Replace(fixture, `"kind":"secret"`, `"kind":"secret","unexpected":"secret-canary"`, 1)},
+		{"mixed-case duplicate", strings.Replace(fixture, `"kind":"secret"`, `"kind":"secret","Kind":"config"`, 1)},
+		{"wrong-case field", strings.Replace(fixture, `"kind":"secret"`, `"KIND":"secret"`, 1)},
+		{"Unicode field alias", strings.Replace(fixture, `"scope":"project"`, `"ſcope":"project"`, 1)},
+		{"dotfile example as actual", strings.Replace(fixture, `"path":"web.local.env"`, `"path":".env.example"`, 1)},
+		{"condition outside choices", strings.Replace(fixture, `"equals":"remote"`, `"equals":"other"`, 1)},
 		{"duplicate JSON key", strings.Replace(fixture, `"kind":"secret"`, `"kind":"secret","kind":"config"`, 1)},
 		{"undeclared example key", fixture + "UNDECLARED=secret-canary\n"},
 		{"duplicate requirement", fixture + "# taba:require " + strings.Split(strings.Split(fixture, "# taba:require ")[1], "# taba:require ")[0]},
@@ -187,5 +196,89 @@ func TestConfigRequirementsInputIsLiteralAndRedacted(t *testing.T) {
 		if strings.Contains(err.Error(), "secret-canary") {
 			t.Fatal("error leaked input")
 		}
+	}
+}
+
+func TestConfigRequirementsSeparateFileAndKeyNamespaces(t *testing.T) {
+	_, fixture := requirementsFixture(t)
+	body := strings.Replace(fixture, `"file":"certs/test.pem"`, `"file":"credentials"`, 1)
+	schema, err := ParseConfigRequirements("web.env.example", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := []RequirementInput{{Source: schema.Sources.Files[0], State: "inspected", Values: map[string]string{"credentials": "synthetic-canary"}}, {Source: schema.Sources.Files[1], State: "missing"}}
+	items := ConfigRequirementsInventory(schema, inputs, map[string]string{}, map[string]string{"credentials": "missing"})
+	states := map[string]string{}
+	for _, item := range items {
+		if item.Name == "credentials" {
+			states[item.Target] = item.State
+		}
+	}
+	if states["key"] != "undocumented" || states["file"] != "missing" {
+		t.Fatalf("namespaces conflated: %v", states)
+	}
+	// A declaration for the key is independent of the same-named file.
+	body += `# taba:require {"kind":"secret","purpose":"p","affects":"a","required":"optional","scope":"project","example":"placeholder","hint":"h","doc":"d"}` + "\ncredentials=replace-me\n"
+	if _, err = ParseConfigRequirements("web.env.example", strings.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfigRequirementsAmbiguousSnapshots(t *testing.T) {
+	schema, _ := requirementsFixture(t)
+	first := RequirementInput{Source: schema.Sources.Files[0], State: "inspected", Values: map[string]string{"WEB_CONNECTION": "remote"}}
+	items := ConfigRequirementsInventory(schema, []RequirementInput{first, first, {Source: schema.Sources.Files[1], State: "missing"}}, map[string]string{}, nil)
+	if requirementItem(t, items, "WEB_CONNECTION").State != "unverified" {
+		t.Fatal("duplicate source snapshots accepted")
+	}
+}
+
+func TestConfigRequirementsCountLimits(t *testing.T) {
+	schema, fixture := requirementsFixture(t)
+	replaceSource := func(s RequirementSources) string {
+		encoded, err := json.Marshal(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(fixture, "\n")
+		lines[1] = "# taba:source " + string(encoded)
+		return strings.Join(lines, "\n")
+	}
+	sources := schema.Sources
+	for i := 0; i < 17; i++ {
+		sources.Files = append(sources.Files, RequirementSource{Path: fmt.Sprintf("extra-%d.env", i), Scope: "collection", Format: "dotenv"})
+	}
+	if _, err := ParseConfigRequirements("web.env.example", strings.NewReader(replaceSource(sources))); err == nil {
+		t.Fatal("too many sources accepted")
+	}
+	sources = schema.Sources
+	sources.EnvPrefixes = nil
+	for i := 0; i < 17; i++ {
+		sources.EnvPrefixes = append(sources.EnvPrefixes, fmt.Sprintf("PREFIX_%d_", i))
+	}
+	if _, err := ParseConfigRequirements("web.env.example", strings.NewReader(replaceSource(sources))); err == nil {
+		t.Fatal("too many prefixes accepted")
+	}
+	choices := []string{}
+	for i := 0; i < 33; i++ {
+		choices = append(choices, fmt.Sprintf("choice%d", i))
+	}
+	encoded, _ := json.Marshal(choices)
+	body := strings.Replace(fixture, `["local","remote"]`, string(encoded), 1)
+	if _, err := ParseConfigRequirements("web.env.example", strings.NewReader(body)); err == nil {
+		t.Fatal("too many choices accepted")
+	}
+	var actual, example strings.Builder
+	example.WriteString("# taba:requirements v1\n# taba:source {\"files\":[{\"path\":\"web.env\",\"scope\":\"project\",\"format\":\"dotenv\"}]}\n")
+	for i := 0; i < 1025; i++ {
+		fmt.Fprintf(&actual, "KEY%d=literal\n", i)
+		example.WriteString("# taba:require {\"kind\":\"config\",\"purpose\":\"p\",\"affects\":\"a\",\"required\":\"optional\",\"scope\":\"project\",\"example\":\"nonsecret-default\",\"hint\":\"h\",\"doc\":\"d\"}\n")
+		fmt.Fprintf(&example, "KEY%d=literal\n", i)
+	}
+	if _, err := ParseRequirementInput(strings.NewReader(actual.String())); err == nil || err.(*RequirementError).Code != "too-many-inputs" {
+		t.Fatalf("key count: %v", err)
+	}
+	if _, err := ParseConfigRequirements("web.env.example", strings.NewReader(example.String())); err == nil || err.(*RequirementError).Code != "too-many-requirements" {
+		t.Fatalf("declaration count: %v", err)
 	}
 }

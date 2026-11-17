@@ -52,8 +52,8 @@ type ConfigRequirement struct {
 	Doc      string                `json:"doc"`
 	When     *RequirementCondition `json:"when,omitempty"`
 	Choices  []string              `json:"choices,omitempty"`
-	// File is a relative path whose existence is required. Its contents are
-	// never parsed by the dotenv reader.
+	// File is a relative path whose presence is reported. Required determines
+	// whether absence is a failure; the dotenv reader never parses its contents.
 	File string `json:"file,omitempty"`
 }
 
@@ -67,6 +67,7 @@ type RequirementSchema struct {
 
 var requirementName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
 var requirementRelativePath = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
+var requirementField = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 func requirementPath(p string) bool {
 	return len(p) <= 240 && requirementRelativePath.MatchString(p) && !strings.HasPrefix(p, "/") && path.Clean(p) == p && p != ".." && !strings.HasPrefix(p, "../") && p != "."
@@ -115,7 +116,7 @@ func requirementJSONValue(d *json.Decoder, depth int) bool {
 				return false
 			}
 			key, ok := k.(string)
-			if !ok || seen[key] {
+			if !ok || !requirementField.MatchString(key) || seen[key] {
 				return false
 			}
 			seen[key] = true
@@ -201,10 +202,10 @@ func ParseConfigRequirements(filename string, r io.Reader) (RequirementSchema, e
 			} else {
 				return fail(line, "unknown-annotation")
 			}
-			if names[req.Name] || !validConfigRequirement(req) {
+			if names["file:"+req.Name] || !validConfigRequirement(req) {
 				return fail(line, "contradictory-declaration")
 			}
-			names[req.Name] = true
+			names["file:"+req.Name] = true
 			result.Requirements = append(result.Requirements, req)
 		} else if strings.HasPrefix(s, "#") {
 			continue
@@ -222,10 +223,10 @@ func ParseConfigRequirements(filename string, r io.Reader) (RequirementSchema, e
 			if req.Example == "placeholder" && example != "" {
 				result.placeholders[key] = example
 			}
-			if names[key] || !validConfigRequirement(req) {
+			if names["key:"+key] || !validConfigRequirement(req) {
 				return fail(line, "contradictory-declaration")
 			}
-			names[key] = true
+			names["key:"+key] = true
 			result.Requirements = append(result.Requirements, req)
 		}
 		if len(names) > requirementMaxKeys {
@@ -245,7 +246,9 @@ func ParseConfigRequirements(filename string, r io.Reader) (RequirementSchema, e
 	// unresolved selectors cannot be hidden by dependency cycles or secrets.
 	byName := map[string]ConfigRequirement{}
 	for _, r := range result.Requirements {
-		byName[r.Name] = r
+		if r.File == "" {
+			byName[r.Name] = r
+		}
 	}
 	for _, req := range result.Requirements {
 		if req.When != nil {
@@ -309,7 +312,7 @@ func validRequirementSources(s RequirementSources, canonical string) bool {
 	seen := map[string]bool{}
 	canonicalFound := false
 	for _, f := range s.Files {
-		if !requirementPath(f.Path) || !requirementDotenv(f.Path) || f.Format != "dotenv" || f.Scope != "project" && f.Scope != "collection" {
+		if !requirementPath(f.Path) || !requirementDotenv(f.Path) || strings.HasSuffix(f.Path, ".example") || f.Format != "dotenv" || f.Scope != "project" && f.Scope != "collection" {
 			return false
 		}
 		k := f.Scope + ":" + f.Path
