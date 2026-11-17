@@ -1,0 +1,2 @@
+# GoReleaser-owned outputs; checked before removal and after each build.
+/dist/
