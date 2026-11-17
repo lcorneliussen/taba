@@ -54,8 +54,9 @@ func catchUpHerdr(session string, args ...string) ([]byte, error) {
 }
 
 // Reload Herdr/mise commands and observation waits share a deadline. Filesystem
-// and Git inspection consumes that time but is not interrupted by it. Leave
-// cancellation/pipe headroom below the limit in catch_up_pane_retry_test.go.
+// and Git inspection consumes that time but is not interrupted by it.
+// TestCatchUpReloadSelectedCommand checks real-command cancellation and pipe
+// cleanup headroom against the elapsed-time ceiling.
 const catchUpStatusReloadTimeout = 7500 * time.Millisecond
 const catchUpReloadWaitDelay = 200 * time.Millisecond
 

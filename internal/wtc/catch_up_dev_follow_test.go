@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,7 +13,8 @@ import (
 )
 
 // Pane control and installation are fixture scripts; eligible OFF/normal
-// targets execute the real CLI to verify the installed version and bypasses.
+// targets execute the exact captured command afterward to verify the installed
+// version and bypasses. A provider acknowledgement does not wait for CLI exit.
 func TestCatchUpInstalledReloadPreservesDevFollow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the native CLI for isolated installed-target reload checks")
@@ -83,10 +85,13 @@ case "$1" in
    [ "$2" = github:lcorneliussen/taba@0.2.2 ] || exit 97
    [ "$TABA_DEV_BUILD" = off ] && [ "$WTC_DEV_BUILD" = off ] || exit 98
    [ "$MISE_AUTO_INSTALL" = 0 ] && [ "$MISE_EXEC_AUTO_INSTALL" = 0 ] || exit 98
+   [ "$#" = 6 ] && [ "$3" = -- ] && [ "$4" = wtc ] && [ "$5" = status ] && [ "$6" = --tui ] || exit 97
+   printf 'execute\n' >> "$RELOAD_TEST_STATE/executions"
    printf '%s|%s\n' "$TABA_DEV_BUILD" "$WTC_DEV_BUILD" > "$RELOAD_TEST_STATE/child-env"
    "$RELOAD_TEST_CANDIDATE" --json dev status > "$RELOAD_TEST_STATE/dev-status.json" 2> "$RELOAD_TEST_STATE/dev-status.err" || :
    shift 4
-   exec "$RELOAD_TEST_CANDIDATE" "$@" ;;
+   # Keep the real CLI finite without changing the captured shell command.
+   exec "$RELOAD_TEST_CANDIDATE" "$@" --json --no-watch --no-fetch ;;
 esac
 `, 0755)
 					fixtureFile(t, filepath.Join(bin, "herdr"), `#!/bin/sh
@@ -102,7 +107,8 @@ case "$1 $2" in
    printf '{"result":{"process_info":{"foreground_process_group_id":42,"foreground_processes":[{"pid":42,"argv":%s}]}}}\n' "$args" ;;
  'pane send-keys') touch "$RELOAD_TEST_STATE/interrupted" ;;
  'pane run')
-   /bin/sh -c "$4 --json --no-watch --no-fetch" > "$RELOAD_TEST_STATE/status.json" 2> "$RELOAD_TEST_STATE/status.err" || exit 1
+   printf '%s' "$4" > "$RELOAD_TEST_STATE/captured-command"
+   printf 'capture\n' >> "$RELOAD_TEST_STATE/captures"
    touch "$RELOAD_TEST_STATE/restarted" ;;
 esac
 `, 0755)
@@ -120,6 +126,54 @@ esac
 					report.add("repo", "main", "agent-harness", "current", "synthetic harness already current", "", "", "")
 					target := catchUpTarget{collection: "main", path: c.Harness, repo: "agent-harness", harness: true, managed: true}
 					c.catchUpHooks(&report, target, CatchUpOptions{ReloadStatus: true, InstallTools: true, DryRun: dry, NoEnv: true, NoSecrets: true, NoSkills: true, NoMCP: true}, false)
+					blocked := policy == "on" || policy == "auto-active" || policy == "invalid"
+					captured, captureErr := os.ReadFile(filepath.Join(state, "captured-command"))
+					wantExecutions := 0
+					if !blocked && !dry {
+						wantExecutions = 1
+						if captureErr != nil || len(captured) == 0 {
+							t.Errorf("missing captured installed command: %v", captureErr)
+						} else {
+							// Execute the provider's exact command bytes. Only the
+							// existing mise fixture chooses finite CLI output flags.
+							ctx, cancel := context.WithTimeout(t.Context(), catchUpStatusReloadTimeout)
+							child := exec.CommandContext(ctx, "/bin/sh", "-c", string(captured))
+							child.WaitDelay = catchUpReloadWaitDelay
+							stdout, err := os.Create(filepath.Join(state, "status.json"))
+							if err != nil {
+								cancel()
+								t.Fatal(err)
+							}
+							defer stdout.Close()
+							stderr, err := os.Create(filepath.Join(state, "status.err"))
+							if err != nil {
+								cancel()
+								t.Fatal(err)
+							}
+							defer stderr.Close()
+							child.Stdout, child.Stderr = stdout, stderr
+							runErr := child.Run()
+							budgetErr := ctx.Err()
+							cancel()
+							if runErr != nil || budgetErr != nil {
+								t.Errorf("captured installed command: %v (budget %v)", runErr, budgetErr)
+							}
+							if child.ProcessState == nil || !child.ProcessState.Exited() {
+								t.Error("installed command child was not reaped after exit")
+							}
+						}
+					} else if !os.IsNotExist(captureErr) {
+						t.Errorf("blocked/dry target captured a command: %q %v", captured, captureErr)
+					}
+					for _, marker := range []string{"captures", "executions"} {
+						raw, err := os.ReadFile(filepath.Join(state, marker))
+						if err != nil && !os.IsNotExist(err) {
+							t.Fatal(err)
+						}
+						if got := strings.Count(string(raw), "\n"); got != wantExecutions {
+							t.Errorf("%s count=%d, want %d", marker, got, wantExecutions)
+						}
+					}
 					calls, _ := os.ReadFile(filepath.Join(state, "pane.log"))
 					var pane CatchUpRow
 					for _, row := range report.Outcomes {
@@ -138,7 +192,7 @@ esac
 						}
 					}
 					_ = json.Unmarshal(devRaw, &diagnostic)
-					blocked := policy == "on" || policy == "auto-active" || policy == "invalid"
+
 					if blocked {
 						if pane.Outcome != "needs-owner" || strings.Contains(string(calls), "pane send-keys") || strings.Contains(string(calls), "pane run") {
 							t.Errorf("FOLLOW GUARD missing: policy=%s outcome=%s stable_version=%s child_bypassed=%t child_mode=%s active=%t calls=%s", policy, pane.Outcome, snapshot.CLIVersion, diagnostic.Data.HandoverBypassed, diagnostic.Data.Follow.Mode, diagnostic.Data.Follow.Active, calls)
