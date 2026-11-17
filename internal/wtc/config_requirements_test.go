@@ -126,7 +126,7 @@ func TestConfigRequirementsGrammarRejectsAmbiguity(t *testing.T) {
 		{"unknown field", strings.Replace(fixture, `"kind":"secret"`, `"kind":"secret","unexpected":"secret-canary"`, 1)},
 		{"duplicate JSON key", strings.Replace(fixture, `"kind":"secret"`, `"kind":"secret","kind":"config"`, 1)},
 		{"undeclared example key", fixture + "UNDECLARED=secret-canary\n"},
-		{"duplicate requirement", fixture + strings.Split(fixture, "# taba:require ")[1]},
+		{"duplicate requirement", fixture + "# taba:require " + strings.Split(strings.Split(fixture, "# taba:require ")[1], "# taba:require ")[0]},
 		{"source escape", strings.Replace(fixture, `"path":"web.env"`, `"path":"../web.env"`, 1)},
 		{"unsupported source", strings.Replace(fixture, `"format":"dotenv"`, `"format":"yaml"`, 1)},
 		{"secret default", strings.Replace(fixture, `"kind":"config"`, `"kind":"secret"`, 1)},
@@ -146,7 +146,7 @@ func TestConfigRequirementsGrammarRejectsAmbiguity(t *testing.T) {
 			}
 		})
 	}
-	for _, filename := range []string{"web.yaml.example", "../web.env.example", ".example", "web.env"} {
+	for _, filename := range []string{"web.yaml.example", "../web.env.example", ".example", "web.env", "C:/web.env.example", "web\x1b.env.example"} {
 		if _, err := ParseConfigRequirements(filename, strings.NewReader(fixture)); err == nil {
 			t.Fatalf("unsupported path %s passed", filename)
 		}

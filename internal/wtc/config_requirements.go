@@ -66,9 +66,10 @@ type RequirementSchema struct {
 }
 
 var requirementName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,127}$`)
+var requirementRelativePath = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
 
 func requirementPath(p string) bool {
-	return p != "" && len(p) <= 240 && !strings.ContainsAny(p, "\\\x00\r\n\t") && !strings.HasPrefix(p, "/") && path.Clean(p) == p && p != ".." && !strings.HasPrefix(p, "../") && p != "."
+	return len(p) <= 240 && requirementRelativePath.MatchString(p) && !strings.HasPrefix(p, "/") && path.Clean(p) == p && p != ".." && !strings.HasPrefix(p, "../") && p != "."
 }
 func requirementDotenv(p string) bool {
 	b := path.Base(p)
