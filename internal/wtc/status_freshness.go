@@ -178,7 +178,11 @@ func StatusPRObservationDetail(row StatusPRRow) string {
 	if reason == "" {
 		reason = "unknown"
 	}
-	text := row.Repo + "#" + row.Number + ": " + row.Freshness + "; " + observation + "; reason " + reason
+	reasonLabel := "; reason "
+	if row.State == "MERGED" && row.Merge != nil && *row.Merge == "MERGED" && row.ObservationReason != "" && row.ObservationReason != "provider-confirmed" {
+		reasonLabel = "; recheck reason "
+	}
+	text := row.Repo + "#" + row.Number + ": " + row.Freshness + "; " + observation + reasonLabel + reason
 	if row.RetryAt != "" {
 		text += "; retry after " + row.RetryAt
 	}

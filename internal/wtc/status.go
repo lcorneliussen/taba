@@ -411,16 +411,72 @@ func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnaps
 			}
 			retained := old
 			if statusObservationUnavailable(row.Freshness) {
-				retained.Freshness, retained.ObservationReason, retained.RetryAt = row.Freshness, row.ObservationReason, row.RetryAt
-			}
-			incoming.PRs[i] = retained
-			for j := range incoming.Repos {
-				if incoming.Repos[j].Repo == row.Repo {
-					incoming.Repos[j].PRUnconfirmed = true
-					incoming.Repos[j].Next, incoming.Repos[j].Choices = nil, nil
+				// Recheck failure cannot revoke a confirmed terminal observation.
+				// Keep its reason/retry separate from the retained fact's age.
+				retained.ObservationReason, retained.RetryAt = row.ObservationReason, row.RetryAt
+				if !knownMerge(old) {
+					retained.Freshness = row.Freshness
 				}
 			}
+			associated := false
+			for j := range incoming.Repos {
+				repo := &incoming.Repos[j]
+				if repo.Repo != row.Repo || repo.PR != nil && !statusRetainedPRIdentity(repo.PR, row) {
+					continue
+				}
+				var facts *StatusPRFacts
+				for _, prior := range current.Repos {
+					if statusRetainedPRAssociation(*repo, prior, retained) {
+						associated = true
+						if !knownMerge(retained) {
+							facts = statusRetainedPRFacts(retained)
+						}
+						break
+					}
+				}
+				// Display evidence never supplies checkout/action authority.
+				// Without the exact association, show no active PR facts.
+				repo.PR = facts
+				repo.PRUnconfirmed = true
+				repo.Next, repo.Choices = nil, nil
+			}
+			if retained.OnBranch && !associated {
+				retained.OnBranch, retained.Landing = false, nil
+				retained.DisplayTitle = retained.Title
+			}
+			incoming.PRs[i] = retained
 		}
 	}
 	return incoming
+}
+
+func statusRetainedPRIdentity(facts *StatusPRFacts, row StatusPRRow) bool {
+	return facts != nil && row.URL != nil && *row.URL != "" && facts.URL == *row.URL && facts.Number == row.Number
+}
+
+// Snapshot association must agree on local identity and the reported PR head.
+// A matching repository name alone cannot transfer checks across checkouts.
+func statusRetainedPRAssociation(repo, prior StatusRepo, row StatusPRRow) bool {
+	return repo.Repo == row.Repo && prior.Repo == row.Repo &&
+		(row.worktreeDir == "" || row.worktreeDir == repo.Dir) &&
+		repo.Collection != "" && repo.Collection == prior.Collection &&
+		repo.Dir != "" && repo.Dir == prior.Dir && repo.Worktree != "" && repo.Worktree == prior.Worktree &&
+		repo.BranchKind == "branch" && prior.BranchKind == "branch" && repo.Branch != "" && repo.Branch == prior.Branch &&
+		repo.Slug != "" && repo.Slug == prior.Slug && repo.Slug == row.Slug && repo.Forge != "" && repo.Forge == prior.Forge &&
+		statusRetainedPRIdentity(repo.PR, row) && statusRetainedPRIdentity(prior.PR, row) &&
+		row.HeadCommit != "" && repo.PR.Head == row.HeadCommit && prior.PR.Head == row.HeadCommit
+}
+
+func statusRetainedPRFacts(row StatusPRRow) *StatusPRFacts {
+	value := func(s *string) string {
+		if s != nil {
+			return *s
+		}
+		return ""
+	}
+	return &StatusPRFacts{Number: row.Number, URL: value(row.URL), Head: row.HeadCommit,
+		Checks: value(row.Checks), Merge: value(row.Merge), Review: value(row.Review), Draft: row.Draft,
+		Freshness: row.Freshness, ObservedAt: row.ObservedAt, StateSource: row.StateSource,
+		ObservationReason: row.ObservationReason, RetryAt: row.RetryAt,
+		MergeConflicts: append([]string(nil), row.MergeConflicts...), MergeSource: row.MergeSource, MergeHead: row.MergeHead, MergeBase: row.MergeBase}
 }
