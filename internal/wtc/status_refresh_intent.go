@@ -20,7 +20,8 @@ const statusForegroundTimeout = 30 * time.Second
 
 // StatusObservation describes the result of a read, independently of the last
 // known PR state. RetryAt is populated only from an actual admission/cooldown
-// decision. Missing reasons in older snapshots must remain unknown.
+// decision. Missing admission or budget reasons in older snapshots stay unknown;
+// observation age can independently establish expiration.
 type StatusObservation struct {
 	Freshness         string `json:"freshness,omitempty"`
 	Reason            string `json:"reason,omitempty"`

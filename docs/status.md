@@ -203,8 +203,8 @@ The PR STATE cell uses compact `s:age` (stale), `d:age` (deferred), and `u:age`
 (unavailable) marks so titles remain visible. `never` means no known observation;
 `?` means unknown age. The header shows a refresh in progress. `?` help and `l`
 log provide the full last-known state, original observation time, actual admission
-reason and retry time when known. Older records with no reason say unknown;
-age alone never establishes a provider rate limit. Existing landing warnings
+reason and retry time when known. Missing admission or budget reasons remain
+unknown. Age can establish observation expiration, but never a provider rate limit. Existing landing warnings
 remain visible. JSON adds `observation_reason` and `retry_at` without changing
 the meaning of `observed_at`. Reading or rendering does not renew observations.
 

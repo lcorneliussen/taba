@@ -71,6 +71,8 @@ func statusFreshnessLabel(freshness, observed string) string {
 // timestamps. Age bounds ordinary detail; retained MERGED state is bounded by
 // statusMergedCacheAge.
 func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
+	// A fresh active detail from a released writer cannot supersede retained
+	// merge state. Its original age still controls freshness and action gates.
 	if detail, ok := statusRetainedMerge(record, slug, forge); ok {
 		return detail, true
 	}
