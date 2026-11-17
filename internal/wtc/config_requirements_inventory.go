@@ -12,12 +12,18 @@ import (
 // adapter must establish ownership before opening it. Values never enter the
 // returned inventory; callers must not log this input.
 type RequirementInput struct {
-	Source RequirementSource
-	Values map[string]string
-	State  string // inspected, missing, or unverified
+	Source         RequirementSource
+	Values         map[string]string
+	State          string // inspected, missing, or unverified
+	Provenance     string
+	EffectiveScope string
 }
 type RequirementItem struct {
 	Target        string                `json:"target"`
+	Repository    string                `json:"repository,omitempty"`
+	Declaration   string                `json:"declaration,omitempty"`
+	DeclaredScope string                `json:"declared_scope,omitempty"`
+	Provenance    string                `json:"provenance,omitempty"`
 	Name          string                `json:"name"`
 	Kind          string                `json:"kind"`
 	Purpose       string                `json:"purpose,omitempty"`
@@ -70,7 +76,7 @@ func ParseRequirementInput(r io.Reader) (map[string]string, error) {
 	return result, nil
 }
 
-type requirementValue struct{ value, source, scope, state string }
+type requirementValue struct{ value, source, scope, state, provenance string }
 
 // ConfigRequirementsInventory evaluates ordered authorized snapshots. Files
 // follow the canonical source order (last wins, even when empty); only owned
@@ -87,6 +93,7 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 	}
 	unknown := map[string]RequirementItem{}
 	unresolved := false
+	processUninspected := false
 	for _, source := range schema.Sources.Files {
 		var input *RequirementInput
 		for i := range inputs {
@@ -114,9 +121,13 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 				unresolved = true
 				continue
 			}
-			effective[key] = requirementValue{value, source.Path, source.Scope, "present"}
+			scope := source.Scope
+			if input.EffectiveScope != "" {
+				scope = input.EffectiveScope
+			}
+			effective[key] = requirementValue{value, source.Path, scope, "present", input.Provenance}
 			if _, ok := declared[key]; !ok {
-				unknown[key] = RequirementItem{Target: "key", Name: key, Source: source.Path, Scope: source.Scope, Applicability: "unknown", State: "undocumented"}
+				unknown[key] = RequirementItem{Target: "key", Kind: "unknown", Provenance: input.Provenance, Name: key, Source: source.Path, Scope: scope, Applicability: "unknown", State: "undocumented"}
 			}
 		}
 	}
@@ -135,7 +146,7 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 	}
 	if len(schema.Sources.EnvNames)+len(schema.Sources.EnvPrefixes) > 0 {
 		if env == nil {
-			unresolved = true
+			processUninspected = true
 			for k, v := range effective {
 				if owns(k) {
 					v.state = "unverified"
@@ -147,9 +158,9 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 				if !owns(k) || !requirementName.MatchString(k) {
 					continue
 				}
-				effective[k] = requirementValue{v, "process", "collection", "present"}
+				effective[k] = requirementValue{v, "process", "process", "present", "explicit-process-input"}
 				if _, ok := declared[k]; !ok {
-					unknown[k] = RequirementItem{Target: "key", Name: k, Source: "process", Scope: "collection", Applicability: "unknown", State: "undocumented"}
+					unknown[k] = RequirementItem{Target: "key", Kind: "unknown", Provenance: "explicit-process-input", Name: k, Source: "process", Scope: "process", Applicability: "unknown", State: "undocumented"}
 				}
 			}
 		}
@@ -157,6 +168,7 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 	result := make([]RequirementItem, 0, len(declared)+len(unknown))
 	for _, r := range schema.Requirements {
 		item := RequirementItem{Target: "key", Name: r.Name, Kind: r.Kind, Purpose: r.Purpose, Affects: r.Affects, Scope: r.Scope, Required: r.Required, Hint: r.Hint, Doc: r.Doc, Condition: r.When, Applicability: "applicable"}
+		item.DeclaredScope = r.Scope
 		if r.When != nil {
 			v, ok := effective[r.When.Key]
 			if !ok || v.state == "unverified" || !requirementChoice(declared[r.When.Key], v.value) {
@@ -175,6 +187,7 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 			item.Source = r.File
 		} else if exists {
 			item.Source = v.source
+			item.Provenance = v.provenance
 			item.Scope = v.scope
 			item.State = v.state
 			if item.State == "present" {
@@ -186,7 +199,7 @@ func ConfigRequirementsInventory(schema RequirementSchema, inputs []RequirementI
 					item.State = "malformed"
 				}
 			}
-		} else if unresolved {
+		} else if unresolved || processUninspected && owns(r.Name) {
 			item.State = "unverified"
 		} else {
 			item.State = "missing"

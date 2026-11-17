@@ -9,6 +9,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 const requirementMaxBytes = 256 * 1024
@@ -266,7 +267,7 @@ func validConfigRequirement(r ConfigRequirement) bool {
 	}
 	seen := map[string]bool{}
 	for _, choice := range r.Choices {
-		if choice == "" || len(choice) > 128 || strings.ContainsAny(choice, "\x00\r\n") || seen[choice] {
+		if !requirementText(choice, 128) || seen[choice] {
 			return false
 		}
 		seen[choice] = true
@@ -287,14 +288,18 @@ func validConfigRequirement(r ConfigRequirement) bool {
 		return false
 	}
 	for _, s := range []string{r.Purpose, r.Affects, r.Hint, r.Doc} {
-		if s == "" || len(s) > 512 || strings.ContainsAny(s, "\x00\r\n") {
+		if !requirementText(s, 512) {
 			return false
 		}
 	}
 	if (r.Required == "conditional") != (r.When != nil) {
 		return false
 	}
-	return r.When == nil || requirementName.MatchString(r.When.Key) && len(r.When.Equals) > 0 && len(r.When.Equals) <= 128 && !strings.ContainsAny(r.When.Equals, "\x00\r\n")
+	return r.When == nil || requirementName.MatchString(r.When.Key) && requirementText(r.When.Equals, 128)
+}
+
+func requirementText(s string, limit int) bool {
+	return s != "" && len(s) <= limit && strings.IndexFunc(s, unicode.IsControl) < 0
 }
 
 func requirementChoice(r ConfigRequirement, value string) bool {

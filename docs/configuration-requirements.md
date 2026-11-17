@@ -1,4 +1,4 @@
-# Canonical configuration requirements (v1 draft)
+# Canonical configuration requirements (v1)
 
 The declarative requirements parser accepts explicitly selected dotenv examples
 named `<actual filename>.example`. Supported names are `.env`, `.env.<suffix>`
@@ -6,9 +6,43 @@ and `<name>.env`, with `.example` appended. `.env.example` and
 `.env.local.example` follow the same rule. There is no hidden-file crawl and no
 requirement to rename an application's configuration files.
 
-The parser and inventory evaluator are currently library components. Command
-selection, filesystem authorization and CLI output are pending integration.
-This document describes the draft data contract, not commands already available.
+`taba doctor`, `taba config list`, and explicit `taba secrets list --requirements`
+use one inventory. The default `secrets list` remains a filename/link-state view
+and does not inspect contents.
+
+By default, only Git-tracked root `.env.example` and `.env.local.example` files
+are considered. A `# taba:requirements v1` header opts the file into the schema.
+Unannotated legacy examples remain hints, not mandatory-key declarations.
+Explicit `--example repo:path` selects nonstandard owned paths instead of the
+default selection; repeat it to select several independent groups. Selected
+examples cannot claim the same actual source or key namespace. There is no
+separate manifest or duplicated authoritative variable list.
+
+```sh
+taba doctor
+taba config list --json
+taba secrets list --requirements --json
+taba doctor --example web:config/dev.env.example
+taba config lint --json
+```
+
+`config lint` validates declarations, references, source ownership and any
+provided owned keys. It does **not** fail merely because a required credential,
+actual configuration file or optional integration is absent. A repository can
+require this command in local validation and CI without supplying real secrets.
+In a standalone Git checkout, use `taba config lint --example .env.example` or
+run `taba config lint` for bounded default discovery. Standalone lint cannot
+authorize project control-root inputs, so it does not open them; its provided-key
+checks cover selected repository-local inputs. In a collection, approved project
+inputs are also inspected when provided. Malformed provided dotenv files,
+unsafe sources, contradictory schemas and undocumented owned keys fail lint.
+
+Doctor diagnoses readiness: missing, empty, placeholder, malformed and unverified
+mandatory requirements are not healthy; optional missing and inapplicable
+requirements do not fail. Unknown selection remains unknown. A local connection
+can remove a remote credential requirement while local-service readiness remains
+unverified. Neither inventory listing nor doctor proves authentication or starts
+services.
 
 One canonical example contains the variable declarations for one configuration
 scope. The source annotation maps multiple actual files to that schema in the
@@ -54,19 +88,36 @@ The optional file annotation declares a presence-only requirement:
 ```
 
 File presence is separate from validation of its contents or authentication.
-Unsupported file-content checks remain unverified. The pure evaluator accepts
-only observations supplied by an authorized adapter; it opens no files itself.
+The adapter reports only presence for opaque file declarations; it does not
+validate their contents. Supported dotenv file contents are checked through key
+declarations. Unsupported content formats are not silently validated.
 
 The source list explicitly selects actual dotenv files. Process input ownership
 uses exact `env_names` and bounded `env_prefixes`. Only owned process names can
 participate in precedence or undocumented-input reporting. Unrelated inherited
-variables such as `HOME` and `PATH` do not participate. The adapter must establish
-receiving-project ownership before reading files or supplying process inputs;
-these declarations do not grant arbitrary filesystem access or establish that an
-inherited credential belongs to this project.
+variables such as `HOME` and `PATH` do not participate. Process values participate
+only when the invocation explicitly adds
+`--process-environment`; declaring ownership alone does not enable inspection.
+Uninspected owned process inputs remain unverified where they could affect the
+effective configuration. Inherited credentials never silently satisfy a
+file-mapped requirement. Standalone static lint does not inspect process inputs.
+
+Project sources resolve under the validated receiving control root in the
+registered repository namespace. Collection sources resolve relative to that
+repository's selected worktree. The inventory reports declaration, effective
+source scope and provenance separately. Process storage scope is reported as
+`process`, not assumed to be project-shared or collection-isolated. Existing worktree secret links may
+resolve inside that exact approved project/repository namespace. Cross-project,
+cross-repository and arbitrary external links are rejected. Examples cannot be
+symlinks; all inspected files must be regular, owned by the current user, not
+writable by others and within the size bound. Inspection uses rooted read-only
+opens and never creates, copies, links or migrates configuration. Ambiguous
+receiving identity produces an unverified diagnostic without exposing paths or
+values.
 
 The shared inventory reports names, classification, purpose, scope, effective
-source, condition, applicability and presence. Presence states include `present`,
+source, condition, applicability and presence. Key and file targets have distinct
+identities. Presence states include `present`,
 `missing`, `empty`, `placeholder`, `malformed`, `unverified`, `not-required` and
 `undocumented`. A present value does not prove valid authentication. Optional
 missing inputs remain distinguishable from missing mandatory inputs. A required
@@ -74,7 +125,9 @@ remote credential remains required when remote is explicitly selected, including
 when a local service repository is also checked out.
 
 Input is bounded to 256 KiB per file, 16 KiB per line, 1,024 keys, 16 sources and
-16 owned process prefixes. Paths are relative and cannot traverse parents.
+16 owned process prefixes. Paths use ASCII letters, digits, `_`, `.`, `/` and `-`;
+they are relative and
+cannot traverse parents. Actual source paths cannot end in `.example`.
 Dotenv syntax is deliberately literal: `NAME=value`, blank lines and whole-line
 comments. One matching pair of single or double quotes is removed. There is no
 shell expansion, escape processing, interpolation, multiline assignment, `export`

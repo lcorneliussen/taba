@@ -63,10 +63,20 @@ func addSecretsCommands(root *cobra.Command, asJSON *bool) {
 	list := &cobra.Command{Use: "list", Short: "List control-root file names and their link state without reading contents", Args: cobra.NoArgs}
 	var listRepo string
 	var tui, noTUI bool
+	var requirements bool
+	var requirementsOptions requirementsFlags
+	list.Flags().BoolVar(&requirements, "requirements", false, "Inspect example-backed requirement keys and presence (explicit content inspection)")
+	addRequirementsFlags(list, &requirementsOptions)
 	list.Flags().StringVar(&listRepo, "repo", "", "Only list files under this repository's control-root directory")
 	list.Flags().BoolVar(&tui, "tui", false, "Open the interactive inventory view")
 	list.Flags().BoolVar(&noTUI, "no-tui", false, "Print one table and exit")
 	list.RunE = func(cmd *cobra.Command, args []string) error {
+		if (len(requirementsOptions.examples) > 0 || requirementsOptions.process) && !requirements {
+			return fmt.Errorf("--example and --process-environment require --requirements")
+		}
+		if requirements && tui {
+			return fmt.Errorf("--requirements does not support --tui")
+		}
 		if tui && noTUI {
 			return fmt.Errorf("--tui and --no-tui cannot be combined")
 		}
@@ -86,6 +96,13 @@ func addSecretsCommands(root *cobra.Command, asJSON *bool) {
 		}
 		if err != nil {
 			return err
+		}
+		if requirements {
+			inventory, err := c.ListConfigRequirements(wtc.RequirementsOptions{Examples: requirementsOptions.examples, Repo: listRepo, ProcessEnvironment: requirementsOptions.process})
+			if err != nil {
+				return err
+			}
+			return printRequirementsInventory(inventory, *asJSON, false)
 		}
 		result, err := c.ListSecrets(listRepo)
 		if err != nil {

@@ -126,6 +126,7 @@ func TestConfigRequirementsUnknownSources(t *testing.T) {
 func TestConfigRequirementsGrammarRejectsAmbiguity(t *testing.T) {
 	_, fixture := requirementsFixture(t)
 	for _, test := range []struct{ name, body string }{
+		{"control hint", strings.Replace(fixture, `"hint":"Choose local or remote"`, `"hint":"bad\u001bsecret-canary"`, 1)},
 		{"unknown version", strings.Replace(fixture, "requirements v1", "requirements v2", 1)},
 		{"unknown field", strings.Replace(fixture, `"kind":"secret"`, `"kind":"secret","unexpected":"secret-canary"`, 1)},
 		{"mixed-case duplicate", strings.Replace(fixture, `"kind":"secret"`, `"kind":"secret","Kind":"config"`, 1)},
@@ -280,5 +281,14 @@ func TestConfigRequirementsCountLimits(t *testing.T) {
 	}
 	if _, err := ParseConfigRequirements("web.env.example", strings.NewReader(example.String())); err == nil || err.(*RequirementError).Code != "too-many-requirements" {
 		t.Fatalf("declaration count: %v", err)
+	}
+}
+
+func TestConfigRequirementsUninspectedProcessAffectsOnlyOwnedKeys(t *testing.T) {
+	schema, _ := requirementsFixture(t)
+	inputs := []RequirementInput{{Source: schema.Sources.Files[0], State: "missing"}, {Source: schema.Sources.Files[1], State: "missing"}}
+	items := ConfigRequirementsInventory(schema, inputs, nil, nil)
+	if requirementItem(t, items, "WEB_TRACE").State != "missing" || requirementItem(t, items, "WEB_CONNECTION").State != "unverified" {
+		t.Fatal("uninspected process input changed non-owned key presence")
 	}
 }
