@@ -267,7 +267,7 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			report.add("collection", name, "", "failed", "invalid collection name", "", "", "")
 			continue
 		}
-		target, err := OpenCollection(filepath.Join(c.Workspace, name))
+		target, err := OpenCollectionContext(c.resourceContext(), filepath.Join(c.Workspace, name))
 		if err != nil {
 			report.add("collection", name, "", "failed", "missing or invalid harness", "", "", "")
 			continue
@@ -324,7 +324,7 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 					continue
 				}
 			}
-			owner, err := gitOutput("-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+			owner, err := gitOutputContext(c.resourceContext(), "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir")
 			if err != nil {
 				report.add("repo", name, repoName, "failed", "cannot find Git owner", "", "", "")
 				continue
@@ -338,7 +338,7 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			var base *RepositoryBase
 			if repoErr == nil {
 				if bases == nil {
-					bases, err = newRepositoryBaseSnapshot(target.Collection, target.Registry)
+					bases, err = newRepositoryBaseSnapshotContext(c.resourceContext(), target.Collection, target.Registry)
 				}
 				var resolved RepositoryBase
 				if err == nil {
@@ -355,7 +355,7 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 				ref = resolved.EffectiveRef
 				base = &resolved
 			}
-			remotes, remoteErr := gitOutput("--git-dir="+owner, "remote")
+			remotes, remoteErr := gitOutputContext(c.resourceContext(), "--git-dir="+owner, "remote")
 			t := catchUpTarget{collection: name, path: path, repo: repoName, owner: owner,
 				harness: label == "harness", managed: repoErr == nil || label == "harness", noRemote: remoteErr == nil && remotes == ""}
 			if repoErr == nil && label != "harness" && repo.Name != repoName {
@@ -388,14 +388,14 @@ func (c *Context) catchUpHarnessRepo() (string, error) {
 	if c.AdHoc {
 		return "", nil
 	}
-	owner, err := gitOutput("-C", c.Harness, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	owner, err := gitOutputContext(c.resourceContext(), "-C", c.Harness, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err == nil {
 		name := strings.TrimSuffix(filepath.Base(owner), ".git")
 		if _, err := c.Repository(name); err == nil {
 			return name, nil
 		}
 	}
-	remote, err := gitOutput("-C", c.Harness, "remote", "get-url", "origin")
+	remote, err := gitOutputContext(c.resourceContext(), "-C", c.Harness, "remote", "get-url", "origin")
 	if err == nil {
 		for _, repo := range c.Registry.Repos {
 			if normalizeCatchUpRemote(remote) == normalizeCatchUpRemote(repo.Remote) {

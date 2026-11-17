@@ -330,7 +330,7 @@ const runtimeObservationTimeout = 5 * time.Second
 // RuntimeStatus reads recorded tunnel facts and the existing runner. Provider
 // credentials, accounts and daemon state are never probed by a read/status.
 func (c *Context) RuntimeStatus() []RuntimeItem {
-	ctx, cancel := context.WithTimeout(context.Background(), runtimeObservationTimeout)
+	ctx, cancel := context.WithTimeout(c.resourceContext(), runtimeObservationTimeout)
 	defer cancel()
 	items := runtimeTaskDiagnostics(c.runtimeStatusOnlyContext(ctx))
 	// Ready non-tunnel application addresses can be checked for answering.

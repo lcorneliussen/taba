@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -200,7 +201,11 @@ func (c *Context) statusProgress(message string) {
 }
 
 func statusCount(worktree, rangeSpec string) (int, error) {
-	value, err := statusGit(worktree, "rev-list", "--count", rangeSpec)
+	return statusCountContext(context.Background(), worktree, rangeSpec)
+}
+
+func statusCountContext(ctx context.Context, worktree, rangeSpec string) (int, error) {
+	value, err := statusGitContext(ctx, worktree, "rev-list", "--count", rangeSpec)
 	if err != nil {
 		return 0, err
 	}
@@ -212,14 +217,18 @@ func statusCount(worktree, rangeSpec string) (int, error) {
 }
 
 func statusLocalRepo(t catchUpTarget) (StatusRepo, error) {
+	return statusLocalRepoContext(context.Background(), t)
+}
+
+func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, error) {
 	dir := filepath.Base(t.path)
 	row := StatusRepo{Collection: t.collection, Dir: dir, Repo: t.repo,
 		Worktree: t.path, Tree: "clean", baseRef: t.ref, ComparisonRef: t.ref, DevelopmentBase: t.developmentBase, RenamedTo: t.renamed}
-	remote, err := statusGit(t.path, "remote", "get-url", "origin")
+	remote, err := statusGitContext(ctx, t.path, "remote", "get-url", "origin")
 	if err == nil {
 		row.Slug, row.Forge = catchUpForge(remote)
 	}
-	branch, err := statusGit(t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch, err := statusGitContext(ctx, t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err == nil {
 		row.BranchKind = "branch"
 		row.Branch = branch
@@ -236,24 +245,24 @@ func statusLocalRepo(t catchUpTarget) (StatusRepo, error) {
 	upstream := t.ref
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
 	if row.BranchKind == "branch" {
-		if found, err := statusGit(t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
+		if found, err := statusGitContext(ctx, t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
 			upstream = found
 			row.AheadBasis, row.UpstreamState = "upstream", "tracking"
-		} else if tracking, err := statusGit(t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
+		} else if tracking, err := statusGitContext(ctx, t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
 			row.UpstreamState = "gone"
 			row.BranchDisplay += " [gone]"
 		}
 	}
 	row.AheadRef = upstream
-	row.Ahead, err = statusCount(t.path, upstream+"..HEAD")
+	row.Ahead, err = statusCountContext(ctx, t.path, upstream+"..HEAD")
 	if err != nil {
 		return StatusRepo{}, fmt.Errorf("%s ahead count: %w", t.path, err)
 	}
-	row.Behind, err = statusCount(t.path, "HEAD.."+t.ref)
+	row.Behind, err = statusCountContext(ctx, t.path, "HEAD.."+t.ref)
 	if err != nil {
 		return StatusRepo{}, fmt.Errorf("%s development-tip count: %w", t.path, err)
 	}
-	porcelain, err := statusGit(t.path, "status", "--porcelain")
+	porcelain, err := statusGitContext(ctx, t.path, "status", "--porcelain")
 	if err != nil {
 		return StatusRepo{}, fmt.Errorf("%s working tree: %w", t.path, err)
 	}
@@ -262,7 +271,7 @@ func statusLocalRepo(t catchUpTarget) (StatusRepo, error) {
 		row.Tree = fmt.Sprintf("±%d", row.Changed)
 	}
 	row.Operation = catchUpOperation(t)
-	if unmerged, err := statusGit(t.path, "diff", "--name-only", "--diff-filter=U"); err == nil && unmerged != "" {
+	if unmerged, err := statusGitContext(ctx, t.path, "diff", "--name-only", "--diff-filter=U"); err == nil && unmerged != "" {
 		row.Conflict = true
 	}
 	return row, nil
@@ -288,7 +297,7 @@ func (c *Context) StatusLocalSnapshot(all bool) (StatusSnapshot, error) {
 	}
 	for i, target := range targets {
 		c.statusProgress(fmt.Sprintf("Reading worktrees %d/%d", i+1, len(targets)))
-		row, err := statusLocalRepo(target)
+		row, err := statusLocalRepoContext(c.resourceContext(), target)
 		if err != nil {
 			return snapshot, err
 		}
@@ -301,6 +310,9 @@ func (c *Context) StatusLocalSnapshot(all bool) (StatusSnapshot, error) {
 		c.statusRetired(&snapshot)
 	}
 	c.statusRuntime(&snapshot, all)
+	if err := c.resourceContext().Err(); err != nil {
+		return snapshot, err
+	}
 	statusNext(&snapshot)
 	c.statusRetirement(&snapshot, all)
 	return snapshot, nil

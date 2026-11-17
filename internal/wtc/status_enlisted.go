@@ -445,10 +445,11 @@ func (c *Context) StatusForgePreview() (StatusSnapshot, error) {
 }
 
 func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSnapshot, error) {
-	return c.statusForgePreviewWithIntent(context.Background(), StatusRefreshBackground, includeBuild, recordMerges, 0)
+	return c.statusForgePreviewWithIntent(c.resourceContext(), StatusRefreshBackground, includeBuild, recordMerges, 0)
 }
 
 func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent StatusRefreshIntent, includeBuild, recordMerges bool, metadataBudget time.Duration) (StatusSnapshot, error) {
+	c = c.WithStatusContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return StatusSnapshot{}, err
 	}

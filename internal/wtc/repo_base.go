@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -69,6 +70,10 @@ func canonicalBaseRepository(registry Registry, name string) (Repo, error) {
 	return repo, err
 }
 func normalizeRepoBase(ref string) (string, error) {
+	return normalizeRepoBaseContext(context.Background(), ref)
+}
+
+func normalizeRepoBaseContext(ctx context.Context, ref string) (string, error) {
 	branch := strings.TrimPrefix(ref, "origin/")
 	if len(branch) == 40 || len(branch) == 64 {
 		if _, err := hex.DecodeString(branch); err == nil {
@@ -78,7 +83,7 @@ func normalizeRepoBase(ref string) (string, error) {
 	if branch == "" || strings.HasPrefix(branch, "-") || strings.HasPrefix(branch, "refs/") || strings.HasPrefix(branch, "origin/") || strings.ContainsAny(branch, " \t\r\n@^~:?\\*[\x00") {
 		return "", fmt.Errorf("base must be a branch name or origin/<branch>")
 	}
-	if _, err := gitOutput("check-ref-format", "--branch", branch); err != nil {
+	if _, err := gitOutputContext(ctx, "check-ref-format", "--branch", branch); err != nil {
 		return "", fmt.Errorf("invalid development branch")
 	}
 	return "origin/" + branch, nil
@@ -114,6 +119,10 @@ func baseDirectory(collection string, create bool) (*os.File, error) {
 	return os.NewFile(uintptr(fd), ".wtc"), nil
 }
 func readRepoBases(dir *os.File, registry Registry) (repoBaseStore, error) {
+	return readRepoBasesContext(context.Background(), dir, registry)
+}
+
+func readRepoBasesContext(ctx context.Context, dir *os.File, registry Registry) (repoBaseStore, error) {
 	store := repoBaseStore{SchemaVersion: 1, Repos: map[string]repoBaseEntry{}}
 	if dir == nil {
 		return store, nil
@@ -148,7 +157,7 @@ func readRepoBases(dir *os.File, registry Registry) (repoBaseStore, error) {
 		if _, err := canonicalBaseRepository(registry, name); err != nil && !errors.Is(err, errUnregisteredBaseRepository) {
 			return store, err
 		}
-		ref, err := normalizeRepoBase(entry.Base)
+		ref, err := normalizeRepoBaseContext(ctx, entry.Base)
 		if err != nil {
 			return store, err
 		}
@@ -161,6 +170,10 @@ func readRepoBases(dir *os.File, registry Registry) (repoBaseStore, error) {
 }
 
 func readReceivingRepoBases(collection string, registry Registry) (repoBaseStore, error) {
+	return readReceivingRepoBasesContext(context.Background(), collection, registry)
+}
+
+func readReceivingRepoBasesContext(ctx context.Context, collection string, registry Registry) (repoBaseStore, error) {
 	dir, err := baseDirectory(collection, false)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return repoBaseStore{}, fmt.Errorf("repository bases: %w", err)
@@ -168,7 +181,7 @@ func readReceivingRepoBases(collection string, registry Registry) (repoBaseStore
 	if dir != nil {
 		defer dir.Close()
 	}
-	store, err := readRepoBases(dir, registry)
+	store, err := readRepoBasesContext(ctx, dir, registry)
 	if err != nil {
 		return store, fmt.Errorf("repository bases: %w", err)
 	}
@@ -178,21 +191,26 @@ func readReceivingRepoBases(collection string, registry Registry) (repoBaseStore
 // repositoryBaseSnapshot is confined to one read operation. It owns validated
 // store data and the identity/ref fields it resolves; updates never use it.
 type repositoryBaseSnapshot struct {
+	ctx        context.Context
 	collection string
 	registry   Registry
 	store      repoBaseStore
 }
 
 func newRepositoryBaseSnapshot(collection string, registry Registry) (*repositoryBaseSnapshot, error) {
+	return newRepositoryBaseSnapshotContext(context.Background(), collection, registry)
+}
+
+func newRepositoryBaseSnapshotContext(ctx context.Context, collection string, registry Registry) (*repositoryBaseSnapshot, error) {
 	copyRegistry := Registry{Repos: make([]Repo, len(registry.Repos))}
 	for i, repo := range registry.Repos {
 		copyRegistry.Repos[i] = Repo{Name: repo.Name, Aliases: append([]string(nil), repo.Aliases...), DefaultRef: repo.DefaultRef, ProductionRef: repo.ProductionRef, ReleaseRef: repo.ReleaseRef}
 	}
-	store, err := readReceivingRepoBases(collection, copyRegistry)
+	store, err := readReceivingRepoBasesContext(ctx, collection, copyRegistry)
 	if err != nil {
 		return nil, err
 	}
-	return &repositoryBaseSnapshot{collection: collection, registry: copyRegistry, store: store}, nil
+	return &repositoryBaseSnapshot{ctx: ctx, collection: collection, registry: copyRegistry, store: store}, nil
 }
 
 // ResolveRepositoryBase reads only receivingCollection, never the caller's
@@ -224,7 +242,7 @@ func (snapshot *repositoryBaseSnapshot) resolve(selector string, unmanaged bool)
 		if pathErr != nil || !info.IsDir() {
 			return RepositoryBase{}, fmt.Errorf("unmanaged base needs an existing Git worktree")
 		}
-		top, pathErr := gitOutput("-C", path, "rev-parse", "--show-toplevel")
+		top, pathErr := gitOutputContext(snapshot.ctx, "-C", path, "rev-parse", "--show-toplevel")
 		if pathErr != nil || !sameCanonicalPath(top, path) {
 			return RepositoryBase{}, fmt.Errorf("unmanaged base needs an existing Git worktree")
 		}

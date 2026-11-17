@@ -120,14 +120,14 @@ func (c *Context) prRepositories(names ...string) prRepositories {
 		if err != nil {
 			continue
 		}
-		top, err := gitOutput("-C", path, "rev-parse", "--show-toplevel")
+		top, err := gitOutputContext(c.resourceContext(), "-C", path, "rev-parse", "--show-toplevel")
 		if err != nil {
 			continue
 		}
 		if top, err = filepath.EvalSymlinks(top); err != nil || top != real {
 			continue
 		}
-		remote, _ := gitOutput("-C", path, "remote", "get-url", "origin")
+		remote, _ := gitOutputContext(c.resourceContext(), "-C", path, "remote", "get-url", "origin")
 		identity := registered[name]
 		if name == "harness" && !c.AdHoc {
 			identity = registered[harness]

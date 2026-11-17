@@ -2,19 +2,26 @@ package wtc
 
 import (
 	"bufio"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
 )
 
 func gitOutput(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	return gitOutputContext(context.Background(), args...)
+}
+
+func gitOutputContext(ctx context.Context, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = 200 * time.Millisecond
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

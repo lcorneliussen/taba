@@ -58,7 +58,7 @@ func (c *Context) StatusRefreshRefsWithAge(all bool, maxAge time.Duration) (Stat
 		}
 		report.Attempted++
 		c.statusProgress(fmt.Sprintf("Fetching remote refs %d", report.Attempted))
-		if _, err := statusCommand(30*time.Second, "git", "--git-dir="+common, "fetch", "--prune", "origin"); err != nil {
+		if _, err := statusCommandContext(c.resourceContext(), 30*time.Second, "git", "--git-dir="+common, "fetch", "--prune", "origin"); err != nil {
 			report.Failed++
 		}
 	}
@@ -111,6 +111,9 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 			return snapshot, report, err
 		}
 		c.statusProgress("Writing status snapshot")
+		if err := c.resourceContext().Err(); err != nil {
+			return snapshot, report, err
+		}
 		return snapshot, report, c.WriteStatusSnapshot(snapshot)
 	}
 	collections, err := WorkspaceCollections(c.Workspace)
@@ -159,6 +162,7 @@ func (c *Context) StatusForegroundSnapshot(ctx context.Context) (StatusSnapshot,
 }
 
 func (c *Context) statusForegroundSnapshot(ctx context.Context, metadataBudget time.Duration) (StatusSnapshot, error) {
+	c = c.WithStatusContext(ctx)
 	// A metadata-phase deadline is a deferred per-record outcome. The caller's
 	// cancellation still prevents subsequent snapshot publication.
 	snapshot, err := c.statusForgePreviewWithIntent(ctx, StatusRefreshForeground, true, true, metadataBudget)
@@ -169,4 +173,10 @@ func (c *Context) statusForegroundSnapshot(ctx context.Context, metadataBudget t
 		return snapshot, err
 	}
 	return snapshot, c.WriteStatusSnapshot(snapshot)
+}
+
+// StatusLiveSnapshotContext retains the complete collector and its accounting;
+// cancellation applies to context-aware reads and prevents queued publication.
+func (c *Context) StatusLiveSnapshotContext(ctx context.Context, all, noFetch bool, maxAge time.Duration) (StatusSnapshot, StatusFetchReport, error) {
+	return c.WithStatusContext(ctx).StatusLiveSnapshotWithFetchAge(all, noFetch, maxAge)
 }

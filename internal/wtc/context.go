@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -96,6 +97,7 @@ type Config struct {
 	} `toml:"openclaw"`
 }
 type Context struct {
+	readCtx          context.Context
 	Collection       string          `json:"collection"`
 	Harness          string          `json:"harness"`
 	Workspace        string          `json:"workspace"`
@@ -148,8 +150,13 @@ func devAutoSource(collection string) (string, error) {
 	return cfg.Dev.AutoSource, nil
 }
 
-func Discover(start string) (*Context, error) {
-	location, err := DiscoverLocation(start)
+func Discover(start string) (*Context, error) { return DiscoverContext(context.Background(), start) }
+
+func DiscoverContext(ctx context.Context, start string) (*Context, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	location, err := DiscoverLocationContext(ctx, start)
 	if err != nil {
 		return nil, err
 	}
@@ -165,18 +172,29 @@ func Discover(start string) (*Context, error) {
 	}
 	for candidate := abs; ; candidate = filepath.Dir(candidate) {
 		if sameCanonicalPath(candidate, location.Collection) {
-			return OpenCollection(candidate)
+			return OpenCollectionContext(ctx, candidate)
 		}
 		if candidate == filepath.Dir(candidate) {
 			break
 		}
 	}
-	return OpenCollection(location.Collection)
+	return OpenCollectionContext(ctx, location.Collection)
 }
 
 func OpenCollection(dir string) (*Context, error) { return openCollection(dir, false) }
 
+func OpenCollectionContext(ctx context.Context, dir string) (*Context, error) {
+	return openCollectionContext(ctx, dir, false)
+}
+
 func openCollection(dir string, creating bool) (*Context, error) {
+	return openCollectionContext(context.Background(), dir, creating)
+}
+
+func openCollectionContext(ctx context.Context, dir string, creating bool) (*Context, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -184,14 +202,14 @@ func openCollection(dir string, creating bool) (*Context, error) {
 	if RetiredFolder(abs) {
 		return nil, retiredFolderError(abs)
 	}
-	location, err := DiscoverLocation(abs)
+	location, err := DiscoverLocationContext(ctx, abs)
 	if err != nil {
 		return nil, err
 	}
 	if location.Collection == "" || !sameCanonicalPath(location.Collection, abs) {
 		return nil, fmt.Errorf("not a collection")
 	}
-	c := &Context{Collection: abs, Workspace: filepath.Dir(abs), Project: location.Project, creatingReceiver: creating}
+	c := &Context{readCtx: ctx, Collection: abs, Workspace: filepath.Dir(abs), Project: location.Project, creatingReceiver: creating}
 	if location.Project != nil {
 		if location.Project.Mode == "legacy" {
 			c.Harness = filepath.Join(abs, "harness")
@@ -208,7 +226,7 @@ func openCollection(dir string, creating bool) (*Context, error) {
 	if err := c.load(); err != nil {
 		return nil, err
 	}
-	return c, nil
+	return c, ctx.Err()
 }
 
 // registryPath is the tracked registry of a harness or the local registry of

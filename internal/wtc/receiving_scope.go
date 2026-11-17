@@ -72,7 +72,7 @@ func (r ReceivingContext) resolveEnvironment(checkInherited, checkGenerated bool
 	if r.Project != nil {
 		p := r.Project
 		if p.Mode != "legacy" {
-			p, err = OpenProject(p.Root)
+			p, err = OpenProjectContext(p.resourceContext(), p.Root)
 			if err != nil {
 				return scope, err
 			}
@@ -217,7 +217,7 @@ func ResolveReceivingScope(receiver ReceivingContext) (ResolvedScope, error) {
 }
 
 func (c *Context) receivingContext() (ReceivingContext, error) {
-	location, err := DiscoverLocation(c.Collection)
+	location, err := DiscoverLocationContext(c.resourceContext(), c.Collection)
 	if err != nil {
 		return ReceivingContext{}, err
 	}
@@ -276,7 +276,7 @@ func (s ResolvedScope) validateSourcePath(path string) error {
 }
 
 func (p *ProjectContext) snapshotFile(legacy, current string) ([]byte, string, error) {
-	listing, err := projectSnapshotGit(p.Source.Owner, "ls-tree", "-z", p.Source.Ref, "--", legacy, current)
+	listing, err := projectSnapshotGitContext(p.resourceContext(), p.Source.Owner, "ls-tree", "-z", p.Source.Ref, "--", legacy, current)
 	if err != nil {
 		return nil, "", fmt.Errorf("cannot inspect project snapshot policy")
 	}
@@ -303,7 +303,7 @@ func (p *ProjectContext) snapshotFile(legacy, current string) ([]byte, string, e
 	if mode != "100644 blob" && mode != "100755 blob" {
 		return nil, "", fmt.Errorf("snapshot policy must be a regular file")
 	}
-	data, err := projectSnapshotGit(p.Source.Owner, "show", p.Source.Ref+":"+name)
+	data, err := projectSnapshotGitContext(p.resourceContext(), p.Source.Owner, "show", p.Source.Ref+":"+name)
 	if err != nil {
 		return nil, "", fmt.Errorf("cannot read project snapshot policy")
 	}
