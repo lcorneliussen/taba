@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 type catchUpWorkspaceList struct {
@@ -71,18 +73,167 @@ func catchUpReloadContextErrAt(ctx context.Context, now time.Time) error {
 	return nil
 }
 
+// Drain the command pipes in this goroutine rather than racing a short cleanup
+// timer against separately scheduled pipe-copy goroutines. EOF and a reaped
+// successful child are still required; holding an inherited pipe stays unknown.
 func catchUpReloadOutput(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 	if err := catchUpReloadContextErr(ctx); err != nil {
 		return nil, err
 	}
-	cmd.WaitDelay = catchUpReloadWaitDelay
-	data, err := cmd.Output()
-	// A successful reply arriving after the deadline is not an in-budget
-	// observation or confirmed acknowledgement of a control write.
-	if expired := catchUpReloadContextErr(ctx); expired != nil {
-		return nil, expired
+	if cmd.Stdout != nil || cmd.Stderr != nil {
+		return nil, fmt.Errorf("reload command output already configured")
 	}
-	return data, err
+	stdout, outWriter, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	defer stdout.Close()
+	defer outWriter.Close()
+	stderr, errWriter, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	defer stderr.Close()
+	defer errWriter.Close()
+	fds := []unix.PollFd{{Fd: int32(stdout.Fd()), Events: unix.POLLIN}, {Fd: int32(stderr.Fd()), Events: unix.POLLIN}}
+	for _, fd := range fds {
+		if err := unix.SetNonblock(int(fd.Fd), true); err != nil {
+			return nil, err
+		}
+	}
+	cmd.Stdout, cmd.Stderr = outWriter, errWriter
+	cmd.WaitDelay = catchUpReloadWaitDelay
+	if err := catchUpReloadContextErr(ctx); err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	_ = outWriter.Close()
+	_ = errWriter.Close()
+	type completion struct {
+		err error
+		at  time.Time
+	}
+	done := make(chan completion, 1)
+	go func() { err := cmd.Wait(); done <- completion{err: err, at: time.Now()} }()
+	var finished *completion
+	var output bytes.Buffer
+	var errHead, errTail []byte
+	const errorPart = 32 << 10
+	captureError := func(data []byte) {
+		if len(errHead) < errorPart {
+			n := min(len(data), errorPart-len(errHead))
+			errHead = append(errHead, data[:n]...)
+			data = data[n:]
+		}
+		if len(data) >= errorPart {
+			errTail = append(errTail[:0], data[len(data)-errorPart:]...)
+		} else if len(data) > 0 {
+			errTail = append(errTail, data...)
+			if len(errTail) > errorPart {
+				errTail = append(errTail[:0], errTail[len(errTail)-errorPart:]...)
+			}
+		}
+	}
+	var readErr error
+	buf := make([]byte, 32<<10)
+	for {
+		if finished == nil {
+			select {
+			case result := <-done:
+				finished = &result
+			default:
+			}
+		}
+		if finished != nil {
+			if expired := catchUpReloadContextErr(ctx); expired != nil {
+				return nil, expired
+			}
+			if fds[0].Fd < 0 && fds[1].Fd < 0 {
+				if exit, ok := finished.err.(*exec.ExitError); ok {
+					exit.Stderr = append(errHead, errTail...)
+				}
+				if finished.err != nil {
+					return output.Bytes(), finished.err
+				}
+				return output.Bytes(), readErr
+			}
+		}
+		for i := range fds {
+			for fds[i].Fd >= 0 {
+				n, err := unix.Read(int(fds[i].Fd), buf)
+				if n > 0 {
+					if i == 0 {
+						_, _ = output.Write(buf[:n])
+					} else {
+						captureError(buf[:n])
+					}
+				}
+				if err == unix.EINTR && catchUpReloadContextErr(ctx) == nil {
+					continue
+				}
+				if err == unix.EAGAIN {
+					break
+				}
+				if err != nil {
+					if readErr == nil {
+						readErr = err
+					}
+					if i == 0 {
+						_ = stdout.Close()
+					} else {
+						_ = stderr.Close()
+					}
+				}
+				if err != nil || n == 0 {
+					fds[i].Fd = -1
+					break
+				}
+				// A continuously writing child must not monopolize draining
+				// past the absolute deadline. Wait still reaps it below.
+				if catchUpReloadContextErr(ctx) != nil {
+					break
+				}
+			}
+		}
+		if fds[0].Fd < 0 && fds[1].Fd < 0 {
+			if finished == nil {
+				select {
+				case result := <-done:
+					finished = &result
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+			continue
+		}
+		// First consume immediately available data/EOF, even if this goroutine
+		// was descheduled after Wait. The cleanup limit bounds further waiting,
+		// not a race against collecting an already closed pipe. The absolute
+		// observation deadline above still rejects late replies.
+		if finished != nil && !time.Now().Before(finished.at.Add(catchUpReloadWaitDelay)) {
+			return output.Bytes(), exec.ErrWaitDelay
+		}
+		// Poll only briefly so child completion and cancellation do not depend
+		// on another I/O copier being scheduled. Never extend either deadline.
+		delay := 10 * time.Millisecond
+		if deadline, ok := ctx.Deadline(); ok && cmd.Cancel != nil {
+			delay = min(delay, max(time.Millisecond, time.Until(deadline)))
+		}
+		if finished != nil {
+			delay = min(delay, max(time.Millisecond, time.Until(finished.at.Add(catchUpReloadWaitDelay))))
+		}
+		if _, err := unix.Poll(fds, int((delay+time.Millisecond-1)/time.Millisecond)); err != nil && err != unix.EINTR {
+			if readErr == nil {
+				readErr = err
+			}
+			// A pipe error must not leave an unreaped child behind. Closing the
+			// read ends unblocks writers; CommandContext retains cancellation.
+			_ = stdout.Close()
+			_ = stderr.Close()
+			fds[0].Fd, fds[1].Fd = -1, -1
+		}
+	}
 }
 
 func catchUpReloadWait(ctx context.Context) error {

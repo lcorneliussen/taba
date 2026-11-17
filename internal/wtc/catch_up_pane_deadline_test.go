@@ -159,6 +159,8 @@ func TestCatchUpReloadLogical(t *testing.T) {
 		{"dry-run", "planned", "would reload", 0, 0, 0, 0, 0},
 		{"late-shell", "failed", "budget expired; no command sent", 1, 0, 1, 0, 0},
 		{"late-status", "failed", "budget expired; command delivered", 1, 1, 2, 1, 0},
+		{"at-deadline-status", "failed", "budget expired; command delivered", 1, 1, 2, 1, 0},
+		{"before-deadline-status", "restarted", "observed status process", 1, 1, 2, 1, 0},
 		{"late-ack", "failed", "budget expired; restart delivery unconfirmed", 1, 1, 2, 0, 0},
 		{"shared-budget", "failed", "budget expired; command delivered", 1, 1, 2, 1, 0},
 		{"wait-expiry", "failed", "budget expired; no command sent", 1, 0, 1, 0, 1},
@@ -185,6 +187,14 @@ func TestCatchUpReloadLogical(t *testing.T) {
 				phase := s.phase()
 				if key == "pane process-info" && (tc.mode == "late-shell" && phase == "interrupt" || tc.mode == "late-status" && phase == "restart") || tc.mode == "late-ack" && key == "pane run" {
 					now = now.Add(8 * time.Second)
+				}
+				if key == "pane process-info" && phase == "restart" {
+					if tc.mode == "at-deadline-status" {
+						now = start.Add(catchUpStatusReloadTimeout)
+					}
+					if tc.mode == "before-deadline-status" {
+						now = start.Add(catchUpStatusReloadTimeout - time.Nanosecond)
+					}
 				}
 				if tc.mode == "shared-budget" && key == "pane process-info" && s.reads[phase] == 1 {
 					if phase == "interrupt" {
@@ -267,6 +277,9 @@ func TestReloadDeadlineProcess(t *testing.T) {
 		os.Exit(0)
 	}
 	mark("entered")
+	if os.WriteFile(filepath.Join(state, "owned-pid"), []byte(strconv.Itoa(os.Getpid())), 0600) != nil {
+		os.Exit(98)
+	}
 	switch mode {
 	case "interrupt-ack":
 		mark("actual-interrupt")
@@ -295,8 +308,19 @@ func TestReloadDeadlineProcess(t *testing.T) {
 		mark("emitted")
 		_ = json.NewEncoder(os.Stdout).Encode(reloadStatusBody())
 		os.Exit(0)
-	case "reply":
-		_ = json.NewEncoder(os.Stdout).Encode(reloadStatusBody())
+	case "reply", "clean-eof", "stdout-large", "stderr-success", "exit-error":
+		if mode == "stderr-success" || mode == "exit-error" {
+			_, _ = os.Stderr.Write([]byte(strings.Repeat("synthetic-stderr;", 10000)))
+		}
+		body := reloadStatusBody().(map[string]any)
+		if mode == "stdout-large" {
+			body["padding"] = strings.Repeat("synthetic-output;", 20000)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(body)
+		mark("emitted")
+		if mode == "exit-error" {
+			os.Exit(17)
+		}
 		os.Exit(0)
 	}
 	time.Sleep(30 * time.Second)
@@ -347,6 +371,8 @@ func TestCatchUpReloadSelectedCommand(t *testing.T) {
 		{"restart-ack", "failed", "restart delivery unconfirmed", 1, 1, 0, 1},
 		{"mise", "failed", "pin inspection unconfirmed", 0, 0, 0, 0},
 		{"pipe", "failed", "no pane control attempted", 0, 0, 0, 0},
+		{"clean-eof", "restarted", "observed status process", 1, 1, 0, 0},
+		{"stderr-success", "restarted", "observed status process", 1, 1, 0, 0},
 		{"expired-write", "failed", "restart delivery unconfirmed", 1, 1, 0, 0},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
@@ -384,7 +410,7 @@ func TestCatchUpReloadSelectedCommand(t *testing.T) {
 			ops.run = func(ctx context.Context, name, dir string, args ...string) ([]byte, error) {
 				key := reloadCommand(name, args)
 				phase := s.phase()
-				choose := tc.mode == "initial-read" && key == "pane process-info" && phase == "initial" || tc.mode == "interrupt-read" && key == "pane process-info" && phase == "interrupt" || tc.mode == "restart-read" && key == "pane process-info" && phase == "restart" || tc.mode == "interrupt-ack" && key == "pane send-keys" || (tc.mode == "restart-ack" || tc.mode == "expired-write") && key == "pane run" || tc.mode == "mise" && key == "mise where" || tc.mode == "pipe" && key == "pane process-info"
+				choose := tc.mode == "initial-read" && key == "pane process-info" && phase == "initial" || tc.mode == "interrupt-read" && key == "pane process-info" && phase == "interrupt" || tc.mode == "restart-read" && key == "pane process-info" && phase == "restart" || tc.mode == "interrupt-ack" && key == "pane send-keys" || (tc.mode == "restart-ack" || tc.mode == "expired-write") && key == "pane run" || tc.mode == "mise" && key == "mise where" || tc.mode == "pipe" && key == "pane process-info" || (tc.mode == "clean-eof" || tc.mode == "stderr-success") && key == "pane process-info" && phase == "restart"
 				if !choose {
 					return s.run(ctx, name, dir, args...)
 				}
@@ -424,6 +450,16 @@ func TestCatchUpReloadSelectedCommand(t *testing.T) {
 					t.Fatal("selected subprocess did not reach the owned boundary")
 				}
 			}
+			if tc.mode != "expired-write" {
+				data, err := os.ReadFile(filepath.Join(state, "owned-pid"))
+				pid, parseErr := strconv.Atoi(string(data))
+				if err != nil || parseErr != nil || pid <= 1 {
+					t.Fatalf("invalid owned child evidence: %q %v", data, err)
+				}
+				if err := unix.Kill(pid, 0); err != unix.ESRCH {
+					t.Fatalf("owned command child was not reaped: %v", err)
+				}
+			}
 			if tc.mode == "expired-write" {
 				<-barrierDone
 				if !errors.Is(selectedErr, context.Canceled) {
@@ -431,6 +467,13 @@ func TestCatchUpReloadSelectedCommand(t *testing.T) {
 				}
 				if _, err := os.Stat(filepath.Join(state, "entered")); !os.IsNotExist(err) {
 					t.Error("expired command started")
+				}
+			} else if tc.mode == "clean-eof" || tc.mode == "stderr-success" {
+				if selectedErr != nil {
+					t.Errorf("complete output rejected: %v", selectedErr)
+				}
+				if _, err := os.Stat(filepath.Join(state, "emitted")); err != nil {
+					t.Error("real status reply was not emitted")
 				}
 			} else if tc.mode == "pipe" {
 				if !errors.Is(selectedErr, exec.ErrWaitDelay) {
@@ -483,5 +526,40 @@ func TestCatchUpReloadLateOutput(t *testing.T) {
 	}
 	if time.Since(start) >= time.Second {
 		t.Fatal("canceled wait consumed cadence")
+	}
+}
+
+func TestCatchUpReloadOutputStreams(t *testing.T) {
+	for _, mode := range []string{"clean-eof", "stdout-large", "stderr-success", "exit-error"} {
+		t.Run(mode, func(t *testing.T) {
+			_, state := reloadDeadlineFixture(t)
+			t.Setenv("RELOAD_DEADLINE_BOUNDARY", mode)
+			ctx, cancel := context.WithTimeout(context.Background(), catchUpStatusReloadTimeout)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "herdr", "--session", "synthetic", "pane", "process-info", "--pane", "w1:p3")
+			start := time.Now()
+			data, err := catchUpReloadOutput(ctx, cmd)
+			if time.Since(start) > 8*time.Second {
+				t.Fatal("stream collection exceeded original elapsed ceiling")
+			}
+			if mode == "exit-error" {
+				var exit *exec.ExitError
+				if !errors.As(err, &exit) || exit.ExitCode() != 17 || len(exit.Stderr) == 0 || len(exit.Stderr) > 64<<10 {
+					t.Fatalf("exit/stderr evidence: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			var reply catchUpProcessInfo
+			if json.Unmarshal(data, &reply) != nil || reply.Result.ProcessInfo.Group != 42 {
+				t.Fatalf("complete stdout missing: %q", data)
+			}
+			if cmd.ProcessState == nil || !cmd.ProcessState.Exited() {
+				t.Fatal("owned child not reaped")
+			}
+			if _, err := os.Stat(filepath.Join(state, "emitted")); err != nil {
+				t.Fatal("fixture did not emit output")
+			}
+		})
 	}
 }
