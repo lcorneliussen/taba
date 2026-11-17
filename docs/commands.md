@@ -77,6 +77,40 @@ the conversation before using `x` to allow an explicit retry. Agent tasks in one
 handoff; check that conversation for completion. Publication authority is not
 broadened by a selection, and follow-up steps require a new selection.
 
+## Share a local preview with a selected reviewer
+
+For a one-off browser review, you can use qURL with a development service
+that Taba already runs. This uses the qURL CLI alongside Taba. Taba does not
+manage the share or observe its access policy.
+
+1. Start the preview with `wtc up <name>`. Check its assigned port in
+   `wtc svc status` or the service log. Use a preview with test data. Share
+   only the app port, and keep the Taba control panel and admin APIs local.
+2. Install the [qURL CLI](https://github.com/layervai/qurl-integrations/releases).
+   Replace `3000` with the preview port, then run:
+
+   ```sh
+   qurl publish http://127.0.0.1:3000 --access review
+   ```
+
+3. Send the resource address to one reviewer. Ask them to request access in
+   their browser. Check the pending request for their verified email and use
+   its decision ID and current version:
+
+   ```sh
+   qurl access list_grants <CRID> -o json
+   qurl access approve <CRID> <decision-id> --version <version>
+   ```
+
+4. Ask the approved reviewer to return to the access page and click **Open**.
+   Check that the app loads for them. For a test of the access policy, check
+   that an unapproved browser cannot load the app and watch the app log for
+   requests before approval. Keep the preview and its host running during
+   the review.
+5. End the qURL share with `qurl delete <CRID>` after the review. This
+   permanently removes that qURL resource. Stop the development service
+   separately if you no longer need it.
+
 ## Retirement readiness
 
 `wtc status` includes a retirement assessment for each selected collection: known
