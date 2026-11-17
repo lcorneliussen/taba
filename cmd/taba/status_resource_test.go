@@ -242,3 +242,28 @@ func TestStatusResourcePresentationPreservesEvidence(t *testing.T) {
 		t.Fatal("presentation renewed, mutated or discarded evidence")
 	}
 }
+
+func TestStatusResourceUnchangedServiceTickKeepsPaintClock(t *testing.T) {
+	m := statusTUIModel{width: 100, height: 20, lastRefresh: time.Now().Add(-time.Hour), nextRefresh: time.Now().Add(5 * time.Minute), snapshot: wtc.StatusSnapshot{Collection: "fixture"}}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 20})
+	m = next.(statusTUIModel)
+	first := m.View().Content
+	time.Sleep(1100 * time.Millisecond)
+	next, _ = m.Update(statusRuntimeTickMsg{})
+	m = next.(statusTUIModel)
+	if got := m.View().Content; got != first {
+		t.Fatal("unchanged service timer repainted clock-only content between UI heartbeats")
+	}
+	next, _ = m.Update(statusTickMsg(time.Now()))
+	m = next.(statusTUIModel)
+	if got := m.View().Content; got == first {
+		t.Fatal("UI heartbeat stopped advancing original observation age")
+	}
+	old := m.headerLine()
+	time.Sleep(1100 * time.Millisecond)
+	next, _ = m.Update(statusRuntimeMsg{at: time.Now(), items: []wtc.RuntimeItem{{Path: "widget/web", State: "ready"}}})
+	m = next.(statusTUIModel)
+	if m.headerLine() == old || !strings.Contains(m.View().Content, "ready") {
+		t.Fatal("new service observation waited for the next UI heartbeat")
+	}
+}

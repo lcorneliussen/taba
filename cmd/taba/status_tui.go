@@ -97,6 +97,7 @@ type statusTUIModel struct {
 	background        time.Duration
 	nextRefresh       time.Time
 	lastRefresh       time.Time
+	paintAt           time.Time // UI clock only; never an observation timestamp
 	width             int
 	height            int
 	scroll            int
@@ -563,6 +564,11 @@ func (m statusTUIModel) runtimeDue(now time.Time) bool {
 }
 
 func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// An unchanged service timer is not a second display clock. The UI
+	// heartbeat still advances ages, and input/new observations paint now.
+	if _, unchangedClock := msg.(statusRuntimeTickMsg); !unchangedClock {
+		m.paintAt = time.Now()
+	}
 	switch msg := msg.(type) {
 	case statusWatcherReadyMsg:
 		if msg.err != nil {
@@ -1998,12 +2004,19 @@ func (m statusTUIModel) headerLine() string {
 		age = "age unknown"
 	}
 	if !m.lastRefresh.IsZero() {
-		age = fmt.Sprintf("%ds old", max(0, int(time.Since(m.lastRefresh).Seconds())))
+		age = fmt.Sprintf("%ds old", max(0, int(m.paintTime().Sub(m.lastRefresh).Seconds())))
 	}
 	if m.refreshing {
 		age += " · refreshing"
 	}
 	return fmt.Sprintf("%s status · %s · %s", branding.Product, name, age)
+}
+
+func (m statusTUIModel) paintTime() time.Time {
+	if !m.paintAt.IsZero() {
+		return m.paintAt
+	}
+	return time.Now()
 }
 
 func statusTUIProgressLine(step string, elapsed time.Duration, width int) string {
@@ -2185,7 +2198,7 @@ func (m statusTUIModel) View() tea.View {
 		}
 	}
 	if !m.nextRefresh.IsZero() && !m.refreshing {
-		footer += fmt.Sprintf(" · next %ds", max(0, int(time.Until(m.nextRefresh).Seconds())))
+		footer += fmt.Sprintf(" · next %ds", max(0, int(m.nextRefresh.Sub(m.paintTime()).Seconds())))
 	}
 	if m.hover != "" {
 		footer = m.hover
