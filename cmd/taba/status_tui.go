@@ -1581,7 +1581,10 @@ func statusTUIFollowState(follow *wtc.StatusFollow) (string, string) {
 }
 
 func statusTUIMergedPR(row wtc.StatusPRRow) bool {
-	return row.Merge != nil && *row.Merge == "MERGED" || row.MergedOn != nil && *row.MergedOn != ""
+	// Match the existing retention rule when an older snapshot lacks optional
+	// merge signals. Unconfirmed state-only payloads gain no new authority.
+	knownState := row.State == "MERGED" && row.Freshness != "stale" && row.Freshness != "deferred" && row.Freshness != "unavailable"
+	return knownState || row.Merge != nil && *row.Merge == "MERGED" || row.MergedOn != nil && *row.MergedOn != ""
 }
 
 func statusTUIVisiblePRs(snapshot wtc.StatusSnapshot, showArchived bool) ([]wtc.StatusPRRow, int) {

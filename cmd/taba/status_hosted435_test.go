@@ -200,3 +200,56 @@ func TestStatusHosted435NativeConfirmedBranchWarningSurvivesAge(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusHosted435NativeLegacyKnownMergeMatchesRetention(t *testing.T) {
+	for _, freshness := range []string{"recorded", "live", "cached"} {
+		for _, width := range []int{34, 100} {
+			t.Run(fmt.Sprintf("%s/%d", freshness, width), func(t *testing.T) {
+				incoming, current := hosted435FrameSnapshots(true)
+				current.PRs[0].Merge = nil
+				current.PRs[0].MergedOn = nil
+				current.PRs[0].Freshness = freshness
+				snapshot := wtc.StatusPreferNewerObservations(incoming, current)
+				if snapshot.PRs[0].State != "MERGED" || snapshot.PRs[0].Freshness != freshness || snapshot.PRs[0].ObservedAt != current.PRs[0].ObservedAt {
+					t.Fatal("existing retention authority changed")
+				}
+				model := statusTUIModel{width: width, height: 28, focused: true, snapshot: snapshot, lastRefresh: time.Now()}
+				frame := model.View().Content
+				plain := ansi.Strip(frame)
+				if !strings.Contains(strings.ToLower(plain), "merged") || !strings.Contains(wtc.StatusPRObservationDetail(snapshot.PRs[0]), "recheck reason shared-budget") {
+					t.Fatalf("render disagrees with existing terminal retention: %s", plain)
+				}
+				if dir := os.Getenv("WTC_HOSTED435_FRAME_DIR"); dir != "" {
+					raw, _ := json.Marshal(map[string]any{"columns": width, "case": "legacy-" + freshness, "content": frame})
+					if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("legacy-%s-%d.json", freshness, width)), raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, line := range strings.Split(frame, "\n") {
+					if ansi.StringWidth(line) > width {
+						t.Fatal("frame wraps")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestStatusHosted435UnconfirmedLegacyMergeGainsNoAuthority(t *testing.T) {
+	for _, freshness := range []string{"stale", "deferred", "unavailable"} {
+		t.Run(freshness, func(t *testing.T) {
+			incoming, current := hosted435FrameSnapshots(false)
+			incoming.PRs[0].State = "MERGED"
+			incoming.PRs[0].Freshness = freshness
+			incoming.PRs[0].Merge = nil
+			incoming.PRs[0].MergedOn = nil
+			if statusTUIMergedPR(incoming.PRs[0]) {
+				t.Fatal("uncertain state-only payload gained merge authority")
+			}
+			snapshot := wtc.StatusPreferNewerObservations(incoming, current)
+			if snapshot.PRs[0].State == "MERGED" || statusTUIMergedPR(snapshot.PRs[0]) {
+				t.Fatal("unconfirmed incoming state defeated a later observation")
+			}
+		})
+	}
+}
