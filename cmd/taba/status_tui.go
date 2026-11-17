@@ -2216,7 +2216,9 @@ func (m statusTUIModel) View() tea.View {
 	visibleLink := false
 	for i, line := range visible {
 		fitted := statusTUIFitANSI(line, width)
-		visible[i] = fitted
+		// The renderer clears its frame before drawing. Keep row positions
+		// and ANSI closures, without parsing right-edge padding on every paint.
+		visible[i] = strings.TrimRight(fitted, " ")
 		if statusTUIHasVisibleLink(fitted) {
 			visibleLink = true
 		}
@@ -2285,7 +2287,9 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 
 func runStatusProgram(model tea.Model, ctx context.Context, cancel context.CancelFunc) (tea.Model, error) {
 	defer cancel()
-	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
+	// The status view has no animation requiring the renderer's default
+	// sixty wakeups per second. Input and collector work run independently.
+	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(5)).Run()
 	interrupted := ctx.Err() != nil
 	if start, ok := final.(statusStartupModel); ok && start.err != nil {
 		return final, start.err

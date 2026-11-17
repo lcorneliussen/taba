@@ -69,11 +69,13 @@ func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
 		_ = f.Close()
 		return nil, err
 	}
+	events, closeEvents := statusResourceLeaseEvents(f)
 	done := make(chan struct{})
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
 			close(done)
+			closeEvents()
 			if current, err := os.Lstat(f.Name()); err == nil && os.SameFile(identity, current) {
 				_ = os.Remove(f.Name())
 			}
@@ -89,17 +91,28 @@ func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
 		})
 	}
 	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
+		every := 500 * time.Millisecond
+		if events != nil {
+			every = 5 * time.Second
+		}
+		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 		for {
+			// Also check immediately after installing the notifications, so
+			// a change during registration cannot be lost.
+			current, err := os.Lstat(f.Name())
+			if err != nil || !os.SameFile(identity, current) || current.Size() != 0 {
+				stop()
+				return
+			}
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				current, err := os.Lstat(f.Name())
-				if err != nil || !os.SameFile(identity, current) || current.Size() != 0 {
-					stop()
-					return
+			case _, ok := <-events:
+				if !ok {
+					events = nil
+					ticker.Reset(500 * time.Millisecond)
 				}
 			}
 		}

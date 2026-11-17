@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -133,6 +134,56 @@ func TestStatusResourcePresentationExpiry(t *testing.T) {
 			if got := StatusPRPresentationFreshness(tc.freshness, tc.stamp, now); got != tc.want {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
+		})
+	}
+}
+
+func TestStatusResourceLeaseNotificationsAndCleanup(t *testing.T) {
+	for _, change := range []string{"truncate", "replace", "rename-collection"} {
+		t.Run(change, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "fixture")
+			dir := filepath.Join(root, statusWatcherDir)
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.CreateTemp(dir, "watcher-")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			events, cleanup := statusResourceLeaseEvents(f)
+			defer cleanup()
+			if events == nil {
+				if runtime.GOOS == "darwin" || runtime.GOOS == "linux" {
+					t.Fatal("expected native notifications unavailable")
+				}
+				t.Skip("polling platform")
+			}
+			switch change {
+			case "truncate":
+				err = f.Truncate(1)
+			case "replace":
+				err = os.Rename(f.Name(), f.Name()+"-old")
+				if err == nil {
+					err = os.WriteFile(f.Name(), []byte("replacement"), 0600)
+				}
+			case "rename-collection":
+				err = os.Rename(root, root+"-moved")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case _, ok := <-events:
+				if !ok {
+					t.Fatal("native notification stream failed")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("lease namespace change did not wake guard")
+			}
+			// Cleanup joins the native reader, including an otherwise blocked read.
+			cleanup()
+			cleanup()
 		})
 	}
 }
