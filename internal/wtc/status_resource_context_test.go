@@ -114,3 +114,25 @@ func TestStatusResourceReadContextRevalidatesRegistryAndScope(t *testing.T) {
 		t.Fatal("changed receiving policy was bypassed by an old context")
 	}
 }
+
+func TestStatusResourcePresentationExpiry(t *testing.T) {
+	t.Setenv("WTC_FORGE_CACHE_AGE", "90")
+	now := time.Now()
+	for _, tc := range []struct{ name, freshness, stamp, want string }{
+		{"fresh", "live", now.Add(-89 * time.Second).Format(time.RFC3339Nano), "live"},
+		{"exact expiry", "live", now.Add(-90 * time.Second).Format(time.RFC3339Nano), "stale"},
+		{"cached expired", "cached", now.Add(-time.Hour).Format(time.RFC3339Nano), "stale"},
+		{"missing", "live", "", "unavailable"},
+		{"malformed", "cached", "invalid", "unavailable"},
+		{"future", "live", now.Add(time.Second).Format(time.RFC3339Nano), "unavailable"},
+		{"explicit deferred", "deferred", now.Add(-time.Hour).Format(time.RFC3339Nano), "deferred"},
+		{"recorded", "recorded", now.Add(-time.Hour).Format(time.RFC3339Nano), "recorded"},
+		{"legacy", "", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := StatusPRPresentationFreshness(tc.freshness, tc.stamp, now); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}

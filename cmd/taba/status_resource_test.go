@@ -204,3 +204,41 @@ func TestStatusResourceCompletedReceiverDoesNotKeepCollectorCallback(t *testing.
 		t.Fatal("binding mutated the completed receiver")
 	}
 }
+
+func TestStatusResourceExpiredLiveFrames(t *testing.T) {
+	t.Setenv("WTC_FORGE_CACHE_AGE", "90")
+	stamp := time.Now().Add(-2 * time.Minute).Format(time.RFC3339Nano)
+	row := wtc.StatusPRRow{Repo: "widget", Slug: "example/widget", Number: "7", State: "OPEN", Freshness: "live", ObservedAt: stamp, Title: "Synthetic change"}
+	snapshot := wtc.StatusSnapshot{Collection: "fixture", PRs: []wtc.StatusPRRow{row}, Repos: []wtc.StatusRepo{{Dir: "widget", PR: &wtc.StatusPRFacts{Number: "7", Freshness: "live", ObservedAt: stamp}}}}
+	for _, width := range []int{34, 100} {
+		lines := strings.Join(statusTUIPRLines(snapshot, width, false, false), "\n")
+		if !strings.Contains(lines, "s:2m") {
+			t.Errorf("width%d expired live row not marked stale: %s", width, lines)
+		}
+		repos := strings.Join(statusTUIRepoLines(snapshot, width, false), "\n")
+		if !strings.Contains(repos, "stale") {
+			t.Errorf("width%d expired repo facts still current: %s", width, repos)
+		}
+	}
+}
+
+func TestStatusResourcePresentationPreservesEvidence(t *testing.T) {
+	now := time.Now()
+	at := now.Add(-time.Hour).Format(time.RFC3339Nano)
+	merged, failed := "MERGED", "FAILURE"
+	for _, row := range []wtc.StatusPRRow{
+		{State: "MERGED", Merge: &merged, Freshness: "live", ObservedAt: at, OnBranch: true},
+		{State: "OPEN", Freshness: "deferred", ObservationReason: "shared-cooldown", ObservedAt: at},
+		{State: "OPEN", Freshness: "live", ObservedAt: at, Archived: true},
+	} {
+		got := statusTUIPresentationRow(row, now)
+		if got.Freshness != row.Freshness || got.ObservationReason != row.ObservationReason || got.ObservedAt != at || got.Merge != row.Merge || got.OnBranch != row.OnBranch {
+			t.Fatalf("changed retained evidence: %+v", got)
+		}
+	}
+	row := wtc.StatusPRRow{State: "OPEN", Freshness: "live", ObservedAt: at, Checks: &failed}
+	got := statusTUIPresentationRow(row, now)
+	if got.Freshness != "stale" || got.Checks != row.Checks || *got.Checks != "FAILURE" || got.ObservedAt != at || row.Freshness != "live" {
+		t.Fatal("presentation renewed, mutated or discarded evidence")
+	}
+}

@@ -198,6 +198,12 @@ page, head-resolution request and redirect separately. Incomplete checks cannot
 claim success or absence; a known failure for that exact head keeps its original
 observation time when fresh checks are unavailable. Periodic collection still includes branch discovery, local refs, runtime and build facts.
 
+Active PR state observations expire on screen using their original observation
+time and the configured forge cache age, even between background refreshes.
+Expiry does not make a provider request or change saved evidence. Missing or
+future observation times cannot establish currentness. Confirmed merges retain
+their terminal authority; checks and reviews remain separate observations.
+
 The PR STATE cell uses compact `s:age` (stale), `d:age` (deferred), and `u:age`
 (unavailable) marks so titles remain visible. `never` means no known observation;
 `?` means unknown age. The header shows a refresh in progress. `?` help and `l`

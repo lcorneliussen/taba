@@ -592,11 +592,15 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.FocusMsg:
 		m.focused = true
 		m.observedUntil = time.Now().Add(time.Minute)
-		m.nextRefresh = time.Now().Add(m.interval)
+		if m.interval > 0 {
+			m.nextRefresh = time.Now().Add(m.interval)
+		}
 	case tea.BlurMsg:
 		m.focused = false
 		m.observedUntil = time.Time{}
-		m.nextRefresh = time.Now().Add(m.background)
+		if m.background > 0 {
+			m.nextRefresh = time.Now().Add(m.background)
+		}
 	case statusRuntimeMsg:
 		m.runtimeReading = false
 		if !m.runtimeObservedAt.IsZero() && msg.at.Before(m.runtimeObservedAt) {
@@ -875,7 +879,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.watcherPending && (msg.String() == "enter" || msg.String() == "n" || msg.String() == "r") {
 			return m, nil
 		}
-		if !m.resourceObserved(time.Now()) {
+		if m.interval > 0 && !m.resourceObserved(time.Now()) {
 			m.nextRefresh = time.Now().Add(m.interval)
 		}
 		m.focused = true
@@ -1363,6 +1367,11 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 	if pr == nil || pr.Number == "" {
 		return statusTUIFit("·", width)
 	}
+	if pr.Merge != "MERGED" {
+		copy := *pr
+		copy.Freshness = wtc.StatusPRPresentationFreshness(copy.Freshness, copy.ObservedAt, time.Now())
+		pr = &copy
+	}
 	n := ansi.StringWidth(statusTUIPRNumber(pr.Number))
 	if len(numberWidth) > 0 {
 		n = numberWidth[0]
@@ -1713,6 +1722,21 @@ func statusTUIMergedPR(row wtc.StatusPRRow) bool {
 	return knownState || row.Merge != nil && *row.Merge == "MERGED" || row.MergedOn != nil && *row.MergedOn != ""
 }
 
+func statusTUIPresentationRow(row wtc.StatusPRRow, now time.Time) wtc.StatusPRRow {
+	if row.Archived || statusTUIMergedPR(row) {
+		return row
+	}
+	old := row.Freshness
+	row.Freshness = wtc.StatusPRPresentationFreshness(old, row.ObservedAt, now)
+	if row.Freshness != old {
+		row.ObservationReason = "unknown"
+		if row.Freshness == "stale" {
+			row.ObservationReason = "observation-expired"
+		}
+	}
+	return row
+}
+
 func statusTUIVisiblePRs(snapshot wtc.StatusSnapshot, showArchived bool) ([]wtc.StatusPRRow, int) {
 	active := make([]wtc.StatusPRRow, 0, len(snapshot.PRs))
 	merged := make([]wtc.StatusPRRow, 0)
@@ -1811,6 +1835,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 	}
 	lines := []string{"", heading, header}
 	for _, row := range visible {
+		row = statusTUIPresentationRow(row, time.Now())
 		label := statusTUISafe(row.DisplayTitle)
 		if label == "" {
 			label = statusTUISafe(row.Title)
@@ -2051,7 +2076,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			if row.Archived && !m.showArchived {
 				continue
 			}
-			help = append(help, statusTUISafe(wtc.StatusPRObservationDetail(row)))
+			help = append(help, statusTUISafe(wtc.StatusPRObservationDetail(statusTUIPresentationRow(row, time.Now()))))
 			if row.OnBranch && row.Landing != nil {
 				help = append(help, row.LandingLabel())
 			}
