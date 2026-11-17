@@ -162,6 +162,10 @@ WEB_TEST_TOKEN=replace-me
 		t.Fatal("disabled optional integration required credential")
 	}
 	write(local, "WEB_CONNECTION=garbage\n")
+
+	if got := item(inventory(run(collection, true, "config", "lint", "--json")), "WEB_CONNECTION"); got.State != "malformed" {
+		t.Fatal("static lint hid value readiness state")
+	}
 	if inv := doctor(false); item(inv, "WEB_TEST_TOKEN").Applicability != "unknown" || item(inv, "WEB_CONNECTION").State != "malformed" {
 		t.Fatal("unknown selection passed")
 	}

@@ -26,8 +26,11 @@ taba doctor --example web:config/dev.env.example
 taba config lint --json
 ```
 
-`config lint` validates declarations, references, source ownership and any
-provided owned keys. It does **not** fail merely because a required credential,
+`config lint` validates declarations, references, source ownership, provided
+owned key names and dotenv syntax. It reports effective value states, but those
+states do not impose readiness requirements on static lint. For example, an
+out-of-choices selector is reported as `malformed`; doctor fails that mandatory
+selector while static lint can still pass its syntax and key-name checks. It does **not** fail merely because a required credential,
 actual configuration file or optional integration is absent. A repository can
 require this command in local validation and CI without supplying real secrets.
 In a standalone Git checkout, use `taba config lint --example .env.example` or
@@ -35,7 +38,10 @@ run `taba config lint` for bounded default discovery. Standalone lint cannot
 authorize project control-root inputs, so it does not open them; its provided-key
 checks cover selected repository-local inputs. In a collection, approved project
 inputs are also inspected when provided. Malformed provided dotenv files,
-unsafe sources, contradictory schemas and undocumented owned keys fail lint.
+unsafe config sources, contradictory schemas and undocumented owned keys fail
+lint. Missing, empty, placeholder and malformed effective-value states alone do
+not fail static lint. Required opaque-file presence and content readiness belong
+to doctor, not static CI lint.
 
 Doctor diagnoses readiness: missing, empty, placeholder, malformed and unverified
 mandatory requirements are not healthy; optional missing and inapplicable

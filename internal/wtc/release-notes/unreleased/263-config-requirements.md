@@ -1,7 +1,9 @@
-- Doctor diagnoses configuration and secret requirements from opted-in canonical
-  dotenv examples. Config listing and explicit `secrets list --requirements`
-  share the same value-free inventory; the default secrets listing still reads
-  names and link state only.
-- `config lint` validates schemas and provided owned inputs without requiring
-  credentials, with bounded tracked-file discovery and explicit source selection.
-  Process inspection is opt-in. Executable custom checks remain separate work.
+## Configuration
+
+- **Inspect requirements from canonical dotenv examples.** Doctor, `config list`
+  and explicit `secrets list --requirements` share a value-free inventory, while
+  the default secrets listing keeps its filename/link-state contract.
+  `config lint` validates schemas and provided owned key names without requiring
+  credentials; process inspection is explicit.
+  ([#263](https://github.com/lcorneliussen/taba/issues/263),
+  [#436](https://github.com/lcorneliussen/taba/pull/436)).
