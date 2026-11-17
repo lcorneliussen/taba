@@ -91,11 +91,12 @@ manage the share or observe its access policy.
    this review. The example uses `taba-review-1`:
 
    ```sh
-   qurl publish http://127.0.0.1:3000 --id taba-review-1 --access review
+   qurl publish http://127.0.0.1:3000 --id taba-review-1 --access review -o json
    ```
 
-3. Check the resource's access mode before sharing. Send the resource
-   address to one reviewer only if it requires approval. Ask them to request access in
+3. Check for `found_existing: false`, `private: true`, and
+   `consumer_access.mode: review` in the JSON. If any check fails, stop here.
+   Send `resource_url` to one reviewer. Ask them to request access in
    their browser. Check the pending request for their verified email and use
    its decision ID and current version:
 
