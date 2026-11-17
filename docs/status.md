@@ -232,6 +232,8 @@ changes without a local change signal are caught by the bounded full refresh.
 `WTC_STATUS_WATCH` and `WTC_STATUS_WATCH_BG` tune full refresh intervals; manual
 `r` keeps its foreground admission, coalescing and shared cooldown behavior.
 No per-view host visibility command or unsupported attached-client API is used.
+Painting is capped at two frames per second; input and collector work run
+independently, so this does not throttle manual refresh or provider admission.
 
 Quit cancels context-aware discovery and watcher waits. Some legacy collector
 and receiver helpers still retain their own deadline rather than the view's

@@ -661,10 +661,6 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refreshCancel()
 			m.refreshCancel = nil
 		}
-		if m.refreshCancel != nil {
-			m.refreshCancel()
-			m.refreshCancel = nil
-		}
 		m.foreground = false
 		anchor := m.scrollAnchor()
 		selectedVisible := m.selectedNextVisible()
@@ -2287,9 +2283,15 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 
 func runStatusProgram(model tea.Model, ctx context.Context, cancel context.CancelFunc) (tea.Model, error) {
 	defer cancel()
+	// Each interactive CLI has its own scheduler. One CPU execution slot
+	// avoids waking spare workers for an otherwise idle view; concurrent
+	// collector I/O still uses its existing goroutines and admission limits.
+	// Restore the caller's setting if startup continues as a one-shot command.
+	previous := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previous)
 	// The status view has no animation requiring the renderer's default
 	// sixty wakeups per second. Input and collector work run independently.
-	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(5)).Run()
+	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(2)).Run()
 	interrupted := ctx.Err() != nil
 	if start, ok := final.(statusStartupModel); ok && start.err != nil {
 		return final, start.err
