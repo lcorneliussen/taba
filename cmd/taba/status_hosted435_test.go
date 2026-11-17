@@ -253,3 +253,85 @@ func TestStatusHosted435UnconfirmedLegacyMergeGainsNoAuthority(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusHosted435NativeCanonicalMergedBranchWarning(t *testing.T) {
+	for _, kind := range []string{"same-branch", "new-head", "changed-branch", "changed-dir", "changed-worktree", "changed-repo", "changed-forge", "changed-slug", "ambiguous-alias", "never-associated"} {
+		for _, width := range []int{34, 100} {
+			t.Run(fmt.Sprintf("%s/%d", kind, width), func(t *testing.T) {
+				incoming, current := hosted435FrameSnapshots(true)
+				current.PRs[0].OnBranch = true
+				current.PRs[0].Landing = &wtc.StatusLanding{State: "landed", Reason: "prior landing"}
+				current.PRs[0].DisplayTitle = "MERGED — fully landed; still on feature Retained title"
+				current.Repos[0].PR = nil
+				current.Repos[0].Landing = current.PRs[0].Landing
+				incoming.PRs[0].State = "UNKNOWN"
+				incoming.PRs[0].Freshness = "deferred"
+				incoming.PRs[0].ObservationReason = "shared-budget"
+				incoming.Repos[0].PR = nil
+				switch kind {
+				case "new-head":
+					incoming.PRs[0].HeadCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+				case "changed-branch":
+					incoming.Repos[0].Branch = "another"
+				case "changed-dir":
+					incoming.Repos[0].Dir = "alias"
+				case "changed-worktree":
+					incoming.Repos[0].Worktree = "checkout/alias"
+				case "changed-repo":
+					incoming.Repos[0].Repo = "another"
+				case "changed-forge":
+					incoming.Repos[0].Forge = "bitbucket.org"
+				case "changed-slug":
+					incoming.Repos[0].Slug = "example/another"
+				case "never-associated":
+					current.PRs[0].OnBranch = false
+					current.PRs[0].Landing = nil
+					current.PRs[0].DisplayTitle = current.PRs[0].Title
+				case "ambiguous-alias":
+					alias := current.Repos[0]
+					alias.Dir = "alias"
+					alias.Worktree = "checkout/alias"
+					current.Repos = append(current.Repos, alias)
+				}
+				snapshot := wtc.StatusPreferNewerObservations(incoming, current)
+				model := statusTUIModel{width: width, height: 30, focused: true, snapshot: snapshot, lastRefresh: time.Now()}
+				frame := model.View().Content
+				plain := ansi.Strip(frame)
+				lines := strings.Split(plain, "\n")
+				split := -1
+				for i, line := range lines {
+					if strings.TrimSpace(line) == "PRs" {
+						split = i
+						break
+					}
+				}
+				if split < 0 {
+					t.Fatal("missing PR section")
+				}
+				repos, prs := strings.Join(lines[:split], "\n"), strings.Join(lines[split+1:], "\n")
+				wantWarning := kind == "same-branch" || kind == "new-head"
+				if !strings.Contains(repos, incoming.Repos[0].Dir) || strings.Contains(repos, "#7") || !strings.Contains(strings.ToLower(prs), "merged") {
+					t.Fatalf("repo/PR native sections disagree: %s", plain)
+				}
+				if wantWarning {
+					if !snapshot.PRs[0].OnBranch || !strings.Contains(prs, "landing unknown") || snapshot.PRs[0].Landing == nil || snapshot.PRs[0].Landing.State != "unknown" || strings.Contains(prs, "fully landed") {
+						t.Fatalf("historical branch warning erased or falsely landed: %s", plain)
+					}
+				} else if snapshot.PRs[0].OnBranch || strings.Contains(prs, "landing unknown") {
+					t.Fatalf("warning transferred to different local association: %s", plain)
+				}
+				if dir := os.Getenv("WTC_HOSTED435_FRAME_DIR"); dir != "" {
+					raw, _ := json.Marshal(map[string]any{"columns": width, "case": "historical-" + kind, "content": frame})
+					if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("historical-%s-%d.json", kind, width)), raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				for _, line := range strings.Split(frame, "\n") {
+					if ansi.StringWidth(line) > width {
+						t.Fatal("frame wraps")
+					}
+				}
+			})
+		}
+	}
+}

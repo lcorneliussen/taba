@@ -418,16 +418,21 @@ func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnaps
 					retained.Freshness = row.Freshness
 				}
 			}
-			associated := false
+			var historicalBranch *StatusRepo
 			for j := range incoming.Repos {
 				repo := &incoming.Repos[j]
-				if repo.Repo != row.Repo || repo.PR != nil && !statusRetainedPRIdentity(repo.PR, row) {
+				if repo.Repo != row.Repo {
+					continue
+				}
+				if retained.OnBranch && knownMerge(retained) && statusRetainedMergedBranch(*repo, current.Repos, retained) {
+					historicalBranch = repo
+				}
+				if repo.PR != nil && !statusRetainedPRIdentity(repo.PR, row) {
 					continue
 				}
 				var facts *StatusPRFacts
 				for _, prior := range current.Repos {
 					if statusRetainedPRAssociation(*repo, prior, retained) {
-						associated = true
 						if !knownMerge(retained) {
 							facts = statusRetainedPRFacts(retained)
 						}
@@ -440,9 +445,17 @@ func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnaps
 				repo.PRUnconfirmed = true
 				repo.Next, repo.Choices = nil, nil
 			}
-			if retained.OnBranch && !associated {
-				retained.OnBranch, retained.Landing = false, nil
-				retained.DisplayTitle = retained.Title
+			if retained.OnBranch {
+				if historicalBranch == nil {
+					retained.OnBranch, retained.Landing = false, nil
+					retained.DisplayTitle = retained.Title
+				} else {
+					// The branch is still associated, but snapshots do not prove
+					// that its checkout head or landing classification is current.
+					retained.Landing = &StatusLanding{State: "unknown", Reason: "retained merge; current branch landing not established"}
+					historicalBranch.Landing = retained.Landing
+					retained.DisplayTitle = "MERGED — " + retained.LandingLabel() + "; still on " + historicalBranch.Branch + "  " + retained.Title
+				}
 			}
 			incoming.PRs[i] = retained
 		}
@@ -457,14 +470,36 @@ func statusRetainedPRIdentity(facts *StatusPRFacts, row StatusPRRow) bool {
 // Snapshot association must agree on local identity and the reported PR head.
 // A matching repository name alone cannot transfer checks across checkouts.
 func statusRetainedPRAssociation(repo, prior StatusRepo, row StatusPRRow) bool {
+	return statusRetainedLocalAssociation(repo, prior, row) &&
+		statusRetainedPRIdentity(repo.PR, row) && statusRetainedPRIdentity(prior.PR, row) &&
+		row.HeadCommit != "" && repo.PR.Head == row.HeadCommit && prior.PR.Head == row.HeadCommit
+}
+
+func statusRetainedLocalAssociation(repo, prior StatusRepo, row StatusPRRow) bool {
 	return repo.Repo == row.Repo && prior.Repo == row.Repo &&
 		(row.worktreeDir == "" || row.worktreeDir == repo.Dir) &&
 		repo.Collection != "" && repo.Collection == prior.Collection &&
 		repo.Dir != "" && repo.Dir == prior.Dir && repo.Worktree != "" && repo.Worktree == prior.Worktree &&
 		repo.BranchKind == "branch" && prior.BranchKind == "branch" && repo.Branch != "" && repo.Branch == prior.Branch &&
-		repo.Slug != "" && repo.Slug == prior.Slug && repo.Slug == row.Slug && repo.Forge != "" && repo.Forge == prior.Forge &&
-		statusRetainedPRIdentity(repo.PR, row) && statusRetainedPRIdentity(prior.PR, row) &&
-		row.HeadCommit != "" && repo.PR.Head == row.HeadCommit && prior.PR.Head == row.HeadCommit
+		repo.Slug != "" && repo.Slug == prior.Slug && repo.Slug == row.Slug && repo.Forge != "" && repo.Forge == prior.Forge
+}
+
+// A historical merged-branch warning is not active PR/check evidence. Its
+// stable local binding survives follow-up commits even though merged repos
+// have no active PR facts. Cached rows without a directory need a unique prior
+// branch candidate; an ambiguous alias must never inherit the warning.
+func statusRetainedMergedBranch(repo StatusRepo, priors []StatusRepo, row StatusPRRow) bool {
+	candidate := -1
+	for i, prior := range priors {
+		if prior.Repo != row.Repo || prior.BranchKind != "branch" || row.worktreeDir != "" && row.worktreeDir != prior.Dir {
+			continue
+		}
+		if candidate >= 0 {
+			return false
+		}
+		candidate = i
+	}
+	return candidate >= 0 && statusRetainedLocalAssociation(repo, priors[candidate], row)
 }
 
 func statusRetainedPRFacts(row StatusPRRow) *StatusPRFacts {
