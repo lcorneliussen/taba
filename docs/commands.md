@@ -87,13 +87,15 @@ manage the share or observe its access policy.
    `wtc svc status` or the service log. Use a preview with test data. Share
    only the app port, and keep the Taba control panel and admin APIs local.
 2. Install the [qURL CLI](https://github.com/layervai/qurl-integrations/releases).
-   Replace `3000` with the preview port, then run:
+   Replace `3000` with the preview port. Choose a new Connector ID for
+   this review. The example uses `taba-review-1`:
 
    ```sh
-   qurl publish http://127.0.0.1:3000 --access review
+   qurl publish http://127.0.0.1:3000 --id taba-review-1 --access review
    ```
 
-3. Send the resource address to one reviewer. Ask them to request access in
+3. Check the resource's access mode before sharing. Send the resource
+   address to one reviewer only if it requires approval. Ask them to request access in
    their browser. Check the pending request for their verified email and use
    its decision ID and current version:
 
