@@ -240,7 +240,7 @@ func TestStatusResourceRetirementTransitionsReadAgain(t *testing.T) {
 }
 
 func TestStatusResourceRetirementMalformedAndUnsupportedFallback(t *testing.T) {
-	for _, mode := range []string{"unsupported", "malformed", "unborn-header", "duplicate-header", "unknown-record"} {
+	for _, mode := range []string{"unsupported", "malformed", "unborn-header", "duplicate-header", "unknown-record", "bad-tracked-record", "empty-untracked-record"} {
 		t.Run(mode, func(t *testing.T) {
 			c, _ := retirementFixture(t)
 			real, err := exec.LookPath("git")
@@ -259,6 +259,8 @@ case " $* " in
    unborn-header) printf '# branch.oid (initial)\n# branch.head main\n' ;;
    duplicate-header) printf '# branch.oid aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n# branch.oid bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n# branch.head main\n' ;;
    unknown-record) printf '# branch.oid aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n# branch.head main\nunknown record\n' ;;
+   bad-tracked-record) printf '# branch.oid aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n# branch.head main\n1 broken\n' ;;
+   empty-untracked-record) printf '# branch.oid aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n# branch.head main\n? \n' ;;
   esac
   exit 0 ;;
 esac
