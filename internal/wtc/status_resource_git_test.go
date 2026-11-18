@@ -181,11 +181,31 @@ func TestStatusResourceGitMemoConcurrentAndCancelledWaiter(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { _, e := statusResourceGit(ctx, args, read); done <- e }()
 	<-entered
-	waiting, cancel := context.WithCancel(ctx)
-	cancel()
-	if _, e := statusResourceGit(waiting, args, func() (string, error) { t.Error("cancelled dispatch"); return "", nil }); !errors.Is(e, context.Canceled) {
-		t.Fatal(e)
+	parent, cancel := context.WithCancel(ctx)
+	defer cancel()
+	waiting := &resourceChecksQueuedContext{Context: parent, waiting: make(chan struct{})}
+	waiter := make(chan error, 1)
+	go func() {
+		_, e := statusResourceGit(waiting, args, func() (string, error) { t.Error("cancelled waiter dispatched"); return "", nil })
+		waiter <- e
+	}()
+	select {
+	case <-waiting.waiting:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("waiter did not queue")
 	}
+	cancel()
+	select {
+	case e := <-waiter:
+		if !errors.Is(e, context.Canceled) {
+			t.Fatal(e)
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("queued waiter did not cancel")
+	}
+
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -221,7 +241,7 @@ func TestStatusResourceGitMemoNoCancelledPublication(t *testing.T) {
 	}
 }
 
-func TestStatusResourceLocalBatchUnsupportedFallback(t *testing.T) {
+func TestStatusResourceLocalBatchCancelled(t *testing.T) {
 	c := newWorkspaceFixture(t)
 	_, targets, err := c.CatchUpInventory(CatchUpOptions{DryRun: true})
 	if err != nil {
@@ -233,6 +253,24 @@ func TestStatusResourceLocalBatchUnsupportedFallback(t *testing.T) {
 		time.Sleep(time.Millisecond)
 		if _, e := statusLocalRepoContext(ctx, target); e == nil {
 			t.Fatal("cancelled observation accepted")
+		}
+	}
+}
+
+func TestStatusResourceLocalUnsupportedGitFallback(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	_, targets, err := c.CatchUpInventory(CatchUpOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "git"), "#!/bin/sh\nif [ \"$3\" = status ] && [ \"$4\" = --porcelain=v2 ]; then printf 'unsupported-data\\n'; exit 0; fi\nif [ \"$3\" = rev-parse ] && [ \"$4\" = --path-format=absolute ] && [ \"$5\" = --git-path ]; then exit 2; fi\nexec /usr/bin/git \"$@\"\n", 0700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, target := range targets {
+		got, ge := statusLocalRepoContext(context.Background(), target)
+		want, we := statusResourceLocalReference(context.Background(), target)
+		if (ge == nil) != (we == nil) || !reflect.DeepEqual(got, want) {
+			t.Fatal(got, ge, want, we)
 		}
 	}
 }
