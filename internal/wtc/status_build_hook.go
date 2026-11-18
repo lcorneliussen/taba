@@ -224,7 +224,7 @@ func (c *Context) statusBuildFacts(snapshot *StatusSnapshot) error {
 	jobs := []job{}
 	worktrees := map[string]string{}
 	tiers := map[string][]statusBuildTier{}
-	harnessName, _ := c.HarnessRepoName()
+	harnessName, _ := c.harnessRepoNameContext(c.resourceContext())
 	for _, row := range snapshot.Repos {
 		repo, err := c.Repository(row.Repo)
 		if err != nil {

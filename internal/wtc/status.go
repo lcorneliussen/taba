@@ -267,13 +267,17 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 		}
 	}
 	row.AheadRef = upstream
-	row.Ahead, err = statusCountContext(ctx, t.path, upstream+"..HEAD")
-	if err != nil {
-		return StatusRepo{}, fmt.Errorf("%s ahead count: %w", t.path, err)
-	}
-	row.Behind, err = statusCountContext(ctx, t.path, "HEAD.."+t.ref)
-	if err != nil {
-		return StatusRepo{}, fmt.Errorf("%s development-tip count: %w", t.path, err)
+	if ahead, behind, ok := statusResourceCounts(ctx, t.path, upstream, t.ref); ok {
+		row.Ahead, row.Behind = ahead, behind
+	} else {
+		row.Ahead, err = statusCountContext(ctx, t.path, upstream+"..HEAD")
+		if err != nil {
+			return StatusRepo{}, fmt.Errorf("%s ahead count: %w", t.path, err)
+		}
+		row.Behind, err = statusCountContext(ctx, t.path, "HEAD.."+t.ref)
+		if err != nil {
+			return StatusRepo{}, fmt.Errorf("%s development-tip count: %w", t.path, err)
+		}
 	}
 	if batched {
 		row.Changed, row.Conflict = local.changed, local.conflict
@@ -396,9 +400,13 @@ func statusFactsContext(ctx context.Context, r StatusRepo) next.Facts {
 		f.Branch = r.Branch
 		f.ToPush = r.Ahead
 	}
-	f.Head, _ = statusGitContext(ctx, r.Worktree, "rev-parse", "HEAD")
-	if r.baseRef != "" {
-		f.BaseHead, _ = statusGitContext(ctx, r.Worktree, "rev-parse", r.baseRef)
+	if head, base, ok := statusResourceHeads(ctx, r.Worktree, r.baseRef); ok {
+		f.Head, f.BaseHead = head, base
+	} else {
+		f.Head, _ = statusGitContext(ctx, r.Worktree, "rev-parse", "HEAD")
+		if r.baseRef != "" {
+			f.BaseHead, _ = statusGitContext(ctx, r.Worktree, "rev-parse", r.baseRef)
+		}
 	}
 	if ctx.Err() == nil && r.Behind > 0 && r.baseRef != "" && f.InProgress == "" {
 		var ok bool

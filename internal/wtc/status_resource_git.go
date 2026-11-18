@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,7 +47,7 @@ func statusResourceGitKey(args []string) string {
 	}
 	op := strings.Join(command, "\x00")
 	switch op {
-	case "rev-parse\x00--show-toplevel", "rev-parse\x00--path-format=absolute\x00--git-common-dir", "remote\x00get-url\x00origin", "remote":
+	case "rev-parse\x00--git-common-dir", "rev-parse\x00--show-toplevel", "rev-parse\x00--path-format=absolute\x00--git-common-dir", "remote\x00get-url\x00origin", "remote":
 	default:
 		return ""
 	}
@@ -168,7 +169,11 @@ func statusResourceGit(ctx context.Context, args []string, read func() (string, 
 		}
 		key := statusResourceGitKey(args)
 		if key == "" {
-			return read()
+			v, e := read()
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return v, e
 		}
 		memo.mu.Lock()
 		entry, ok := memo.entries[key]
@@ -292,4 +297,30 @@ func statusResourceOperationFallback(ctx context.Context, t catchUpTarget) strin
 		}
 	}
 	return ""
+}
+
+func statusResourceCounts(ctx context.Context, path, upstream, base string) (int, int, bool) {
+	if upstream != base {
+		return 0, 0, false
+	}
+	raw, err := statusGitContext(ctx, path, "rev-list", "--left-right", "--count", base+"...HEAD")
+	fields := strings.Fields(raw)
+	if err != nil || len(fields) != 2 {
+		return 0, 0, false
+	}
+	behind, be := strconv.Atoi(fields[0])
+	ahead, ae := strconv.Atoi(fields[1])
+	return ahead, behind, be == nil && ae == nil && behind >= 0 && ahead >= 0
+}
+
+func statusResourceHeads(ctx context.Context, path, base string) (string, string, bool) {
+	if base == "" {
+		return "", "", false
+	}
+	raw, err := statusGitContext(ctx, path, "rev-parse", "HEAD", base)
+	heads := strings.Fields(raw)
+	if err != nil || len(heads) != 2 || !validCheckHead(heads[0]) || !validCheckHead(heads[1]) {
+		return "", "", false
+	}
+	return heads[0], heads[1], true
 }

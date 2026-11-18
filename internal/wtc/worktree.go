@@ -80,6 +80,10 @@ func (c *Context) WorktreeDir(name string) string {
 // HarnessRepoName resolves the registry identity of harness/, which need not
 // be named harness in a downstream registry. An ad-hoc collection has none.
 func (c *Context) HarnessRepoName() (string, error) {
+	return c.harnessRepoNameContext(context.Background())
+}
+
+func (c *Context) harnessRepoNameContext(ctx context.Context) (string, error) {
 	if c.AdHoc {
 		return "", nil
 	}
@@ -89,14 +93,14 @@ func (c *Context) HarnessRepoName() (string, error) {
 		}
 		return name, nil
 	}
-	owner, err := gitOutput("-C", c.Harness, "rev-parse", "--git-common-dir")
+	owner, err := gitOutputContext(ctx, "-C", c.Harness, "rev-parse", "--git-common-dir")
 	if err == nil {
 		name := strings.TrimSuffix(filepath.Base(owner), ".git")
 		if _, err := c.Repository(name); err == nil {
 			return name, nil
 		}
 	}
-	remote, err := gitOutput("-C", c.Harness, "remote", "get-url", "origin")
+	remote, err := gitOutputContext(ctx, "-C", c.Harness, "remote", "get-url", "origin")
 	if err == nil {
 		for _, repo := range c.Registry.Repos {
 			if repo.Remote == remote {

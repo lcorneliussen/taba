@@ -699,7 +699,7 @@ func (c *Context) statusReturnMerged(snapshot *StatusSnapshot, records []PRRecor
 	}
 	// If an inherited WTC_HARNESS_REPO names a different repository from this
 	// collection's own harness, do not return its worktree.
-	if inherited, _ := c.HarnessRepoName(); inherited != harnessName {
+	if inherited, _ := c.harnessRepoNameContext(c.resourceContext()); inherited != harnessName {
 		return
 	}
 	repos := c.prRepositories()
