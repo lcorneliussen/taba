@@ -104,56 +104,62 @@ func (c *resourceChecksQueuedContext) Done() <-chan struct{} {
 
 func TestStatusResourceBackgroundChecksCancelQueuedLock(t *testing.T) {
 	for _, abbreviated := range []bool{false, true} {
-		t.Run(fmt.Sprint(abbreviated), func(t *testing.T) {
-			var hits atomic.Int32
-			resourceChecksServer(t, func(w http.ResponseWriter, r *http.Request) {
-				hits.Add(1)
-				if strings.HasSuffix(r.URL.Path, "/commit/"+checkHeadB[:12]) {
-					fmt.Fprintf(w, `{"hash":%q}`, checkHeadB)
-				} else {
-					fmt.Fprint(w, `{"values":[]}`)
+		for _, budget := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%t/budget-%t", abbreviated, budget), func(t *testing.T) {
+				var hits atomic.Int32
+				resourceChecksServer(t, func(w http.ResponseWriter, r *http.Request) {
+					hits.Add(1)
+					if strings.HasSuffix(r.URL.Path, "/commit/"+checkHeadB[:12]) {
+						fmt.Fprintf(w, `{"hash":%q}`, checkHeadB)
+					} else {
+						fmt.Fprint(w, `{"values":[]}`)
+					}
+				})
+				head, kind := checkHeadB, "checks"
+				if abbreviated {
+					head, kind = head[:12], "checkhead"
+				}
+				path := statusForgeEntryPath(kind, "bitbucket.org", "example/widget", head)
+				if budget {
+					path = statusForgeStatePath("budget", "bitbucket.org")
+				}
+				unlock, err := statusLockCache(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				parent, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				ctx := &resourceChecksQueuedContext{Context: parent, waiting: make(chan struct{})}
+				done := make(chan error, 1)
+				go func() {
+					_, err := statusBBHeadChecksContext(ctx, StatusRefreshBackground, "example/widget", head, false)
+					done <- err
+				}()
+				queued := false
+				select {
+				case <-ctx.waiting:
+					queued = true
+				case <-time.After(200 * time.Millisecond):
+				}
+				cancel()
+				blocked := false
+				select {
+				case err = <-done:
+				case <-time.After(200 * time.Millisecond):
+					blocked = true
+				}
+				unlock()
+				if blocked {
+					err = <-done
+				}
+				if !queued || blocked || !errors.Is(err, context.Canceled) || hits.Load() != 0 {
+					t.Fatalf("queued cancel blocked=%v err=%v hits=%d", blocked, err, hits.Load())
+				}
+				if _, ok := statusReadForgeEntryAny(kind, "bitbucket.org", "example/widget", head); ok {
+					t.Fatal("queued cancellation persisted")
 				}
 			})
-			head, kind := checkHeadB, "checks"
-			if abbreviated {
-				head, kind = head[:12], "checkhead"
-			}
-			unlock, err := statusLockCache(statusForgeEntryPath(kind, "bitbucket.org", "example/widget", head))
-			if err != nil {
-				t.Fatal(err)
-			}
-			parent, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			ctx := &resourceChecksQueuedContext{Context: parent, waiting: make(chan struct{})}
-			done := make(chan error, 1)
-			go func() {
-				_, err := statusBBHeadChecksContext(ctx, StatusRefreshBackground, "example/widget", head, false)
-				done <- err
-			}()
-			queued := false
-			select {
-			case <-ctx.waiting:
-				queued = true
-			case <-time.After(200 * time.Millisecond):
-			}
-			cancel()
-			blocked := false
-			select {
-			case err = <-done:
-			case <-time.After(200 * time.Millisecond):
-				blocked = true
-			}
-			unlock()
-			if blocked {
-				err = <-done
-			}
-			if !queued || blocked || !errors.Is(err, context.Canceled) || hits.Load() != 0 {
-				t.Fatalf("queued cancel blocked=%v err=%v hits=%d", blocked, err, hits.Load())
-			}
-			if _, ok := statusReadForgeEntryAny(kind, "bitbucket.org", "example/widget", head); ok {
-				t.Fatal("queued cancellation persisted")
-			}
-		})
+		}
 	}
 }
 
@@ -278,5 +284,43 @@ func TestStatusResourceBackgroundChecksCommitSurvivesCancellation(t *testing.T) 
 	var saved headCheckEvidence
 	if !ok || json.Unmarshal(raw, &saved) != nil || saved.Result != "FAILURE" || !saved.Complete {
 		t.Fatal("valid committed evidence rolled back")
+	}
+}
+
+func TestStatusResourceBackgroundChecksNewerPartialKeepsKnownFailure(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprint(complete), func(t *testing.T) {
+			var hits atomic.Int32
+			resourceChecksServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if hits.Add(1) == 2 {
+					newer := unknownHeadChecks(checkHeadB)
+					raw, _ := json.Marshal(newer)
+					// A released-style writer publishes a genuinely later incomplete read.
+					// Its bytes/order remain authoritative; it cannot disprove a known failure.
+					statusWriteForgeEntrySince("checks", "bitbucket.org", "example/widget", checkHeadB, raw, time.Now())
+					if !complete {
+						w.WriteHeader(http.StatusServiceUnavailable)
+					}
+					fmt.Fprint(w, `{"values":[]}`)
+					return
+				}
+				fmt.Fprint(w, `{"values":[{"state":"SUCCESSFUL"}]}`)
+			})
+			before := checks424Seed(t, checkHeadB, "FAILURE")
+			path := statusForgeEntryPath("checks", "bitbucket.org", "example/widget", checkHeadB)
+			past := time.Now().Add(-time.Hour)
+			if err := os.Chtimes(path, past, past); err != nil {
+				t.Fatal(err)
+			}
+			got, err := statusBBHeadChecksContext(context.Background(), StatusRefreshBackground, "example/widget", checkHeadB, false)
+			if err == nil || got.Result != "FAILURE" || got.Complete || got.ObservedAt != before.ObservedAt {
+				t.Fatalf("incomplete winner erased failure: %+v %v", got, err)
+			}
+			raw, _ := os.ReadFile(path)
+			var winner headCheckEvidence
+			if json.Unmarshal(raw, &winner) != nil || winner.Result != "UNKNOWN" {
+				t.Fatal("older completion overwrote actual newer bytes")
+			}
+		})
 	}
 }
