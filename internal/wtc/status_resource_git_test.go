@@ -429,3 +429,33 @@ func TestStatusResourceLocalNamedDetachedBranch(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusResourceIdentitySurvivesValidatedObservations(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+	calls := 0
+	read := func() (string, error) { calls++; return gitOutput(args...) }
+	for i := 0; i < 2; i++ {
+		fresh, err := c.StatusReadContext(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := statusResourceGit(fresh.resourceContext(), args, read); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("unchanged validated identity redispatched across observations: %d", calls)
+	}
+	fixtureGit(t, "-C", c.Harness, "remote", "set-url", "origin", "https://github.com/example/replaced.git")
+	fresh, err := c.StatusReadContext(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := statusResourceGit(fresh.resourceContext(), args, read)
+	if err != nil || calls != 2 || got != "https://github.com/example/replaced.git" {
+		t.Fatalf("stale identity %s %v %d", got, err, calls)
+	}
+}
