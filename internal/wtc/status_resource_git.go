@@ -15,6 +15,9 @@ import (
 	"time"
 )
 
+// Only paths are reusable here; marker existence is checked again each observation.
+const statusResourceMarkerPathsOperation = "rev-parse\x00--path-format=absolute\x00--git-path\x00MERGE_HEAD\x00--git-path\x00CHERRY_PICK_HEAD\x00--git-path\x00REVERT_HEAD\x00--git-path\x00rebase-merge\x00--git-path\x00rebase-apply\x00--git-path\x00sequencer"
+
 type statusGitMemoKey struct{}
 type statusIdentityMemoKey struct{}
 
@@ -60,7 +63,7 @@ func statusResourceOperation(ctx context.Context) context.Context {
 func statusResourceGitKey(args []string) string { return statusResourceGitKeyConfig(args, nil, "") }
 
 func statusResourceGitKeyConfig(args []string, provenConfigs []string, provenance string) string {
-	if len(args) < 3 {
+	if len(args) < 2 {
 		return ""
 	}
 	path := ""
@@ -76,7 +79,7 @@ func statusResourceGitKeyConfig(args []string, provenConfigs []string, provenanc
 	}
 	op := strings.Join(command, "\x00")
 	switch op {
-	case "rev-parse\x00--git-common-dir", "rev-parse\x00--show-toplevel", "rev-parse\x00--path-format=absolute\x00--git-common-dir", "remote\x00get-url\x00origin", "remote":
+	case statusResourceMarkerPathsOperation, "rev-parse\x00--git-common-dir", "rev-parse\x00--show-toplevel", "rev-parse\x00--path-format=absolute\x00--git-common-dir", "remote\x00get-url\x00origin", "remote":
 	default:
 		return ""
 	}
@@ -422,7 +425,7 @@ func (memo *statusGitMemo) fingerprint(ctx context.Context, args []string) strin
 	if !statusResourceKnownGitEnvironment() {
 		return ""
 	}
-	if len(args) < 3 {
+	if len(args) < 2 {
 		return ""
 	}
 	command := args[1:]
@@ -432,7 +435,7 @@ func (memo *statusGitMemo) fingerprint(ctx context.Context, args []string) strin
 		return ""
 	}
 	switch strings.Join(command, "\x00") {
-	case "rev-parse\x00--git-common-dir", "rev-parse\x00--show-toplevel", "rev-parse\x00--path-format=absolute\x00--git-common-dir", "remote\x00get-url\x00origin", "remote":
+	case statusResourceMarkerPathsOperation, "rev-parse\x00--git-common-dir", "rev-parse\x00--show-toplevel", "rev-parse\x00--path-format=absolute\x00--git-common-dir", "remote\x00get-url\x00origin", "remote":
 	default:
 		return ""
 	}
