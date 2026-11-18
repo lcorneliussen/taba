@@ -111,6 +111,10 @@ func TestStatusResourceLocalActualGitComparison(t *testing.T) {
 	check("branch-no-upstream")
 	fixtureGit(t, "-C", target.path, "branch", "--set-upstream-to=origin/main")
 	check("tracking")
+	fixtureGit(t, "-C", target.path, "branch", "alternate", "HEAD")
+	fixtureGit(t, "-C", target.path, "branch", "--set-upstream-to=alternate")
+	check("distinct-upstream-and-development-base")
+	fixtureGit(t, "-C", target.path, "branch", "--set-upstream-to=origin/main")
 	fixtureFile(t, filepath.Join(target.path, "untracked"), "new", 0600)
 	check("untracked")
 	fixtureGit(t, "-C", target.path, "add", "untracked")
@@ -135,6 +139,8 @@ func TestStatusResourceLocalActualGitComparison(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoIdentityAndScope(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t)
 	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
 	ctx := statusResourceOperation(context.Background())
@@ -172,6 +178,8 @@ func TestStatusResourceGitMemoIdentityAndScope(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoConcurrentAndCancelledWaiter(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t)
 	args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
 	ctx := statusResourceOperation(context.Background())
@@ -228,6 +236,8 @@ func TestStatusResourceGitMemoConcurrentAndCancelledWaiter(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoNoCancelledPublication(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t)
 	args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
 	base := statusResourceOperation(context.Background())
@@ -264,7 +274,7 @@ func TestStatusResourceLocalUnsupportedGitFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	bin := t.TempDir()
-	fixtureFile(t, filepath.Join(bin, "git"), "#!/bin/sh\nif [ \"$3\" = status ] && [ \"$4\" = --porcelain=v2 ]; then printf 'unsupported-data\\n'; exit 0; fi\nif [ \"$3\" = rev-parse ] && [ \"$4\" = --path-format=absolute ] && [ \"$5\" = --git-path ]; then exit 2; fi\nexec /usr/bin/git \"$@\"\n", 0700)
+	fixtureFile(t, filepath.Join(bin, "git"), "#!/bin/sh\nif [ \"$3\" = status ] && [ \"$4\" = --porcelain=v2 ]; then printf 'unsupported-data\\n'; exit 0; fi\nif [ \"$3\" = rev-parse ] && [ \"$4\" = --path-format=absolute ] && [ \"$5\" = --git-path ]; then exit 2; fi\nif [ \"$3 $4 $5\" = 'rev-list --left-right --count' ]; then printf 'malformed'; exit 0; fi\nif [ \"$3 $4\" = 'rev-parse HEAD' ] && [ \"$#\" -eq 5 ]; then printf 'malformed'; exit 0; fi\nexec /usr/bin/git \"$@\"\n", 0700)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	for _, target := range targets {
 		got, ge := statusLocalRepoContext(context.Background(), target)
@@ -272,5 +282,71 @@ func TestStatusResourceLocalUnsupportedGitFallback(t *testing.T) {
 		if (ge == nil) != (we == nil) || !reflect.DeepEqual(got, want) {
 			t.Fatal(got, ge, want, we)
 		}
+		if gotHead := statusFactsContext(context.Background(), got).Head; gotHead != fixtureGit(t, "-C", target.path, "rev-parse", "HEAD") {
+			t.Fatal("malformed head batch bypassed fallback", gotHead)
+		}
+	}
+}
+
+func TestStatusResourceForegroundObservationSharesIdentityMemo(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	c := newWorkspaceFixture(t)
+	ctx := context.Background()
+	receiver, err := c.StatusReadContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	t.Setenv("STATUS_MEMO_CALLS", calls)
+	fixtureFile(t, filepath.Join(bin, "git"), "#!/bin/sh\nif [ \"$3 $4 $5\" = 'remote get-url origin' ]; then printf 'request\\n' >> \"$STATUS_MEMO_CALLS\"; fi\nexec /usr/bin/git \"$@\"\n", 0700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, err := receiver.StatusForegroundSnapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(calls)
+	if n := strings.Count(string(raw), "request"); n > 3 {
+		t.Fatalf("foreground discarded operation memo: %d remote subprocesses", n)
+	}
+}
+
+func TestStatusResourceGitMemoUnknownConfigBypassesSafely(t *testing.T) {
+	for _, mode := range []string{"unknown-system", "included-global", "symlink-global"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+			c := newWorkspaceFixture(t)
+			if mode == "unknown-system" {
+				t.Setenv("GIT_CONFIG_NOSYSTEM", "")
+				t.Setenv("GIT_CONFIG_SYSTEM", "")
+			} else {
+				path := filepath.Join(t.TempDir(), "gitconfig")
+				if mode == "included-global" {
+					fixtureFile(t, path, "[include]\n path = unsupported-include\n", 0600)
+				} else {
+					if err := os.Symlink("/dev/null", path); err != nil {
+						t.Fatal(err)
+					}
+				}
+				t.Setenv("GIT_CONFIG_GLOBAL", path)
+			}
+			ctx := statusResourceOperation(context.Background())
+			args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
+			calls := 0
+			read := func() (string, error) { calls++; return "current", nil }
+			for i := 0; i < 2; i++ {
+				if _, e := statusResourceGit(ctx, args, read); e != nil {
+					t.Fatal(e)
+				}
+			}
+			if calls != 2 {
+				t.Fatal("unknown config must not authorize reuse")
+			}
+			canceled, cancel := context.WithCancel(ctx)
+			if _, e := statusResourceGit(canceled, args, func() (string, error) { cancel(); return "cancelled", nil }); !errors.Is(e, context.Canceled) {
+				t.Fatal("bypass dropped cancellation", e)
+			}
+		})
 	}
 }
