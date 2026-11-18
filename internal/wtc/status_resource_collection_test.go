@@ -2,12 +2,15 @@ package wtc
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"taba.sh/taba/internal/next"
 )
 
 func TestStatusResourceForgeCalculatesFinalChoicesOnce(t *testing.T) {
@@ -54,5 +57,55 @@ exec "$RESOURCE_REAL_GIT" "$@"
 	}
 	if got := len(strings.Split(strings.TrimSpace(string(raw)), "\n")); got != 1 {
 		t.Fatalf("complete collector read action heads %d times, want one final read; argv:\n%s", got, raw)
+	}
+}
+
+func TestStatusResourceFinalChoicesObserveChangedHead(t *testing.T) {
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	fixtureGit(t, "-C", c.Harness, "switch", "-qc", "topic")
+	fixtureGit(t, "-C", c.Harness, "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "commit", "--allow-empty", "-qm", "Synthetic unpublished head")
+	before, err := c.StatusLocalSnapshot(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := false
+	c.StatusProgress = func(message string) {
+		if message != "Checking build providers" {
+			return
+		}
+		fixtureGit(t, "-C", c.Harness, "-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "commit", "--allow-empty", "-qm", "Synthetic concurrent head")
+		changed = true
+	}
+	snapshot, err := c.statusForgePreview(true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || len(snapshot.Repos) != 1 || len(before.Repos) != 1 {
+		t.Fatal("missing actual head transition")
+	}
+	want := next.ChoicesFor(statusFactsContext(context.Background(), snapshot.Repos[0]))
+	if !reflect.DeepEqual(snapshot.Repos[0].Choices, &want) || reflect.DeepEqual(snapshot.Repos[0].Choices, before.Repos[0].Choices) {
+		t.Fatal("final choices reused authority from before the head transition")
+	}
+}
+
+func TestStatusResourceCancelledFinalChoicesReturnError(t *testing.T) {
+	base := newWorkspaceFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := base.WithStatusContext(ctx)
+	c.StatusProgress = func(message string) {
+		if message == "Checking build providers" {
+			cancel()
+		}
+	}
+	_, err := c.statusForgePreview(true, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled final collector returned success: %v", err)
+	}
+	for _, name := range []string{".wtc-status.json", ".wtc-status.md", ".last-wtc-status.yml"} {
+		if _, err := os.Stat(filepath.Join(c.Collection, name)); !os.IsNotExist(err) {
+			t.Fatalf("canceled collector published %s: %v", name, err)
+		}
 	}
 }
