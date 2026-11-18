@@ -852,3 +852,32 @@ func TestStatusResourceIdentityRelativeConfigFallsBack(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusResourceUpstreamMalformedFallsBack(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	_, targets, err := c.CatchUpInventory(CatchUpOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target catchUpTarget
+	for _, v := range targets {
+		if v.path == c.Harness {
+			target = v
+		}
+	}
+	fixtureGit(t, "-C", target.path, "switch", "-qc", "topic")
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
+if [ "$3" = for-each-ref ] && [ "$4" = '--format=%(upstream:short)%00%(upstream:track)' ]; then printf 'origin/main\000[unsupported]\n'; exit 0; fi
+exec /usr/bin/git "$@"
+`, 0700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := statusLocalRepoContext(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := statusResourceLocalReference(context.Background(), target)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("malformed upstream changed local facts: got%+v want%+v err%v", got, want, err)
+	}
+}
