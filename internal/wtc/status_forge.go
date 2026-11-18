@@ -121,6 +121,9 @@ func statusGHDetail(raw []byte, fallback PRRecord) (statusPRDetail, error) {
 		} else {
 			d.MergedOn = ""
 			d.MergeCommit = ""
+			if d.Merge == "MERGED" {
+				d.Merge = "UNKNOWN"
+			}
 		}
 	}
 	if d.State == "OPEN" && p.IsDraft {

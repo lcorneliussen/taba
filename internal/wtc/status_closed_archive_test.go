@@ -48,7 +48,7 @@ func TestStatusClosedArchiveMergeDistinction(t *testing.T) {
 		}
 	}
 	got, err := statusBBDetail([]byte(`{"id":7,"state":"DECLINED","updated_on":"2020-01-01T00:00:00Z","merge_commit":{"hash":"synthetic"}}`), PRRecord{})
-	if err != nil || got.State != "DECLINED" || got.Merge == "MERGED" || got.MergedOn != "" {
+	if err != nil || got.State != "DECLINED" || got.Merge == "MERGED" || got.MergedOn != "" || got.MergeCommit != "" {
 		t.Fatal(got, err)
 	}
 	friday := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
@@ -61,10 +61,24 @@ func TestStatusClosedArchiveMergeDistinction(t *testing.T) {
 
 func TestStatusClosedArchiveRejectsInvalidMergeDate(t *testing.T) {
 	for _, date := range []string{"malformed", time.Now().Add(time.Hour).UTC().Format(time.RFC3339)} {
-		raw := []byte(fmt.Sprintf(`{"number":7,"state":"CLOSED","closedAt":"2020-01-01T00:00:00Z","mergedAt":%q}`, date))
+		raw := []byte(fmt.Sprintf(`{"number":7,"state":"CLOSED","closedAt":"2020-01-01T00:00:00Z","mergedAt":%q,"mergeStateStatus":"MERGED","mergeCommit":{"oid":"synthetic"}}`, date))
 		got, err := statusGHDetail(raw, PRRecord{})
-		if err != nil || got.State != "CLOSED" || got.Merge == "MERGED" || got.MergedOn != "" {
+		if err != nil || got.State != "CLOSED" || got.Merge == "MERGED" || got.MergedOn != "" || got.MergeCommit != "" {
 			t.Fatalf("invalid merge date grants terminal signal: %+v %v", got, err)
+		}
+	}
+}
+
+func TestStatusClosedArchiveUnconfirmedPresentation(t *testing.T) {
+	for _, freshness := range []string{"", "unknown", "stale", "deferred", "unavailable"} {
+		row := StatusPRRow{Repo: "widget", Number: "7", State: "CLOSED", Freshness: freshness, Title: "Unconfirmed entry"}
+		rows := StatusPRsByPriority([]StatusPRRow{row, {Repo: "widget", Number: "8", State: "OPEN", Title: "Current"}})
+		if rows[0].Number != "7" {
+			t.Fatal("unconfirmed closure sorted as confirmed completion", freshness)
+		}
+		text := (StatusSnapshot{PRs: []StatusPRRow{row}}).Markdown()
+		if strings.Contains(text, " closed ") || strings.Contains(text, "~~") {
+			t.Fatal("unknown observation invented terminal presentation", text)
 		}
 	}
 }

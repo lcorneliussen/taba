@@ -7,6 +7,10 @@ import (
 	"taba.sh/taba/internal/branding"
 )
 
+func statusClosedObservation(row StatusPRRow) bool {
+	return (row.State == "CLOSED" || row.State == "DECLINED") && (row.Freshness == "live" || row.Freshness == "cached" || row.Freshness == "recorded")
+}
+
 // StatusPRsByPriority keeps inventory order within each visible group while
 // putting review-ready PRs ahead of drafts and completed work.
 func StatusPRsByPriority(rows []StatusPRRow) []StatusPRRow {
@@ -18,7 +22,7 @@ func StatusPRsByPriority(rows []StatusPRRow) []StatusPRRow {
 		if row.OnBranch {
 			return 2
 		}
-		if row.State == "MERGED" || row.State == "CLOSED" || row.State == "DECLINED" || row.Archived || row.MergedOn != nil ||
+		if row.State == "MERGED" || statusClosedObservation(row) || row.Archived || row.MergedOn != nil ||
 			(row.Merge != nil && *row.Merge == "MERGED") {
 			return 3
 		}
@@ -249,7 +253,7 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			}
 			if row.OnBranch {
 				bits = append(bits, "⚠ MERGED — "+row.LandingLabel())
-			} else if (row.State == "CLOSED" || row.State == "DECLINED") && !statusObservationUnavailable(row.Freshness) {
+			} else if statusClosedObservation(row) {
 				bits = append(bits, strings.ToLower(row.State))
 			} else if row.Draft {
 				bits = append(bits, "◇ draft")
@@ -311,7 +315,7 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			b.WriteString("\n## Archived\n\n_Completed PRs past 48 weekday-hours (weekends excluded)._\n\n")
 			for _, row := range archived {
 				bits := []string{fmt.Sprintf("**%s**", row.Repo), "#" + row.Number}
-				closed := row.State == "CLOSED" || row.State == "DECLINED"
+				closed := statusClosedObservation(row)
 				if closed {
 					bits = append(bits, strings.ToLower(row.State))
 				}
