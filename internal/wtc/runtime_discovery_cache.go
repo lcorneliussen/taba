@@ -31,7 +31,7 @@ func newRuntimeDeclarationCache() *runtimeDeclarationCache {
 
 func (c *Context) cachedRuntimeDeclarations() []RuntimeItem {
 	cache := c.runtimeDeclarationsCache
-	ctx := c.resourceContext()
+	ctx := statusResourceOperation(c.resourceContext())
 	select {
 	case <-ctx.Done():
 		return []RuntimeItem{c.runtimeDeclarationError("", ctx.Err())}
