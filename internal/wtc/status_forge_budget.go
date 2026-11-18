@@ -133,14 +133,21 @@ func statusTakeForgeToken(forge string) bool {
 }
 
 func statusTakeForgeTokenFor(forge, confirmation string) bool {
+	return statusTakeForgeTokenForContext(context.Background(), forge, confirmation)
+}
+
+func statusTakeForgeTokenForContext(ctx context.Context, forge, confirmation string) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	burst, every := statusForgeAllowance(forge)
 	if burst >= 1<<30 {
 		return true
 	}
 	path := statusForgeStatePath("budget", forge)
-	unlock, err := statusLockCache(path)
+	unlock, err := statusLockCacheContext(ctx, path)
 	if err != nil {
-		return true
+		return false
 	}
 	defer unlock()
 	now := time.Now()
@@ -178,8 +185,9 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 			saveQueue()
 			// Wait at most statusBitbucketEvery while holding the budget lock;
 			// provider I/O must stay outside this wait.
-			timer := time.NewTimer(delay)
-			<-timer.C
+			if statusWaitRefresh(ctx, delay) != nil {
+				return false
+			}
 			now = time.Now()
 			tokens, updated = statusReadForgeBudget(path, burst, every, now)
 			if statusForgeCooling(forge) {
@@ -198,6 +206,9 @@ func statusTakeForgeTokenFor(forge, confirmation string) bool {
 	}
 	if confirmation != "" && len(queue) > 0 && queue[0].Key == confirmation {
 		queue = queue[1:]
+	}
+	if ctx.Err() != nil {
+		return false
 	}
 	saveQueue()
 	tokens--
@@ -410,6 +421,13 @@ func statusWithForgeBudget(forge string, stale []byte, fetch func() ([]byte, err
 }
 
 func statusWithForgeBudgetKey(forge, confirmation string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
+	return statusWithForgeBudgetKeyContext(context.Background(), forge, confirmation, stale, fetch)
+}
+
+func statusWithForgeBudgetKeyContext(ctx context.Context, forge, confirmation string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	// GitHub identity recovery already schedules its ordinary and repair reads.
 	// Reserve admission only for Bitbucket omission confirmations.
 	if forge != "bitbucket.org" {
@@ -421,16 +439,25 @@ func statusWithForgeBudgetKey(forge, confirmation string, stale []byte, fetch fu
 		}
 		return nil, false, errForgeCooling
 	}
-	if !statusTakeForgeTokenFor(forge, statusConfirmationKey(confirmation)) {
+	if !statusTakeForgeTokenForContext(ctx, forge, statusConfirmationKey(confirmation)) {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		if len(stale) > 0 {
 			return stale, false, nil
 		}
 		return nil, false, errForgeBudget
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	raw, err := fetch()
+	if ctx.Err() != nil {
+		return nil, false, ctx.Err()
+	}
 	if err != nil {
 		if statusRateLimited(err) {
-			statusForgeCool(forge, statusRetryAfter(err))
+			statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
 			if len(stale) > 0 {
 				return stale, false, nil
 			}
@@ -441,16 +468,30 @@ func statusWithForgeBudgetKey(forge, confirmation string, stale []byte, fetch fu
 }
 
 func statusSingleFlight(kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, error) {
-	raw, _, err := statusFetchShared(kind, forge, slug, key, fetch)
+	return statusSingleFlightContext(context.Background(), kind, forge, slug, key, fetch)
+}
+
+func statusSingleFlightContext(ctx context.Context, kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, error) {
+	raw, _, err := statusFetchSharedContext(ctx, kind, forge, slug, key, fetch)
 	return raw, err
 }
 
 func statusFetchShared(kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, bool, error) {
+	return statusFetchSharedContext(context.Background(), kind, forge, slug, key, fetch)
+}
+
+func statusFetchSharedContext(ctx context.Context, kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	if data, ok := statusReadForgeEntry(kind, forge, slug, key); ok {
 		return data, false, nil
 	}
 	stale, _ := statusReadForgeEntryAny(kind, forge, slug, key)
-	unlock, lockErr := statusLockCache(statusForgeEntryPath(kind, forge, slug, key))
+	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPath(kind, forge, slug, key))
+	if lockErr != nil {
+		return nil, false, lockErr
+	}
 	if lockErr == nil {
 		defer unlock()
 		if data, ok := statusReadForgeEntry(kind, forge, slug, key); ok {
@@ -458,15 +499,18 @@ func statusFetchShared(kind, forge, slug, key string, fetch func() ([]byte, erro
 		}
 	}
 	started := time.Now()
-	raw, live, err := statusWithForgeBudget(forge, stale, fetch)
+	raw, live, err := statusWithForgeBudgetKeyContext(ctx, forge, "", stale, fetch)
 	if err != nil {
 		return nil, false, err
 	}
-	if live && !statusWriteForgeEntrySince(kind, forge, slug, key, raw, started) {
+	if live && !statusResourceWriteSince(ctx, kind, forge, slug, key, raw, started) {
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		if winner, ok := statusReadForgeEntryAny(kind, forge, slug, key); ok {
 			return winner, false, nil
 		}
 		return nil, false, errors.New("superseding forge observation is unavailable")
 	}
-	return raw, live, nil
+	return raw, live, ctx.Err()
 }

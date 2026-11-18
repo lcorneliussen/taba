@@ -254,3 +254,58 @@ func TestStatusResourceBitbucketTransportCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusResourceCanceledRecordLockKeepsCommittedMerge(t *testing.T) {
+	for _, path := range []string{"listed", "detail"} {
+		t.Run(path, func(t *testing.T) {
+			resourceCancellationFixture(t)
+			record, slug, forge := PRRecord{Number: "7"}, "example/widget", "github.com"
+			if !statusWriteForgeEntrySince("pr", forge, slug, "7", []byte(`{"number":7,"state":"MERGED","title":"Confirmed"}`), time.Now()) {
+				t.Fatal("merge setup")
+			}
+			before, _ := statusReadObservedDetail(record, slug, forge, time.Hour)
+			unlock, err := statusLockCache(statusForgeEntryPath("pr", forge, slug, "7"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+			defer cancel()
+			var got statusPRDetail
+			if path == "listed" {
+				got = statusEnrichListedContext(ctx, record, slug, forge, statusOpenPR{})
+			} else {
+				got = statusViewPRWithLiveContext(ctx, record, slug, forge, true, false, nil)
+			}
+			if got.State != "MERGED" || got.ObservedAt != before.ObservedAt || got.Freshness != "unavailable" {
+				t.Fatalf("canceled waiter lost confirmed authority: before=%+v after=%+v", before, got)
+			}
+		})
+	}
+}
+
+func TestStatusResourceSharedReadSeparatesCommittedMergeFromCancellation(t *testing.T) {
+	for _, point := range []string{"merge", "since"} {
+		t.Run(point, func(t *testing.T) {
+			resourceCancellationFixture(t)
+			key := "7"
+			if point == "since" {
+				key = "pr:7"
+			}
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := status424CancelAfterFile{Context: parent, path: statusForgeEntryPath(point, "github.com", "example/widget", key), cancel: cancel}
+			_, _, err := statusFetchSharedContext(ctx, "pr", "github.com", "example/widget", "7", func() ([]byte, error) { return []byte(`{"number":7,"state":"MERGED","title":"Confirmed"}`), nil })
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("request outcome concealed cancellation: %v", err)
+			}
+			got, known := statusReadObservedDetail(PRRecord{Number: "7"}, "example/widget", "github.com", time.Hour)
+			if !known || got.State != "MERGED" || got.Title != "Confirmed" {
+				t.Fatalf("committed terminal fact lost: %+v", got)
+			}
+			if statusWriteForgeEntrySince("pr", "github.com", "example/widget", "7", []byte(`{"number":7,"state":"OPEN"}`), time.Now()) {
+				t.Fatal("compatibility writer reopened committed merge")
+			}
+		})
+	}
+}

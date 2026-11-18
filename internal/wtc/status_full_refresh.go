@@ -134,7 +134,7 @@ func statusFetchPRRaw(record PRRecord, slug, forge string) ([]byte, error) {
 // excluded here as a second safety boundary.
 func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (result statusPRDetail, observation StatusObservation) {
 	if intent != StatusRefreshForeground {
-		detail := statusEnrichRecordMetadata(record, slug, forge)
+		detail := statusEnrichRecordMetadataContext(ctx, record, slug, forge)
 		return detail, statusDetailObservation(detail)
 	}
 	ctx, cancel := statusRefreshContext(ctx)
@@ -328,11 +328,21 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 }
 
 func statusFetchPRRawWithRequest(record PRRecord, slug, forge string, onRequest func()) ([]byte, error) {
+	return statusFetchPRRawWithRequestContext(context.Background(), record, slug, forge, onRequest)
+}
+
+func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, slug, forge string, onRequest func()) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if statusForgeCooling(forge) {
 		return nil, errForgeCooling
 	}
-	if !statusTakeForgeToken(forge) {
+	if !statusTakeForgeTokenForContext(ctx, forge, "") {
 		return nil, errForgeBudget
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	var raw []byte
 	var err error
@@ -341,7 +351,7 @@ func statusFetchPRRawWithRequest(record PRRecord, slug, forge string, onRequest 
 		if onRequest != nil {
 			onRequest()
 		}
-		raw, err = statusJSON("gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid")
+		raw, err = statusJSONContext(ctx, "gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid")
 	case "bitbucket.org":
 		parts := strings.SplitN(slug, "/", 2)
 		if len(parts) != 2 {
@@ -350,33 +360,44 @@ func statusFetchPRRawWithRequest(record PRRecord, slug, forge string, onRequest 
 		if onRequest != nil {
 			onRequest()
 		}
-		raw, err = statusJSON("bb", "pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json")
+		raw, err = statusJSONContext(ctx, "bb", "pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json")
 	default:
 		return nil, fmt.Errorf("unsupported forge")
 	}
 	if err != nil && statusRateLimited(err) {
-		statusForgeCool(forge, statusRetryAfter(err))
+		statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
 	}
 	return raw, err
 }
 
 func statusConfirmFullPR(record PRRecord, slug, forge string, incremental statusPRDetail, source string) statusPRDetail {
-	unlock, lockErr := statusLockCache(statusForgeEntryPath("pr", forge, slug, record.Number))
+	return statusConfirmFullPRContext(context.Background(), record, slug, forge, incremental, source)
+}
+
+func statusConfirmFullPRContext(ctx context.Context, record PRRecord, slug, forge string, incremental statusPRDetail, source string) statusPRDetail {
+	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPath("pr", forge, slug, record.Number))
+	if lockErr != nil {
+		return incremental
+	}
 	if lockErr == nil {
 		defer unlock()
 	}
-	return statusConfirmFullPRLocked(record, slug, forge, incremental, source)
+	return statusConfirmFullPRLockedContext(ctx, record, slug, forge, incremental, source)
 }
 
 func statusConfirmFullPRLocked(record PRRecord, slug, forge string, incremental statusPRDetail, source string) statusPRDetail {
+	return statusConfirmFullPRLockedContext(context.Background(), record, slug, forge, incremental, source)
+}
+
+func statusConfirmFullPRLockedContext(ctx context.Context, record PRRecord, slug, forge string, incremental statusPRDetail, source string) statusPRDetail {
 	if !statusFullRefreshDue(forge, slug, record.Number) {
-		if cached, ok := statusReadCachedDetail(record, slug, forge); ok {
+		if cached, ok := statusReadCachedDetailContext(ctx, record, slug, forge); ok {
 			return cached
 		}
 		return incremental
 	}
 	started := time.Now()
-	raw, err := statusFetchPRRaw(record, slug, forge)
+	raw, err := statusFetchPRRawWithRequestContext(ctx, record, slug, forge, nil)
 	if err != nil || len(raw) == 0 {
 		return incremental
 	}
@@ -385,10 +406,10 @@ func statusConfirmFullPRLocked(record PRRecord, slug, forge string, incremental 
 		return incremental
 	}
 	if forge == "bitbucket.org" {
-		full = statusBBCompleteMergeTime(full, slug)
+		full = statusBBCompleteMergeTimeContext(ctx, full, slug)
 	}
-	if !statusWriteForgeEntrySince("pr", forge, slug, record.Number, raw, started) {
-		if winner, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
+	if !statusResourceWriteSince(ctx, "pr", forge, slug, record.Number, raw, started) {
+		if winner, ok := statusResourceObservedDetail(ctx, record, slug, forge, 365*24*time.Hour); ok {
 			if winner.State != full.State {
 				winner.Freshness = "unavailable"
 			}
@@ -402,7 +423,14 @@ func statusConfirmFullPRLocked(record PRRecord, slug, forge string, incremental 
 }
 
 func statusConfirmFullBuild(slug, branch string, incremental *StatusBuild, source, user, pass string) *StatusBuild {
-	unlock, lockErr := statusLockCache(statusForgeEntryPath("build", "bitbucket.org", slug, branch))
+	return statusConfirmFullBuildContext(context.Background(), slug, branch, incremental, source, user, pass)
+}
+
+func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, incremental *StatusBuild, source, user, pass string) *StatusBuild {
+	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPath("build", "bitbucket.org", slug, branch))
+	if lockErr != nil {
+		return incremental
+	}
 	if lockErr == nil {
 		defer unlock()
 	}
@@ -421,14 +449,14 @@ func statusConfirmFullBuild(slug, branch string, incremental *StatusBuild, sourc
 	if len(parts) != 2 {
 		return fallback
 	}
-	if statusForgeCooling("bitbucket.org") || !statusTakeForgeToken("bitbucket.org") {
+	if statusForgeCooling("bitbucket.org") || !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "") {
 		return fallback
 	}
 	started := time.Now()
-	raw, err := statusBBPipelines(parts[0], parts[1], branch, user, pass)
+	raw, err := statusBBPipelinesContext(ctx, parts[0], parts[1], branch, user, pass)
 	if err != nil {
 		if statusRateLimited(err) {
-			statusForgeCool("bitbucket.org", statusRetryAfter(err))
+			statusForgeCoolContext(ctx, "bitbucket.org", statusRetryAfter(err))
 		}
 		return fallback
 	}
@@ -436,8 +464,11 @@ func statusConfirmFullBuild(slug, branch string, incremental *StatusBuild, sourc
 	if parseErr != nil {
 		return fallback
 	}
-	statusWriteForgeEntrySince("build", "bitbucket.org", slug, branch, raw, started)
-	statusWriteForgeEntry("full", "bitbucket.org", slug, "build:"+branch, []byte(statusBuildFingerprint(incremental)))
+	statusResourceWriteSince(ctx, "build", "bitbucket.org", slug, branch, raw, started)
+	if ctx.Err() != nil {
+		return full
+	}
+	statusResourceWriteEntry(ctx, "full", "bitbucket.org", slug, "build:"+branch, []byte(statusBuildFingerprint(incremental)))
 	statusLogIncrementalMiss("bitbucket.org", slug, branch, source, statusBuildDiff(incremental, full))
 	return full
 }

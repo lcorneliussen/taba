@@ -235,9 +235,12 @@ No per-view host visibility command or unsupported attached-client API is used.
 Painting is capped at one frame per second; input and collector work run
 independently, so this does not throttle manual refresh or provider admission.
 
-Quit cancels context-aware discovery and watcher waits. Some legacy collector
-and receiver helpers still retain their own deadline rather than the view's
-cancellation; complete collector-child cancellation is not yet provided.
+Quit cancels discovery and watcher waits, selected PR/build provider reads,
+the read-only build hook, and queued cache/admission waits. Snapshot publication
+checks cancellation before committing each file. Already committed observations
+remain authoritative. Filesystem I/O already in progress and arbitrary hook
+descendants are not universally cancellable; this is not a promise of complete
+collector process-tree cancellation.
 
 ```sh
 taba status                 # interactive live view in a terminal

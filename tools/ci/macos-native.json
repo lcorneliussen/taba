@@ -1,5 +1,6 @@
 {
   "darwin_sources": [
+    "internal/wtc/status_resource_lease_darwin.go",
     "internal/wtc/status_watcher_process_darwin.go"
   ],
   "groups": [
@@ -45,6 +46,15 @@
       "risk": "macOS PTY accounting and holder diagnostics (fixture-based; no host terminal mutation).",
       "tests": [
         "TestOpenPtyReportNamesHoldersWhenLow"
+      ]
+    },
+    {
+      "package": "./internal/wtc",
+      "risk": "Native lease notifications, cancellation before admission and owned reader cleanup without weakening identity or retirement guards.",
+      "tests": [
+        "TestStatusResourceLeaseNotificationsAndCleanup",
+        "TestStatusResourceWatcherCancelledBeforeLock",
+        "TestStatusResourceWatcherCleanupDoesNotWaitForRetirementLock"
       ]
     }
   ]
