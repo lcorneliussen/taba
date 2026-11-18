@@ -1835,6 +1835,9 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 	}
 	lines := []string{"", heading, header}
 	for _, row := range visible {
+		// Expiry ages the observation, not an already confirmed closure. Keep
+		// the terminal label while showing its recheck age separately below.
+		confirmedClosed := (row.State == "CLOSED" || row.State == "DECLINED") && (row.Freshness == "live" || row.Freshness == "cached" || row.Freshness == "recorded")
 		row = statusTUIPresentationRow(row, time.Now())
 		label := statusTUISafe(row.DisplayTitle)
 		if label == "" {
@@ -1845,7 +1848,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		state := "open"
 		merged := statusTUIMergedPR(row)
-		closed := !merged && (row.State == "CLOSED" || row.State == "DECLINED") && (row.Freshness == "live" || row.Freshness == "cached" || row.Freshness == "recorded")
+		closed := !merged && confirmedClosed && row.Freshness != "unavailable"
 		if closed {
 			state = strings.ToLower(row.State)
 		} else if row.Merge != nil && (*row.Merge == "CONFLICTING" || *row.Merge == "DIRTY") {

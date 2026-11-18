@@ -166,3 +166,26 @@ func TestStatusClosedArchiveConfirmedLabelSurvivesPresentationExpiry(t *testing.
 		}
 	}
 }
+
+func TestStatusClosedArchiveExpiryDoesNotConfirmUnknownOrReopenedRows(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	for _, state := range []string{"CLOSED", "DECLINED", "OPEN", "UNKNOWN"} {
+		for _, freshness := range []string{"stale", "deferred", "unavailable", ""} {
+			row := wtc.StatusPRRow{Repo: "widget", Number: "7", State: state, Title: "Synthetic fact", Freshness: freshness, ObservedAt: old}
+			for _, width := range []int{34, 120} {
+				frame := strings.Join(statusTUIPRLines(wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{row}}, width, false, false), "\n")
+				if strings.Contains(frame, "closed") || strings.Contains(frame, "declined") {
+					t.Fatalf("unconfirmed/reopened row gained closure: %+v\n%s", row, frame)
+				}
+			}
+		}
+	}
+	for _, observed := range []string{"", "malformed", time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)} {
+		row := wtc.StatusPRRow{Repo: "widget", Number: "7", State: "CLOSED", Title: "Synthetic fact", Freshness: "live", ObservedAt: observed}
+		frame := strings.Join(statusTUIPRLines(wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{row}}, 120, false, false), "\n")
+		if strings.Contains(frame, "closed") || !strings.Contains(frame, wtc.StatusPRFreshnessMark("unavailable", observed, time.Now())) {
+			t.Fatalf("invalid observation became authoritative: %s", frame)
+		}
+	}
+}
