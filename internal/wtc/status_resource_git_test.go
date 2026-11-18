@@ -669,3 +669,61 @@ func TestStatusResourceIdentityLegacyRemoteFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusResourceIdentityNullConfigDiscardDoesNotInvalidate(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+	calls := 0
+	read := func() (string, error) { calls++; return gitOutput(args...) }
+	first, err := statusResourceGit(c.resourceContext(), args, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	discarded, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writeErr := discarded.Write([]byte("Synthetic discarded output\n"))
+	closeErr := discarded.Close()
+	if writeErr != nil || closeErr != nil {
+		t.Fatal(writeErr, closeErr)
+	}
+	after, err := os.Stat(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.ModTime() == after.ModTime() {
+		t.Skip("null-device writes do not update metadata on this platform")
+	}
+	got, err := statusResourceGit(c.resourceContext(), args, read)
+	if err != nil || got != first || calls != 1 {
+		t.Fatalf("discarded output invalidated unchanged empty configuration: calls%d got%q want%q err%v", calls, got, first, err)
+	}
+}
+
+func TestStatusResourceIdentityRegularGlobalConfigStillInvalidates(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	fixtureGit(t, "-C", c.Harness, "remote", "set-url", "origin", "synthetic:widget")
+	config := filepath.Join(t.TempDir(), "gitconfig")
+	fixtureFile(t, config, "# Synthetic config\n", 0600)
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+	calls := 0
+	read := func() (string, error) { calls++; return gitOutput(args...) }
+	if got, err := statusResourceGit(c.resourceContext(), args, read); err != nil || got != "synthetic:widget" {
+		t.Fatal(got, err)
+	}
+	fixtureFile(t, config, "[url \"https://example.invalid/\"]\n insteadOf = synthetic:\n", 0600)
+	got, err := statusResourceGit(c.resourceContext(), args, read)
+	if err != nil || got != "https://example.invalid/widget" || calls != 2 {
+		t.Fatal("changed real config was reused", got, err, calls)
+	}
+}
