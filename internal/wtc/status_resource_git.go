@@ -500,6 +500,12 @@ func (memo *statusGitMemo) configPaths(ctx context.Context) ([]string, string) {
 	return paths, proof
 }
 func statusResourceKnownGitEnvironment() bool {
+	// Relative configuration paths resolve after Git's -C, not in our cwd.
+	for _, name := range []string{"HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM"} {
+		if path := os.Getenv(name); path != "" && !filepath.IsAbs(path) {
+			return false
+		}
+	}
 	// Unknown Git environment may change discovery or identity independently of files.
 	for _, item := range os.Environ() {
 		name, _, _ := strings.Cut(item, "=")
