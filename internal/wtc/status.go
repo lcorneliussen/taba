@@ -258,7 +258,11 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	}
 	upstream := t.ref
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
-	if row.BranchKind == "branch" {
+	trackingBatch := batched && local.tracking && row.BranchKind == "branch" && local.branch == row.Branch && local.upstream == t.ref
+	if trackingBatch {
+		upstream = local.upstream
+		row.AheadBasis, row.UpstreamState = "upstream", "tracking"
+	} else if row.BranchKind == "branch" {
 		// The batch and fallback together have a 60-second bound.
 		upstreamCtx, stop := context.WithTimeout(ctx, 60*time.Second)
 		if found, state, ok := statusResourceUpstream(upstreamCtx, t.path, row.Branch); ok {
@@ -280,7 +284,9 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 		stop()
 	}
 	row.AheadRef = upstream
-	if ahead, behind, ok := statusResourceCounts(ctx, t.path, upstream, t.ref); ok {
+	if trackingBatch {
+		row.Ahead, row.Behind = local.ahead, local.behind
+	} else if ahead, behind, ok := statusResourceCounts(ctx, t.path, upstream, t.ref); ok {
 		row.Ahead, row.Behind = ahead, behind
 	} else {
 		row.Ahead, err = statusCountContext(ctx, t.path, upstream+"..HEAD")

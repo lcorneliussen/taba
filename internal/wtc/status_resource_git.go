@@ -335,9 +335,12 @@ func statusResourceOperationState(ctx context.Context, t catchUpTarget) string {
 }
 
 type statusResourceLocalState struct {
-	branch   string
-	changed  int
-	conflict bool
+	branch        string
+	changed       int
+	conflict      bool
+	upstream      string
+	ahead, behind int
+	tracking      bool
 }
 
 // V2 records preserve Git's quoting of paths, so embedded newlines and rename
@@ -349,6 +352,8 @@ func statusResourceLocalRead(ctx context.Context, path string) (statusResourceLo
 	}
 	s := statusResourceLocalState{}
 	head, oid := false, false
+	upstreams, counts, branches := 0, 0, 0
+	var countOK bool
 	for _, line := range strings.Split(raw, "\n") {
 		switch {
 		case strings.HasPrefix(line, "# branch.oid "):
@@ -360,9 +365,13 @@ func statusResourceLocalRead(ctx context.Context, path string) (statusResourceLo
 		case strings.HasPrefix(line, "# branch.head "):
 			s.branch = strings.TrimPrefix(line, "# branch.head ")
 			head = true
+			branches++
 		case strings.HasPrefix(line, "# branch.upstream "):
-			// Upstream/count semantics remain in the established authoritative reads.
+			s.upstream = strings.TrimPrefix(line, "# branch.upstream ")
+			upstreams++
 		case strings.HasPrefix(line, "# branch.ab "):
+			counts++
+			s.ahead, s.behind, countOK = statusResourceTrackingCounts(strings.TrimPrefix(line, "# branch.ab "))
 		case strings.HasPrefix(line, "1 "), strings.HasPrefix(line, "2 "), strings.HasPrefix(line, "? "):
 			s.changed++
 		case strings.HasPrefix(line, "u "):
@@ -376,7 +385,27 @@ func statusResourceLocalRead(ctx context.Context, path string) (statusResourceLo
 	if !head || !oid || s.branch == "" {
 		return s, false
 	}
+	// The counts belong only to this Git observation and its exact upstream.
+	// Missing/suppressed/duplicate evidence keeps the independent reads.
+	s.tracking = branches == 1 && upstreams == 1 && counts == 1 && countOK && s.upstream != "" && !strings.ContainsAny(s.upstream, " \t\r\n\x00")
 	return s, true
+}
+
+func statusResourceTrackingCounts(raw string) (int, int, bool) {
+	fields := strings.Fields(raw)
+	if len(fields) != 2 || len(fields[0]) < 2 || len(fields[1]) < 2 || fields[0][0] != '+' || fields[1][0] != '-' {
+		return 0, 0, false
+	}
+	for _, digits := range []string{fields[0][1:], fields[1][1:]} {
+		for _, digit := range digits {
+			if digit < '0' || digit > '9' {
+				return 0, 0, false
+			}
+		}
+	}
+	ahead, ae := strconv.Atoi(fields[0][1:])
+	behind, be := strconv.Atoi(fields[1][1:])
+	return ahead, behind, ae == nil && be == nil
 }
 
 func statusResourceOperationFallback(ctx context.Context, t catchUpTarget) string {
