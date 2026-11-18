@@ -58,3 +58,13 @@ func TestStatusClosedArchiveMergeDistinction(t *testing.T) {
 		t.Fatal("weekday archive timing changed")
 	}
 }
+
+func TestStatusClosedArchiveRejectsInvalidMergeDate(t *testing.T) {
+	for _, date := range []string{"malformed", time.Now().Add(time.Hour).UTC().Format(time.RFC3339)} {
+		raw := []byte(fmt.Sprintf(`{"number":7,"state":"CLOSED","closedAt":"2020-01-01T00:00:00Z","mergedAt":%q}`, date))
+		got, err := statusGHDetail(raw, PRRecord{})
+		if err != nil || got.State != "CLOSED" || got.Merge == "MERGED" || got.MergedOn != "" {
+			t.Fatalf("invalid merge date grants terminal signal: %+v %v", got, err)
+		}
+	}
+}
