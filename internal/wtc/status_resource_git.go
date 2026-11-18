@@ -540,3 +540,26 @@ func statusResourceGitBinary() (string, string) {
 
 	return binary, proof
 }
+
+// Upstream binding and its gone marker come from one current ref observation.
+// Unsupported or malformed Git output uses the established separate reads.
+func statusResourceUpstream(ctx context.Context, path, branch string) (string, string, bool) {
+	raw, err := statusGitContext(ctx, path, "for-each-ref", "--format=%(upstream:short)%00%(upstream:track)", "refs/heads/"+branch)
+	if err != nil || strings.ContainsAny(raw, "\r\n") {
+		return "", "", false
+	}
+	fields := strings.Split(raw, "\x00")
+	if len(fields) != 2 {
+		return "", "", false
+	}
+	if fields[0] == "" && fields[1] == "" {
+		return "", "none", true
+	}
+	if fields[0] == "" {
+		return "", "", false
+	}
+	if fields[1] == "[gone]" {
+		return "", "gone", true
+	}
+	return fields[0], "tracking", true
+}

@@ -259,13 +259,25 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	upstream := t.ref
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
 	if row.BranchKind == "branch" {
-		if found, err := statusGitContext(ctx, t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
+		// Batch and fallback together retain the previous two-read maximum.
+		upstreamCtx, stop := context.WithTimeout(ctx, 60*time.Second)
+		if found, state, ok := statusResourceUpstream(upstreamCtx, t.path, row.Branch); ok {
+			row.UpstreamState = state
+			if state == "tracking" {
+				upstream = found
+				row.AheadBasis = "upstream"
+			}
+			if state == "gone" {
+				row.BranchDisplay += " [gone]"
+			}
+		} else if found, err := statusGitContext(upstreamCtx, t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
 			upstream = found
 			row.AheadBasis, row.UpstreamState = "upstream", "tracking"
-		} else if tracking, err := statusGitContext(ctx, t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
+		} else if tracking, err := statusGitContext(upstreamCtx, t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
 			row.UpstreamState = "gone"
 			row.BranchDisplay += " [gone]"
 		}
+		stop()
 	}
 	row.AheadRef = upstream
 	if ahead, behind, ok := statusResourceCounts(ctx, t.path, upstream, t.ref); ok {

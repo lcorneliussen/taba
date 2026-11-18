@@ -125,6 +125,10 @@ func TestStatusResourceLocalActualGitComparison(t *testing.T) {
 	fixtureFile(t, filepath.Join(target.path, "untracked"), "changed", 0600)
 	check("dirty")
 	fixtureGit(t, "-C", target.path, "update-ref", "-d", "refs/remotes/origin/main")
+	originalRef := target.ref
+	target.ref = "alternate"
+	check("gone-upstream-valid-base")
+	target.ref = originalRef
 	check("missing-base")
 	fixtureGit(t, "-C", target.path, "update-ref", "refs/remotes/origin/main", "HEAD")
 	check("changed-base")
