@@ -242,9 +242,7 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 		detail.Freshness = ""
 		detail = statusObserveAt(detail, item.Started, "open-list")
 	}
-	if lockErr == nil {
-		unlock()
-	}
+	unlock()
 	return detail
 }
 
@@ -486,7 +484,9 @@ func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent Statu
 	if err := ctx.Err(); err != nil {
 		return StatusSnapshot{}, err
 	}
-	snapshot, err := c.StatusLocalSnapshot(false)
+	// Final choices need the PR/build observations and any branch return below.
+	// Collect local rows without issuing an unused preliminary head read.
+	snapshot, err := c.statusLocalSnapshot(false, false)
 	if err != nil {
 		return snapshot, err
 	}
@@ -664,8 +664,14 @@ func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent Statu
 			return snapshot, err
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return snapshot, err
+	}
 	// The pull requests change what comes next.
 	statusNextContext(c.resourceContext(), &snapshot)
+	if err := ctx.Err(); err != nil {
+		return snapshot, err
+	}
 	return snapshot, nil
 }
 

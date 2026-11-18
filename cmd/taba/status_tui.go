@@ -2237,7 +2237,7 @@ func (m statusTUIModel) View() tea.View {
 	for i, line := range visible {
 		fitted := statusTUIFitANSI(line, width)
 		// The renderer clears its frame before drawing. Keep row positions
-		// and ANSI closures, without parsing right-edge padding on every paint.
+		// and ANSI closures; trim padding to avoid writing unused right-edge cells.
 		visible[i] = strings.TrimRight(fitted, " ")
 		if statusTUIHasVisibleLink(fitted) {
 			visibleLink = true

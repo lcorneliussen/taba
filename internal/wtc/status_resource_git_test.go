@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// Frozen pre-optimization collector oracle; actual Git fixtures compare complete
+// Frozen independent-read collector oracle; actual Git fixtures compare complete
 // local rows, including development-base and operation authority.
 func statusResourceLocalReference(ctx context.Context, t catchUpTarget) (StatusRepo, error) {
 	dir := filepath.Base(t.path)

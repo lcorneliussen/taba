@@ -448,8 +448,8 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 			return nil, fmt.Errorf("Bitbucket API response read failed")
 		}
 		if empty404 && response.StatusCode == http.StatusNotFound {
-			// Save the disabled-feature empty page so the next refresh can reuse
-			// that answer without spending another provider request.
+			// Map a pipelines 404 to an empty page. The caller caches that answer
+			// so a repeated refresh can reuse it without another request.
 			return []byte(`{"values":[]}`), nil
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {

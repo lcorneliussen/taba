@@ -259,7 +259,7 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	upstream := t.ref
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
 	if row.BranchKind == "branch" {
-		// Batch and fallback together retain the previous two-read maximum.
+		// The batch and fallback together have a 60-second bound.
 		upstreamCtx, stop := context.WithTimeout(ctx, 60*time.Second)
 		if found, state, ok := statusResourceUpstream(upstreamCtx, t.path, row.Branch); ok {
 			row.UpstreamState = state
@@ -317,6 +317,10 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 // StatusLocalSnapshot reads worktrees and local refs without contacting a
 // forge, updating refs, or writing a cache. All is an explicit workspace sweep.
 func (c *Context) StatusLocalSnapshot(all bool) (StatusSnapshot, error) {
+	return c.statusLocalSnapshot(all, true)
+}
+
+func (c *Context) statusLocalSnapshot(all, includeChoices bool) (StatusSnapshot, error) {
 	snapshot := StatusSnapshot{Schema: 1,
 		CLIVersion:           RunningCLIVersion(),
 		GeneratedAt:          time.Now().UTC().Format("2006-01-02T15:04:05Z"),
@@ -350,7 +354,9 @@ func (c *Context) StatusLocalSnapshot(all bool) (StatusSnapshot, error) {
 	if err := c.resourceContext().Err(); err != nil {
 		return snapshot, err
 	}
-	statusNextContext(c.resourceContext(), &snapshot)
+	if includeChoices {
+		statusNextContext(c.resourceContext(), &snapshot)
+	}
 	c.statusRetirement(&snapshot, all)
 	return snapshot, nil
 }

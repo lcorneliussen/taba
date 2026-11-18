@@ -792,7 +792,7 @@ func TestStatusUnconfirmedTerminalProducerRows(t *testing.T) {
 						}
 					}
 				}
-				// Confirmed closures now remain inspectable; the existing orphan warning stays.
+				// Confirmed closures remain inspectable; the existing orphan warning stays.
 				statusWriteForgeEntrySince("pr", tc.forge, "example/widget", "7", raw, time.Now())
 				confirmed, err := c.statusForgePreview(false, false)
 				if err != nil {

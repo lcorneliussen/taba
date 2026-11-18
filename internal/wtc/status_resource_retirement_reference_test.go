@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Frozen cf92 inspection oracle, including complete coverage and classification.
+// Frozen independent-read inspection oracle, including coverage and classification.
 // It deliberately retains the four independent guarded Git reads.
 func (c *Context) statusResourceLegacyInspect(ctx context.Context, name string, transcripts []string) (RetirementReport, error) {
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
