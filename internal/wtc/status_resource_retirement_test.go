@@ -204,6 +204,13 @@ func TestStatusResourceRetirementFullReportEquivalence(t *testing.T) {
 					t.Fatal("missing real conflict")
 				}
 			}
+			raw, rawErr := retirementGitContext(context.Background(), repo, "status", "--porcelain=v2", "--branch", "--untracked-files=normal")
+			if rawErr == nil {
+				_, _, _, supported := statusResourceRetirementParse(raw)
+				if supported == (state == "unborn") {
+					t.Fatalf("actualGit state %s incorrectly used fallback/support", state)
+				}
+			}
 			transcript := retirementTranscriptFixture(t, target, "Untrusted synthetic evidence; verification remains necessary.")
 			compareRetirementReports(t, c, []string{transcript})
 		})

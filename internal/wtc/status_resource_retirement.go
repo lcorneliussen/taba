@@ -86,7 +86,22 @@ func statusResourceRetirementParse(raw string) (head, branch string, dirty, ok b
 			haveBranch = true
 			branch = strings.TrimPrefix(line, "# branch.head ")
 		case strings.HasPrefix(line, "# branch.upstream "), strings.HasPrefix(line, "# branch.ab "):
-		case strings.HasPrefix(line, "1 "), strings.HasPrefix(line, "2 "), strings.HasPrefix(line, "? "), strings.HasPrefix(line, "u "):
+		case strings.HasPrefix(line, "1 "), strings.HasPrefix(line, "2 "), strings.HasPrefix(line, "u "):
+			count := 9
+			if line[0] == '2' {
+				count = 10
+			} else if line[0] == 'u' {
+				count = 11
+			}
+			fields := strings.SplitN(line, " ", count)
+			if len(fields) != count || fields[count-1] == "" || len(fields[1]) != 2 || len(fields[2]) != 4 {
+				return "", "", false, false
+			}
+			dirty = true
+		case strings.HasPrefix(line, "? "):
+			if len(line) == 2 {
+				return "", "", false, false
+			}
 			dirty = true
 		case line == "":
 		default:
