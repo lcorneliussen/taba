@@ -143,3 +143,57 @@ func TestStatusResourceTrackingAmbiguousRef(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusResourceNoUpstreamWholeRows(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	git := func(args ...string) string { return fixtureGit(t, append([]string{"-C", c.Harness}, args...)...) }
+	git("switch", "-qc", "topic")
+	target := catchUpTarget{path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: "origin/main"}
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
+if [ "$3" = for-each-ref ] || [ "$3 $4 $5" = 'rev-parse --abbrev-ref @{u}' ]; then printf x >> "$RESOURCE_NO_UPSTREAM_CALLS"; fi
+exec /usr/bin/git "$@"
+`, 0700)
+	t.Setenv("RESOURCE_NO_UPSTREAM_CALLS", calls)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	repeated := 0
+	check := func(label string) {
+		t.Helper()
+		before := resourceCalls(calls)
+		got, ge := statusLocalRepoContext(context.Background(), target)
+		n := resourceCalls(calls) - before
+		want, we := statusResourceLocalReference(context.Background(), target)
+		if (ge == nil) != (we == nil) || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s got%+v/%v want%+v/%v", label, got, ge, want, we)
+		}
+		if ge != nil {
+			t.Fatal(label, ge)
+		}
+		if got.UpstreamState != "none" || got.AheadBasis != "development-tip" {
+			t.Fatal(label, got)
+		}
+		t.Logf("%s complete row matches independent oracle; upstream reads=%d", label, n)
+		repeated += n
+	}
+	check("clean")
+	fixtureFile(t, filepath.Join(c.Harness, "synthetic"), "one", 0600)
+	check("untracked")
+	git("add", "synthetic")
+	check("staged")
+	git("-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "commit", "-qm", "Synthetic ahead")
+	check("ahead")
+	fixtureFile(t, filepath.Join(c.Harness, "synthetic"), "two", 0600)
+	check("dirty")
+	git("reset", "--hard", "HEAD")
+	git("mv", "synthetic", "renamed")
+	check("rename")
+	git("reset", "--hard", "HEAD")
+	git("switch", "-c", "(detached)")
+	check("legal-detached-branch")
+	git("update-ref", "refs/remotes/origin/main", "HEAD")
+	check("changed-base")
+	if repeated != 0 {
+		t.Fatalf("valid fresh no-upstream porcelain repeated %d Git probes", repeated)
+	}
+}
