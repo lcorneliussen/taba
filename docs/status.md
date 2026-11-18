@@ -201,7 +201,8 @@ merges are reused without metadata queries. Bitbucket active-PR checks are
 rechecked for the reported commit under the same phase budget, charging each
 page, head-resolution request and redirect separately. Incomplete checks cannot
 claim success or absence; a known failure for that exact head keeps its original
-observation time when fresh checks are unavailable. Periodic collection still includes branch discovery, local refs, runtime and build facts.
+observation time when fresh checks are unavailable. Periodic collection still
+includes branch discovery, local refs, runtime and build facts.
 
 Active PR state observations expire on screen using their original observation
 time and the configured forge cache age, even between background refreshes.

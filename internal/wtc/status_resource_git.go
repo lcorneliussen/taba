@@ -341,6 +341,7 @@ type statusResourceLocalState struct {
 	upstream      string
 	ahead, behind int
 	tracking      bool
+	noUpstream    bool
 }
 
 // V2 records preserve Git's quoting of paths, so embedded newlines and rename
@@ -352,7 +353,7 @@ func statusResourceLocalRead(ctx context.Context, path string) (statusResourceLo
 	}
 	s := statusResourceLocalState{}
 	head, oid := false, false
-	upstreams, counts, branches := 0, 0, 0
+	upstreams, counts, branches, oids := 0, 0, 0, 0
 	var countOK bool
 	for _, line := range strings.Split(raw, "\n") {
 		switch {
@@ -362,6 +363,7 @@ func statusResourceLocalRead(ctx context.Context, path string) (statusResourceLo
 				return s, false
 			}
 			oid = true
+			oids++
 		case strings.HasPrefix(line, "# branch.head "):
 			s.branch = strings.TrimPrefix(line, "# branch.head ")
 			head = true
@@ -387,7 +389,10 @@ func statusResourceLocalRead(ctx context.Context, path string) (statusResourceLo
 	}
 	// The counts belong only to this Git observation and its exact upstream.
 	// Missing/suppressed/duplicate evidence keeps the independent reads.
-	s.tracking = branches == 1 && upstreams == 1 && counts == 1 && countOK && s.upstream != "" && !strings.ContainsAny(s.upstream, " \t\r\n\x00")
+	// In complete --branch output, an absent upstream and counts means none.
+	// Incomplete/duplicate branch headers cannot replace the independent probe.
+	s.noUpstream = branches == 1 && oids == 1 && upstreams == 0 && counts == 0
+	s.tracking = branches == 1 && oids == 1 && upstreams == 1 && counts == 1 && countOK && s.upstream != "" && !strings.ContainsAny(s.upstream, " \t\r\n\x00")
 	return s, true
 }
 

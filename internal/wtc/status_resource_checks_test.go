@@ -295,7 +295,7 @@ func TestStatusResourceBackgroundChecksNewerPartialKeepsKnownFailure(t *testing.
 				if hits.Add(1) == 2 {
 					newer := unknownHeadChecks(checkHeadB)
 					raw, _ := json.Marshal(newer)
-					// A released-style writer publishes a genuinely later incomplete read.
+					// A compatibility writer publishes a genuinely later incomplete read.
 					// Its bytes/order remain authoritative; it cannot disprove a known failure.
 					statusWriteForgeEntrySince("checks", "bitbucket.org", "example/widget", checkHeadB, raw, time.Now())
 					if !complete {
@@ -333,8 +333,6 @@ func TestStatusResourceForegroundNewerPartialKeepsKnownFailure(t *testing.T) {
 				if hits.Add(1) == 2 {
 					newer := unknownHeadChecks(checkHeadB)
 					raw, _ := json.Marshal(newer)
-					// A released-style writer publishes a genuinely later incomplete read.
-					// Its bytes/order remain authoritative; it cannot disprove a known failure.
 					statusWriteForgeEntrySince("checks", "bitbucket.org", "example/widget", checkHeadB, raw, time.Now())
 					if !complete {
 						w.WriteHeader(http.StatusServiceUnavailable)

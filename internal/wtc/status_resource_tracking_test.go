@@ -95,6 +95,8 @@ printf '%s\n' "$RESOURCE_TRACKING_RAW"
 	}{
 		{"valid", "# branch.upstream origin/main\n# branch.ab +7 -3", true, 7, 3},
 		{"zero", "# branch.upstream origin/main\n# branch.ab +0 -0", true, 0, 0},
+		{"none", "", false, 0, 0},
+		{"duplicate-oid", "# branch.oid " + strings.Repeat("b", 40), false, 0, 0},
 		{"missing-counts", "# branch.upstream origin/main", false, 0, 0},
 		{"unknown-counts", "# branch.upstream origin/main\n# branch.ab +? -?", false, 0, 0},
 		{"negative", "# branch.upstream origin/main\n# branch.ab +-1 -0", false, 0, 0},
@@ -110,7 +112,7 @@ printf '%s\n' "$RESOURCE_TRACKING_RAW"
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("RESOURCE_TRACKING_RAW", base+tc.extra)
 			got, ok := statusResourceLocalRead(context.Background(), t.TempDir())
-			if !ok || got.tracking != tc.known || tc.known && (got.ahead != tc.ahead || got.behind != tc.behind) {
+			if !ok || got.tracking != tc.known || got.noUpstream != (tc.name == "none") || tc.known && (got.ahead != tc.ahead || got.behind != tc.behind) {
 				t.Fatalf("%s got%+v ok%v", tc.name, got, ok)
 			}
 		})
@@ -193,6 +195,14 @@ exec /usr/bin/git "$@"
 	check("legal-detached-branch")
 	git("update-ref", "refs/remotes/origin/main", "HEAD")
 	check("changed-base")
+	git("branch", "--set-upstream-to=origin/main")
+	got, ge := statusLocalRepoContext(context.Background(), target)
+	want, we := statusResourceLocalReference(context.Background(), target)
+	if ge != nil || we != nil || !reflect.DeepEqual(got, want) || got.UpstreamState != "tracking" {
+		t.Fatal("new upstream was not observed", got, want, ge, we)
+	}
+	git("branch", "--unset-upstream")
+	check("removed-upstream")
 	if repeated != 0 {
 		t.Fatalf("valid fresh no-upstream porcelain repeated %d Git probes", repeated)
 	}

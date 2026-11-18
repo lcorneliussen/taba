@@ -236,7 +236,7 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	if batched {
 		branch = local.branch
 		if branch == "(detached)" {
-			// The marker is also a legal branch name; resolve that ambiguity.
+			// The marker is also a legal branch name; confirm it with symbolic-ref.
 			branch, branchErr = statusGitContext(ctx, t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
 		}
 	} else {
@@ -258,12 +258,13 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	}
 	upstream := t.ref
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
-	trackingBatch := batched && local.tracking && row.BranchKind == "branch" && local.branch == row.Branch && local.upstream == t.ref
+	branchBatch := batched && row.BranchKind == "branch" && local.branch == row.Branch
+	trackingBatch := branchBatch && local.tracking && local.upstream == t.ref
 	if trackingBatch {
 		upstream = local.upstream
 		row.AheadBasis, row.UpstreamState = "upstream", "tracking"
-	} else if row.BranchKind == "branch" {
-		// The batch and fallback together have a 60-second bound.
+	} else if row.BranchKind == "branch" && !(branchBatch && local.noUpstream) {
+		// The upstream probe and fallback share a 60-second bound.
 		upstreamCtx, stop := context.WithTimeout(ctx, 60*time.Second)
 		if found, state, ok := statusResourceUpstream(upstreamCtx, t.path, row.Branch); ok {
 			row.UpstreamState = state

@@ -798,6 +798,8 @@ func TestStatusResourceUpstreamReadIsOneCurrentObservation(t *testing.T) {
 		t.Fatal("missing target")
 	}
 	fixtureGit(t, "-C", target.path, "switch", "-qc", "topic")
+	fixtureGit(t, "-C", target.path, "branch", "alternate", "HEAD")
+	fixtureGit(t, "-C", target.path, "branch", "--set-upstream-to=alternate")
 	bin := t.TempDir()
 	calls := filepath.Join(bin, "upstream-calls")
 	t.Setenv("RESOURCE_UPSTREAM_CALLS", calls)
@@ -866,15 +868,22 @@ func TestStatusResourceUpstreamMalformedFallsBack(t *testing.T) {
 		}
 	}
 	fixtureGit(t, "-C", target.path, "switch", "-qc", "topic")
+	fixtureGit(t, "-C", target.path, "branch", "alternate", "HEAD")
+	fixtureGit(t, "-C", target.path, "branch", "--set-upstream-to=alternate")
 	bin := t.TempDir()
+	calls := filepath.Join(bin, "malformed-hits")
+	t.Setenv("RESOURCE_UPSTREAM_MALFORMED_HITS", calls)
 	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
-if [ "$3" = for-each-ref ] && [ "$4" = '--format=%(upstream:short)%00%(upstream:track)' ]; then printf 'origin/main\000[unsupported]\n'; exit 0; fi
+if [ "$3" = for-each-ref ] && [ "$4" = '--format=%(upstream:short)%00%(upstream:track)' ]; then printf x >> "$RESOURCE_UPSTREAM_MALFORMED_HITS"; printf 'origin/main\000[unsupported]\n'; exit 0; fi
 exec /usr/bin/git "$@"
 `, 0700)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	got, err := statusLocalRepoContext(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if resourceCalls(calls) != 1 {
+		t.Fatal("malformed upstream probe was not exercised exactly once")
 	}
 	want, err := statusResourceLocalReference(context.Background(), target)
 	if err != nil || !reflect.DeepEqual(got, want) {

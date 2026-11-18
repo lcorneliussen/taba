@@ -22,7 +22,7 @@ func statusResourceRetirementRead(ctx context.Context, path string) RetirementRe
 	}
 	head, branch, dirty, ok := statusResourceRetirementParse(raw)
 	if err == nil && ok && branch == "(detached)" {
-		// A real branch may have this name; preserve the legacy symbolic read.
+		// A real branch may have this name; preserve branch --show-current.
 		branch, err = retirementGitContext(localCtx, path, "branch", "--show-current")
 	}
 	if localCtx.Err() != nil {
