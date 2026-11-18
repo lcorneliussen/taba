@@ -1,6 +1,8 @@
 package wtc
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -340,4 +342,59 @@ esac
 		}
 	}
 	t.Fatal("harness row missing")
+}
+
+func TestStatusBranchDiscoveryPreservesOperationCancellation(t *testing.T) {
+	auth441Fixture(t)
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		t.Run(forge, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			ctx = statusAuthOperation(ctx)
+			cancel()
+			if _, err := statusDiscoverBranchContext(ctx, forge, "example/widget", "topic"); !errors.Is(err, context.Canceled) {
+				t.Fatalf("discovery lost cancellation: %v", err)
+			}
+			var err error
+			if forge == "github.com" {
+				_, err = statusDiscoverGitHubBranchContext(ctx, "example/widget", "topic")
+			} else {
+				_, err = statusDiscoverBitbucketBranchContext(ctx, "example/widget", "topic")
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("fallback lost cancellation: %v", err)
+			}
+		})
+	}
+}
+
+func TestStatusBranchFallbackProviderDeadline(t *testing.T) {
+	auth441Fixture(t)
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "gh"), "#!/bin/sh\nexec sleep 5\n", 0700)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	t.Setenv("BB_API_USER", "synthetic-user")
+	t.Setenv("BB_API_PASS", "synthetic-secret")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer server.Close()
+	old := statusBBAPI
+	statusBBAPI = server.URL
+	defer func() { statusBBAPI = old }()
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		t.Run(forge, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			started := time.Now()
+			var err error
+			if forge == "github.com" {
+				_, err = statusDiscoverGitHubBranchContext(ctx, "example/widget", "topic")
+			} else {
+				_, err = statusDiscoverBitbucketBranchContext(ctx, "example/widget", "topic")
+			}
+			if err == nil || ctx.Err() != context.DeadlineExceeded || time.Since(started) > 2*time.Second {
+				t.Fatalf("provider fallback did not honor deadline: %v (%v)", err, time.Since(started))
+			}
+		})
+	}
 }

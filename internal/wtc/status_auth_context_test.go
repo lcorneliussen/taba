@@ -483,3 +483,47 @@ func TestStatusAuth441CommittedOrderingReceiptStaysWithPinnedContext(t *testing.
 		t.Fatal("ordering lost across credential switch")
 	}
 }
+
+func TestStatusAuth441UnenlistedCollectorSharesUnknownOperation(t *testing.T) {
+	auth441Fixture(t)
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
+	c := newWorkspaceFixture(t)
+	fixtureGit(t, "-C", c.Harness, "switch", "-qc", "topic")
+	c.Registry.Repos[0].Remote = "https://github.com/example/agent-harness.git"
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	t.Setenv("AUTH_441_DISCOVERY_CALLS", calls)
+	fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
+printf '%s\n' "$*" >> "$AUTH_441_DISCOVERY_CALLS"
+[ "$1 $2" = 'pr list' ] || exit 9
+printf '%s\n' '[{"number":7,"headRefName":"topic","state":"OPEN","title":"Synthetic discovered change","baseRefName":"main","statusCheckRollup":[]}]'
+`, 0700)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	if statusResolveAuthContext("github.com").known {
+		t.Fatal("fixture must use unknown credential selection")
+	}
+	for operation := 1; operation <= 2; operation++ {
+		snapshot, err := c.statusForgePreview(false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(snapshot.PRs) != 1 || !snapshot.PRs[0].NotEnlisted || snapshot.PRs[0].State != "OPEN" || snapshot.PRs[0].Title != "Synthetic discovered change" || snapshot.PRs[0].ObservedAt == "" {
+			t.Fatalf("discovery facts/provenance lost: %+v", snapshot.PRs)
+		}
+		raw, _ := os.ReadFile(calls)
+		if count := strings.Count(string(raw), "pr list"); count != operation {
+			t.Fatalf("operation %d made %d list calls; want %d total (one per operation)", operation, count, operation)
+		}
+		entries, _ := os.ReadDir(statusForgeCacheDir())
+		for _, entry := range entries {
+			for _, prefix := range []string{"openprs-", "branch-", "pr-", "merge-"} {
+				if strings.HasPrefix(entry.Name(), prefix) {
+					t.Fatalf("unknown authority escaped operation memory: %s", entry.Name())
+				}
+			}
+		}
+	}
+	if _, err := os.Stat(c.PRFile()); !os.IsNotExist(err) {
+		t.Fatal("discovery wrote enlistment")
+	}
+}

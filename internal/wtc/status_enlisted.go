@@ -148,6 +148,7 @@ func statusEnrichRecord(record PRRecord, slug, forge string) statusPRDetail {
 }
 
 func statusEnrichRecordContext(ctx context.Context, record PRRecord, slug, forge string) statusPRDetail {
+	ctx = statusAuthOperation(ctx)
 	detail := statusEnrichRecordMetadataContext(ctx, record, slug, forge)
 	if forge == "bitbucket.org" && (detail.State == "OPEN" || detail.State == "DRAFT") {
 		evidence, _ := statusBBHeadChecksContext(ctx, StatusRefreshBackground, slug, detail.HeadCommit, false)
@@ -640,11 +641,11 @@ func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent Status
 		}
 		slug, forge := repos.forge(row.Repo)
 		c.statusProgress(fmt.Sprintf("Finding branch pull requests %d/%d", i+1, len(snapshot.Repos)))
-		number, err := statusDiscoverBranch(forge, slug, row.Branch)
+		number, err := statusDiscoverBranchContext(ctx, forge, slug, row.Branch)
 		if err != nil || number == "" {
 			continue
 		}
-		detail := statusPredictBBMerge(statusEnrichRecord(PRRecord{Repo: row.Repo, Number: number}, slug, forge), forge, slug, snapshot.Repos)
+		detail := statusPredictBBMerge(statusEnrichRecordContext(ctx, PRRecord{Repo: row.Repo, Number: number}, slug, forge), forge, slug, snapshot.Repos)
 		mergeHead, mergeBase := statusMergeProvenance(detail)
 		if detail.State == "OPEN" || detail.State == "DRAFT" {
 			statusPRBase(&snapshot, i, detail.Base)

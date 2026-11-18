@@ -337,6 +337,10 @@ func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, err
 }
 
 func statusFetchBBBranch(slug, branch string) ([]byte, error) {
+	return statusFetchBBBranchContext(context.Background(), slug, branch)
+}
+
+func statusFetchBBBranchContext(ctx context.Context, slug, branch string) ([]byte, error) {
 	user, pass := bitbucketCredentials()
 	if user == "" || pass == "" {
 		return nil, fmt.Errorf("no Bitbucket API credentials")
@@ -351,7 +355,7 @@ func statusFetchBBBranch(slug, branch string) ([]byte, error) {
 	query.Set("fields", "values.id,values.source.branch.name")
 	query.Set("q", `source.branch.name="`+statusBBQueryString(branch)+`"`)
 	endpoint := statusBBAPI + "/repositories/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/pullrequests?" + query.Encode()
-	return statusBBGET(endpoint, user, pass)
+	return statusBBGETContext(ctx, StatusRefreshBackground, endpoint, user, pass)
 }
 
 func statusBBQueryString(value string) string {
