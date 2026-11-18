@@ -819,3 +819,36 @@ exec /usr/bin/git "$@"
 		t.Fatalf("unchanged local upstream required %d queries", n)
 	}
 }
+
+func TestStatusResourceIdentityRelativeConfigFallsBack(t *testing.T) {
+	for _, kind := range []string{"global", "system"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+			c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+			fixtureGit(t, "-C", c.Harness, "remote", "set-url", "origin", "synthetic:widget")
+			relative := "synthetic-relative-config"
+			config := filepath.Join(c.Harness, relative)
+			fixtureFile(t, config, "# Synthetic config\n", 0600)
+			if kind == "global" {
+				t.Setenv("GIT_CONFIG_GLOBAL", relative)
+			} else {
+				t.Setenv("GIT_CONFIG_NOSYSTEM", "0")
+				t.Setenv("GIT_CONFIG_SYSTEM", relative)
+			}
+			args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+			if got, err := gitOutputContext(c.resourceContext(), args...); err != nil || got != "synthetic:widget" {
+				t.Fatal(got, err)
+			}
+			fixtureFile(t, config, "[url \"https://example.invalid/\"]\n insteadOf = synthetic:\n", 0600)
+			want, err := gitOutput(args...)
+			if err != nil || want != "https://example.invalid/widget" {
+				t.Fatal("invalid actualGit fixture", want, err)
+			}
+			got, err := gitOutputContext(c.resourceContext(), args...)
+			if err != nil || got != want {
+				t.Fatalf("relative config reused wrong-cwd identity: got%q want%q err%v", got, want, err)
+			}
+		})
+	}
+}
