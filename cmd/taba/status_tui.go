@@ -286,10 +286,6 @@ func statusTUITick() tea.Cmd {
 	return tea.Tick(time.Second, func(at time.Time) tea.Msg { return statusTickMsg(at) })
 }
 
-func statusTUIRefresh(c *wtc.Context, all, procs, noFetch bool, fetchAge time.Duration) tea.Cmd {
-	return statusTUIRefreshContext(context.Background(), c, all, procs, noFetch, fetchAge)
-}
-
 func statusTUIRefreshContext(ctx context.Context, c *wtc.Context, all, procs, noFetch bool, fetchAge time.Duration) tea.Cmd {
 	return statusTUIRefreshID(ctx, c, all, procs, noFetch, fetchAge, 0)
 }

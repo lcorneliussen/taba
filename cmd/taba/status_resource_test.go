@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"github.com/charmbracelet/x/ansi"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -176,12 +173,6 @@ func TestStatusResourceNativeLoadingAndSavedFrames(t *testing.T) {
 				for _, line := range strings.Split(frame, "\n") {
 					if ansi.StringWidth(line) > width {
 						t.Fatal("resource frame wraps")
-					}
-				}
-				if dir := os.Getenv("WTC_RESOURCE_FRAME_DIR"); dir != "" {
-					raw, _ := json.Marshal(map[string]any{"case": name, "columns": width, "content": frame})
-					if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%s-%d.json", name, width)), raw, 0600); err != nil {
-						t.Fatal(err)
 					}
 				}
 			}
