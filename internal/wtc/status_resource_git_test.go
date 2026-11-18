@@ -777,3 +777,41 @@ func TestStatusResourceIdentityMarkerPathsRemainFresh(t *testing.T) {
 		t.Fatal("cached marker paths retained old operation", got)
 	}
 }
+
+func TestStatusResourceUpstreamReadIsOneCurrentObservation(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	_, targets, err := c.CatchUpInventory(CatchUpOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target catchUpTarget
+	for _, v := range targets {
+		if v.path == c.Harness {
+			target = v
+		}
+	}
+	if target.path == "" {
+		t.Fatal("missing target")
+	}
+	fixtureGit(t, "-C", target.path, "switch", "-qc", "topic")
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "upstream-calls")
+	t.Setenv("RESOURCE_UPSTREAM_CALLS", calls)
+	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
+if [ "$3 $4 $5" = 'rev-parse --abbrev-ref @{u}' ] || [ "$3" = for-each-ref ]; then printf x >> "$RESOURCE_UPSTREAM_CALLS"; fi
+exec /usr/bin/git "$@"
+`, 0700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := statusLocalRepoContext(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := resourceCalls(calls)
+	want, err := statusResourceLocalReference(context.Background(), target)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatal(got, want, err)
+	}
+	if n != 1 {
+		t.Fatalf("unchanged local upstream required %d queries", n)
+	}
+}

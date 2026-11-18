@@ -114,3 +114,39 @@ func TestStatusResourceRetirementBackgroundCompatibility(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStatusResourceRetirementBatchesGuardedLocalReads(t *testing.T) {
+	c, target := retirementFixture(t)
+	for _, dir := range []string{"harness", "widget"} {
+		fixtureGit(t, "-C", filepath.Join(target, dir), "switch", "-qc", "topic")
+	}
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	t.Setenv("RETIRE_TEST_GIT", real)
+	t.Setenv("RETIRE_TEST_CALLS", calls)
+	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
+if [ "$1" = --no-optional-locks ]; then printf '%s\n' "$*" >> "$RETIRE_TEST_CALLS"; fi
+exec "$RETIRE_TEST_GIT" "$@"
+`, 0700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	report, err := c.InspectRetirementContext(context.Background(), "finished", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(b), "\n"); n != 2*len(report.Repos) {
+		t.Fatalf("guarded local reads=%d for%d named-branch repos; want2 each", n, len(report.Repos))
+	}
+	for _, r := range report.Repos {
+		if r.Error != "" || r.Dirty || r.Unpushed != 0 || r.Branch != "topic" {
+			t.Fatalf("lost current facts: %+v", r)
+		}
+	}
+}
