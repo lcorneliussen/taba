@@ -792,14 +792,21 @@ func TestStatusUnconfirmedTerminalProducerRows(t *testing.T) {
 						}
 					}
 				}
-				// A confirmed terminal response keeps the established omission/orphan policy.
+				// Confirmed closures now remain inspectable; the existing orphan warning stays.
 				statusWriteForgeEntrySince("pr", tc.forge, "example/widget", "7", raw, time.Now())
 				confirmed, err := c.statusForgePreview(false, false)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(confirmed.PRs) != 0 || (len(confirmed.Orphans) != 0) != onBranch {
+				wantRows := 1
+				if tc.state == "SUPERSEDED" {
+					wantRows = 0
+				}
+				if len(confirmed.PRs) != wantRows || (len(confirmed.Orphans) != 0) != onBranch {
 					t.Errorf("confirmed terminal policy changed: PRs=%+v orphans=%+v", confirmed.PRs, confirmed.Orphans)
+				}
+				if wantRows == 1 && (confirmed.PRs[0].Archived || confirmed.PRs[0].OnBranch || confirmed.PRs[0].Landing != nil) {
+					t.Error("closure invented merge authority or archive date")
 				}
 				// Closed/declined/superseded observations can reopen; cached MERGED
 				// protection remains bounded by statusMergedCacheAge.

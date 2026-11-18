@@ -270,7 +270,7 @@ func statusViewPRWithLiveContext(ctx context.Context, record PRRecord, slug, for
 	fetchRaw := func() ([]byte, error) {
 		switch forge {
 		case "github.com":
-			return statusJSONContext(ctx, "gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid")
+			return statusJSONContext(ctx, "gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,closedAt,baseRefName,mergeCommit,headRefOid")
 		case "bitbucket.org":
 			parts := strings.SplitN(slug, "/", 2)
 			if len(parts) != 2 {
@@ -587,7 +587,11 @@ func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent Statu
 			if branchRow >= 0 {
 				snapshot.Orphans = append(snapshot.Orphans, StatusOrphan{Repo: worktreeDir, Branch: record.Branch, State: detail.State})
 			}
-			continue
+			// Keep the established orphan warning; closure is not a merge or
+			// permission to return/delete the branch. Its row remains inspectable.
+			if detail.State == "SUPERSEDED" {
+				continue
+			}
 		}
 		url := ""
 		if refErr == nil {
@@ -597,7 +601,9 @@ func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent Statu
 			Merge: statusString(detail.Merge), Review: statusString(detail.Review), Title: detail.Title,
 			DisplayTitle: detail.Title, Slug: slug, URL: statusString(url), MergedOn: statusString(detail.MergedOn),
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
-			Archived:  detail.State == "MERGED" && branchRow < 0 && statusArchived(detail.MergedOn, time.Now()),
+			Archived: branchRow < 0 &&
+				(detail.State == "MERGED" && statusArchived(detail.MergedOn, time.Now()) ||
+					(detail.State == "CLOSED" || detail.State == "DECLINED") && !statusObservationUnavailable(detail.Freshness) && statusArchived(detail.ClosedOn, time.Now())),
 			Freshness: detail.Freshness, ObservedAt: detail.ObservedAt, StateSource: detail.StateSource,
 			ObservationReason: observations[i].Reason, RetryAt: observations[i].RetryAt,
 			MergeConflicts: detail.MergeConflicts, MergeSource: detail.MergeSource, MergeHead: mergeHead, MergeBase: mergeBase,

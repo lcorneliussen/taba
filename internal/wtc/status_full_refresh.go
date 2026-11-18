@@ -298,7 +298,7 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	var args []string
 	switch forge {
 	case "github.com":
-		name, args = "gh", []string{"pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid"}
+		name, args = "gh", []string{"pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,closedAt,baseRefName,mergeCommit,headRefOid"}
 	case "bitbucket.org":
 		parts := strings.SplitN(slug, "/", 2)
 		if len(parts) != 2 {
@@ -351,7 +351,7 @@ func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, sl
 		if onRequest != nil {
 			onRequest()
 		}
-		raw, err = statusJSONContext(ctx, "gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,baseRefName,mergeCommit,headRefOid")
+		raw, err = statusJSONContext(ctx, "gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,closedAt,baseRefName,mergeCommit,headRefOid")
 	case "bitbucket.org":
 		parts := strings.SplitN(slug, "/", 2)
 		if len(parts) != 2 {

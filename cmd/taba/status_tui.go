@@ -1851,7 +1851,10 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		state := "open"
 		merged := statusTUIMergedPR(row)
-		if row.Merge != nil && (*row.Merge == "CONFLICTING" || *row.Merge == "DIRTY") {
+		closed := !merged && (row.State == "CLOSED" || row.State == "DECLINED") && (row.Freshness == "live" || row.Freshness == "cached" || row.Freshness == "recorded")
+		if closed {
+			state = strings.ToLower(row.State)
+		} else if row.Merge != nil && (*row.Merge == "CONFLICTING" || *row.Merge == "DIRTY") {
 			state = "✗ conflict"
 		} else if row.OnBranch {
 			state = "⚠ catch-up"
@@ -1881,10 +1884,17 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		if merged && !row.OnBranch {
 			linkTone = statusToneDim
 		}
+		if closed && row.Archived {
+			linkTone = statusToneDim + ";9"
+		}
 		number := statusTUIPRNumberCell(row.Number, target, l.number, styled, linkTone)
 		repo := statusTUIFit(statusTUISafe(row.Repo), l.repo)
 		if mark := wtc.StatusPRFreshnessMark(row.Freshness, row.ObservedAt, time.Now()); mark != "" && !merged {
-			state = mark
+			if closed {
+				label = mark + " " + label
+			} else {
+				state = mark
+			}
 		}
 		stateCell := statusTUIFit(state, l.state)
 		signals := statusTUIPRSignals(row.Checks, row.Merge, row.Review, styled)
@@ -1896,6 +1906,9 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 			rowTone := statusToneLabel
 			if merged && !row.OnBranch {
 				rowTone = statusToneDim
+			}
+			if closed && row.Archived {
+				rowTone = statusToneDim + ";9"
 			}
 			repo = statusTUIStyle(repo, rowTone)
 			title = statusTUIStyle(title, rowTone)

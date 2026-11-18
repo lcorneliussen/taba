@@ -6,3 +6,5 @@
 
 Shared cache/budget lock failures now defer provider reads in background and
 one-shot status too, preserving shared accounting instead of failing open.
+
+- **Keep unmerged closures inspectable.** Confirmed closed/declined PRs use the existing archive age and toggle, with strikethrough and explicit state when expanded. Still-checked-out branch warnings remain visible.

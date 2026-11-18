@@ -18,7 +18,7 @@ func StatusPRsByPriority(rows []StatusPRRow) []StatusPRRow {
 		if row.OnBranch {
 			return 2
 		}
-		if row.State == "MERGED" || row.Archived || row.MergedOn != nil ||
+		if row.State == "MERGED" || row.State == "CLOSED" || row.State == "DECLINED" || row.Archived || row.MergedOn != nil ||
 			(row.Merge != nil && *row.Merge == "MERGED") {
 			return 3
 		}
@@ -249,6 +249,8 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			}
 			if row.OnBranch {
 				bits = append(bits, "⚠ MERGED — "+row.LandingLabel())
+			} else if (row.State == "CLOSED" || row.State == "DECLINED") && !statusObservationUnavailable(row.Freshness) {
+				bits = append(bits, strings.ToLower(row.State))
 			} else if row.Draft {
 				bits = append(bits, "◇ draft")
 			}
@@ -306,9 +308,13 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			b.WriteString("- " + strings.Join(bits, " ") + "\n")
 		}
 		if len(archived) != 0 {
-			b.WriteString("\n## Archived\n\n_Merged PRs past 48 weekday-hours (weekends excluded)._\n\n")
+			b.WriteString("\n## Archived\n\n_Completed PRs past 48 weekday-hours (weekends excluded)._\n\n")
 			for _, row := range archived {
 				bits := []string{fmt.Sprintf("**%s**", row.Repo), "#" + row.Number}
+				closed := row.State == "CLOSED" || row.State == "DECLINED"
+				if closed {
+					bits = append(bits, strings.ToLower(row.State))
+				}
 				if label := statusFreshnessLabel(row.Freshness, row.ObservedAt); label != "" {
 					bits = append(bits, label)
 				}
@@ -317,9 +323,17 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 					if label == "" {
 						label = "PR #" + row.Number
 					}
-					bits = append(bits, statusMarkdownLink(row.URL, label))
+					if closed {
+						bits = append(bits, "~~"+statusMarkdownLink(row.URL, label)+"~~")
+					} else {
+						bits = append(bits, statusMarkdownLink(row.URL, label))
+					}
 				} else if row.Title != "" {
-					bits = append(bits, row.Title)
+					if closed {
+						bits = append(bits, "~~"+row.Title+"~~")
+					} else {
+						bits = append(bits, row.Title)
+					}
 				}
 				if row.MergedOn != nil && *row.MergedOn != "" {
 					bits = append(bits, "merged "+*row.MergedOn)

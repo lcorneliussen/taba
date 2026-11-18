@@ -144,9 +144,14 @@ Such an on-branch PR row retains its recorded C/M/R observations; they are
 not cleared merely because it merged, and are not a new post-merge gate.
 Its title and JSON give the fuller explanation. Older merged entries move
 behind the `a` archive toggle after the configured age; hiding does not delete.
-Closed, declined or superseded enlisted PRs leave the active PR rows. If their
-branch is still checked out, an orphan warning identifies it below the table;
-closure alone does not establish landing or authorize discarding local work.
+Confirmed closed and declined PRs use the same archive age and `a` toggle as
+merged entries. Expanded unmerged closures retain a `closed`/`declined` label
+and show struck-through links and titles in supporting terminals. NO_COLOR
+keeps the textual state and links. GitHub uses its closure date; Bitbucket uses
+its last update conservatively, so later updates can delay archival. Missing,
+malformed or future dates stay unarchived. A still-checked-out branch also stays
+unarchived with the existing orphan warning; closure does not establish landing
+or authorize discarding local work. Superseded entries retain their omission rule.
 
 ## What is detected and supported
 
