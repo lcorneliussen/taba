@@ -121,7 +121,7 @@ func statusForgeCoolContext(ctx context.Context, forge string, retry time.Durati
 	if err := ctx.Err(); err != nil {
 		return until, err
 	}
-	if !statusWriteForgeEntryObserved("cool", forge, "", "", []byte(strconv.FormatInt(until.UnixNano(), 10)), time.Time{}) {
+	if !statusWriteForgeEntryObservedContext(ctx, "cool", forge, "", "", []byte(strconv.FormatInt(until.UnixNano(), 10)), time.Time{}) {
 		return until, errors.New("provider cooldown publication failed")
 	}
 	// A completed atomic write remains valid after late cancellation.
@@ -425,6 +425,8 @@ func statusWithForgeBudgetKey(forge, confirmation string, stale []byte, fetch fu
 }
 
 func statusWithForgeBudgetKeyContext(ctx context.Context, forge, confirmation string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
+	ctx = statusAuthOperation(ctx)
+	selected := statusAuthForContext(ctx, forge)
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -452,6 +454,9 @@ func statusWithForgeBudgetKeyContext(ctx context.Context, forge, confirmation st
 		return nil, false, err
 	}
 	raw, err := fetch()
+	if selected != statusResolveAuthContext(forge) {
+		return nil, false, errors.New("forge credential context changed")
+	}
 	if ctx.Err() != nil {
 		return nil, false, ctx.Err()
 	}
@@ -481,19 +486,29 @@ func statusFetchShared(kind, forge, slug, key string, fetch func() ([]byte, erro
 }
 
 func statusFetchSharedContext(ctx context.Context, kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, bool, error) {
+	ctx = statusAuthOperation(ctx)
+	if !statusAuthForContext(ctx, forge).known {
+		return statusWithForgeBudgetKeyContext(ctx, forge, "", nil, fetch)
+	}
+	if !statusAuthCurrent(ctx, forge) {
+		return nil, false, errors.New("forge credential context changed")
+	}
+	if !statusAuthSharedKind(kind) {
+		ctx = statusAuthOperation(ctx)
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
-	if data, ok := statusReadForgeEntry(kind, forge, slug, key); ok {
+	if data, ok := statusReadForgeEntryContext(ctx, kind, forge, slug, key); ok {
 		return data, false, nil
 	}
-	stale, _ := statusReadForgeEntryAny(kind, forge, slug, key)
-	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPath(kind, forge, slug, key))
+	stale, _ := statusReadForgeEntryAnyContext(ctx, kind, forge, slug, key)
+	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, kind, forge, slug, key))
 	if lockErr != nil {
 		return nil, false, lockErr
 	}
 	defer unlock()
-	if data, ok := statusReadForgeEntry(kind, forge, slug, key); ok {
+	if data, ok := statusReadForgeEntryContext(ctx, kind, forge, slug, key); ok {
 		return data, false, nil
 	}
 	started := time.Now()
@@ -505,7 +520,7 @@ func statusFetchSharedContext(ctx context.Context, kind, forge, slug, key string
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		if winner, ok := statusReadForgeEntryAny(kind, forge, slug, key); ok {
+		if winner, ok := statusReadForgeEntryAnyContext(ctx, kind, forge, slug, key); ok {
 			return winner, false, nil
 		}
 		return nil, false, errors.New("superseding forge observation is unavailable")

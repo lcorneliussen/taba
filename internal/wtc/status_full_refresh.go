@@ -29,11 +29,16 @@ func statusFullRefreshEvery() time.Duration {
 }
 
 func statusFullRefreshDue(forge, slug, key string) bool {
+	return statusFullRefreshDueContext(context.Background(), forge, slug, key)
+}
+
+func statusFullRefreshDueContext(ctx context.Context, forge, slug, key string) bool {
+	ctx = statusAuthOperation(ctx)
 	every := statusFullRefreshEvery()
 	if every <= 0 {
 		return false
 	}
-	info, err := os.Lstat(statusForgeEntryPath("full", forge, slug, key))
+	info, err := os.Lstat(statusForgeEntryPathContext(ctx, "full", forge, slug, key))
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return true
 	}
@@ -41,7 +46,11 @@ func statusFullRefreshDue(forge, slug, key string) bool {
 }
 
 func statusMarkFullRefresh(forge, slug, key string) {
-	statusWriteForgeEntry("full", forge, slug, key, []byte("ok"))
+	statusMarkFullRefreshContext(context.Background(), forge, slug, key)
+}
+
+func statusMarkFullRefreshContext(ctx context.Context, forge, slug, key string) {
+	statusResourceWriteEntry(ctx, "full", forge, slug, key, []byte("ok"))
 }
 
 func statusAuditValue(value string) string {
@@ -133,6 +142,7 @@ func statusFetchPRRaw(record PRRecord, slug, forge string) ([]byte, error) {
 // supplies only active records; recorded and retained terminal state is also
 // excluded here as a second safety boundary.
 func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (result statusPRDetail, observation StatusObservation) {
+	ctx = statusAuthOperation(ctx)
 	if intent != StatusRefreshForeground {
 		detail := statusEnrichRecordMetadataContext(ctx, record, slug, forge)
 		return detail, statusDetailObservation(detail)
@@ -171,12 +181,12 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 	}
 	// Pure cache reads retain known facts even if cancellation prevents lock
 	// admission. The locked path below still revalidates/migrates authority.
-	if known, ok := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge()); ok && known.State == "MERGED" {
+	if known, ok := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge()); ok && known.State == "MERGED" {
 		fallback = known
-	} else if known, ok := statusReadObservedDetailKind("pr", record, slug, forge, 365*24*time.Hour); ok {
+	} else if known, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
 		fallback = known
 	}
-	unlock, err := statusLockCacheContext(ctx, statusForgeEntryPath("pr", forge, slug, record.Number))
+	unlock, err := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "pr", forge, slug, record.Number))
 	if err != nil {
 		return statusFailedPRObservation(fallback, err)
 	}
@@ -257,7 +267,7 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 		// Retention can commit before cancellation prevents ordinary detail
 		// publication. Read that independent authority without another lock or
 		// migration; never revoke a persisted merge because the request ended.
-		if retained, ok := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge()); ok && retained.State == "MERGED" {
+		if retained, ok := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge()); ok && retained.State == "MERGED" {
 			if retained.ObservedAt != detail.ObservedAt || retained.State != detail.State || retained.HeadCommit != detail.HeadCommit || retained.Title != detail.Title {
 				outcome := statusDetailObservation(retained)
 				outcome.Reason = "superseded"
@@ -275,7 +285,7 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 		outcome.Reason = "detail-publication-failed"
 	default:
 		outcome.Reason = "provider-confirmed"
-		statusMarkFullRefresh(forge, slug, record.Number)
+		statusMarkFullRefreshContext(ctx, forge, slug, record.Number)
 	}
 	return detail, outcome
 }
@@ -375,7 +385,8 @@ func statusConfirmFullPR(record PRRecord, slug, forge string, incremental status
 }
 
 func statusConfirmFullPRContext(ctx context.Context, record PRRecord, slug, forge string, incremental statusPRDetail, source string) statusPRDetail {
-	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPath("pr", forge, slug, record.Number))
+	ctx = statusAuthOperation(ctx)
+	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "pr", forge, slug, record.Number))
 	if lockErr != nil {
 		return incremental
 	}
@@ -388,7 +399,8 @@ func statusConfirmFullPRLocked(record PRRecord, slug, forge string, incremental 
 }
 
 func statusConfirmFullPRLockedContext(ctx context.Context, record PRRecord, slug, forge string, incremental statusPRDetail, source string) statusPRDetail {
-	if !statusFullRefreshDue(forge, slug, record.Number) {
+	ctx = statusAuthOperation(ctx)
+	if !statusFullRefreshDueContext(ctx, forge, slug, record.Number) {
 		if cached, ok := statusReadCachedDetailContext(ctx, record, slug, forge); ok {
 			return cached
 		}
@@ -415,7 +427,7 @@ func statusConfirmFullPRLockedContext(ctx context.Context, record PRRecord, slug
 		}
 		return incremental
 	}
-	statusMarkFullRefresh(forge, slug, record.Number)
+	statusMarkFullRefreshContext(ctx, forge, slug, record.Number)
 	statusLogIncrementalMiss(forge, slug, "#"+record.Number, source, statusPRDetailDiff(incremental, full))
 	return full
 }
@@ -425,13 +437,14 @@ func statusConfirmFullBuild(slug, branch string, incremental *StatusBuild, sourc
 }
 
 func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, incremental *StatusBuild, source, user, pass string) *StatusBuild {
-	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPath("build", "bitbucket.org", slug, branch))
+	ctx = statusAuthOperation(ctx)
+	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "build", "bitbucket.org", slug, branch))
 	if lockErr != nil {
 		return incremental
 	}
 	defer unlock()
 	corrected, found := statusAuditedCorrection(slug, branch, incremental)
-	if !statusFullRefreshDue("bitbucket.org", slug, "build:"+branch) {
+	if !statusFullRefreshDueContext(ctx, "bitbucket.org", slug, "build:"+branch) {
 		if found {
 			return corrected
 		}
@@ -475,7 +488,12 @@ func statusBuildFingerprint(build *StatusBuild) string {
 }
 
 func statusPreferAuditedBuild(slug, branch string, pageBuild *StatusBuild) (*StatusBuild, bool) {
-	if pageBuild == nil || statusFullRefreshDue("bitbucket.org", slug, "build:"+branch) {
+	return statusPreferAuditedBuildContext(context.Background(), slug, branch, pageBuild)
+}
+
+func statusPreferAuditedBuildContext(ctx context.Context, slug, branch string, pageBuild *StatusBuild) (*StatusBuild, bool) {
+	ctx = statusAuthOperation(ctx)
+	if pageBuild == nil || statusFullRefreshDueContext(ctx, "bitbucket.org", slug, "build:"+branch) {
 		return nil, false
 	}
 	return statusAuditedCorrection(slug, branch, pageBuild)

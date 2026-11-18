@@ -84,13 +84,14 @@ func statusDetailFromOpenItem(record PRRecord, slug, forge string, item statusOp
 }
 
 func statusDetailFromOpenItemContext(ctx context.Context, record PRRecord, slug, forge string, item statusOpenPR) (statusPRDetail, bool, bool) {
+	ctx = statusAuthOperation(ctx)
 	// Within statusMergedCacheAge, a changed list fingerprint cannot reopen a
 	// retained merge, even while its merge time or checks are still being collected.
 	if known, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
 		return known, true, true
 	}
-	if stamp, ok := statusReadForgeEntryAny("stamp", forge, slug, record.Number); ok && string(stamp) == item.Fingerprint {
-		if cached, ok := statusReadForgeEntryAny("pr", forge, slug, record.Number); ok {
+	if stamp, ok := statusReadForgeEntryAnyContext(ctx, "stamp", forge, slug, record.Number); ok && string(stamp) == item.Fingerprint {
+		if cached, ok := statusReadForgeEntryAnyContext(ctx, "pr", forge, slug, record.Number); ok {
 			if detail, err := statusParseForgeDetail(forge, cached, record); err == nil {
 				return detail, true, true
 			}

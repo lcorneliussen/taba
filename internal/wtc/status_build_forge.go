@@ -127,6 +127,7 @@ func statusBBBuild(slug, branch string) (*StatusBuild, error) {
 }
 
 func statusBBBuildContext(ctx context.Context, slug, branch string) (*StatusBuild, error) {
+	ctx = statusAuthOperation(ctx)
 	parts := strings.SplitN(slug, "/", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid Bitbucket repository slug")
@@ -146,9 +147,9 @@ func statusBBBuildContext(ctx context.Context, slug, branch string) (*StatusBuil
 	if live {
 		statusSaveLivePipelinePageContext(ctx, slug, raw, started)
 	}
-	if pageSince, ok := statusForgeEntrySince("pipelines", "bitbucket.org", slug, "recent"); ok {
-		if buildSince, ok := statusForgeEntrySince("build", "bitbucket.org", slug, branch); ok && buildSince.After(pageSince) {
-			if saved, ok := statusReadForgeEntryAny("build", "bitbucket.org", slug, branch); ok {
+	if pageSince, ok := statusForgeEntrySinceContext(ctx, "pipelines", "bitbucket.org", slug, "recent"); ok {
+		if buildSince, ok := statusForgeEntrySinceContext(ctx, "build", "bitbucket.org", slug, branch); ok && buildSince.After(pageSince) {
+			if saved, ok := statusReadForgeEntryAnyContext(ctx, "build", "bitbucket.org", slug, branch); ok {
 				raw = saved
 			}
 		}
@@ -158,12 +159,12 @@ func statusBBBuildContext(ctx context.Context, slug, branch string) (*StatusBuil
 		return nil, err
 	}
 	if build != nil {
-		if audited, found := statusPreferAuditedBuild(slug, branch, build); found {
+		if audited, found := statusPreferAuditedBuildContext(ctx, slug, branch, build); found {
 			return audited, nil
 		}
 		return statusConfirmFullBuildContext(ctx, slug, branch, build, "page", user, pass), nil
 	}
-	if saved, ok := statusReadForgeEntryAny("build", "bitbucket.org", slug, branch); ok {
+	if saved, ok := statusReadForgeEntryAnyContext(ctx, "build", "bitbucket.org", slug, branch); ok {
 		savedBuild, parseErr := statusParseBBBuild(saved, slug, branch)
 		if parseErr != nil {
 			return nil, parseErr
@@ -180,7 +181,7 @@ func statusBBBuildContext(ctx context.Context, slug, branch string) (*StatusBuil
 	if err != nil {
 		return nil, err
 	}
-	statusMarkFullRefresh("bitbucket.org", slug, "build:"+branch)
+	statusMarkFullRefreshContext(ctx, "bitbucket.org", slug, "build:"+branch)
 	return build, nil
 }
 
@@ -203,13 +204,14 @@ func statusSaveLivePipelinePage(slug string, raw []byte, started time.Time) {
 }
 
 func statusSaveLivePipelinePageContext(ctx context.Context, slug string, raw []byte, started time.Time) {
+	ctx = statusAuthOperation(ctx)
 	for _, branch := range statusPipelinePageBranches(raw) {
-		unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPath("build", "bitbucket.org", slug, branch))
+		unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "build", "bitbucket.org", slug, branch))
 		if lockErr != nil {
 			return
 		}
 		build, err := statusParseBBBuild(raw, slug, branch)
-		if err == nil && build != nil && !statusPageAuditApplies(slug, branch, build) {
+		if err == nil && build != nil && !statusPageAuditAppliesContext(ctx, slug, branch, build) {
 			statusResourceWriteSince(ctx, "build", "bitbucket.org", slug, branch, raw, started)
 		}
 		unlock()
@@ -251,10 +253,15 @@ func statusPipelinePageBranches(raw []byte) []string {
 }
 
 func statusPageAuditApplies(slug, branch string, pageBuild *StatusBuild) bool {
+	return statusPageAuditAppliesContext(context.Background(), slug, branch, pageBuild)
+}
+
+func statusPageAuditAppliesContext(ctx context.Context, slug, branch string, pageBuild *StatusBuild) bool {
+	ctx = statusAuthOperation(ctx)
 	if pageBuild == nil {
 		return false
 	}
-	raw, ok := statusReadForgeEntryAny("full", "bitbucket.org", slug, "build:"+branch)
+	raw, ok := statusReadForgeEntryAnyContext(ctx, "full", "bitbucket.org", slug, "build:"+branch)
 	return ok && string(raw) == statusBuildFingerprint(pageBuild)
 }
 

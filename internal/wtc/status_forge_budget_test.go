@@ -13,7 +13,31 @@ import (
 func TestMain(m *testing.M) {
 	unsetTabaEnvironment()
 	statusTurnOffSharedForgeBudgetAndAudit()
-	os.Exit(m.Run())
+	// Status fixtures must never inherit a developer's credential selection.
+	os.Setenv("GH_TOKEN", "synthetic-status-fixture")
+	os.Setenv("BB_USERNAME", "synthetic-status-user")
+	os.Setenv("BB_API_TOKEN", "synthetic-status-fixture")
+	home := os.Getenv("WTC_TEST_AUTH_HOME")
+	owned := home == ""
+	if owned {
+		var err error
+		home, err = os.MkdirTemp("", "taba-test-home-")
+		if err != nil {
+			panic(err)
+		}
+		os.Setenv("WTC_TEST_AUTH_HOME", home)
+	}
+	os.Setenv("HOME", home)
+	// Respect explicit child test stores; the process fixture shares cache salt
+	// and provenance with its parent, rather than silently selecting a new store.
+	if os.Getenv("GH_CONFIG_DIR") == "" {
+		os.Setenv("GH_CONFIG_DIR", filepath.Join(home, "gh"))
+	}
+	code := m.Run()
+	if owned {
+		os.RemoveAll(home)
+	}
+	os.Exit(code)
 }
 
 // A collection shell carries generated TABA_ variables, and readers prefer

@@ -109,6 +109,7 @@ func statusBBHeadChecks(slug, head string, fresh bool) headCheckEvidence {
 // Foreground checks share the metadata phase deadline and per-hop allowance.
 // Background/review wrappers retain their existing cache and admission policy.
 func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, slug, head string, fresh bool) (headCheckEvidence, error) {
+	ctx = statusAuthOperation(ctx)
 	if intent == StatusRefreshForeground {
 		var cancel context.CancelFunc
 		ctx, cancel = statusRefreshContext(ctx)
@@ -122,7 +123,7 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 	user, pass := bitbucketCredentials()
 	if user == "" || pass == "" {
 		if intent == StatusRefreshForeground {
-			if raw, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+			if raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 				var saved headCheckEvidence
 				if json.Unmarshal(raw, &saved) == nil && saved.Head == head && saved.Result == "FAILURE" {
 					saved.Complete = false
@@ -133,7 +134,7 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 		}
 		// An auth failure cannot erase already observed exact-head failures.
 		if validCheckHead(head) {
-			if raw, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+			if raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 				var saved headCheckEvidence
 				if json.Unmarshal(raw, &saved) == nil && saved.Head == head && saved.Result == "FAILURE" {
 					saved.Complete = false
@@ -222,7 +223,7 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 	}
 	if intent == StatusRefreshForeground {
 		cached := unknownHeadChecks(head)
-		if raw, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+		if raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 			var saved headCheckEvidence
 			if json.Unmarshal(raw, &saved) == nil && saved.Head == head {
 				cached = saved
@@ -236,12 +237,12 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 			}
 			return cached, err
 		}
-		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPath("checks", "bitbucket.org", slug, head))
+		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "checks", "bitbucket.org", slug, head))
 		if err != nil {
 			return fallback(err)
 		}
 		defer unlock()
-		if raw, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+		if raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 			var saved headCheckEvidence
 			if json.Unmarshal(raw, &saved) == nil && saved.Head == head {
 				cached = saved
@@ -273,7 +274,7 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 			return fallback(err)
 		}
 		if !publication.Written {
-			if winner, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+			if winner, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 				var newer headCheckEvidence
 				if json.Unmarshal(winner, &newer) == nil && newer.Head == head {
 					if !newer.Complete {
@@ -298,7 +299,7 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 	// Each HTTP page owns its admission; the aggregate must not spend a token.
 	cached := unknownHeadChecks(head)
 	readCached := func() {
-		if raw, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+		if raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 			var saved headCheckEvidence
 			if json.Unmarshal(raw, &saved) == nil && saved.Head == head {
 				cached = saved
@@ -320,13 +321,13 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 		return fallback(err)
 	}
 	if !fresh {
-		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPath("checks", "bitbucket.org", slug, head))
+		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "checks", "bitbucket.org", slug, head))
 		if err != nil {
 			return fallback(err)
 		}
 		defer unlock()
 		readCached()
-		if raw, ok := statusReadForgeEntry("checks", "bitbucket.org", slug, head); ok {
+		if raw, ok := statusReadForgeEntryContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 			var saved headCheckEvidence
 			if json.Unmarshal(raw, &saved) == nil && saved.Head == head {
 				evidence = saved
@@ -359,7 +360,7 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 			return fallback(err)
 		}
 		if !publication.Written {
-			if winner, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+			if winner, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 				var newer headCheckEvidence
 				if json.Unmarshal(winner, &newer) == nil && newer.Head == head {
 					if !newer.Complete {
@@ -413,18 +414,19 @@ func resolveBBCheckHead(slug, prefix, user, pass string) (string, error) {
 }
 
 func resolveBBCheckHeadContext(ctx context.Context, intent StatusRefreshIntent, slug, prefix, user, pass string) (string, error) {
+	ctx = statusAuthOperation(ctx)
 	parts := strings.Split(slug, "/")
 	endpoint := statusBBAPI + "/repositories/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/commit/" + prefix
 	fetch := func() ([]byte, error) { return statusBBGETContext(ctx, intent, endpoint, user, pass) }
 	var raw []byte
 	var err error
 	if intent == StatusRefreshForeground {
-		unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPath("checkhead", "bitbucket.org", slug, prefix))
+		unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "checkhead", "bitbucket.org", slug, prefix))
 		if lockErr != nil {
 			return "", lockErr
 		}
 		defer unlock()
-		if cached, ok := statusReadForgeEntry("checkhead", "bitbucket.org", slug, prefix); ok {
+		if cached, ok := statusReadForgeEntryContext(ctx, "checkhead", "bitbucket.org", slug, prefix); ok {
 			raw = cached
 		} else {
 			started := time.Now()
@@ -434,7 +436,7 @@ func resolveBBCheckHeadContext(ctx context.Context, intent StatusRefreshIntent, 
 				publication, err = statusWriteForgeEntrySinceObservedContext(ctx, "checkhead", "bitbucket.org", slug, prefix, raw, started, time.Now())
 				if err == nil && !publication.Written {
 					var ok bool
-					raw, ok = statusReadForgeEntryAny("checkhead", "bitbucket.org", slug, prefix)
+					raw, ok = statusReadForgeEntryAnyContext(ctx, "checkhead", "bitbucket.org", slug, prefix)
 					if !ok {
 						err = errors.New("head resolution superseded without evidence")
 					}

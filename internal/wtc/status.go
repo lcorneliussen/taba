@@ -15,6 +15,8 @@ import (
 // and, once ported, the live renderer. This is the local Git portion; forge
 // and process facts are added by later collection stages.
 type StatusSnapshot struct {
+	// authContext is in-memory provenance only; the public snapshot schema is unchanged.
+	authContext string
 	// RuntimeObservedAt orders concurrent in-process service reads. It is not a cache timestamp or wire field.
 	RuntimeObservedAt time.Time `json:"-"`
 	Schema            int       `json:"schema"`
@@ -483,7 +485,7 @@ func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHea
 // StatusPreferNewerObservations protects presentation from an older collector
 // completion. It never grants local action authority from retained UI facts.
 func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnapshot {
-	if incoming.Collection != current.Collection {
+	if incoming.Collection != current.Collection || incoming.authContext != current.authContext {
 		return incoming
 	}
 	knownMerge := func(row StatusPRRow) bool {

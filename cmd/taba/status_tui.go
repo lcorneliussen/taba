@@ -2284,7 +2284,7 @@ func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick b
 	model.progressStep = "Registering status watcher"
 	if !all && !procs {
 		model.snapshot.Collection = filepath.Base(c.Collection)
-		if cached, err := c.ReadStatusSnapshot(); err == nil {
+		if cached, err := c.ReadScopedStatusSnapshot(); err == nil {
 			// Saved runtime may come from another process for this collection.
 			// Display its original snapshot age until a newer observation replaces it.
 			model.snapshot = cached
