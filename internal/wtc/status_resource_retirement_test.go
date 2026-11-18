@@ -2,9 +2,11 @@ package wtc
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -89,5 +91,26 @@ exec "$RETIRE_TEST_GIT" "$@"
 				t.Fatalf("canceled evidence gained authority: %+v", snap.Retirement)
 			}
 		})
+	}
+}
+
+func TestStatusResourceRetirementBackgroundCompatibility(t *testing.T) {
+	c, _ := retirementFixture(t)
+	a, ae := c.InspectRetirement("finished", nil)
+	b, be := c.InspectRetirementContext(context.Background(), "finished", nil)
+	a.GeneratedAt = ""
+	a.Assessment.ObservedAt = ""
+	b.GeneratedAt = ""
+	b.Assessment.ObservedAt = ""
+	if ae != nil || be != nil || !reflect.DeepEqual(a, b) {
+		t.Fatalf("compatibility changed: %+v %v vs %+v %v", a, ae, b, be)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := c.InspectRetirementContext(ctx, "finished", nil); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := retirementGitContext(ctx, c.Harness, "rev-parse", "HEAD"); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }
