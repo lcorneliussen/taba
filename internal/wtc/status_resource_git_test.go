@@ -727,3 +727,53 @@ func TestStatusResourceIdentityRegularGlobalConfigStillInvalidates(t *testing.T)
 		t.Fatal("changed real config was reused", got, err, calls)
 	}
 }
+
+func TestStatusResourceIdentityOwnerRemoteReuse(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	owner := fixtureGit(t, "-C", c.Harness, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	args := []string{"--git-dir=" + owner, "remote"}
+	calls := 0
+	read := func() (string, error) { calls++; return gitOutput(args...) }
+	for i := 0; i < 2; i++ {
+		if got, err := statusResourceGit(c.resourceContext(), args, read); err != nil || got != "origin" {
+			t.Fatal(got, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("allowlisted owner remote never reused: %d", calls)
+	}
+}
+
+func TestStatusResourceIdentityMarkerPathsRemainFresh(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	args := []string{"-C", c.Harness, "rev-parse", "--path-format=absolute"}
+	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"} {
+		args = append(args, "--git-path", marker)
+	}
+	calls := 0
+	read := func() (string, error) { calls++; return gitOutput(args...) }
+	for i := 0; i < 2; i++ {
+		if _, err := statusResourceGit(c.resourceContext(), args, read); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("unchanged operation-path identities redispatched: %d", calls)
+	}
+	target := catchUpTarget{path: c.Harness}
+	marker := fixtureGit(t, "-C", c.Harness, "rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD")
+	fixtureFile(t, marker, strings.Repeat("a", 40)+"\n", 0600)
+	if got := statusResourceOperationState(c.resourceContext(), target); got != "MERGE_HEAD" {
+		t.Fatal("cached marker paths hid new operation", got)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusResourceOperationState(c.resourceContext(), target); got != "" {
+		t.Fatal("cached marker paths retained old operation", got)
+	}
+}
