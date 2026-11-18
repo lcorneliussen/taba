@@ -534,14 +534,8 @@ type statusRuntimeMsg struct {
 // than the polling interval, and otherwise just ticks again.
 type statusRuntimeTickMsg struct{}
 
-const statusRuntimeTickEvery = 500 * time.Millisecond
-
 func statusTUIRuntimeRefresh(c *wtc.Context) tea.Cmd {
 	return func() tea.Msg { items, at := c.RuntimeStatusObserved(); return statusRuntimeMsg{items: items, at: at} }
-}
-
-func statusTUIRuntimeTick() tea.Cmd {
-	return tea.Tick(statusRuntimeTickEvery, func(time.Time) tea.Msg { return statusRuntimeTickMsg{} })
 }
 
 // runtimeDue says whether the next tick reads the service states.

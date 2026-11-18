@@ -3,6 +3,7 @@ package wtc
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,9 +39,10 @@ type statusGitMemo struct {
 	provenancePaths []string
 }
 type statusGitMemoEntry struct {
-	done  chan struct{}
-	value string
-	err   error
+	done      chan struct{}
+	value     string
+	err       error
+	abandoned bool
 }
 
 // Standalone operations own a fresh memo. Status receivers may carry a bounded
@@ -167,6 +169,15 @@ func statusResourceGitKeyConfig(args []string, provenConfigs []string, provenanc
 	if !add(common) || !add(filepath.Join(common, "config")) {
 		return ""
 	}
+	// Legacy remote definitions are unsupported provenance, not cacheable config.
+	for _, dir := range []string{gitdir, common} {
+		for _, name := range []string{"remotes", "branches"} {
+			if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+				return ""
+			}
+		}
+	}
+
 	// URL rewriting and includes can live in user/system configuration too.
 	home, _ := os.UserHomeDir()
 	xdg := os.Getenv("XDG_CONFIG_HOME")
@@ -261,6 +272,9 @@ func statusResourceGit(ctx context.Context, args []string, read func() (string, 
 			if key != memo.fingerprint(ctx, args) {
 				continue
 			}
+			if entry.abandoned {
+				continue
+			}
 			return entry.value, entry.err
 		}
 		value, err := read()
@@ -276,6 +290,7 @@ func statusResourceGit(ctx context.Context, args []string, read func() (string, 
 			value, err = "", ctx.Err()
 		}
 		entry.value, entry.err = value, err
+		entry.abandoned = errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 		if err != nil || ctx.Err() != nil || key != currentKey {
 			delete(memo.entries, key)
 		}
@@ -399,8 +414,7 @@ func statusResourceHeads(ctx context.Context, path, base string) (string, string
 	return heads[0], heads[1], true
 }
 
-// Discovery asks trusted Git only for its configuration file paths. It never
-// evaluates hooks, records values, or relaxes unknown/include/symlink fallback.
+// fingerprint validates current identity inputs, discovering config paths if needed.
 func (memo *statusGitMemo) fingerprint(ctx context.Context, args []string) string {
 	if !statusResourceKnownGitEnvironment() {
 		return ""
@@ -433,6 +447,9 @@ func (memo *statusGitMemo) fingerprint(ctx context.Context, args []string) strin
 	return statusResourceGitKeyConfig(args, paths, proof)
 }
 
+// configPaths stores only absolute system/global paths reported by trusted Git.
+// It does not collect configuration values or execute hooks; fingerprint checks
+// current file contents and keeps unknown/include/symlink fallback.
 func (memo *statusGitMemo) configPaths(ctx context.Context) ([]string, string) {
 	binary, proof := statusResourceGitBinary()
 	if proof == "" {

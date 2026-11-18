@@ -379,9 +379,7 @@ func statusConfirmFullPRContext(ctx context.Context, record PRRecord, slug, forg
 	if lockErr != nil {
 		return incremental
 	}
-	if lockErr == nil {
-		defer unlock()
-	}
+	defer unlock()
 	return statusConfirmFullPRLockedContext(ctx, record, slug, forge, incremental, source)
 }
 
@@ -431,9 +429,7 @@ func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, inc
 	if lockErr != nil {
 		return incremental
 	}
-	if lockErr == nil {
-		defer unlock()
-	}
+	defer unlock()
 	corrected, found := statusAuditedCorrection(slug, branch, incremental)
 	if !statusFullRefreshDue("bitbucket.org", slug, "build:"+branch) {
 		if found {

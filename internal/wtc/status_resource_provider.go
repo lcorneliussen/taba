@@ -29,7 +29,7 @@ func statusResourceSettledMerge(ctx context.Context, record PRRecord, slug, forg
 	return detail, true
 }
 
-// Markers retain their released format and write path. A cancellation check
+// Entries keep their existing on-disk format and write path. A cancellation check
 // precedes publication; filesystem I/O already in progress is not cancellable.
 func statusResourceWriteEntry(ctx context.Context, kind, forge, slug, key string, raw []byte) bool {
 	if ctx.Err() != nil {

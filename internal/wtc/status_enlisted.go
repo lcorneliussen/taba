@@ -222,9 +222,7 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	}
 	detail, used, matched := statusDetailFromOpenItemContext(ctx, record, slug, forge, item)
 	if !used {
-		if lockErr == nil {
-			unlock()
-		}
+		unlock()
 		return statusViewPRWithLiveContext(ctx, record, slug, forge, false, false, nil)
 	}
 	source := "list"
@@ -302,9 +300,7 @@ func statusViewPRWithLiveContext(ctx context.Context, record PRRecord, slug, for
 		if lockErr != nil {
 			return statusResourceUnavailableDetail(ctx, record, slug, forge)
 		}
-		if lockErr == nil {
-			defer unlock()
-		}
+		defer unlock()
 		if _, ok := statusReadForgeEntry("omit", forge, slug, record.Number); ok {
 			if cached, ok := statusReadCachedDetailContext(ctx, record, slug, forge); ok {
 				return cached
