@@ -16,12 +16,19 @@ import (
 )
 
 func gitOutput(args ...string) (string, error) {
-	return gitOutputContext(context.Background(), args...)
+	cmd := exec.Command("git", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func gitOutputContext(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.WaitDelay = 200 * time.Millisecond
+	if ctx.Done() != nil {
+		cmd.WaitDelay = 200 * time.Millisecond
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

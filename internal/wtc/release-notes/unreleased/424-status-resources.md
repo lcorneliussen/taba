@@ -3,3 +3,6 @@
 - **Refresh active PR facts explicitly.** Manual Refresh bypasses stale detail/list reuse within the shared provider allowance, preserves exact-head checks and retained merges, and shows compact freshness with honest retry details.
 - **Paint before discovery and reduce idle work.** Live views show a responsive loading frame, retain validated saved ages, reuse unchanged service declarations and use conservative background cadence when focus is unknown. Manual Refresh stays available.
   ([#424](https://github.com/lcorneliussen/taba/issues/424), [#426](https://github.com/lcorneliussen/taba/issues/426)).
+
+Shared cache/budget lock failures now defer provider reads in background and
+one-shot status too, preserving shared accounting instead of failing open.

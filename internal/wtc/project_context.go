@@ -44,7 +44,9 @@ func projectSnapshotGit(owner string, args ...string) (string, error) {
 func projectSnapshotGitContext(ctx context.Context, owner string, args ...string) (string, error) {
 	argv := append([]string{"--no-replace-objects", "--git-dir=" + owner}, args...)
 	cmd := exec.CommandContext(ctx, "git", argv...)
-	cmd.WaitDelay = 200 * time.Millisecond
+	if ctx.Done() != nil {
+		cmd.WaitDelay = 200 * time.Millisecond
+	}
 	for _, setting := range os.Environ() {
 		name, _, _ := strings.Cut(setting, "=")
 		if strings.HasPrefix(name, "GIT_") {

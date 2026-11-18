@@ -187,3 +187,48 @@ func TestStatusResourceLeaseNotificationsAndCleanup(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusResourcePollingFallbackDetectsLeaseChanges(t *testing.T) {
+	for _, change := range []string{"retire", "replace"} {
+		t.Run(change, func(t *testing.T) {
+			t.Setenv("WTC_CONFIG_ROOT", "")
+			t.Setenv("TABA_CONFIG_ROOT", "")
+			c := watcherCollection(t)
+			stopped := make(chan struct{}, 1)
+			closed := 0
+			cleanup, err := c.registerStatusWatcherWithEvents(func() { stopped <- struct{}{} }, func(*os.File) (<-chan struct{}, func()) { return nil, func() { closed++ } })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			select {
+			case <-stopped:
+				t.Fatal("valid fallback lease stopped")
+			case <-time.After(650 * time.Millisecond):
+			}
+			entries, err := os.ReadDir(filepath.Join(c.Collection, statusWatcherDir))
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("lease fixture: %v %v", entries, err)
+			}
+			lease := filepath.Join(c.Collection, statusWatcherDir, entries[0].Name())
+			if change == "replace" {
+				if err := os.Rename(lease, lease+"-old"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.WriteFile(lease, []byte("stop"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-stopped:
+			case <-time.After(time.Second):
+				t.Fatal("fallback did not observe retirement/replacement")
+			}
+			cleanup()
+			cleanup()
+			if closed != 1 {
+				t.Fatalf("event owner cleanup count %d", closed)
+			}
+		})
+	}
+}

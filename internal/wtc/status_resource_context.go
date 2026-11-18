@@ -33,7 +33,8 @@ func (p *ProjectContext) resourceContext() context.Context {
 }
 
 // StatusReadContext reopens the same receiver at an observation boundary. It
-// shares only advisory declaration data, never stale registry or scope grants.
+// carries the progress callback, sweep trust flag and advisory declaration
+// cache. Registry and receiving scope are freshly re-read by OpenCollectionContext.
 func (c *Context) StatusReadContext(ctx context.Context) (*Context, error) {
 	if ctx == nil {
 		ctx = context.Background()

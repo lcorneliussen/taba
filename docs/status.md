@@ -232,8 +232,14 @@ changes without a local change signal are caught by the bounded full refresh.
 `WTC_STATUS_WATCH` and `WTC_STATUS_WATCH_BG` tune full refresh intervals; manual
 `r` keeps its foreground admission, coalescing and shared cooldown behavior.
 No per-view host visibility command or unsupported attached-client API is used.
-Painting is capped at one frame per second; input and collector work run
-independently, so this does not throttle manual refresh or provider admission.
+Painting, including key feedback and new observations, is capped at one frame
+per second. Input and collector work run independently, so the paint cadence
+does not throttle manual refresh or provider admission.
+
+If a shared cache or budget lock is unavailable, provider reads fail closed:
+status reports deferred or unavailable observations instead of dispatching
+without shared accounting. The same rule applies to background and one-shot
+status reads; it does not increase provider limits.
 
 Quit cancels discovery and watcher waits, selected PR/build provider reads,
 the read-only build hook, and queued cache/admission waits. Snapshot publication

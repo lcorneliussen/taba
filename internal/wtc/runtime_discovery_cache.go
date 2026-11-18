@@ -61,9 +61,9 @@ func (c *Context) cachedRuntimeDeclarations() []RuntimeItem {
 	return items
 }
 
-// StatusResourceSignature observes local invalidation inputs without Git,
-// services, Herdr or providers. It is an advisory change signal; full bounded
-// reconciliation remains necessary for changes not represented by these files.
+// StatusResourceSignature reads local metadata (including HEAD, index and refs)
+// with stat and file reads, without invoking Git, services, Herdr or providers.
+// It is advisory; bounded reconciliation still covers unrepresented changes.
 func (c *Context) StatusResourceSignature() string { return c.statusResourceSignature(true) }
 
 func (c *Context) statusResourceSignature(repoState bool) string {

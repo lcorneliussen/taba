@@ -46,6 +46,10 @@ func (c *Context) RegisterStatusWatcherContext(ctx context.Context, stop func())
 }
 
 func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
+	return c.registerStatusWatcherWithEvents(stop, statusResourceLeaseEvents)
+}
+
+func (c *Context) registerStatusWatcherWithEvents(stop func(), watch func(*os.File) (<-chan struct{}, func())) (func(), error) {
 	dir := filepath.Join(c.Collection, statusWatcherDir)
 	if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
 		return nil, err
@@ -69,7 +73,7 @@ func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
 		_ = f.Close()
 		return nil, err
 	}
-	events, closeEvents := statusResourceLeaseEvents(f)
+	events, closeEvents := watch(f)
 	done := make(chan struct{})
 	var once sync.Once
 	cleanup := func() {

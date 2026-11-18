@@ -326,7 +326,7 @@ func statusTUIRefreshCollectorContext(ctx context.Context, c *wtc.Context, procs
 			collector.StatusProgress = func(message string) {
 				select {
 				case events <- statusProgressMsg{requestID: id, message: message, at: time.Now(), events: events}:
-				default:
+				default: // Drop progress when the UI cannot keep up; collection continues.
 				}
 			}
 			result := collect(&collector)
@@ -372,7 +372,7 @@ func (m *statusTUIModel) startForegroundRefresh() tea.Cmd {
 			collector.StatusProgress = func(message string) {
 				select {
 				case events <- statusProgressMsg{requestID: id, message: message, at: time.Now(), events: events}:
-				default:
+				default: // Drop progress when the UI cannot keep up; collection continues.
 				}
 			}
 			receiver, err := collector.StatusReadContext(ctx)
@@ -565,7 +565,8 @@ func (m statusTUIModel) runtimeDue(now time.Time) bool {
 
 func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// An unchanged service timer is not a second display clock. The UI
-	// heartbeat still advances ages, and input/new observations paint now.
+	// heartbeat still advances ages. Input and new observations update the
+	// display clock; physical paints remain subject to the renderer frame cap.
 	if _, unchangedClock := msg.(statusRuntimeTickMsg); !unchangedClock {
 		m.paintAt = time.Now()
 	}
@@ -711,6 +712,9 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err == nil {
 			m.lastRefresh = statusSnapshotTime(msg.snapshot)
+			if m.procs {
+				m.lastRefresh = msg.at
+			}
 			m.snapshotLoaded = true
 		}
 		m.nextRefresh = msg.at.Add(m.interval)
@@ -794,7 +798,11 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		now := time.Now()
 		if m.focused && !m.observedUntil.IsZero() && !now.Before(m.observedUntil) {
 			m.focused = false
-			m.nextRefresh = m.lastRefresh.Add(m.background)
+			base := m.lastRefresh
+			if base.IsZero() {
+				base = now
+			}
+			m.nextRefresh = base.Add(m.background)
 		}
 		changed := false
 		if m.context != nil && !m.watcherPending {
@@ -2279,7 +2287,8 @@ func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick b
 	}
 	model.devAllowed = !wtc.DevBuildDisabled() && version != "dev"
 	model.devCheckAt = time.Now()
-	model.devCollection = c.Collection
+	cwd, _ := os.Getwd()
+	model.devCollection = wtc.FindCollectionRoot(cwd)
 	model.devResume = takeStatusDevPresentation()
 	model.restoreDevPresentation()
 	return model
@@ -2299,11 +2308,13 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	// Each interactive CLI has its own scheduler. One CPU execution slot
 	// avoids waking spare workers for an otherwise idle view; concurrent
 	// collector I/O still uses its existing goroutines and admission limits.
-	// Restore the caller's setting if startup continues as a one-shot command.
+	// Restore the caller's setting on every return.
 	previous := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(previous)
 	// The status view has no animation requiring the renderer's default
-	// sixty wakeups per second. Input and collector work run independently.
+	// sixty wakeups per second. All paints, including input feedback, wait for
+	// the next frame (up to one second); input and collector work still execute
+	// independently of that physical paint cadence.
 	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(1)).Run()
 	interrupted := ctx.Err() != nil
 	if start, ok := final.(statusStartupModel); ok && start.err != nil {
