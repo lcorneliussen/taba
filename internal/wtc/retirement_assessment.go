@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -152,30 +151,9 @@ func (c *Context) InspectRetirementContext(ctx context.Context, name string, tra
 			report.Assessment.Unknowns = append(report.Assessment.Unknowns, "Cannot inspect Git entry: "+entry.Name())
 			continue
 		}
-		row := RetirementRepo{Directory: entry.Name(), Unpushed: -1}
-		read := func(args ...string) string {
-			if row.Error != "" {
-				return ""
-			}
-			out, e := retirementGitContext(ctx, path, args...)
-			if e != nil {
-				row.Error = "Git evidence unavailable"
-				return ""
-			}
-			return out
-		}
-		row.Head = read("rev-parse", "--verify", "HEAD")
-		row.Branch = read("branch", "--show-current")
-		row.Dirty = read("status", "--porcelain", "--untracked-files=normal") != ""
-		value := read("rev-list", "--count", "HEAD", "--not", "--remotes")
+		row := statusResourceRetirementRead(ctx, path)
 		if err := ctx.Err(); err != nil {
 			return report, err
-		}
-		if row.Error == "" {
-			row.Unpushed, err = strconv.Atoi(value)
-			if err != nil {
-				row.Error = "Cannot count commits absent from cached remote refs"
-			}
 		}
 		if row.Error != "" {
 			report.Assessment.Unknowns = append(report.Assessment.Unknowns, entry.Name()+": "+row.Error)
