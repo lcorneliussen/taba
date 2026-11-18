@@ -277,6 +277,9 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 				var newer headCheckEvidence
 				if json.Unmarshal(winner, &newer) == nil && newer.Head == head {
 					if !newer.Complete {
+						if newer.Result != "FAILURE" && cached.Result == "FAILURE" {
+							return fallback(errors.New("incomplete newer head checks"))
+						}
 						return newer, errors.New("incomplete newer head checks")
 					}
 					return newer, nil
