@@ -128,3 +128,41 @@ func TestStatusClosedArchiveDumbTerminalAndScroll(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusClosedArchiveConfirmedLabelSurvivesPresentationExpiry(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	now := time.Now()
+	observed := now.Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	for _, state := range []string{"CLOSED", "DECLINED"} {
+		for _, freshness := range []string{"live", "cached", "recorded"} {
+			for _, onBranch := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/onBranch=%v", state, freshness, onBranch), func(t *testing.T) {
+					target := "https://github.com/example/widget/pull/7"
+					row := wtc.StatusPRRow{Repo: "widget", Number: "7", State: state, Title: "Synthetic closure", Freshness: freshness, ObservedAt: observed, OnBranch: onBranch, URL: &target}
+					presented := statusTUIPresentationRow(row, now)
+					if freshness != "recorded" && presented.Freshness != "stale" {
+						t.Fatalf("expired observation must stay stale: %+v", presented)
+					}
+					if presented.ObservedAt != observed || row.Freshness != freshness || presented.Archived {
+						t.Fatal("presentation changed evidence or archive eligibility")
+					}
+					for _, width := range []int{34, 120} {
+						lines := statusTUIPRLines(wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{row}}, width, false, false)
+						frame := strings.Join(lines, "\n")
+						if !strings.Contains(frame, strings.ToLower(state)) {
+							t.Fatalf("width%d confirmed terminal label expired: %s", width, frame)
+						}
+						if freshness != "recorded" && !strings.Contains(frame, "s:1h") {
+							t.Fatalf("width%d expiry marker lost: %s", width, frame)
+						}
+						for _, line := range lines {
+							if ansi.StringWidth(line) > width {
+								t.Fatal("expiry broke width")
+							}
+						}
+					}
+				})
+			}
+		}
+	}
+}
