@@ -567,5 +567,26 @@ func statusResourceUpstream(ctx context.Context, path, branch string) (string, s
 	if fields[1] == "[gone]" {
 		return "", "gone", true
 	}
+	if track := fields[1]; track != "" {
+		if !strings.HasPrefix(track, "[") || !strings.HasSuffix(track, "]") {
+			return "", "", false
+		}
+		parts := strings.Split(track[1:len(track)-1], ", ")
+		if len(parts) > 2 {
+			return "", "", false
+		}
+		seen := map[string]bool{}
+		for _, part := range parts {
+			words := strings.Fields(part)
+			if len(words) != 2 || (words[0] != "ahead" && words[0] != "behind") || seen[words[0]] {
+				return "", "", false
+			}
+			count, err := strconv.Atoi(words[1])
+			if err != nil || count < 0 {
+				return "", "", false
+			}
+			seen[words[0]] = true
+		}
+	}
 	return fields[0], "tracking", true
 }
