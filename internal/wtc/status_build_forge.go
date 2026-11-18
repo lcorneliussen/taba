@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -196,34 +194,8 @@ func statusBBPipelinesContext(ctx context.Context, workspace, repo, branch, user
 		query.Set("target.branch", branch)
 	}
 	endpoint := statusBBAPI + "/repositories/" + url.PathEscape(workspace) + "/" + url.PathEscape(repo) + "/pipelines/?" + query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	request.SetBasicAuth(user, pass)
-	request.Header.Set("Accept", "application/json")
-	response, err := (&http.Client{Timeout: 15 * time.Second}).Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer response.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(response.Body, 4<<20))
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode == http.StatusNotFound {
-		// Pipelines are not enabled. Save an empty page so the next refresh
-		// does not spend another request on the same answer.
-		return []byte(`{"values":[]}`), nil
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body := strings.TrimSpace(string(raw))
-		if len(body) > 200 {
-			body = body[:200]
-		}
-		return nil, fmt.Errorf("Bitbucket pipelines API returned %s: %s", response.Status, body)
-	}
-	return raw, nil
+	// The outer admission pays the first hop; redirects spend the same bucket.
+	return statusBBGETWithOptionsContext(ctx, StatusRefreshBackground, endpoint, user, pass, true)
 }
 
 func statusSaveLivePipelinePage(slug string, raw []byte, started time.Time) {

@@ -386,6 +386,11 @@ func statusBBGET(endpoint, user, pass string) ([]byte, error) {
 }
 
 func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endpoint, user, pass string) ([]byte, error) {
+	return statusBBGETWithOptionsContext(parent, intent, endpoint, user, pass, false)
+}
+
+// Pipelines retain their established disabled-feature (404) empty-page result.
+func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshIntent, endpoint, user, pass string, empty404 bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -442,6 +447,9 @@ func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endp
 			}
 			return nil, fmt.Errorf("Bitbucket API response read failed")
 		}
+		if empty404 && response.StatusCode == http.StatusNotFound {
+			return []byte(`{"values":[]}`), nil
+		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			body := strings.TrimSpace(string(raw))
 			if len(body) > 200 {
@@ -451,6 +459,9 @@ func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endp
 				if retry, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && retry > 0 {
 					return nil, fmt.Errorf("Bitbucket API returned 429; Retry-After: %d", retry)
 				}
+			}
+			if empty404 {
+				return nil, fmt.Errorf("Bitbucket pipelines API returned %s: %s", response.Status, body)
 			}
 			return nil, fmt.Errorf("Bitbucket pull request list API returned %s: %s", response.Status, body)
 		}
