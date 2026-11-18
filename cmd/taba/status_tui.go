@@ -2288,6 +2288,8 @@ func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick b
 	if !all && !procs {
 		model.snapshot.Collection = filepath.Base(c.Collection)
 		if cached, err := c.ReadStatusSnapshot(); err == nil {
+			// Saved runtime is displayed with its original snapshot age, not as a
+			// live probe. Init or a later runtime tick replaces it by observation time.
 			model.snapshot = cached
 			model.snapshotLoaded = true
 			model.lastRefresh = statusSnapshotTime(cached)

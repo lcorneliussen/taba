@@ -389,7 +389,7 @@ func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endp
 	return statusBBGETWithOptionsContext(parent, intent, endpoint, user, pass, false)
 }
 
-// Pipelines retain their established disabled-feature (404) empty-page result.
+// Pipelines represent a disabled feature (404) as an empty page.
 func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshIntent, endpoint, user, pass string, empty404 bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
@@ -448,6 +448,8 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 			return nil, fmt.Errorf("Bitbucket API response read failed")
 		}
 		if empty404 && response.StatusCode == http.StatusNotFound {
+			// Save the disabled-feature empty page so the next refresh can reuse
+			// that answer without spending another provider request.
 			return []byte(`{"values":[]}`), nil
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {

@@ -587,8 +587,9 @@ func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent Statu
 			if branchRow >= 0 {
 				snapshot.Orphans = append(snapshot.Orphans, StatusOrphan{Repo: worktreeDir, Branch: record.Branch, State: detail.State})
 			}
-			// Keep the established orphan warning; closure is not a merge or
-			// permission to return/delete the branch. Its row remains inspectable.
+			// CLOSED/DECLINED retain their row and any checked-out orphan warning;
+			// SUPERSEDED keeps the warning but omits its row. Closure never grants
+			// merge authority or permission to return/delete the branch.
 			if detail.State == "SUPERSEDED" {
 				continue
 			}

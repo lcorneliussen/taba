@@ -492,11 +492,9 @@ func statusFetchSharedContext(ctx context.Context, kind, forge, slug, key string
 	if lockErr != nil {
 		return nil, false, lockErr
 	}
-	if lockErr == nil {
-		defer unlock()
-		if data, ok := statusReadForgeEntry(kind, forge, slug, key); ok {
-			return data, false, nil
-		}
+	defer unlock()
+	if data, ok := statusReadForgeEntry(kind, forge, slug, key); ok {
+		return data, false, nil
 	}
 	started := time.Now()
 	raw, live, err := statusWithForgeBudgetKeyContext(ctx, forge, "", stale, fetch)

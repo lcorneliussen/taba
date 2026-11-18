@@ -236,6 +236,13 @@ inventory instead of running Git discovery on every service read. Working-tree
 changes without a local change signal are caught by the bounded full refresh.
 `WTC_STATUS_WATCH` and `WTC_STATUS_WATCH_BG` tune full refresh intervals; manual
 `r` keeps its foreground admission, coalescing and shared cooldown behavior.
+Read-only identity requests coalesce only when their Git configuration inputs
+can be validated. A default shell with an unknown system-config path, or an
+unsupported global include, symlink or environment override, uses uncached Git
+reads. This limits current resource coverage. Synthetic positive controls use
+isolated system/global configuration; separate controls preserve the unknown
+configuration fallback and cancellation behavior.
+
 No per-view host visibility command or unsupported attached-client API is used.
 Painting, including key feedback and new observations, is capped at one frame
 per second. Input and collector work run independently, so the paint cadence

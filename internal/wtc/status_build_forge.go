@@ -212,9 +212,7 @@ func statusSaveLivePipelinePageContext(ctx context.Context, slug string, raw []b
 		if err == nil && build != nil && !statusPageAuditApplies(slug, branch, build) {
 			statusResourceWriteSince(ctx, "build", "bitbucket.org", slug, branch, raw, started)
 		}
-		if lockErr == nil {
-			unlock()
-		}
+		unlock()
 	}
 }
 
