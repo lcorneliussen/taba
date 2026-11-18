@@ -603,3 +603,69 @@ func TestStatusResourceIdentityProvenanceCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStatusResourceIdentityLiveWaiterAfterLeaderCancel(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
+	leader, cancel := context.WithCancel(c.resourceContext())
+	defer cancel()
+	entered, release := make(chan struct{}), make(chan struct{})
+	leadDone := make(chan error, 1)
+	go func() {
+		_, err := statusResourceGit(leader, args, func() (string, error) { close(entered); <-release; return "discarded", leader.Err() })
+		leadDone <- err
+	}()
+	<-entered
+	waiter := &resourceChecksQueuedContext{Context: c.resourceContext(), waiting: make(chan struct{})}
+	type outcome struct {
+		value string
+		err   error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		v, e := statusResourceGit(waiter, args, func() (string, error) { return "current", nil })
+		done <- outcome{v, e}
+	}()
+	select {
+	case <-waiter.waiting:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("waiter did not queue")
+	}
+	cancel()
+	close(release)
+	if err := <-leadDone; !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil || got.value != "current" {
+			t.Fatalf("live waiter inherited canceled leader: %q %v", got.value, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("live waiter failed to retry")
+	}
+}
+
+func TestStatusResourceIdentityLegacyRemoteFallback(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	root := t.TempDir()
+	fixtureGit(t, "init", "-q", root)
+	remote := filepath.Join(root, ".git/remotes/origin")
+	c := (&Context{}).WithStatusContext(context.Background())
+	args := []string{"-C", root, "remote", "get-url", "origin"}
+	for _, url := range []string{"https://example.invalid/first.git", "https://example.invalid/second.git"} {
+		fixtureFile(t, remote, "URL: "+url+"\nPull: refs/heads/main:refs/remotes/origin/main\n", 0600)
+		want, err := gitOutput(args...)
+		if err != nil {
+			t.Skip("Git does not support legacy remote definitions")
+		}
+		got, err := gitOutputContext(c.resourceContext(), args...)
+		if err != nil || got != want {
+			t.Fatalf("legacy remote identity reused: got%q want%q err%v", got, want, err)
+		}
+	}
+}
