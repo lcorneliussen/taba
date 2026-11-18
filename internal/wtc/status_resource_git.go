@@ -234,9 +234,9 @@ func statusResourceOperationState(ctx context.Context, t catchUpTarget) string {
 }
 
 type statusResourceLocalState struct {
-	branch, upstream, porcelain string
-	changed                     int
-	conflict                    bool
+	branch   string
+	changed  int
+	conflict bool
 }
 
 // V2 records preserve Git's quoting of paths, so embedded newlines and rename
@@ -260,7 +260,7 @@ func statusResourceLocalRead(ctx context.Context, path string) (statusResourceLo
 			s.branch = strings.TrimPrefix(line, "# branch.head ")
 			head = true
 		case strings.HasPrefix(line, "# branch.upstream "):
-			s.upstream = strings.TrimPrefix(line, "# branch.upstream ")
+			// Upstream/count semantics remain in the established authoritative reads.
 		case strings.HasPrefix(line, "# branch.ab "):
 		case strings.HasPrefix(line, "1 "), strings.HasPrefix(line, "2 "), strings.HasPrefix(line, "? "):
 			s.changed++
