@@ -39,6 +39,7 @@ func (c *Context) StatusReadContext(ctx context.Context) (*Context, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = statusResourceOperation(ctx)
 	fresh, err := OpenCollectionContext(ctx, c.Collection)
 	if err != nil {
 		return nil, err

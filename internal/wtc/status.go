@@ -230,7 +230,18 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	if err == nil {
 		row.Slug, row.Forge = catchUpForge(remote)
 	}
-	branch, err := statusGitContext(ctx, t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	local, batched := statusResourceLocalRead(ctx, t.path)
+	branch := ""
+	var branchErr error
+	if batched {
+		branch = local.branch
+		if branch == "(detached)" {
+			branchErr = fmt.Errorf("detached")
+		}
+	} else {
+		branch, branchErr = statusGitContext(ctx, t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	}
+	err = branchErr
 	if err == nil {
 		row.BranchKind = "branch"
 		row.Branch = branch
@@ -264,18 +275,25 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	if err != nil {
 		return StatusRepo{}, fmt.Errorf("%s development-tip count: %w", t.path, err)
 	}
-	porcelain, err := statusGitContext(ctx, t.path, "status", "--porcelain")
-	if err != nil {
-		return StatusRepo{}, fmt.Errorf("%s working tree: %w", t.path, err)
+	if batched {
+		row.Changed, row.Conflict = local.changed, local.conflict
+	} else {
+		porcelain, err := statusGitContext(ctx, t.path, "status", "--porcelain")
+		if err != nil {
+			return StatusRepo{}, fmt.Errorf("%s working tree: %w", t.path, err)
+		}
+		if porcelain != "" {
+			row.Changed = len(strings.Split(porcelain, "\n"))
+		}
+		if unmerged, err := statusGitContext(ctx, t.path, "diff", "--name-only", "--diff-filter=U"); err == nil && unmerged != "" {
+			row.Conflict = true
+		}
 	}
-	if porcelain != "" {
-		row.Changed = len(strings.Split(porcelain, "\n"))
+	if row.Changed != 0 {
 		row.Tree = fmt.Sprintf("±%d", row.Changed)
 	}
-	row.Operation = catchUpOperation(t)
-	if unmerged, err := statusGitContext(ctx, t.path, "diff", "--name-only", "--diff-filter=U"); err == nil && unmerged != "" {
-		row.Conflict = true
-	}
+	row.Operation = statusResourceOperationState(ctx, t)
+
 	return row, nil
 }
 

@@ -2,12 +2,16 @@ package wtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Frozen pre-optimization collector oracle; actual Git fixtures compare complete
@@ -128,4 +132,107 @@ func TestStatusResourceLocalActualGitComparison(t *testing.T) {
 	fixtureGit(t, "-C", target.path, "reset", "--hard", "HEAD")
 	fixtureGit(t, "-C", target.path, "switch", "--orphan", "unborn")
 	check("unborn")
+}
+
+func TestStatusResourceGitMemoIdentityAndScope(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+	ctx := statusResourceOperation(context.Background())
+	var calls int
+	read := func() (string, error) { calls++; return gitOutput(args...) }
+	first, err := statusResourceGit(ctx, args, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		v, e := statusResourceGit(ctx, args, read)
+		if e != nil || v != first {
+			t.Fatal(v, e)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("duplicate identity reads=%d", calls)
+	}
+	fixtureGit(t, "-C", c.Harness, "remote", "set-url", "origin", "https://github.com/example/other.git")
+	v, e := statusResourceGit(ctx, args, read)
+	if e != nil || v == first || calls != 2 {
+		t.Fatalf("config change reused identity: %s %v %d", v, e, calls)
+	}
+	_, _ = statusResourceGit(statusResourceOperation(context.Background()), args, read)
+	if calls != 3 {
+		t.Fatal("memo escaped observation")
+	}
+	mutating := []string{"-C", c.Harness, "status", "--porcelain"}
+	for i := 0; i < 2; i++ {
+		_, _ = statusResourceGit(ctx, mutating, read)
+	}
+	if calls != 5 {
+		t.Fatal("nonallowlisted read reused")
+	}
+}
+
+func TestStatusResourceGitMemoConcurrentAndCancelledWaiter(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
+	ctx := statusResourceOperation(context.Background())
+	entered, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	read := func() (string, error) { calls.Add(1); close(entered); <-release; return "same", nil }
+	done := make(chan error, 1)
+	go func() { _, e := statusResourceGit(ctx, args, read); done <- e }()
+	<-entered
+	waiting, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, e := statusResourceGit(waiting, args, func() (string, error) { t.Error("cancelled dispatch"); return "", nil }); !errors.Is(e, context.Canceled) {
+		t.Fatal(e)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v, e := statusResourceGit(ctx, args, read)
+			if e != nil || v != "same" {
+				t.Error(v, e)
+			}
+		}()
+	}
+	close(release)
+	if e := <-done; e != nil {
+		t.Fatal(e)
+	}
+	wg.Wait()
+	if calls.Load() != 1 {
+		t.Fatal(calls.Load())
+	}
+}
+
+func TestStatusResourceGitMemoNoCancelledPublication(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
+	base := statusResourceOperation(context.Background())
+	ctx, cancel := context.WithCancel(base)
+	if _, e := statusResourceGit(ctx, args, func() (string, error) { cancel(); return "cancelled", nil }); !errors.Is(e, context.Canceled) {
+		t.Fatal(e)
+	}
+	v, e := statusResourceGit(base, args, func() (string, error) { return "current", nil })
+	if e != nil || v != "current" {
+		t.Fatal(v, e)
+	}
+}
+
+func TestStatusResourceLocalBatchUnsupportedFallback(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	_, targets, err := c.CatchUpInventory(CatchUpOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
+		defer cancel()
+		time.Sleep(time.Millisecond)
+		if _, e := statusLocalRepoContext(ctx, target); e == nil {
+			t.Fatal("cancelled observation accepted")
+		}
+	}
 }

@@ -25,15 +25,17 @@ func gitOutput(args ...string) (string, error) {
 }
 
 func gitOutputContext(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	if ctx.Done() != nil {
-		cmd.WaitDelay = 200 * time.Millisecond
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)), nil
+	return statusResourceGit(ctx, args, func() (string, error) {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		if ctx.Done() != nil {
+			cmd.WaitDelay = 200 * time.Millisecond
+		}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		}
+		return strings.TrimSpace(string(out)), nil
+	})
 }
 
 func (c *Context) Repository(name string) (Repo, error) {

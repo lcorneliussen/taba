@@ -55,8 +55,10 @@ func statusCommandContext(ctx context.Context, timeout time.Duration, name strin
 	return statusRunContext(ctx, timeout, (*exec.Cmd).CombinedOutput, name, args...)
 }
 func statusGitContext(ctx context.Context, path string, args ...string) (string, error) {
-	out, err := statusCommandContext(ctx, 30*time.Second, "git", append([]string{"-C", path}, args...)...)
-	return strings.TrimSpace(string(out)), err
+	return statusResourceGit(ctx, append([]string{"-C", path}, args...), func() (string, error) {
+		out, err := statusCommandContext(ctx, 30*time.Second, "git", append([]string{"-C", path}, args...)...)
+		return strings.TrimSpace(string(out)), err
+	})
 }
 func statusJSONContext(ctx context.Context, args ...string) ([]byte, error) {
 	return statusRunContext(ctx, 30*time.Second, forgeOutput, args[0], args[1:]...)
