@@ -410,3 +410,22 @@ func TestStatusResourceGitMemoRevalidatesCanonicalParent(t *testing.T) {
 		t.Fatalf("changed canonical association reused: before%s got%s want%s err%v", before, got, want, err)
 	}
 }
+
+func TestStatusResourceLocalNamedDetachedBranch(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	_, targets, err := c.CatchUpInventory(CatchUpOptions{DryRun: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		if target.path != c.Harness {
+			continue
+		}
+		fixtureGit(t, "-C", target.path, "switch", "-qc", "(detached)")
+		got, ge := statusLocalRepoContext(context.Background(), target)
+		want, we := statusResourceLocalReference(context.Background(), target)
+		if (ge == nil) != (we == nil) || !reflect.DeepEqual(got, want) {
+			t.Fatalf("actual named branch misread: got%+v err%v want%+v err%v", got, ge, want, we)
+		}
+	}
+}
