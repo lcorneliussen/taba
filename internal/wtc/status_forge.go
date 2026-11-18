@@ -118,6 +118,9 @@ func statusGHDetail(raw []byte, fallback PRRecord) (statusPRDetail, error) {
 	if d.State == "CLOSED" {
 		if at, e := time.Parse(time.RFC3339, p.MergedAt); e == nil && !at.After(time.Now()) {
 			d.State = "MERGED"
+		} else {
+			d.MergedOn = ""
+			d.MergeCommit = ""
 		}
 	}
 	if d.State == "OPEN" && p.IsDraft {
