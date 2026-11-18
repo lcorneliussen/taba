@@ -457,3 +457,29 @@ func TestStatusAuth441UnknownNeverRetainsPriorObservation(t *testing.T) {
 		t.Fatal("unknown stamp equality granted retained provider authority")
 	}
 }
+
+func TestStatusAuth441CommittedOrderingReceiptStaysWithPinnedContext(t *testing.T) {
+	auth441Fixture(t)
+	t.Setenv("GH_TOKEN", "synthetic-A")
+	ctx := statusAuthOperation(context.Background())
+	started := time.Now()
+	// Model the publication boundary: data committed, ordering receipt next.
+	if !statusWriteForgeEntryObservedContext(ctx, "probe", "github.com", "example/widget", "7", []byte("newer synthetic observation"), started) {
+		t.Fatal("data publication failed")
+	}
+	t.Setenv("GH_TOKEN", "synthetic-B")
+	if !statusWriteForgeEntryObservedContext(ctx, "since", "github.com", "example/widget", "probe:7", []byte(fmt.Sprint(started.UnixNano())), time.Time{}) {
+		t.Fatal("context switch interrupted committed ordering receipt")
+	}
+	if _, ok := statusForgeEntrySince("probe", "github.com", "example/widget", "7"); ok {
+		t.Fatal("ordering receipt crossed into B")
+	}
+	t.Setenv("GH_TOKEN", "synthetic-A")
+	if statusWriteForgeEntrySince("probe", "github.com", "example/widget", "7", []byte("older synthetic observation"), started.Add(-time.Second)) {
+		t.Fatal("late older writer replaced committed observation after switching back")
+	}
+	raw, _ := statusReadForgeEntryAny("probe", "github.com", "example/widget", "7")
+	if string(raw) != "newer synthetic observation" {
+		t.Fatal("ordering lost across credential switch")
+	}
+}
