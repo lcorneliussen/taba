@@ -26,12 +26,16 @@ type statusOpenPR struct {
 }
 
 func statusOpenPRs(forge, slug string) (map[string]statusOpenPR, bool, error) {
-	raw, err := statusSingleFlight("openprs", forge, slug, "open", func() ([]byte, error) {
+	return statusOpenPRsContext(context.Background(), forge, slug)
+}
+
+func statusOpenPRsContext(ctx context.Context, forge, slug string) (map[string]statusOpenPR, bool, error) {
+	raw, err := statusSingleFlightContext(ctx, "openprs", forge, slug, "open", func() ([]byte, error) {
 		switch forge {
 		case "github.com":
-			return statusFetchGHOpenList(slug)
+			return statusFetchGHOpenListContext(ctx, slug)
 		case "bitbucket.org":
-			return statusFetchBBOpenList(slug)
+			return statusFetchBBOpenListContext(ctx, slug)
 		default:
 			return nil, fmt.Errorf("unsupported forge")
 		}
@@ -76,9 +80,13 @@ func statusEncodeOpenPRs(prs []statusOpenPR, truncated bool, started time.Time) 
 var statusBeforeOpenPublish func()
 
 func statusDetailFromOpenItem(record PRRecord, slug, forge string, item statusOpenPR) (statusPRDetail, bool, bool) {
+	return statusDetailFromOpenItemContext(context.Background(), record, slug, forge, item)
+}
+
+func statusDetailFromOpenItemContext(ctx context.Context, record PRRecord, slug, forge string, item statusOpenPR) (statusPRDetail, bool, bool) {
 	// Within statusMergedCacheAge, a changed list fingerprint cannot reopen a
 	// retained merge, even while its merge time or checks are still being collected.
-	if known, ok := statusRetainedMerge(record, slug, forge); ok {
+	if known, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
 		return known, true, true
 	}
 	if stamp, ok := statusReadForgeEntryAny("stamp", forge, slug, record.Number); ok && string(stamp) == item.Fingerprint {
@@ -95,13 +103,23 @@ func statusDetailFromOpenItem(record PRRecord, slug, forge string, item statusOp
 	if statusBeforeOpenPublish != nil {
 		statusBeforeOpenPublish()
 	}
-	if !statusWriteForgeEntrySinceObserved("pr", forge, slug, record.Number, item.Raw, item.Started, item.Started) {
-		if cached, ok := statusReadObservedDetail(record, slug, forge, 365*24*time.Hour); ok {
-			statusWriteForgeEntry("stamp", forge, slug, record.Number, []byte(item.Fingerprint))
+	publication, err := statusWriteForgeEntrySinceObservedContext(ctx, "pr", forge, slug, record.Number, item.Raw, item.Started, item.Started)
+	if err != nil {
+		if publication.Written || publication.Retained {
+			if known, ok := statusResourceObservedDetail(ctx, record, slug, forge, 365*24*time.Hour); ok {
+				known.Freshness = "unavailable"
+				return known, true, false
+			}
+		}
+		return statusDeferredDetail(record), true, false
+	}
+	if !publication.Written {
+		if cached, ok := statusResourceObservedDetail(ctx, record, slug, forge, 365*24*time.Hour); ok {
+			statusResourceWriteEntry(ctx, "stamp", forge, slug, record.Number, []byte(item.Fingerprint))
 			return cached, true, true
 		}
 	}
-	statusWriteForgeEntry("stamp", forge, slug, record.Number, []byte(item.Fingerprint))
+	statusResourceWriteEntry(ctx, "stamp", forge, slug, record.Number, []byte(item.Fingerprint))
 	return statusObserveAt(detail, item.Started, "open-list"), true, false
 }
 
@@ -153,8 +171,12 @@ func (p statusGHListItem) fingerprint() string {
 }
 
 func statusFetchGHOpenList(slug string) ([]byte, error) {
+	return statusFetchGHOpenListContext(context.Background(), slug)
+}
+
+func statusFetchGHOpenListContext(ctx context.Context, slug string) ([]byte, error) {
 	started := time.Now()
-	raw, err := statusJSON("gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", strconv.Itoa(statusOpenListLimit), "--json", statusGHOpenFields)
+	raw, err := statusJSONContext(ctx, "gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", strconv.Itoa(statusOpenListLimit), "--json", statusGHOpenFields)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +256,10 @@ func (p statusBBListItem) fingerprint() string {
 }
 
 func statusFetchBBOpenList(slug string) ([]byte, error) {
+	return statusFetchBBOpenListContext(context.Background(), slug)
+}
+
+func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, error) {
 	started := time.Now()
 	user, pass := bitbucketCredentials()
 	if user == "" || pass == "" {
@@ -253,13 +279,16 @@ func statusFetchBBOpenList(slug string) ([]byte, error) {
 	seen := map[string]bool{}
 	truncated := false
 	for page := 0; page < 10 && endpoint != ""; page++ {
-		if page > 0 && (statusForgeCooling("bitbucket.org") || !statusTakeForgeToken("bitbucket.org")) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if page > 0 && (statusForgeCooling("bitbucket.org") || !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "")) {
 			truncated = true
 			break
 		}
-		raw, err := statusBBGET(endpoint, user, pass)
+		raw, err := statusBBGETContext(ctx, StatusRefreshBackground, endpoint, user, pass)
 		if err != nil {
-			if page == 0 {
+			if page == 0 || ctx.Err() != nil {
 				return nil, err
 			}
 			if statusRateLimited(err) {
@@ -357,6 +386,11 @@ func statusBBGET(endpoint, user, pass string) ([]byte, error) {
 }
 
 func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endpoint, user, pass string) ([]byte, error) {
+	return statusBBGETWithOptionsContext(parent, intent, endpoint, user, pass, false)
+}
+
+// empty404 maps a 404 response to an empty values page.
+func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshIntent, endpoint, user, pass string, empty404 bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -398,7 +432,7 @@ func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endp
 				if statusForgeCooling("bitbucket.org") {
 					return nil, errForgeCooling
 				}
-				if !statusTakeForgeToken("bitbucket.org") {
+				if !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "") {
 					return nil, errForgeBudget
 				}
 			}
@@ -413,6 +447,11 @@ func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endp
 			}
 			return nil, fmt.Errorf("Bitbucket API response read failed")
 		}
+		if empty404 && response.StatusCode == http.StatusNotFound {
+			// Map a pipelines 404 to an empty page. The caller caches that answer
+			// so a repeated refresh can reuse it without another request.
+			return []byte(`{"values":[]}`), nil
+		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			body := strings.TrimSpace(string(raw))
 			if len(body) > 200 {
@@ -422,6 +461,9 @@ func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endp
 				if retry, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && retry > 0 {
 					return nil, fmt.Errorf("Bitbucket API returned 429; Retry-After: %d", retry)
 				}
+			}
+			if empty404 {
+				return nil, fmt.Errorf("Bitbucket pipelines API returned %s: %s", response.Status, body)
 			}
 			return nil, fmt.Errorf("Bitbucket pull request list API returned %s: %s", response.Status, body)
 		}

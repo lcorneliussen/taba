@@ -131,6 +131,22 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 			}
 			return evidence, errors.New("head checks credentials unavailable")
 		}
+		// An auth failure cannot erase already observed exact-head failures.
+		if validCheckHead(head) {
+			if raw, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+				var saved headCheckEvidence
+				if json.Unmarshal(raw, &saved) == nil && saved.Head == head && saved.Result == "FAILURE" {
+					saved.Complete = false
+					if err := ctx.Err(); err != nil {
+						return saved, err
+					}
+					return saved, errors.New("head checks credentials unavailable")
+				}
+			}
+		}
+		if err := ctx.Err(); err != nil {
+			return evidence, err
+		}
 		return evidence, nil
 	}
 	if len(head) < 40 {
@@ -261,6 +277,9 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 				var newer headCheckEvidence
 				if json.Unmarshal(winner, &newer) == nil && newer.Head == head {
 					if !newer.Complete {
+						if newer.Result != "FAILURE" && cached.Result == "FAILURE" {
+							return fallback(errors.New("incomplete newer head checks"))
+						}
 						return newer, errors.New("incomplete newer head checks")
 					}
 					return newer, nil
@@ -276,29 +295,90 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 		}
 		return evidence, nil
 	}
-	// The collector budgets each HTTP request itself; avoid charging an extra
-	// token for its aggregate.
-	if fresh {
-		raw, _ := fetch()
-		_ = json.Unmarshal(raw, &evidence)
-		return evidence, nil
+	// Each HTTP page owns its admission; the aggregate must not spend a token.
+	cached := unknownHeadChecks(head)
+	readCached := func() {
+		if raw, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+			var saved headCheckEvidence
+			if json.Unmarshal(raw, &saved) == nil && saved.Head == head {
+				cached = saved
+			}
+		}
 	}
-	// Status uses a head-keyed cache under the existing lock.
-	unlock, err := statusLockCache(statusForgeEntryPath("checks", "bitbucket.org", slug, head))
-	if err == nil {
+	readCached()
+	fallback := func(err error) (headCheckEvidence, error) {
+		if evidence.Head == head && evidence.Result == "FAILURE" {
+			cached = evidence
+		}
+		cached.Complete = false
+		if cached.Result != "FAILURE" {
+			cached.Result = "UNKNOWN"
+		}
+		return cached, err
+	}
+	if err := ctx.Err(); err != nil {
+		return fallback(err)
+	}
+	if !fresh {
+		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPath("checks", "bitbucket.org", slug, head))
+		if err != nil {
+			return fallback(err)
+		}
 		defer unlock()
-	}
-	if raw, ok := statusReadForgeEntry("checks", "bitbucket.org", slug, head); ok {
-		if json.Unmarshal(raw, &evidence) == nil && evidence.Head == head {
-			return evidence, nil
+		readCached()
+		if raw, ok := statusReadForgeEntry("checks", "bitbucket.org", slug, head); ok {
+			var saved headCheckEvidence
+			if json.Unmarshal(raw, &saved) == nil && saved.Head == head {
+				evidence = saved
+				if err := ctx.Err(); err != nil {
+					return fallback(err)
+				}
+				return evidence, nil
+			}
 		}
 	}
 	started := time.Now()
 	raw, err := fetch()
-	if err == nil {
-		if json.Unmarshal(raw, &evidence) == nil {
-			statusWriteForgeEntrySince("checks", "bitbucket.org", slug, head, raw, started)
+	if err != nil {
+		return fallback(err)
+	}
+	if json.Unmarshal(raw, &evidence) != nil {
+		return fallback(errors.New("invalid check evidence"))
+	}
+	if err := ctx.Err(); err != nil {
+		return fallback(err)
+	}
+	if !evidence.Complete && cached.Result == "FAILURE" && evidence.Result != "FAILURE" {
+		evidence = cached
+		evidence.Complete = false
+		raw, _ = json.Marshal(evidence)
+	}
+	if !fresh {
+		publication, err := statusWriteForgeEntrySinceObservedContext(ctx, "checks", "bitbucket.org", slug, head, raw, started, time.Now())
+		if err != nil {
+			return fallback(err)
 		}
+		if !publication.Written {
+			if winner, ok := statusReadForgeEntryAny("checks", "bitbucket.org", slug, head); ok {
+				var newer headCheckEvidence
+				if json.Unmarshal(winner, &newer) == nil && newer.Head == head {
+					if !newer.Complete {
+						if newer.Result != "FAILURE" && cached.Result == "FAILURE" {
+							return fallback(errors.New("incomplete newer head checks"))
+						}
+						return newer, errors.New("incomplete newer head checks")
+					}
+					return newer, nil
+				}
+			}
+			return fallback(errors.New("check evidence publication failed"))
+		}
+	}
+	if !evidence.Complete {
+		if fetchErr != nil {
+			return evidence, fetchErr
+		}
+		return evidence, errors.New("incomplete head checks")
 	}
 	return evidence, nil
 }
@@ -335,7 +415,7 @@ func resolveBBCheckHead(slug, prefix, user, pass string) (string, error) {
 func resolveBBCheckHeadContext(ctx context.Context, intent StatusRefreshIntent, slug, prefix, user, pass string) (string, error) {
 	parts := strings.Split(slug, "/")
 	endpoint := statusBBAPI + "/repositories/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/commit/" + prefix
-	fetch := func() ([]byte, error) { return statusBBGET(endpoint, user, pass) }
+	fetch := func() ([]byte, error) { return statusBBGETContext(ctx, intent, endpoint, user, pass) }
 	var raw []byte
 	var err error
 	if intent == StatusRefreshForeground {
@@ -362,7 +442,7 @@ func resolveBBCheckHeadContext(ctx context.Context, intent StatusRefreshIntent, 
 			}
 		}
 	} else {
-		raw, err = statusSingleFlight("checkhead", "bitbucket.org", slug, prefix, fetch)
+		raw, err = statusSingleFlightContext(ctx, "checkhead", "bitbucket.org", slug, prefix, fetch)
 	}
 	if err != nil {
 		return "", err
@@ -380,7 +460,7 @@ func resolveBBCheckHeadContext(ctx context.Context, intent StatusRefreshIntent, 
 // inside the HTTP helper; the aggregate never consumes an additional token.
 func statusBBCheckRead(ctx context.Context, intent StatusRefreshIntent, endpoint, user, pass string) ([]byte, error) {
 	if intent != StatusRefreshForeground {
-		raw, _, err := statusWithForgeBudget("bitbucket.org", nil, func() ([]byte, error) { return statusBBGET(endpoint, user, pass) })
+		raw, _, err := statusWithForgeBudgetKeyContext(ctx, "bitbucket.org", "", nil, func() ([]byte, error) { return statusBBGETContext(ctx, intent, endpoint, user, pass) })
 		return raw, err
 	}
 	if err := statusTakeForegroundToken(ctx, "bitbucket.org"); err != nil {

@@ -16,7 +16,11 @@ func (c *Context) runtimeWithDeclarations(observed []RuntimeItem) []RuntimeItem 
 	for _, item := range observed {
 		seen[item.Path] = true
 	}
-	for _, item := range c.runtimeDeclarations() {
+	declared := c.runtimeDeclarations
+	if c.runtimeDeclarationsCache != nil {
+		declared = c.cachedRuntimeDeclarations
+	}
+	for _, item := range declared() {
 		if !seen[item.Path] {
 			observed = append(observed, item)
 			seen[item.Path] = true

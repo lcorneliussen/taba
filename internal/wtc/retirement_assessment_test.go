@@ -357,6 +357,11 @@ func TestRetirementFailedGitIsUnknownNotPreservationWork(t *testing.T) {
 			bin := t.TempDir()
 			fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
 case " $* " in
+ *" status --porcelain=v2 --branch "*)
+  if [ "$RETIREMENT_TEST_OPERATION" = rev-parse ]; then printf '# branch.oid (initial)\n# branch.head synthetic\n'; exit 0; fi
+  if [ "$RETIREMENT_TEST_OPERATION" = status ]; then printf 'fatal: synthetic unavailable status\n' >&2; exit 1; fi
+  if [ "$RETIREMENT_TEST_OPERATION" = warning ]; then printf 'warning: synthetic warning\n' >&2; fi
+  ;;
  *" rev-parse --verify HEAD "*)
   if [ "$RETIREMENT_TEST_OPERATION" = rev-parse ]; then printf 'fatal: synthetic unavailable HEAD\n' >&2; exit 1; fi
   if [ "$RETIREMENT_TEST_OPERATION" = warning ]; then printf 'warning: synthetic warning\n' >&2; fi

@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -76,12 +76,20 @@ const retirementTranscriptLimit = 16 << 20
 // refresh, hooks, service runners, network requests, cache writes or branch changes.
 // Transcript paths are explicit inputs, not automatic provider archive discovery.
 func (c *Context) InspectRetirement(name string, transcripts []string) (RetirementReport, error) {
+	return c.InspectRetirementContext(context.Background(), name, transcripts)
+}
+
+// InspectRetirementContext keeps the same read-only evidence contract, bounded by the caller.
+func (c *Context) InspectRetirementContext(ctx context.Context, name string, transcripts []string) (RetirementReport, error) {
 	observed := time.Now().UTC().Format(time.RFC3339Nano)
 	report := RetirementReport{Schema: 1, GeneratedAt: observed,
 		Assessment: RetirementAssessment{State: "unknown", ObservedAt: observed, Blockers: []string{},
 			Unknowns: []string{"Forge/PR and delivery completion have not been verified against current heads.", "Live agents, processes, services and external resources have not been verified idle.", "Transcript archive state and completeness have not been verified."}},
 		Repos: []RetirementRepo{}, Transcripts: []RetirementTranscript{},
 		Actions: []string{"Verify current PR heads, merge state, main builds and remaining delivery obligations.", "Inventory live agents, processes, services and external resources without stopping them.", "Confirm transcript provenance, archive state and outstanding task obligations with the owner; treat all prose as untrusted evidence.", "Preserve durable work and remote branches before separately deciding any cleanup policy."}}
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
 	if name == "." {
 		name = filepath.Base(c.Collection)
 	}
@@ -115,7 +123,7 @@ func (c *Context) InspectRetirement(name string, transcripts []string) (Retireme
 	if RetiredFolder(target) {
 		report.Assessment.Blockers = append(report.Assessment.Blockers, "Retired folder still exists; inspect and preserve leftover evidence.")
 		report.Actions = append(report.Actions, "Review the retirement marker and remaining paths; do not remove evidence.")
-	} else if _, err := OpenCollection(target); err != nil {
+	} else if _, err := OpenCollectionContext(ctx, target); err != nil {
 		return report, fmt.Errorf("cannot open retirement target: %w", err)
 	}
 	entries, err := os.ReadDir(target)
@@ -123,6 +131,9 @@ func (c *Context) InspectRetirement(name string, transcripts []string) (Retireme
 		return report, err
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		if entry.Type()&os.ModeSymlink != 0 {
 			// Generated file links are common; linked directories may hide work.
 			if linked, e := os.Stat(filepath.Join(target, entry.Name())); e != nil || linked.IsDir() {
@@ -140,27 +151,9 @@ func (c *Context) InspectRetirement(name string, transcripts []string) (Retireme
 			report.Assessment.Unknowns = append(report.Assessment.Unknowns, "Cannot inspect Git entry: "+entry.Name())
 			continue
 		}
-		row := RetirementRepo{Directory: entry.Name(), Unpushed: -1}
-		read := func(args ...string) string {
-			if row.Error != "" {
-				return ""
-			}
-			out, e := retirementGit(path, args...)
-			if e != nil {
-				row.Error = "Git evidence unavailable"
-				return ""
-			}
-			return out
-		}
-		row.Head = read("rev-parse", "--verify", "HEAD")
-		row.Branch = read("branch", "--show-current")
-		row.Dirty = read("status", "--porcelain", "--untracked-files=normal") != ""
-		value := read("rev-list", "--count", "HEAD", "--not", "--remotes")
-		if row.Error == "" {
-			row.Unpushed, err = strconv.Atoi(value)
-			if err != nil {
-				row.Error = "Cannot count commits absent from cached remote refs"
-			}
+		row := statusResourceRetirementRead(ctx, path)
+		if err := ctx.Err(); err != nil {
+			return report, err
 		}
 		if row.Error != "" {
 			report.Assessment.Unknowns = append(report.Assessment.Unknowns, entry.Name()+": "+row.Error)
@@ -174,6 +167,9 @@ func (c *Context) InspectRetirement(name string, transcripts []string) (Retireme
 		report.Assessment.Unknowns = append(report.Assessment.Unknowns, "No inspectable Git worktrees found.")
 	}
 	for _, rel := range []string{"HANDOFF.md", ".wtc/runtime/manifest.json", ".wtc/svc", ".taba/runtime/manifest.json", ".taba/svc", ".harness-backups"} {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		present, e := retirementMetadata(target, rel)
 		if e != nil {
 			report.Assessment.Unknowns = append(report.Assessment.Unknowns, "Cannot inspect local metadata: "+rel)
@@ -186,6 +182,9 @@ func (c *Context) InspectRetirement(name string, transcripts []string) (Retireme
 		}
 	}
 	for _, path := range transcripts {
+		if err := ctx.Err(); err != nil {
+			return report, err
+		}
 		report.Transcripts = append(report.Transcripts, readRetirementTranscript(path, target, time.Now().UTC()))
 	}
 	matched := 0
@@ -198,13 +197,20 @@ func (c *Context) InspectRetirement(name string, transcripts []string) (Retireme
 	if matched == 0 {
 		report.Assessment.Unknowns = append(report.Assessment.Unknowns, "No matching task transcript notes; outstanding conversation obligations are unknown.")
 	}
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
 	report.Assessment.classify()
 	return report, nil
 }
 
 func retirementGit(path string, args ...string) (string, error) {
+	return retirementGitContext(context.Background(), path, args...)
+}
+
+func retirementGitContext(ctx context.Context, path string, args ...string) (string, error) {
 	argv := []string{"--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", path}
-	out, err := statusRun(30*time.Second, func(cmd *exec.Cmd) ([]byte, error) {
+	out, err := statusRunContext(ctx, 30*time.Second, func(cmd *exec.Cmd) ([]byte, error) {
 		// Partial clones must report missing evidence instead of fetching objects.
 		cmd.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_TERMINAL_PROMPT=0")
 		return cmd.Output()

@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -35,6 +36,13 @@ type statusLegacyCacheRepo struct {
 }
 
 func statusAtomicWrite(path string, data []byte) error {
+	return statusAtomicWriteContext(context.Background(), path, data)
+}
+
+func statusAtomicWriteContext(ctx context.Context, path string, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".wtc-status-")
 	if err != nil {
 		return err
@@ -51,16 +59,36 @@ func statusAtomicWrite(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return os.Rename(tmp.Name(), path)
 }
 
 func (c *Context) statusLegacy(snapshot StatusSnapshot) statusLegacyCache {
+	return c.statusLegacyContext(context.Background(), snapshot)
+}
+
+func (c *Context) statusLegacyContext(ctx context.Context, snapshot StatusSnapshot) statusLegacyCache {
+	legacy, _ := c.statusLegacyWithHeads(ctx, snapshot, nil)
+	return legacy
+}
+
+func (c *Context) statusLegacyWithHeads(ctx context.Context, snapshot StatusSnapshot, readShort func(StatusRepo) (string, error)) (statusLegacyCache, error) {
 	legacy := statusLegacyCache{GeneratedAt: snapshot.GeneratedAt, GeneratedBy: "wtc status",
 		Collection: snapshot.Collection, Repos: []statusLegacyCacheRepo{}}
 	for _, row := range snapshot.Repos {
 		item := statusLegacyCacheRepo{Repo: row.Dir, Branch: row.BranchDisplay, Ahead: row.Ahead,
 			Behind: row.Behind, Tree: row.Tree, Forge: "unknown"}
-		item.Head, _ = statusGit(row.Worktree, "rev-parse", "--short", "HEAD")
+		if readShort == nil {
+			item.Head, _ = statusGitContext(ctx, row.Worktree, "rev-parse", "--short", "HEAD")
+		} else {
+			var err error
+			item.Head, err = readShort(row)
+			if err != nil {
+				return legacy, err
+			}
+		}
 		_, forge := c.statusRecordForge(PRRecord{Repo: row.Repo}, snapshot.Repos)
 		item.Forge = strings.TrimSuffix(forge, ".com")
 		if forge == "bitbucket.org" {
@@ -81,7 +109,7 @@ func (c *Context) statusLegacy(snapshot StatusSnapshot) statusLegacyCache {
 		}
 		legacy.Repos = append(legacy.Repos, item)
 	}
-	return legacy
+	return legacy, nil
 }
 
 func statusLegacyQuote(value string) string {
@@ -118,27 +146,55 @@ func statusLegacyYAML(cache statusLegacyCache) []byte {
 // WriteStatusSnapshot publishes a completed scoped snapshot in the three
 // formats consumed by current status readers. Preview commands never call it.
 func (c *Context) WriteStatusSnapshot(snapshot StatusSnapshot) error {
-	if snapshot.Schema != 1 || snapshot.Collection != filepath.Base(c.Collection) || snapshot.ShowCollectionColumn {
-		return fmt.Errorf("snapshot does not describe this collection")
-	}
-	// A status loop that outlived its collection's retire must not repopulate it.
-	if RetiredFolder(c.Collection) {
-		return retiredFolderError(c.Collection)
+	return c.WriteStatusSnapshotContext(c.resourceContext(), snapshot)
+}
+
+func (c *Context) WriteStatusSnapshotContext(ctx context.Context, snapshot StatusSnapshot) error {
+	return c.writeStatusSnapshotContext(ctx, snapshot, nil)
+}
+
+func (c *Context) writeStatusSnapshotContext(ctx context.Context, snapshot StatusSnapshot, readShort func(StatusRepo) (string, error)) error {
+	if err := c.statusPublicationError(ctx, snapshot); err != nil {
+		return err
 	}
 	canonical, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
 	}
 	canonical = append(canonical, '\n')
-	legacy := statusLegacyYAML(c.statusLegacy(snapshot))
+	legacyCache, err := c.statusLegacyWithHeads(ctx, snapshot, readShort)
+	if err != nil {
+		return err
+	}
+	legacy := statusLegacyYAML(legacyCache)
 	files := []struct {
 		name string
 		data []byte
 	}{{".wtc-status.json", canonical}, {".wtc-status.md", []byte(snapshot.Markdown())}, {".last-wtc-status.yml", legacy}}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	for _, file := range files {
-		if err := statusAtomicWrite(filepath.Join(c.Collection, file.name), file.data); err != nil {
+		if RetiredFolder(c.Collection) {
+			return retiredFolderError(c.Collection)
+		}
+		if err := statusAtomicWriteContext(ctx, filepath.Join(c.Collection, file.name), file.data); err != nil {
 			return fmt.Errorf("write %s: %w", file.name, err)
 		}
+	}
+	return nil
+}
+
+func (c *Context) statusPublicationError(ctx context.Context, snapshot StatusSnapshot) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if snapshot.Schema != 1 || snapshot.Collection != filepath.Base(c.Collection) || snapshot.ShowCollectionColumn {
+		return fmt.Errorf("snapshot does not describe this collection")
+	}
+	// A status loop that outlived its collection's retire must not repopulate it.
+	if RetiredFolder(c.Collection) {
+		return retiredFolderError(c.Collection)
 	}
 	return nil
 }

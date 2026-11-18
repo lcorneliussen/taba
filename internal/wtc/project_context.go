@@ -1,12 +1,14 @@
 package wtc
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -17,6 +19,7 @@ const CollectionDescriptorFile = ".taba/collection.toml"
 // ProjectContext describes a project without selecting or inventing a task.
 // Discovery is read-only; setup and descriptor writing are separate operations.
 type ProjectContext struct {
+	readCtx      context.Context
 	Root         string        `json:"root"`
 	Mode         string        `json:"mode"`
 	ConfigDir    string        `json:"config_dir"`
@@ -35,8 +38,15 @@ type ProjectSource struct {
 
 // Snapshot reads never fetch missing objects or use ambient object directories.
 func projectSnapshotGit(owner string, args ...string) (string, error) {
+	return projectSnapshotGitContext(context.Background(), owner, args...)
+}
+
+func projectSnapshotGitContext(ctx context.Context, owner string, args ...string) (string, error) {
 	argv := append([]string{"--no-replace-objects", "--git-dir=" + owner}, args...)
-	cmd := exec.Command("git", argv...)
+	cmd := exec.CommandContext(ctx, "git", argv...)
+	if ctx.Done() != nil {
+		cmd.WaitDelay = 200 * time.Millisecond
+	}
 	for _, setting := range os.Environ() {
 		name, _, _ := strings.Cut(setting, "=")
 		if strings.HasPrefix(name, "GIT_") {
@@ -152,6 +162,13 @@ func projectRelative(root, path string) (string, error) {
 }
 
 func OpenProject(dir string) (*ProjectContext, error) {
+	return OpenProjectContext(context.Background(), dir)
+}
+
+func OpenProjectContext(ctx context.Context, dir string) (*ProjectContext, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	root, err := canonicalPath(dir)
 	if err != nil {
 		return nil, err
@@ -170,7 +187,7 @@ func OpenProject(dir string) (*ProjectContext, error) {
 	if descriptor.SchemaVersion != 1 || descriptor.Mode != "local" && descriptor.Mode != "harness" {
 		return nil, fmt.Errorf("unsupported project schema or mode")
 	}
-	p := &ProjectContext{Root: root, Mode: descriptor.Mode, OwnerRoot: root, Source: descriptor.Harness}
+	p := &ProjectContext{readCtx: ctx, Root: root, Mode: descriptor.Mode, OwnerRoot: root, Source: descriptor.Harness}
 	if descriptor.Mode == "local" {
 		if p.Source != (ProjectSource{}) {
 			return nil, fmt.Errorf("local project cannot declare a harness source")
@@ -191,10 +208,10 @@ func OpenProject(dir string) (*ProjectContext, error) {
 		if strings.HasPrefix(p.Source.Ref, "-") || strings.ContainsAny(p.Source.Ref, ":\r\n\x00 ") {
 			return nil, fmt.Errorf("invalid harness snapshot ref")
 		}
-		if bare, err := projectSnapshotGit(owner, "rev-parse", "--is-bare-repository"); err != nil || bare != "true" {
+		if bare, err := projectSnapshotGitContext(ctx, owner, "rev-parse", "--is-bare-repository"); err != nil || bare != "true" {
 			return nil, fmt.Errorf("project snapshot requires an available local bare owner")
 		}
-		sha, err := projectSnapshotGit(owner, "rev-parse", "--verify", p.Source.Ref+"^{commit}")
+		sha, err := projectSnapshotGitContext(ctx, owner, "rev-parse", "--verify", p.Source.Ref+"^{commit}")
 		if _, decodeErr := hex.DecodeString(sha); err != nil || decodeErr != nil || len(sha) != 40 {
 			return nil, fmt.Errorf("harness snapshot unavailable; initialize the selected project explicitly")
 		}
@@ -221,16 +238,26 @@ func OpenProject(dir string) (*ProjectContext, error) {
 // DiscoverLocation stops at the nearest explicit boundary, including malformed
 // or incomplete metadata. It never borrows another collection's harness.
 func DiscoverLocation(start string) (Location, error) {
+	return DiscoverLocationContext(context.Background(), start)
+}
+
+func DiscoverLocationContext(ctx context.Context, start string) (Location, error) {
+	if err := ctx.Err(); err != nil {
+		return Location{}, err
+	}
 	dir, err := canonicalPath(start)
 	if err != nil {
 		return Location{Kind: LocationIncomplete}, err
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			return Location{}, err
+		}
 		if RetiredFolder(dir) {
 			return Location{Kind: LocationConflict}, retiredFolderError(dir)
 		}
 		if descriptorPresent(dir, ProjectDescriptorFile) {
-			p, err := OpenProject(dir)
+			p, err := OpenProjectContext(ctx, dir)
 			if err != nil {
 				return Location{Kind: LocationConflict}, err
 			}
@@ -257,7 +284,7 @@ func DiscoverLocation(start string) (Location, error) {
 					return Location{Kind: LocationConflict}, fmt.Errorf("collection association crosses another boundary")
 				}
 			}
-			p, err := OpenProject(project)
+			p, err := OpenProjectContext(ctx, project)
 			if err != nil {
 				return Location{Kind: LocationIncomplete}, err
 			}
@@ -276,7 +303,7 @@ func DiscoverLocation(start string) (Location, error) {
 				return Location{Kind: LocationAdHoc, Collection: dir}, nil
 			}
 			root := filepath.Dir(dir)
-			p := &ProjectContext{Root: root, Mode: "legacy", ConfigDir: filepath.Join(dir, "harness"), RegistryPath: filepath.Join(dir, "harness", ".harness-repos.yml"), OwnerRoot: root}
+			p := &ProjectContext{readCtx: ctx, Root: root, Mode: "legacy", ConfigDir: filepath.Join(dir, "harness"), RegistryPath: filepath.Join(dir, "harness", ".harness-repos.yml"), OwnerRoot: root}
 			return Location{Kind: LocationCollection, Project: p, Collection: dir}, nil
 		}
 		parent := filepath.Dir(dir)

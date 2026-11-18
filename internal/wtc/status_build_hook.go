@@ -65,7 +65,7 @@ func (c *Context) statusBuildFromHook(path string, request statusBuildRequest) (
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(c.resourceContext(), 15*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, path)
 	command.WaitDelay = 200 * time.Millisecond
@@ -84,7 +84,7 @@ func (c *Context) statusBuildFromHook(path string, request statusBuildRequest) (
 			return nil, fmt.Errorf("status build hook output too large")
 		}
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("status build hook timed out")
+			return nil, fmt.Errorf("status build hook: %w", ctx.Err())
 		}
 		return nil, fmt.Errorf("status build hook: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
@@ -173,7 +173,7 @@ func (c *Context) statusBuild(hook string, request statusBuildRequest) *StatusBu
 		build, err = c.statusBuildFromHook(hook, request)
 	}
 	if err == errStatusBuildDefault {
-		build, err = statusForgeBuild(request.Forge, request.Slug, request.Branch)
+		build, err = statusForgeBuildContext(c.resourceContext(), request.Forge, request.Slug, request.Branch)
 	}
 	if errors.Is(err, errForgeBudget) || errors.Is(err, errForgeCooling) {
 		return nil
@@ -224,7 +224,7 @@ func (c *Context) statusBuildFacts(snapshot *StatusSnapshot) error {
 	jobs := []job{}
 	worktrees := map[string]string{}
 	tiers := map[string][]statusBuildTier{}
-	harnessName, _ := c.HarnessRepoName()
+	harnessName, _ := c.harnessRepoNameContext(c.resourceContext())
 	for _, row := range snapshot.Repos {
 		repo, err := c.Repository(row.Repo)
 		if err != nil {
@@ -268,13 +268,24 @@ func (c *Context) statusBuildFacts(snapshot *StatusSnapshot) error {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
-			limit <- struct{}{}
+			select {
+			case limit <- struct{}{}:
+			case <-c.resourceContext().Done():
+				return
+			}
+			if c.resourceContext().Err() != nil {
+				<-limit
+				return
+			}
 			defer func() { <-limit }()
 			results[i] = c.statusBuild(hook, j.req)
 			c.statusProgress(fmt.Sprintf("Checking builds %d/%d", done.Add(1), len(jobs)))
 		}()
 	}
 	workers.Wait()
+	if err := c.resourceContext().Err(); err != nil {
+		return err
+	}
 	builds := map[string]map[string]*StatusBuild{}
 	for i, j := range jobs {
 		if results[i] == nil {

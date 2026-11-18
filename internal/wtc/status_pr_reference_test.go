@@ -34,7 +34,9 @@ printf '%s\n' "$*" >> "$REFERENCE_CALLS"
 state="$REFERENCE_STATE"
 check='{"status":"COMPLETED","conclusion":"SUCCESS"}'
 if [ "$state" = pending ]; then state=MERGED; check='{"status":"IN_PROGRESS"}'; fi
-printf '{"number":7,"id":7,"state":"%s","title":"Synthetic reference","mergedAt":"2026-10-29T12:00:00Z","merged_on":"2026-10-29T12:00:00Z","mergeCommit":{"oid":"%s"},"statusCheckRollup":[%s]}\n' "$state" "$REFERENCE_HEAD" "$check"
+merge_date=null
+[ "$state" != MERGED ] || merge_date='"2026-10-29T12:00:00Z"'
+printf '{"number":7,"id":7,"state":"%s","title":"Synthetic reference","mergedAt":%s,"merged_on":%s,"mergeCommit":{"oid":"%s"},"statusCheckRollup":[%s]}\n' "$state" "$merge_date" "$merge_date" "$REFERENCE_HEAD" "$check"
 `
 				for _, name := range []string{"gh", "bb"} {
 					fixtureFile(t, filepath.Join(bin, name), script, 0755)
@@ -64,29 +66,27 @@ printf '{"number":7,"id":7,"state":"%s","title":"Synthetic reference","mergedAt"
 				if err != nil {
 					t.Fatal(err)
 				}
-				if state == "CLOSED" {
-					if len(snapshot.PRs) != 0 || len(snapshot.Orphans) != 0 {
-						t.Fatalf("closed reference gained a live row/orphan: %+v", snapshot.PRs)
-					}
-				} else {
-					want := state
-					if state == "error" {
-						want = "UNKNOWN"
-					}
-					if state == "pending" {
-						want = "MERGED"
-					}
-					if len(snapshot.PRs) != 1 || snapshot.PRs[0].State != want {
-						t.Fatalf("URL-only reference: %+v, want %s", snapshot.PRs, want)
-					}
-					row := snapshot.PRs[0]
-					if row.URL == nil || *row.URL != "https://"+forge+"/example/widget/"+segment+"/7" {
-						t.Fatalf("noncanonical displayed URL: %+v", row.URL)
-					}
-					if row.Slug != "example/widget" || row.OnBranch || row.worktreeDir != "" {
-						t.Fatalf("wrong forge or checkout association: %+v", row)
-					}
+				if len(snapshot.Orphans) != 0 {
+					t.Fatal("URL-only reference gained orphan authority")
 				}
+				want := state
+				if state == "error" {
+					want = "UNKNOWN"
+				}
+				if state == "pending" {
+					want = "MERGED"
+				}
+				if len(snapshot.PRs) != 1 || snapshot.PRs[0].State != want {
+					t.Fatalf("URL-only reference: %+v, want %s", snapshot.PRs, want)
+				}
+				row := snapshot.PRs[0]
+				if row.URL == nil || *row.URL != "https://"+forge+"/example/widget/"+segment+"/7" {
+					t.Fatalf("noncanonical displayed URL: %+v", row.URL)
+				}
+				if row.Slug != "example/widget" || row.OnBranch || row.worktreeDir != "" {
+					t.Fatalf("wrong forge or checkout association: %+v", row)
+				}
+
 				if raw, _ := os.ReadFile(calls); !strings.Contains(string(raw), "pr view 7") {
 					t.Fatalf("no by-number forge lookup: %s", raw)
 				}

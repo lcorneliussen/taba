@@ -8,7 +8,7 @@ import (
 )
 
 func (c *Context) appendRetirement(snapshot *StatusSnapshot, name string) {
-	report, err := c.InspectRetirement(name, nil)
+	report, err := c.InspectRetirementContext(c.resourceContext(), name, nil)
 	if err != nil {
 		snapshot.Retirement = append(snapshot.Retirement, RetirementAssessment{Collection: name, State: "unknown", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Blockers: []string{}, Unknowns: []string{"Local retirement evidence could not be collected; inspect with retire --dry-run."}})
 		return
