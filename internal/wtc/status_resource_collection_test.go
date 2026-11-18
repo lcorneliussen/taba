@@ -109,3 +109,46 @@ func TestStatusResourceCancelledFinalChoicesReturnError(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusResourcePublicationUsesOneHeadObservation(t *testing.T) {
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	fixtureGit(t, "-C", c.Harness, "config", "core.abbrev", "12")
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	t.Setenv("RESOURCE_REAL_GIT", real)
+	t.Setenv("RESOURCE_NEXT_CALLS", calls)
+	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
+if [ "$3" = rev-parse ] && { [ "$4" = HEAD ] || [ "$4" = --short ]; }; then
+ printf '%s\n' "$*" >> "$RESOURCE_NEXT_CALLS"
+fi
+exec "$RESOURCE_REAL_GIT" "$@"
+`, 0700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	snapshot, _, err := c.StatusLiveSnapshot(false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := c.ReadStatusSnapshot()
+	if err != nil || len(snapshot.Repos) != 1 || len(cached.Repos) != 1 || !reflect.DeepEqual(snapshot.Repos[0].Choices, cached.Repos[0].Choices) {
+		t.Fatalf("canonical choices changed at publication: %v", err)
+	}
+	short, err := exec.Command(real, "-C", c.Harness, "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := os.ReadFile(filepath.Join(c.Collection, ".last-wtc-status.yml"))
+	if err != nil || !strings.Contains(string(legacy), "head: '"+strings.TrimSpace(string(short))+"'") {
+		t.Fatalf("legacy unique abbreviation changed: %v", err)
+	}
+	raw, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(strings.Split(strings.TrimSpace(string(raw)), "\n")); got != 1 {
+		t.Fatalf("publication read head %d times, want one coherent full/base/unique-short observation; argv:\n%s", got, raw)
+	}
+}
