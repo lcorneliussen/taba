@@ -98,6 +98,7 @@ type Config struct {
 }
 type Context struct {
 	readCtx                  context.Context
+	statusIdentityCache      *statusGitMemo
 	runtimeDeclarationsCache *runtimeDeclarationCache
 	Collection               string          `json:"collection"`
 	Harness                  string          `json:"harness"`

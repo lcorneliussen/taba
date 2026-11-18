@@ -88,9 +88,10 @@ func TestStatusResourceLocalActualGitComparison(t *testing.T) {
 	if target.path == "" {
 		t.Fatal("no fixture target")
 	}
+	shared := c.WithStatusContext(context.Background()).resourceContext()
 	check := func(label string) {
 		t.Helper()
-		got, ge := statusLocalRepoContext(context.Background(), target)
+		got, ge := statusLocalRepoContext(shared, target)
 		want, we := statusResourceLocalReference(context.Background(), target)
 		if (ge == nil) != (we == nil) || !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s got=%+v err=%v want=%+v err=%v", label, got, ge, want, we)
@@ -457,5 +458,148 @@ func TestStatusResourceIdentitySurvivesValidatedObservations(t *testing.T) {
 	got, err := statusResourceGit(fresh.resourceContext(), args, read)
 	if err != nil || calls != 2 || got != "https://github.com/example/replaced.git" {
 		t.Fatalf("stale identity %s %v %d", got, err, calls)
+	}
+}
+
+func TestStatusResourceIdentityBoundAndMutableBypass(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+	config := fixtureGit(t, "-C", c.Harness, "rev-parse", "--git-path", "config")
+	if !filepath.IsAbs(config) {
+		config = filepath.Join(c.Harness, config)
+	}
+	original, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 140; i++ {
+		fixtureFile(t, config, string(original)+fmt.Sprintf("\n# change %d\n", i), 0600)
+		if _, err := statusResourceGit(c.resourceContext(), args, func() (string, error) { return "identity", nil }); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.statusIdentityCache.entries) > 128 {
+			t.Fatal("identity memo exceeded bound")
+		}
+	}
+	calls := 0
+	for _, command := range [][]string{{"rev-parse", "HEAD"}, {"status", "--porcelain"}, {"rev-list", "--count", "HEAD"}} {
+		for i := 0; i < 2; i++ {
+			_, err := statusResourceGit(c.resourceContext(), append([]string{"-C", c.Harness}, command...), func() (string, error) { calls++; return "mutable", nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if calls != 6 {
+		t.Fatal("mutable facts reused", calls)
+	}
+	if err := os.Chmod(config, 0666); err != nil {
+		t.Fatal(err)
+	}
+	if c.statusIdentityCache.fingerprint(c.resourceContext(), args) != "" {
+		t.Fatal("untrusted writable config reused")
+	}
+}
+
+func TestStatusResourceIdentityProvenancePathsAndFallback(t *testing.T) {
+	for _, mode := range []string{"discovered-missing", "unsupported", "include", "symlink", "unknown-env"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+			t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+			c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+			bin := t.TempDir()
+			system := filepath.Join(bin, "system-config")
+			global := filepath.Join(bin, "global-config")
+			t.Setenv("GIT_CONFIG_NOSYSTEM", "")
+			t.Setenv("GIT_CONFIG_SYSTEM", "")
+			t.Setenv("GIT_CONFIG_GLOBAL", "")
+			t.Setenv("PROVENANCE_SYSTEM", system)
+			t.Setenv("PROVENANCE_GLOBAL", global)
+			body := `#!/bin/sh
+case "$1 $2" in
+ 'var GIT_CONFIG_SYSTEM') printf '%s\n' "$PROVENANCE_SYSTEM" ;;
+ 'var GIT_CONFIG_GLOBAL') printf '%s\n' "$PROVENANCE_GLOBAL" ;;
+ *) exit 99 ;;
+esac
+`
+			if mode == "unsupported" {
+				body = "#!/bin/sh\nexit 129\n"
+			}
+			fixtureFile(t, filepath.Join(bin, "git"), body, 0700)
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if mode == "include" {
+				fixtureFile(t, global, "[includeIf \"onbranch:topic\"]\n path = unknown\n", 0600)
+			}
+			if mode == "symlink" {
+				if err := os.Symlink("/dev/null", global); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "unknown-env" {
+				t.Setenv("GIT_NAMESPACE", "opaque")
+			}
+			args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+			calls := 0
+			read := func() (string, error) { calls++; return "identity", nil }
+			for i := 0; i < 2; i++ {
+				if _, err := statusResourceGit(c.resourceContext(), args, read); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if mode == "discovered-missing" {
+				if calls != 1 {
+					t.Fatal("known missing config paths did not permit reuse", calls)
+				}
+				fixtureFile(t, system, "[url \"https://example.invalid/\"]\n insteadOf = local:\n", 0600)
+				if _, err := statusResourceGit(c.resourceContext(), args, read); err != nil {
+					t.Fatal(err)
+				}
+				if calls != 2 {
+					t.Fatal("newly created system config failed to invalidate")
+				}
+			} else if calls != 2 {
+				t.Fatal("unknown config/env authorized reuse", mode, calls)
+			}
+			ctx, cancel := context.WithCancel(c.resourceContext())
+			cancel()
+			if _, err := statusResourceGit(ctx, args, func() (string, error) { t.Error("postcancel dispatch"); return "", nil }); !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestStatusResourceIdentityProvenanceCancellation(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "")
+	t.Setenv("GIT_CONFIG_SYSTEM", "")
+	t.Setenv("GIT_CONFIG_GLOBAL", "")
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "git"), "#!/bin/sh\nexec /bin/sleep 2\n", 0700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+	ctx, cancel := context.WithTimeout(c.resourceContext(), 80*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := statusResourceGit(ctx, args, func() (string, error) { t.Error("canceled discovery dispatched identity"); return "", nil }); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("config discovery child exceeded caller bound")
+	}
+	if len(c.statusIdentityCache.entries) != 0 {
+		t.Fatal("canceled discovery published identity")
+	}
+	// The provenance gate is cancellable independently of the in-flight reader.
+	<-c.statusIdentityCache.provenanceGate
+	defer func() { c.statusIdentityCache.provenanceGate <- struct{}{} }()
+	queued, stop := context.WithTimeout(c.resourceContext(), 40*time.Millisecond)
+	defer stop()
+	if _, err := statusResourceGit(queued, args, func() (string, error) { t.Error("queued canceled reader dispatched"); return "", nil }); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
 	}
 }

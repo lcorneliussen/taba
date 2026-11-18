@@ -236,12 +236,15 @@ inventory instead of running Git discovery on every service read. Working-tree
 changes without a local change signal are caught by the bounded full refresh.
 `WTC_STATUS_WATCH` and `WTC_STATUS_WATCH_BG` tune full refresh intervals; manual
 `r` keeps its foreground admission, coalescing and shared cooldown behavior.
-Read-only identity requests coalesce only when their Git configuration inputs
-can be validated. A default shell with an unknown system-config path, or an
-unsupported global include, symlink or environment override, uses uncached Git
-reads. This limits current resource coverage. Synthetic positive controls use
-isolated system/global configuration; separate controls preserve the unknown
-configuration fallback and cancellation behavior.
+Read-only identity requests share a process-local cache of at most 128 entries.
+Each reuse rechecks current canonical paths, ownership, worktree and Git
+configuration inputs; it does not reuse branch, working-tree, provider,
+retirement or action facts. Registry and receiving scope validate at each
+observation. When supported, trusted Git reports only its system/global config
+paths for validation. Unknown provenance, includes, symlinks, unsupported Git or
+environment overrides fall back to direct reads. No configuration values are
+recorded by discovery. Resource coverage still requires measurement under the
+actual configuration; isolated fixture settings do not establish that coverage.
 
 No per-view host visibility command or unsupported attached-client API is used.
 Painting, including key feedback and new observations, is capped at one frame
@@ -254,7 +257,8 @@ without shared accounting. The same rule applies to background and one-shot
 status reads; it does not increase provider limits.
 
 Quit cancels discovery and watcher waits, selected PR/build provider reads,
-the read-only build hook, and queued cache/admission waits. Snapshot publication
+the read-only build hook, guarded retirement Git reads, and queued
+cache/admission waits. Snapshot publication
 checks cancellation before committing each file. Already committed observations
 remain authoritative. Filesystem I/O already in progress and arbitrary hook
 descendants are not universally cancellable; this is not a promise of complete

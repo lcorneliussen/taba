@@ -5,17 +5,37 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 type statusGitMemoKey struct{}
+type statusIdentityMemoKey struct{}
+
+func newStatusIdentityMemo() *statusGitMemo {
+	memo := newStatusGitMemo()
+	memo.discoverConfig = true
+	memo.provenanceGate = make(chan struct{}, 1)
+	memo.provenanceGate <- struct{}{}
+	return memo
+}
+
+func newStatusGitMemo() *statusGitMemo {
+	return &statusGitMemo{entries: map[string]*statusGitMemoEntry{}}
+}
+
 type statusGitMemo struct {
-	mu      sync.Mutex
-	entries map[string]*statusGitMemoEntry
+	mu              sync.Mutex
+	entries         map[string]*statusGitMemoEntry
+	discoverConfig  bool
+	provenanceGate  chan struct{}
+	provenanceKey   string
+	provenancePaths []string
 }
 type statusGitMemoEntry struct {
 	done  chan struct{}
@@ -23,14 +43,21 @@ type statusGitMemoEntry struct {
 	err   error
 }
 
-// A memo belongs to one observation, never to a UI lifetime or action decision.
+// Standalone operations own a fresh memo. Status receivers may carry a bounded
+// advisory identity memo; every hit still requires current input validation.
 func statusResourceOperation(ctx context.Context) context.Context {
-	return context.WithValue(ctx, statusGitMemoKey{}, &statusGitMemo{entries: map[string]*statusGitMemoEntry{}})
+	memo, _ := ctx.Value(statusIdentityMemoKey{}).(*statusGitMemo)
+	if memo == nil {
+		memo = newStatusGitMemo()
+	}
+	return context.WithValue(ctx, statusGitMemoKey{}, memo)
 }
 
 // Only repository identity reads are reusable. Mutable local facts are collected
 // anew, and all other Git commands (including writes) bypass this memo.
-func statusResourceGitKey(args []string) string {
+func statusResourceGitKey(args []string) string { return statusResourceGitKeyConfig(args, nil, "") }
+
+func statusResourceGitKeyConfig(args []string, provenConfigs []string, provenance string) string {
 	if len(args) < 3 {
 		return ""
 	}
@@ -56,7 +83,7 @@ func statusResourceGitKey(args []string) string {
 		return ""
 	}
 	h := sha256.New()
-	fmt.Fprintln(h, path)
+	fmt.Fprintln(h, path, provenance)
 	add := func(p string) bool {
 		st, err := os.Lstat(p)
 		if os.IsNotExist(err) {
@@ -66,8 +93,14 @@ func statusResourceGitKey(args []string) string {
 		if err != nil || st.Mode()&os.ModeSymlink != 0 {
 			return false
 		}
+		if !st.IsDir() && !st.Mode().IsRegular() && p != "/dev/null" {
+			return false
+		}
 		id, ok := st.Sys().(*syscall.Stat_t)
 		if !ok {
+			return false
+		}
+		if st.Mode().IsRegular() && (st.Mode().Perm()&0022 != 0 || (id.Uid != 0 && id.Uid != uint32(os.Getuid()))) {
 			return false
 		}
 		if st.IsDir() {
@@ -147,7 +180,9 @@ func statusResourceGitKey(args []string) string {
 	} else {
 		configs = append(configs, filepath.Join(home, ".gitconfig"), filepath.Join(xdg, "git", "config"))
 	}
-	if os.Getenv("GIT_CONFIG_NOSYSTEM") != "1" {
+	if provenConfigs != nil {
+		configs = provenConfigs
+	} else if os.Getenv("GIT_CONFIG_NOSYSTEM") != "1" {
 		if system := os.Getenv("GIT_CONFIG_SYSTEM"); system != "" {
 			configs = append(configs, system)
 		} else {
@@ -176,7 +211,10 @@ func statusResourceGit(ctx context.Context, args []string, read func() (string, 
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		key := statusResourceGitKey(args)
+		key := memo.fingerprint(ctx, args)
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if key == "" {
 			v, e := read()
 			if ctx.Err() != nil {
@@ -186,6 +224,26 @@ func statusResourceGit(ctx context.Context, args []string, read func() (string, 
 		}
 		memo.mu.Lock()
 		entry, ok := memo.entries[key]
+		if !ok && len(memo.entries) >= 128 {
+			for old, candidate := range memo.entries {
+				select {
+				case <-candidate.done:
+					delete(memo.entries, old)
+				default:
+				}
+				if len(memo.entries) < 128 {
+					break
+				}
+			}
+			if len(memo.entries) >= 128 {
+				memo.mu.Unlock()
+				value, err := read()
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				return value, err
+			}
+		}
 		if !ok {
 			entry = &statusGitMemoEntry{done: make(chan struct{})}
 			memo.entries[key] = entry
@@ -200,7 +258,7 @@ func statusResourceGit(ctx context.Context, args []string, read func() (string, 
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
-			if key != statusResourceGitKey(args) {
+			if key != memo.fingerprint(ctx, args) {
 				continue
 			}
 			return entry.value, entry.err
@@ -209,9 +267,16 @@ func statusResourceGit(ctx context.Context, args []string, read func() (string, 
 		if ctx.Err() != nil {
 			value, err = "", ctx.Err()
 		}
+		currentKey := memo.fingerprint(ctx, args)
+		if ctx.Err() != nil {
+			value, err = "", ctx.Err()
+		}
 		memo.mu.Lock()
+		if ctx.Err() != nil {
+			value, err = "", ctx.Err()
+		}
 		entry.value, entry.err = value, err
-		if err != nil || key != statusResourceGitKey(args) {
+		if err != nil || ctx.Err() != nil || key != currentKey {
 			delete(memo.entries, key)
 		}
 		close(entry.done)
@@ -332,4 +397,123 @@ func statusResourceHeads(ctx context.Context, path, base string) (string, string
 		return "", "", false
 	}
 	return heads[0], heads[1], true
+}
+
+// Discovery asks trusted Git only for its configuration file paths. It never
+// evaluates hooks, records values, or relaxes unknown/include/symlink fallback.
+func (memo *statusGitMemo) fingerprint(ctx context.Context, args []string) string {
+	if !statusResourceKnownGitEnvironment() {
+		return ""
+	}
+	if len(args) < 3 {
+		return ""
+	}
+	command := args[1:]
+	if args[0] == "-C" {
+		command = args[2:]
+	} else if !strings.HasPrefix(args[0], "--git-dir=") {
+		return ""
+	}
+	switch strings.Join(command, "\x00") {
+	case "rev-parse\x00--git-common-dir", "rev-parse\x00--show-toplevel", "rev-parse\x00--path-format=absolute\x00--git-common-dir", "remote\x00get-url\x00origin", "remote":
+	default:
+		return ""
+	}
+	_, binaryProof := statusResourceGitBinary()
+	if binaryProof == "" {
+		return ""
+	}
+	if key := statusResourceGitKeyConfig(args, nil, binaryProof); key != "" || !memo.discoverConfig {
+		return key
+	}
+	paths, proof := memo.configPaths(ctx)
+	if paths == nil || ctx.Err() != nil {
+		return ""
+	}
+	return statusResourceGitKeyConfig(args, paths, proof)
+}
+
+func (memo *statusGitMemo) configPaths(ctx context.Context) ([]string, string) {
+	binary, proof := statusResourceGitBinary()
+	if proof == "" {
+		return nil, ""
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ""
+	case <-memo.provenanceGate:
+	}
+	defer func() { memo.provenanceGate <- struct{}{} }()
+	if ctx.Err() != nil {
+		return nil, ""
+	}
+	if memo.provenanceKey == proof {
+		return append([]string(nil), memo.provenancePaths...), proof
+	}
+	paths := []string{}
+	for _, name := range []string{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"} {
+		if name == "GIT_CONFIG_SYSTEM" && os.Getenv("GIT_CONFIG_NOSYSTEM") == "1" {
+			continue
+		}
+		raw, e := statusRunContext(ctx, 30*time.Second, (*exec.Cmd).Output, binary, "var", name)
+		if e != nil || len(raw) > 8192 {
+			return nil, ""
+		}
+		lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+		if len(lines) < 1 || len(lines) > 2 {
+			return nil, ""
+		}
+		for _, path := range lines {
+			if !filepath.IsAbs(path) || strings.ContainsAny(path, "\r\x00") {
+				return nil, ""
+			}
+			paths = append(paths, path)
+		}
+	}
+	if ctx.Err() != nil {
+		return nil, ""
+	}
+	memo.provenanceKey, memo.provenancePaths = proof, append([]string(nil), paths...)
+	return paths, proof
+}
+func statusResourceKnownGitEnvironment() bool {
+	// Unknown Git environment may change discovery or identity independently of files.
+	for _, item := range os.Environ() {
+		name, _, _ := strings.Cut(item, "=")
+		if !strings.HasPrefix(name, "GIT_") {
+			continue
+		}
+		switch name {
+		case "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_TERMINAL_PROMPT", "GIT_TRACE", "GIT_TRACE2", "GIT_TRACE2_EVENT", "GIT_TRACE2_PERF", "GIT_ALLOW_PROTOCOL":
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+func statusResourceGitBinary() (string, string) {
+	binary, err := exec.LookPath("git")
+	if err != nil {
+		return "", ""
+	}
+	binary, err = filepath.EvalSymlinks(binary)
+	if err != nil {
+		return "", ""
+	}
+	st, err := os.Stat(binary)
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm()&0022 != 0 {
+		return "", ""
+	}
+	id, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || (id.Uid != 0 && id.Uid != uint32(os.Getuid())) {
+		return "", ""
+	}
+	proof := fmt.Sprint(binary, st.Mode(), st.Size(), st.ModTime().UnixNano(), id.Dev, id.Ino, id.Uid, id.Gid)
+	for _, name := range []string{"PATH", "HOME", "XDG_CONFIG_HOME", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM"} {
+		proof += name + "=" + os.Getenv(name) + "\x00"
+	}
+
+	return binary, proof
 }

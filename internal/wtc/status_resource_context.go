@@ -7,6 +7,11 @@ import "context"
 // background context. Never mutate the original context while it is in use.
 func (c *Context) WithStatusContext(ctx context.Context) *Context {
 	copy := *c
+	if copy.statusIdentityCache == nil {
+		copy.statusIdentityCache = newStatusIdentityMemo()
+	}
+	ctx = context.WithValue(ctx, statusIdentityMemoKey{}, copy.statusIdentityCache)
+	ctx = context.WithValue(ctx, statusGitMemoKey{}, copy.statusIdentityCache)
 	copy.readCtx = ctx
 	if copy.runtimeDeclarationsCache == nil {
 		copy.runtimeDeclarationsCache = newRuntimeDeclarationCache()
@@ -39,11 +44,15 @@ func (c *Context) StatusReadContext(ctx context.Context) (*Context, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if c.statusIdentityCache != nil {
+		ctx = context.WithValue(ctx, statusIdentityMemoKey{}, c.statusIdentityCache)
+	}
 	ctx = statusResourceOperation(ctx)
 	fresh, err := OpenCollectionContext(ctx, c.Collection)
 	if err != nil {
 		return nil, err
 	}
+	fresh.statusIdentityCache = c.statusIdentityCache
 	fresh.StatusProgress = c.StatusProgress
 	fresh.statusSweep = c.statusSweep
 	fresh.runtimeDeclarationsCache = c.runtimeDeclarationsCache
