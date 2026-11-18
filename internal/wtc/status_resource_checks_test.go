@@ -324,3 +324,41 @@ func TestStatusResourceBackgroundChecksNewerPartialKeepsKnownFailure(t *testing.
 		})
 	}
 }
+
+func TestStatusResourceForegroundNewerPartialKeepsKnownFailure(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprint(complete), func(t *testing.T) {
+			var hits atomic.Int32
+			resourceChecksServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if hits.Add(1) == 2 {
+					newer := unknownHeadChecks(checkHeadB)
+					raw, _ := json.Marshal(newer)
+					// A released-style writer publishes a genuinely later incomplete read.
+					// Its bytes/order remain authoritative; it cannot disprove a known failure.
+					statusWriteForgeEntrySince("checks", "bitbucket.org", "example/widget", checkHeadB, raw, time.Now())
+					if !complete {
+						w.WriteHeader(http.StatusServiceUnavailable)
+					}
+					fmt.Fprint(w, `{"values":[]}`)
+					return
+				}
+				fmt.Fprint(w, `{"values":[{"state":"SUCCESSFUL"}]}`)
+			})
+			before := checks424Seed(t, checkHeadB, "FAILURE")
+			path := statusForgeEntryPath("checks", "bitbucket.org", "example/widget", checkHeadB)
+			past := time.Now().Add(-time.Hour)
+			if err := os.Chtimes(path, past, past); err != nil {
+				t.Fatal(err)
+			}
+			got, err := statusBBHeadChecksContext(context.Background(), StatusRefreshForeground, "example/widget", checkHeadB, false)
+			if err == nil || got.Result != "FAILURE" || got.Complete || got.ObservedAt != before.ObservedAt {
+				t.Fatalf("incomplete winner erased failure: %+v %v", got, err)
+			}
+			raw, _ := os.ReadFile(path)
+			var winner headCheckEvidence
+			if json.Unmarshal(raw, &winner) != nil || winner.Result != "UNKNOWN" {
+				t.Fatal("older completion overwrote actual newer bytes")
+			}
+		})
+	}
+}
