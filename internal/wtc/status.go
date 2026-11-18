@@ -236,7 +236,8 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	if batched {
 		branch = local.branch
 		if branch == "(detached)" {
-			branchErr = fmt.Errorf("detached")
+			// The marker is also a legal branch name; resolve that ambiguity.
+			branch, branchErr = statusGitContext(ctx, t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
 		}
 	} else {
 		branch, branchErr = statusGitContext(ctx, t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
