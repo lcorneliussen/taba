@@ -87,7 +87,7 @@ manage the share or observe its access policy.
    `wtc svc status` or the service log. Use a preview with test data. Share
    only the app port, and keep the Taba control panel and admin APIs local.
 2. Install the [qURL CLI](https://github.com/layervai/qurl-integrations/releases).
-   Replace `3000` with the preview port. Choose a new Connector ID for
+   Replace `3000` with the preview port. Choose a new local ID for
    this review. The example uses `taba-review-1`:
 
    ```sh
