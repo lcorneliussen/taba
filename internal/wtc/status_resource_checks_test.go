@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -89,6 +90,18 @@ func TestStatusResourceBackgroundChecksCancelHTTP(t *testing.T) {
 	}
 }
 
+// Done is observed only after the contended context lock enters its wait.
+type resourceChecksQueuedContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *resourceChecksQueuedContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
 func TestStatusResourceBackgroundChecksCancelQueuedLock(t *testing.T) {
 	for _, abbreviated := range []bool{false, true} {
 		t.Run(fmt.Sprint(abbreviated), func(t *testing.T) {
@@ -109,13 +122,21 @@ func TestStatusResourceBackgroundChecksCancelQueuedLock(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ctx := &resourceChecksQueuedContext{Context: parent, waiting: make(chan struct{})}
 			done := make(chan error, 1)
 			go func() {
 				_, err := statusBBHeadChecksContext(ctx, StatusRefreshBackground, "example/widget", head, false)
 				done <- err
 			}()
+			queued := false
+			select {
+			case <-ctx.waiting:
+				queued = true
+			case <-time.After(200 * time.Millisecond):
+			}
+			cancel()
 			blocked := false
 			select {
 			case err = <-done:
@@ -126,7 +147,7 @@ func TestStatusResourceBackgroundChecksCancelQueuedLock(t *testing.T) {
 			if blocked {
 				err = <-done
 			}
-			if blocked || !errors.Is(err, context.Canceled) || hits.Load() != 0 {
+			if !queued || blocked || !errors.Is(err, context.Canceled) || hits.Load() != 0 {
 				t.Fatalf("queued cancel blocked=%v err=%v hits=%d", blocked, err, hits.Load())
 			}
 			if _, ok := statusReadForgeEntryAny(kind, "bitbucket.org", "example/widget", head); ok {
@@ -218,5 +239,44 @@ func TestStatusResourceBackgroundChecksExactHeadAndCost(t *testing.T) {
 				t.Fatal("wrong cache binding")
 			}
 		})
+	}
+}
+
+func TestStatusResourceBackgroundChecksMissingAuthKeepsFailure(t *testing.T) {
+	resourceCancellationFixture(t)
+	for _, name := range []string{"BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN"} {
+		t.Setenv(name, "")
+	}
+	before := checks424Seed(t, checkHeadB, "FAILURE")
+	got, err := statusBBHeadChecksContext(context.Background(), StatusRefreshBackground, "example/widget", checkHeadB, false)
+	if err == nil || got.Result != "FAILURE" || got.Complete || got.ObservedAt != before.ObservedAt {
+		t.Fatalf("auth failure erased known check: %+v %v", got, err)
+	}
+	got, _ = statusBBHeadChecksContext(context.Background(), StatusRefreshBackground, "example/widget", checkHeadA, false)
+	if got.Result == "FAILURE" {
+		t.Fatal("auth fallback crossed heads")
+	}
+}
+
+func TestStatusResourceBackgroundChecksCommitSurvivesCancellation(t *testing.T) {
+	resourceChecksServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/statuses") {
+			fmt.Fprint(w, `{"values":[{"state":"FAILED"}]}`)
+		} else {
+			fmt.Fprint(w, `{"values":[]}`)
+		}
+	})
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	path := statusForgeEntryPath("checks", "bitbucket.org", "example/widget", checkHeadB)
+	ctx := status424CancelAfterFile{Context: parent, path: path, cancel: cancel}
+	got, err := statusBBHeadChecksContext(ctx, StatusRefreshBackground, "example/widget", checkHeadB, false)
+	if !errors.Is(err, context.Canceled) || got.Result != "FAILURE" || got.Complete {
+		t.Fatalf("committed request outcome: %+v %v", got, err)
+	}
+	raw, ok := statusReadForgeEntryAny("checks", "bitbucket.org", "example/widget", checkHeadB)
+	var saved headCheckEvidence
+	if !ok || json.Unmarshal(raw, &saved) != nil || saved.Result != "FAILURE" || !saved.Complete {
+		t.Fatal("valid committed evidence rolled back")
 	}
 }
