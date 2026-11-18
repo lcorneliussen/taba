@@ -29,8 +29,10 @@ func statusResourceSettledMerge(ctx context.Context, record PRRecord, slug, forg
 	return detail, true
 }
 
-// Entries keep their existing on-disk format and write path. A cancellation check
-// precedes publication; filesystem I/O already in progress is not cancellable.
+// Shared controls retain their released paths; observations are scoped to the
+// selected credential context, or kept only in this operation's memory when
+// selection is unknown. A cancellation check precedes publication; filesystem
+// I/O already in progress is not cancellable.
 func statusResourceWriteEntry(ctx context.Context, kind, forge, slug, key string, raw []byte) bool {
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)

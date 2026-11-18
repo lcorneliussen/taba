@@ -486,7 +486,7 @@ func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHea
 // StatusPreferNewerObservations protects presentation from an older collector
 // completion. It never grants local action authority from retained UI facts.
 func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnapshot {
-	if incoming.Collection != current.Collection || incoming.authContext != current.authContext {
+	if incoming.Collection != current.Collection || incoming.authContext != current.authContext || strings.HasPrefix(incoming.authContext, "unknown-") {
 		return incoming
 	}
 	knownMerge := func(row StatusPRRow) bool {

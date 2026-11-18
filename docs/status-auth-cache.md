@@ -16,8 +16,11 @@ stable context. Unknown contexts cannot reuse known or legacy observations.
 Unknown credentials can still supply live status. Their observations and
 inflight work live only in the current collection operation's memory, allowing
 one live list to enrich several PRs without refetching the list. They are never
-saved as active fallback or shared with a later operation or another pane. The
-same aggregate request limits apply; a deferred refresh stays visibly deferred.
+saved as active fallback or shared with a later operation or another pane.
+Incremental-cache audits apply to persistent observations; unknown selection
+has no persistent fingerprints to audit. Explicit foreground and by-number
+reads retain their existing behavior. The same aggregate request limits apply;
+a deferred refresh stays visibly deferred.
 This does not add an authentication probe on a frame, cache hit or status pane.
 
 Detail, lists, checks, builds, terminal observations, ordering receipts and

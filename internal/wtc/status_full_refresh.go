@@ -34,15 +34,18 @@ func statusFullRefreshDue(forge, slug, key string) bool {
 
 func statusFullRefreshDueContext(ctx context.Context, forge, slug, key string) bool {
 	ctx = statusAuthOperation(ctx)
+	// Incremental audits protect reuse of persistent observations. Unknown
+	// selection has only live operation-private observations, so there is no
+	// persistent fingerprint to audit. Explicit/by-number reads still run.
+	if !statusAuthForContext(ctx, forge).known {
+		return false
+	}
 	every := statusFullRefreshEvery()
 	if every <= 0 {
 		return false
 	}
-	info, err := os.Lstat(statusForgeEntryPathContext(ctx, "full", forge, slug, key))
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return true
-	}
-	return time.Since(info.ModTime()) >= every
+	_, _, fresh := statusReadForgeEntryObservedContext(ctx, "full", forge, slug, key, every)
+	return !fresh
 }
 
 func statusMarkFullRefresh(forge, slug, key string) {

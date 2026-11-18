@@ -493,9 +493,6 @@ func statusFetchSharedContext(ctx context.Context, kind, forge, slug, key string
 	if !statusAuthSelectionMatches(ctx, forge) {
 		return nil, false, errors.New("forge credential context changed")
 	}
-	if !statusAuthSharedKind(kind) {
-		ctx = statusAuthOperation(ctx)
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}

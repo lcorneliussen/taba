@@ -18,9 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// A credential is only compared through a keyed digest. The random key belongs
-// to the disposable response cache, not to any credential store. Losing it
-// invalidates observations; it never migrates unscoped observations.
+// Read only a regular, owner-only, 32-byte cache key; otherwise fail closed.
 func statusAuthReadCacheKey(path string) []byte {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
@@ -42,6 +40,10 @@ func statusAuthReadCacheKey(path string) []byte {
 	}
 	return key
 }
+
+// A credential is only compared through a keyed digest. The random key belongs
+// to the disposable response cache, not to any credential store. Losing it
+// invalidates observations; it never migrates unscoped observations.
 func statusAuthCacheKey() []byte {
 	dir := statusForgeCacheDir()
 	if !statusSecureCacheDir(dir) {

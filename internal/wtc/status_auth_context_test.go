@@ -341,6 +341,7 @@ func TestStatusAuth441ProcessIsolation(t *testing.T) {
 
 func TestStatusAuth441KeychainOnlyLiveAvailabilityAndCost(t *testing.T) {
 	auth441Fixture(t)
+	t.Setenv("WTC_FORGE_FULL_REFRESH", "")
 	home := os.Getenv("HOME")
 	fixtureFile(t, filepath.Join(home, ".config", "gh", "hosts.yml"), "github.com:\n  user: synthetic-keychain-account\n", 0600)
 	bin := t.TempDir()
@@ -444,5 +445,15 @@ func TestStatusAuth441UnknownHostSwitchStillInvalidates(t *testing.T) {
 	t.Setenv("GH_HOST", "forge-b.example.invalid")
 	if statusAuthSelectionMatches(ctx, "github.com") {
 		t.Fatal("unknown host switch did not invalidate in-progress observations")
+	}
+}
+
+func TestStatusAuth441UnknownNeverRetainsPriorObservation(t *testing.T) {
+	url := "https://github.com/example/widget/pull/7"
+	old := StatusSnapshot{Collection: "fixture", authContext: "unknown-unavailable", PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "MERGED", Freshness: "live", Title: "Prior unknown context"}}}
+	incoming := old
+	incoming.PRs = []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "UNKNOWN", Freshness: "unavailable"}}
+	if got := StatusPreferNewerObservations(incoming, old); got.PRs[0].State != "UNKNOWN" || got.PRs[0].Title != "" {
+		t.Fatal("unknown stamp equality granted retained provider authority")
 	}
 }
