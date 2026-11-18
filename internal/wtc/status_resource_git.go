@@ -112,6 +112,9 @@ func statusResourceGitKeyConfig(args []string, provenConfigs []string, provenanc
 			}
 			// Namespace identity is independent of index locks and other child writes.
 			fmt.Fprintln(h, p, real, st.Mode(), id.Dev, id.Ino, id.Uid, id.Gid)
+		} else if p == os.DevNull && st.Mode()&os.ModeCharDevice != 0 {
+			// Discarded output changes device timestamps, never its empty config.
+			fmt.Fprintln(h, p, st.Mode(), id.Dev, id.Ino, id.Rdev, id.Uid, id.Gid)
 		} else {
 			fmt.Fprintln(h, p, st.Mode(), st.Size(), st.ModTime().UnixNano(), id.Dev, id.Ino, id.Uid, id.Gid)
 		}
