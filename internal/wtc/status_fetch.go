@@ -110,15 +110,8 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 		}
 	}
 	if !all {
-		snapshot, err := c.StatusForgePreview()
-		if err != nil {
-			return snapshot, report, err
-		}
-		c.statusProgress("Writing status snapshot")
-		if err := c.resourceContext().Err(); err != nil {
-			return snapshot, report, err
-		}
-		return snapshot, report, c.WriteStatusSnapshot(snapshot)
+		snapshot, err := c.statusForgePreviewFinalized(c.resourceContext(), StatusRefreshBackground, true, true, 0, c.statusFinalizePublication)
+		return snapshot, report, err
 	}
 	collections, err := WorkspaceCollections(c.Workspace)
 	if err != nil {
@@ -170,14 +163,7 @@ func (c *Context) statusForegroundSnapshot(ctx context.Context, metadataBudget t
 	c = c.WithStatusContext(ctx)
 	// A metadata-phase deadline is a deferred per-record outcome. The caller's
 	// cancellation still prevents subsequent snapshot publication.
-	snapshot, err := c.statusForgePreviewWithIntent(ctx, StatusRefreshForeground, true, true, metadataBudget)
-	if err != nil {
-		return snapshot, err
-	}
-	if err := ctx.Err(); err != nil {
-		return snapshot, err
-	}
-	return snapshot, c.WriteStatusSnapshot(snapshot)
+	return c.statusForgePreviewFinalized(ctx, StatusRefreshForeground, true, true, metadataBudget, c.statusFinalizePublication)
 }
 
 // StatusLiveSnapshotContext retains the complete collector and its accounting;

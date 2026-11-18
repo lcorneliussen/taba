@@ -480,6 +480,13 @@ func (c *Context) statusForgePreview(includeBuild, recordMerges bool) (StatusSna
 }
 
 func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent StatusRefreshIntent, includeBuild, recordMerges bool, metadataBudget time.Duration) (StatusSnapshot, error) {
+	return c.statusForgePreviewFinalized(ctx, intent, includeBuild, recordMerges, metadataBudget, func(ctx context.Context, snapshot *StatusSnapshot) error {
+		statusNextContext(ctx, snapshot)
+		return ctx.Err()
+	})
+}
+
+func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent StatusRefreshIntent, includeBuild, recordMerges bool, metadataBudget time.Duration, finalize func(context.Context, *StatusSnapshot) error) (StatusSnapshot, error) {
 	c = c.WithStatusContext(ctx)
 	if err := ctx.Err(); err != nil {
 		return StatusSnapshot{}, err
@@ -668,7 +675,9 @@ func (c *Context) statusForgePreviewWithIntent(ctx context.Context, intent Statu
 		return snapshot, err
 	}
 	// The pull requests change what comes next.
-	statusNextContext(c.resourceContext(), &snapshot)
+	if err := finalize(ctx, &snapshot); err != nil {
+		return snapshot, err
+	}
 	if err := ctx.Err(); err != nil {
 		return snapshot, err
 	}

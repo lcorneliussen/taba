@@ -365,6 +365,12 @@ func (c *Context) statusLocalSnapshot(all, includeChoices bool) (StatusSnapshot,
 func statusNext(snapshot *StatusSnapshot) { statusNextContext(context.Background(), snapshot) }
 
 func statusNextContext(ctx context.Context, snapshot *StatusSnapshot) {
+	_ = statusNextWithHeads(ctx, snapshot, statusCurrentHeads)
+}
+
+type statusHeadReader func(context.Context, StatusRepo) (string, string, error)
+
+func statusNextWithHeads(ctx context.Context, snapshot *StatusSnapshot, readHeads statusHeadReader) error {
 	for i := range snapshot.Repos {
 		r := &snapshot.Repos[i]
 		r.Next = nil
@@ -378,7 +384,10 @@ func statusNextContext(ctx context.Context, snapshot *StatusSnapshot) {
 		if r.ReviewOnly || blocked {
 			continue
 		}
-		f := statusFactsContext(ctx, *r)
+		f, err := statusFactsWithHeads(ctx, *r, readHeads)
+		if err != nil {
+			return err
+		}
 		if r.PR == nil && r.BranchKind == "branch" {
 			for _, pr := range snapshot.PRs {
 				if !pr.OnBranch || statusObservationUnavailable(pr.Freshness) || pr.State != "MERGED" || !statusPRMatchesRepo(pr, *r) {
@@ -398,6 +407,7 @@ func statusNextContext(ctx context.Context, snapshot *StatusSnapshot) {
 	}
 	// Refresh collection blockers after PR/build facts change, without source reads.
 	statusRetirementFacts(snapshot)
+	return nil
 }
 
 // statusFacts is what a local row tells about the next step. Ahead counts
@@ -407,6 +417,23 @@ func statusNextContext(ctx context.Context, snapshot *StatusSnapshot) {
 func statusFacts(r StatusRepo) next.Facts { return statusFactsContext(context.Background(), r) }
 
 func statusFactsContext(ctx context.Context, r StatusRepo) next.Facts {
+	f, _ := statusFactsWithHeads(ctx, r, statusCurrentHeads)
+	return f
+}
+
+func statusCurrentHeads(ctx context.Context, r StatusRepo) (string, string, error) {
+	if head, base, ok := statusResourceHeads(ctx, r.Worktree, r.baseRef); ok {
+		return head, base, nil
+	}
+	head, _ := statusGitContext(ctx, r.Worktree, "rev-parse", "HEAD")
+	base := ""
+	if r.baseRef != "" {
+		base, _ = statusGitContext(ctx, r.Worktree, "rev-parse", r.baseRef)
+	}
+	return head, base, nil
+}
+
+func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHeadReader) (next.Facts, error) {
 	f := next.Facts{Collection: r.Collection, Repo: r.Repo, Host: next.HostLocal, Base: r.baseRef,
 		Ahead: r.Ahead, Behind: r.Behind, Dirty: r.Changed, InProgress: r.Operation}
 	if r.Repo == "" {
@@ -419,13 +446,10 @@ func statusFactsContext(ctx context.Context, r StatusRepo) next.Facts {
 		f.Branch = r.Branch
 		f.ToPush = r.Ahead
 	}
-	if head, base, ok := statusResourceHeads(ctx, r.Worktree, r.baseRef); ok {
-		f.Head, f.BaseHead = head, base
-	} else {
-		f.Head, _ = statusGitContext(ctx, r.Worktree, "rev-parse", "HEAD")
-		if r.baseRef != "" {
-			f.BaseHead, _ = statusGitContext(ctx, r.Worktree, "rev-parse", r.baseRef)
-		}
+	var err error
+	f.Head, f.BaseHead, err = readHeads(ctx, r)
+	if err != nil {
+		return f, err
 	}
 	if ctx.Err() == nil && r.Behind > 0 && r.baseRef != "" && f.InProgress == "" {
 		var ok bool
@@ -446,7 +470,7 @@ func statusFactsContext(ctx context.Context, r StatusRepo) next.Facts {
 			f.PR.Mergeable = "mergeable"
 		}
 	}
-	return f
+	return f, nil
 }
 
 // StatusPreferNewerObservations protects presentation from an older collector
