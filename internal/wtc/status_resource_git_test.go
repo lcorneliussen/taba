@@ -312,7 +312,7 @@ func TestStatusResourceForegroundObservationSharesIdentityMemo(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoUnknownConfigBypassesSafely(t *testing.T) {
-	for _, mode := range []string{"unknown-system", "included-global", "symlink-global"} {
+	for _, mode := range []string{"unknown-system", "included-global", "symlink-global", "common-dir-override", "config-parameters"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 			t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -320,6 +320,10 @@ func TestStatusResourceGitMemoUnknownConfigBypassesSafely(t *testing.T) {
 			if mode == "unknown-system" {
 				t.Setenv("GIT_CONFIG_NOSYSTEM", "")
 				t.Setenv("GIT_CONFIG_SYSTEM", "")
+			} else if mode == "common-dir-override" {
+				t.Setenv("GIT_COMMON_DIR", t.TempDir())
+			} else if mode == "config-parameters" {
+				t.Setenv("GIT_CONFIG_PARAMETERS", "opaque-override")
 			} else {
 				path := filepath.Join(t.TempDir(), "gitconfig")
 				if mode == "included-global" {

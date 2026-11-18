@@ -70,7 +70,16 @@ func statusResourceGitKey(args []string) string {
 		if !ok {
 			return false
 		}
-		fmt.Fprintln(h, p, st.Mode(), st.Size(), st.ModTime().UnixNano(), id.Dev, id.Ino)
+		if st.IsDir() {
+			real, err := filepath.EvalSymlinks(p)
+			if err != nil {
+				return false
+			}
+			// Namespace identity is independent of index locks and other child writes.
+			fmt.Fprintln(h, p, real, st.Mode(), id.Dev, id.Ino, id.Uid, id.Gid)
+		} else {
+			fmt.Fprintln(h, p, st.Mode(), st.Size(), st.ModTime().UnixNano(), id.Dev, id.Ino, id.Uid, id.Gid)
+		}
 		if st.Mode().IsRegular() {
 			b, e := statusResourceReadFile(p, 65536)
 			if e != nil {
@@ -145,7 +154,7 @@ func statusResourceGitKey(args []string) string {
 			return ""
 		}
 	}
-	if os.Getenv("GIT_DIR") != "" || os.Getenv("GIT_WORK_TREE") != "" || os.Getenv("GIT_CONFIG_COUNT") != "" {
+	if os.Getenv("GIT_DIR") != "" || os.Getenv("GIT_WORK_TREE") != "" || os.Getenv("GIT_CONFIG_COUNT") != "" || os.Getenv("GIT_COMMON_DIR") != "" || os.Getenv("GIT_CONFIG_PARAMETERS") != "" {
 		return ""
 	}
 	for _, p := range configs {
