@@ -350,3 +350,59 @@ func TestStatusResourceGitMemoUnknownConfigBypassesSafely(t *testing.T) {
 		})
 	}
 }
+
+func TestStatusResourceGitMemoIgnoresUnrelatedDirectoryWrites(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	c := newWorkspaceFixture(t)
+	ctx := statusResourceOperation(context.Background())
+	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
+	calls := 0
+	read := func() (string, error) { calls++; return gitOutput(args...) }
+	first, err := statusResourceGit(ctx, args, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitdir := fixtureGit(t, "-C", c.Harness, "rev-parse", "--absolute-git-dir")
+	fixtureFile(t, filepath.Join(gitdir, "status-resource-unrelated"), "unrelated", 0600)
+	got, err := statusResourceGit(ctx, args, read)
+	if err != nil || got != first || calls != 1 {
+		t.Fatalf("unrelated directory write invalidated identity: calls%d got%s err%v", calls, got, err)
+	}
+}
+
+func TestStatusResourceGitMemoRevalidatesCanonicalParent(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	root := t.TempDir()
+	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
+	if err := os.MkdirAll(second, 0700); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, "init", "-q", filepath.Join(first, "repo"))
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(first, alias); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"-C", filepath.Join(alias, "repo"), "rev-parse", "--show-toplevel"}
+	ctx := statusResourceOperation(context.Background())
+	read := func() (string, error) { return gitOutput(args...) }
+	before, err := statusResourceGit(ctx, args, read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(first, "repo"), filepath.Join(second, "repo")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(second, alias); err != nil {
+		t.Fatal(err)
+	}
+	got, err := statusResourceGit(ctx, args, read)
+	want := fixtureGit(t, args...)
+	if err != nil || got != want || got == before {
+		t.Fatalf("changed canonical association reused: before%s got%s want%s err%v", before, got, want, err)
+	}
+}
