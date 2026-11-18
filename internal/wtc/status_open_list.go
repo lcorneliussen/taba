@@ -389,7 +389,7 @@ func statusBBGETContext(parent context.Context, intent StatusRefreshIntent, endp
 	return statusBBGETWithOptionsContext(parent, intent, endpoint, user, pass, false)
 }
 
-// Pipelines represent a disabled feature (404) as an empty page.
+// empty404 maps a 404 response to an empty values page.
 func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshIntent, endpoint, user, pass string, empty404 bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()

@@ -2079,7 +2079,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 		}
 		mode := "Recently observed view; normal refresh cadence."
 		if !m.resourceObserved(time.Now()) {
-			mode = "Idle or focus unknown; background cadence. r refreshes now."
+			mode = "Idle or focus unknown; background cadence. r requests Refresh."
 		}
 		if m.watcherPending {
 			mode = "Waiting for status watcher; cached actions unavailable."
@@ -2344,7 +2344,7 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 }
 
 // Focus reporting is a bounded positive hint, not an attached-client contract.
-// Unknown/no-event views keep a safety refresh and explicit Refresh remains immediate.
+// Unknown/no-event views keep a safety refresh; focus hints do not gate explicit Refresh.
 func (m statusTUIModel) resourceObserved(now time.Time) bool {
 	if !m.focused {
 		return false
