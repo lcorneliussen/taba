@@ -13,10 +13,13 @@ import (
 func TestMain(m *testing.M) {
 	unsetTabaEnvironment()
 	statusTurnOffSharedForgeBudgetAndAudit()
-	// Status fixtures must never inherit a developer's credential selection.
+	// Create synthetic selection and isolated stores unless inheriting a parent test fixture.
 	home := os.Getenv("WTC_TEST_AUTH_HOME")
 	owned := home == ""
 	if owned {
+		for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST", "GH_REPO", "BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN", "XDG_CONFIG_HOME"} {
+			os.Unsetenv(name)
+		}
 		os.Setenv("GH_TOKEN", "synthetic-status-fixture")
 		os.Setenv("BB_USERNAME", "synthetic-status-user")
 		os.Setenv("BB_API_TOKEN", "synthetic-status-fixture")

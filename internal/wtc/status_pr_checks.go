@@ -132,7 +132,7 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 			}
 			return evidence, errors.New("head checks credentials unavailable")
 		}
-		// An auth failure cannot erase already observed exact-head failures.
+		// Retain exact-head failure evidence only in the same matching context.
 		if validCheckHead(head) {
 			if raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 				var saved headCheckEvidence

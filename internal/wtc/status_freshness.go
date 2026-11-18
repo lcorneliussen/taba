@@ -76,8 +76,8 @@ func statusFreshnessLabel(freshness, observed string) string {
 // timestamps. Age bounds ordinary detail; retained MERGED state is bounded by
 // statusMergedCacheAge.
 func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
-	// A fresh active detail from a released writer cannot supersede retained
-	// merge state. Its original age still controls freshness and action gates.
+	// Ordinary detail cannot supersede retained merge state in the same
+	// credential context. Original age still controls freshness and action gates.
 	if detail, ok := statusRetainedMerge(record, slug, forge); ok {
 		return detail, true
 	}
@@ -86,8 +86,8 @@ func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Dura
 
 func statusReadObservedDetailContext(ctx context.Context, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool, error) {
 	ctx = statusAuthOperation(ctx)
-	// A fresh active detail from a released writer cannot supersede retained
-	// merge state. Its original age still controls freshness and action gates.
+	// Ordinary detail cannot supersede retained merge state in the same
+	// credential context. Original age still controls freshness and action gates.
 	if detail, ok, err := statusRetainedMergeContext(ctx, record, slug, forge); ok || err != nil {
 		return detail, ok, err
 	}
@@ -131,8 +131,8 @@ func statusRetainedMergeContext(ctx context.Context, record PRRecord, slug, forg
 		current, err := statusParseForgeDetail(forge, raw, record)
 		retainedAt, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
 		if err == nil && current.State == "MERGED" && (!known || observed.After(retainedAt)) {
-			// Accept legacy authority only after preserving the same bytes and age
-			// independently of released writers' ordinary cache publications.
+			// Copy only scoped evidence from the pinned credential context,
+			// preserving bytes and observation time independently of ordinary detail.
 			retained, retainErr := statusRetainMergeObservationContext(ctx, forge, slug, record.Number, raw, observed)
 			if retained {
 				winner, found := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge())

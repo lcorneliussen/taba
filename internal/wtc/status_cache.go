@@ -204,8 +204,8 @@ func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge,
 		candidate, parseErr := statusParseForgeDetail(forge, data, PRRecord{Number: key})
 		current, known, err := statusRetainedMergeContext(ctx, PRRecord{Number: key}, slug, forge)
 		if err != nil {
-			// Legacy migration may itself have committed retention before the
-			// request ended. Preserve that authority independently of whether
+			// Scoped retention may itself have committed before the request
+			// ended. Preserve that evidence independently of whether
 			// this candidate can still be published.
 			result.Retained = known
 			return result, err
@@ -217,12 +217,12 @@ func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge,
 		promotesMerge = isMerge && !known
 	}
 	// A first confirmed MERGED observation bypasses request order. Otherwise
-	// preserve ordering, including released writers using the two-file protocol.
+	// preserve scoped request ordering with the existing two-file protocol.
 	if saved, ok := statusForgeEntrySinceContext(ctx, kind, forge, slug, key); ok && saved.After(started) && !promotesMerge {
 		return result, nil
 	}
-	// Released writers can replace ordinary detail, so terminal evidence is
-	// retained independently; reading it never renews its observation age.
+	// Ordinary detail and terminal evidence have independent publications;
+	// reading retained evidence never renews its observation age.
 	if isMerge {
 		if observed.IsZero() {
 			observed = time.Now()
@@ -251,8 +251,8 @@ func statusRetainMergeObservation(forge, slug, key string, data []byte, observed
 	return retained
 }
 
-// Serialize new publications and legacy migrations on the independent record.
-// Observation time, not migration time, controls both ordering and expiry.
+// Serialize publications and copies from scoped detail on the independent
+// record. Observation time controls both ordering and expiry.
 // Callers may already hold the ordinary PR lock; this path never acquires it.
 func statusRetainMergeObservationContext(ctx context.Context, forge, slug, key string, data []byte, observed time.Time) (bool, error) {
 	ctx = statusAuthOperation(ctx)

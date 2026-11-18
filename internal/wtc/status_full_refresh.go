@@ -183,7 +183,7 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 		return fallback, statusObservationFailure(fmt.Errorf("invalid PR identity"))
 	}
 	// Pure cache reads retain known facts even if cancellation prevents lock
-	// admission. The locked path below still revalidates/migrates authority.
+	// admission. The locked path below still revalidates retained scoped evidence.
 	if known, ok := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge()); ok && known.State == "MERGED" {
 		fallback = known
 	} else if known, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
@@ -269,7 +269,7 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 	if publication.Retained {
 		// Retention can commit before cancellation prevents ordinary detail
 		// publication. Read that independent authority without another lock or
-		// migration; never revoke a persisted merge because the request ended.
+		// copy; never revoke a persisted merge because the request ended.
 		if retained, ok := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge()); ok && retained.State == "MERGED" {
 			if retained.ObservedAt != detail.ObservedAt || retained.State != detail.State || retained.HeadCommit != detail.HeadCommit || retained.Title != detail.Title {
 				outcome := statusDetailObservation(retained)
