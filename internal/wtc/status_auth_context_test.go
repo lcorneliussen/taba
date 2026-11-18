@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -17,7 +19,7 @@ func auth441Fixture(t *testing.T) {
 	t.Helper()
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
-	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "GH_HOST", "GH_REPO", "XDG_CONFIG_HOME", "BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN"} {
+	for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "GH_HOST", "GH_REPO", "XDG_CONFIG_HOME", "BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN"} {
 		t.Setenv(name, "")
 	}
 }
@@ -213,7 +215,8 @@ func TestStatusAuth441AllObservationKindsAndLegacy(t *testing.T) {
 	if _, ok := statusReadForgeEntryAny("pr", "github.com", "example/widget", "7"); ok {
 		t.Fatal("unknown borrowed legacy")
 	}
-	if statusWriteForgeEntryObserved("pr", "github.com", "example/widget", "7", []byte("unknown"), time.Now()) {
+	statusWriteForgeEntryObserved("pr", "github.com", "example/widget", "7", []byte("unknown"), time.Now())
+	if _, ok := statusReadForgeEntryAny("pr", "github.com", "example/widget", "7"); ok {
 		t.Fatal("unknown persisted reusable observation")
 	}
 }
@@ -248,5 +251,198 @@ func TestStatusAuth441SnapshotFallbackAndPresentation(t *testing.T) {
 	}
 	if err := c.writeStatusSnapshotContext(ctx, a, nil); err == nil {
 		t.Fatal("old operation published snapshot after selection changed")
+	}
+}
+
+func TestStatusAuth441ProcessIsolation(t *testing.T) {
+	if label := os.Getenv("WTC_TEST_441_CHILD"); label != "" {
+		t.Setenv("HOME", os.Getenv("WTC_TEST_441_HOME"))
+		t.Setenv("GH_CONFIG_DIR", filepath.Join(os.Getenv("HOME"), "gh"))
+		t.Setenv("GH_TOKEN", "synthetic-context-"+label)
+		dir := os.Getenv("WTC_TEST_441_SYNC")
+		raw, _, err := statusFetchSharedContext(context.Background(), "probe", "github.com", "example/widget", "7", func() ([]byte, error) {
+			if err := os.WriteFile(filepath.Join(dir, "entered-"+label), nil, 0600); err != nil {
+				return nil, err
+			}
+			if label == "A" {
+				deadline := time.Now().Add(4 * time.Second)
+				for {
+					if _, err := os.Stat(filepath.Join(dir, "release-A")); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						return nil, fmt.Errorf("fixture barrier timed out")
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+			return []byte("Observation " + label), nil
+		})
+		if err != nil || string(raw) != "Observation "+label {
+			t.Fatalf("cross-process context mismatch: %q %v", raw, err)
+		}
+		return
+	}
+	auth441Fixture(t)
+	dir := t.TempDir()
+	home := os.Getenv("HOME")
+	child := func(label string) *exec.Cmd {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestStatusAuth441ProcessIsolation$")
+		cmd.Env = append(os.Environ(), "WTC_TEST_441_CHILD="+label, "WTC_TEST_441_HOME="+home, "WTC_TEST_441_SYNC="+dir)
+		return cmd
+	}
+	a := child("A")
+	if err := a.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { os.WriteFile(filepath.Join(dir, "release-A"), nil, 0600); a.Wait() }()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "entered-A")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("A did not enter provider fixture")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	b := child("B")
+	done := make(chan error, 1)
+	go func() {
+		out, err := b.CombinedOutput()
+		if err != nil {
+			err = fmt.Errorf("B: %w: %s", err, out)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		b.Process.Kill()
+		<-done
+		t.Fatal("B queued behind A's inflight record")
+	}
+	os.WriteFile(filepath.Join(dir, "release-A"), nil, 0600)
+	if err := a.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	// A second process with unchanged inputs must reuse the first observation.
+	os.Remove(filepath.Join(dir, "entered-A"))
+	if out, err := child("A").CombinedOutput(); err != nil {
+		t.Fatalf("unchanged A: %v %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "entered-A")); !os.IsNotExist(err) {
+		t.Fatal("unchanged process repeated provider work")
+	}
+}
+
+func TestStatusAuth441KeychainOnlyLiveAvailabilityAndCost(t *testing.T) {
+	auth441Fixture(t)
+	home := os.Getenv("HOME")
+	fixtureFile(t, filepath.Join(home, ".config", "gh", "hosts.yml"), "github.com:\n  user: synthetic-keychain-account\n", 0600)
+	bin := t.TempDir()
+	counter := filepath.Join(bin, "calls")
+	t.Setenv("WTC_TEST_441_CALLS", counter)
+	fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
+if [ "$1" = auth ]; then exit 9; fi
+printf x >> "$WTC_TEST_441_CALLS"
+if [ "$2" = list ]; then
+ printf '%s\n' '[{"number":7,"state":"OPEN","title":"Live seven","headRefName":"topic","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},{"number":8,"state":"OPEN","title":"Live eight","headRefName":"other","headRefOid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]'
+else
+ printf '%s\n' '{"number":7,"state":"OPEN","title":"Live seven","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+fi
+`, 0700)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	ctx := statusAuthOperation(context.Background())
+	if statusAuthForContext(ctx, "github.com").known {
+		t.Fatal("keychain credential identity falsely established")
+	}
+	for _, number := range []string{"7", "8"} {
+		detail := statusEnrichRecordMetadataContext(ctx, PRRecord{Number: number}, "example/widget", "github.com")
+		if detail.State != "OPEN" || detail.ObservedAt == "" || !strings.HasPrefix(detail.Title, "Live ") {
+			t.Fatalf("keychain-only live status unavailable: %+v", detail)
+		}
+	}
+	calls, _ := os.ReadFile(counter)
+	if len(calls) != 1 {
+		t.Fatalf("one operation repeated list work: %d", len(calls))
+	}
+	next := statusAuthOperation(context.Background())
+	detail := statusEnrichRecordMetadataContext(next, PRRecord{Number: "7"}, "example/widget", "github.com")
+	if detail.State != "OPEN" {
+		t.Fatal("next keychain-only refresh nonfunctional")
+	}
+	calls, _ = os.ReadFile(counter)
+	if len(calls) != 2 {
+		t.Fatalf("another operation reused unknown credential observations: %d", len(calls))
+	}
+	detail, observation := statusRefreshRecord(statusAuthOperation(context.Background()), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com")
+	if detail.State != "OPEN" || observation.Freshness != "live" || !observation.ProviderConfirmed {
+		t.Fatalf("unknown foreground unavailable: %+v %+v", detail, observation)
+	}
+	files, _ := os.ReadDir(statusForgeCacheDir())
+	for _, file := range files {
+		if strings.HasPrefix(file.Name(), "pr-") || strings.HasPrefix(file.Name(), "openprs-") || strings.HasPrefix(file.Name(), "merge-") {
+			t.Fatalf("unknown observation escaped operation memory: %s", file.Name())
+		}
+	}
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
+	statusForgeCool("github.com", time.Hour)
+	_, _, err := statusFetchSharedContext(statusAuthOperation(context.Background()), "probe", "github.com", "example/widget", "7", func() ([]byte, error) { t.Fatal("unknown bypassed shared cooldown"); return nil, nil })
+	if !errors.Is(err, errForgeCooling) {
+		t.Fatalf("missing truthful cooldown: %v", err)
+	}
+}
+
+func TestStatusAuth441ChangedDeliveryDropsProviderKeepsLocalRecord(t *testing.T) {
+	auth441Fixture(t)
+	t.Setenv("GH_TOKEN", "synthetic-A")
+	ctx := statusAuthOperation(context.Background())
+	snapshot := StatusSnapshot{authContext: statusAuthSnapshotScope(ctx), authInputs: statusAuthSnapshotScope(ctx), Collection: "fixture", PRs: []StatusPRRow{{Number: "7", Title: "Provider A", State: "OPEN", StateSource: "detail-cache"}, {Number: "8", Title: "Recorded merge", State: "MERGED", StateSource: "registry"}}, Repos: []StatusRepo{{Repo: "widget", Branch: "topic", Tree: "clean", PR: &StatusPRFacts{Number: "7", StateSource: "detail-cache"}}}}
+	t.Setenv("GH_TOKEN", "synthetic-B")
+	if StatusSnapshotAuthCurrent(snapshot) {
+		t.Fatal("late A delivery accepted after switch")
+	}
+	clean, changed := StatusWithoutChangedAuth(snapshot)
+	if !changed || len(clean.PRs) != 1 || clean.PRs[0].Number != "8" || clean.Repos[0].PR != nil || clean.Repos[0].Branch != "topic" || clean.Repos[0].Tree != "clean" {
+		t.Fatalf("provider/local boundary lost: %+v", clean)
+	}
+	if snapshot.Repos[0].PR == nil || len(snapshot.PRs) != 2 {
+		t.Fatal("validation mutated an independent snapshot")
+	}
+}
+
+func TestStatusAuth441BitbucketBasicCLIStore(t *testing.T) {
+	auth441Fixture(t)
+	config := filepath.Join(os.Getenv("HOME"), ".config", "bb", "config.json")
+	fixtureFile(t, config, `{"username":"synthetic-user","apiToken":"synthetic-A","authMethod":"basic"}`, 0600)
+	a := statusResolveAuthContext("bitbucket.org")
+	if !a.known {
+		t.Fatal("normal bb basic CLI store unavailable")
+	}
+	fixtureFile(t, config, `{"username":"synthetic-user","apiToken":"synthetic-B","authMethod":"basic"}`, 0600)
+	if a == statusResolveAuthContext("bitbucket.org") {
+		t.Fatal("bb CLI credential rotation not invalidated")
+	}
+	fixtureFile(t, config, `{"authMethod":"oauth","oauthAccessToken":"synthetic-access","oauthRefreshToken":"synthetic-refresh","oauthExpiresAt":1}`, 0600)
+	if statusResolveAuthContext("bitbucket.org").known {
+		t.Fatal("refreshable OAuth identity falsely established")
+	}
+}
+
+func TestStatusAuth441UnknownHostSwitchStillInvalidates(t *testing.T) {
+	auth441Fixture(t)
+	t.Setenv("GH_TOKEN", "synthetic-A")
+	t.Setenv("GH_HOST", "forge-a.example.invalid")
+	ctx := statusAuthOperation(context.Background())
+	if statusAuthForContext(ctx, "github.com").known {
+		t.Fatal("unknown host routing established identity")
+	}
+	t.Setenv("GH_HOST", "forge-b.example.invalid")
+	if statusAuthSelectionMatches(ctx, "github.com") {
+		t.Fatal("unknown host switch did not invalidate in-progress observations")
 	}
 }

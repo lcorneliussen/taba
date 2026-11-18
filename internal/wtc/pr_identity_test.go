@@ -594,6 +594,7 @@ func fixtureRenameRegistry(t *testing.T, c *Context, remote string) {
 func TestStatusOmittedCacheHitDoesNotCertifyFullRequest(t *testing.T) {
 	t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
 	f := newRenameProviderFixture(t, "github.com")
+	t.Setenv("GH_TOKEN", "synthetic-session-a")
 	record := PRRecord{Repo: "reference", Number: "42", URL: "https://github.com/example/new-name/pull/42"}
 	raw, _ := os.ReadFile(filepath.Join(f.dir, "detail"))
 	statusWriteForgeCache("github.com", "example/new-name", "42", raw)

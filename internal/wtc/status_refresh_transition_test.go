@@ -1038,8 +1038,8 @@ func status319ReleasedWriteForgeEntrySince(kind, forge, slug, key string, data [
 }
 
 func status319ReleasedForgeEntrySince(kind, forge, slug, key string) (time.Time, bool) {
-	saved, ok := statusReadForgeEntryAny("since", forge, slug, kind+":"+key)
-	if !ok {
+	saved, readErr := os.ReadFile(status319ReleasedEntryPath("since", forge, slug, kind+":"+key))
+	if readErr != nil {
 		return time.Time{}, false
 	}
 	nanos, err := strconv.ParseInt(string(saved), 10, 64)
@@ -1053,7 +1053,7 @@ func status319ReleasedWriteForgeEntry(kind, forge, slug, key string, data []byte
 	if len(data) == 0 {
 		return
 	}
-	path := statusForgeEntryPath(kind, forge, slug, key)
+	path := status319ReleasedEntryPath(kind, forge, slug, key)
 	if !statusSecureCacheDir(filepath.Dir(path)) {
 		return
 	}
@@ -1074,6 +1074,11 @@ func status319ReleasedWriteForgeEntry(kind, forge, slug, key string, data []byte
 		return
 	}
 	_ = os.Rename(tmp.Name(), path)
+}
+
+func status319ReleasedEntryPath(kind, forge, slug, key string) string {
+	digest := sha256.Sum256([]byte(kind + "\x00" + forge + "\x00" + slug + "\x00" + key))
+	return filepath.Join(statusForgeCacheDir(), kind+"-"+hex.EncodeToString(digest[:])+".json")
 }
 
 func TestStatus319ProductionReleasedCacheWriter(t *testing.T) {
@@ -1198,7 +1203,7 @@ func TestStatus319ProductionReleasedCacheWriter(t *testing.T) {
 	}
 }
 
-func TestStatus319ProductionReleasedMergeMigration(t *testing.T) {
+func TestStatus319ProductionReleasedMergeRemainsUntrusted(t *testing.T) {
 	for _, cooling := range []bool{false, true} {
 		t.Run(fmt.Sprint(cooling), func(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
@@ -1224,7 +1229,7 @@ func TestStatus319ProductionReleasedMergeMigration(t *testing.T) {
 			merged, _ := json.Marshal(wire.item(7, true))
 			publish(merged)
 			old := time.Now().Add(-23 * time.Hour)
-			if err := os.Chtimes(statusForgeCachePath("bitbucket.org", "example/widget", "7"), old, old); err != nil {
+			if err := os.Chtimes(status319ReleasedEntryPath("pr", "bitbucket.org", "example/widget", "7"), old, old); err != nil {
 				t.Fatal(err)
 			}
 			if cooling {
@@ -1233,7 +1238,7 @@ func TestStatus319ProductionReleasedMergeMigration(t *testing.T) {
 				fixtureFile(t, statusForgeStatePath("budget", "bitbucket.org"), fmt.Sprintf("0 %d\n", time.Now().UnixNano()), 0600)
 			}
 			before := wire.count()
-			assertMerge := func(event status319Event) {
+			assertUntrusted := func(event status319Event) {
 				t.Helper()
 				if len(event.Snapshot.PRs) != 2 {
 					t.Fatal(event.Snapshot.PRs)
@@ -1251,24 +1256,24 @@ func TestStatus319ProductionReleasedMergeMigration(t *testing.T) {
 				if pr == nil || pr.NotEnlisted || draft == nil || !draft.NotEnlisted || !draft.Draft {
 					t.Fatalf("merged enlistment and transient draft inventory: %+v", event.Snapshot.PRs)
 				}
-				at, err := time.Parse(time.RFC3339Nano, pr.ObservedAt)
-				if pr.State != "MERGED" || pr.MergedOn != nil || err != nil || at.Sub(old).Abs() > time.Millisecond || !statusObservationUnavailable(pr.Freshness) {
-					t.Fatalf("legacy authority lost or renewed: %+v", pr)
+				if pr.State == "MERGED" || pr.MergedOn != nil {
+					t.Fatalf("unscoped legacy merge gained authority: %+v", pr)
 				}
-				if !strings.Contains(event.Markdown, "merged") {
-					t.Fatal("native merge missing")
+				if _, err := os.Stat(statusForgeEntryPath("merge", "bitbucket.org", "example/widget", "7")); !os.IsNotExist(err) {
+					t.Fatal("unscoped observation promoted to scoped retention")
 				}
+
 			}
-			assertMerge(status319Refresh(t, c, server.URL, bin, false))
+			assertUntrusted(status319Refresh(t, c, server.URL, bin, false))
 			active := wire.item(7, false)
 			active["draft"] = cooling
 			raw, _ := json.Marshal(active)
 			publish(raw)
 			for pass := 0; pass < 2; pass++ {
-				assertMerge(status319Refresh(t, c, server.URL, bin, false))
+				assertUntrusted(status319Refresh(t, c, server.URL, bin, false))
 			}
 			if wire.count() != before {
-				t.Fatal("denied migration dispatched provider I/O")
+				t.Fatal("untrusted legacy fallback dispatched denied provider I/O")
 			}
 		})
 	}

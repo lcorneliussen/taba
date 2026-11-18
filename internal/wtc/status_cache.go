@@ -45,10 +45,20 @@ func statusForgeEntryPath(kind, forge, slug, key string) string {
 func statusForgeEntryPathContext(ctx context.Context, kind, forge, slug, key string) string {
 	input := kind + "\x00" + forge + "\x00" + slug + "\x00" + key
 	if !statusAuthSharedKind(kind) {
-		input = "auth-v1\x00" + statusAuthForContext(ctx, forge).scope + "\x00" + input
+		scope := statusAuthForContext(ctx, forge).scope
+		if !statusAuthForContext(ctx, forge).known {
+			if state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState); ok {
+				scope += "\x00operation:" + state.nonce
+			}
+		}
+		input = "auth-v1\x00" + scope + "\x00" + input
 	}
 	digest := sha256.Sum256([]byte(input))
-	return filepath.Join(statusForgeCacheDir(), kind+"-"+hex.EncodeToString(digest[:])+".json")
+	path := filepath.Join(statusForgeCacheDir(), kind+"-"+hex.EncodeToString(digest[:])+".json")
+	if !statusAuthSharedKind(kind) && !statusAuthForContext(ctx, forge).known {
+		statusAuthMemoryPath(ctx, path)
+	}
+	return path
 }
 
 func statusSecureCacheDir(path string) bool {
@@ -118,11 +128,14 @@ func statusReadForgeEntryObservedContext(ctx context.Context, kind, forge, slug,
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)
 	}
-	if !statusAuthSharedKind(kind) && !statusAuthCurrent(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return nil, time.Time{}, false
 	}
 
 	path := statusForgeEntryPathContext(ctx, kind, forge, slug, key)
+	if !statusAuthSharedKind(kind) && !statusAuthForContext(ctx, forge).known {
+		return statusAuthMemoryRead(ctx, path, age)
+	}
 	if !statusSecureCacheDir(filepath.Dir(path)) {
 		return nil, time.Time{}, false
 	}
@@ -176,7 +189,7 @@ func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge,
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)
 	}
-	if !statusAuthCurrent(ctx, forge) {
+	if !statusAuthSelectionMatches(ctx, forge) {
 		return result, errors.New("forge credential context unavailable or changed")
 	}
 
@@ -306,7 +319,7 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)
 	}
-	if !statusAuthSharedKind(kind) && !statusAuthCurrent(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return false
 	}
 
@@ -314,6 +327,9 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 		return false
 	}
 	path := statusForgeEntryPathContext(ctx, kind, forge, slug, key)
+	if !statusAuthSharedKind(kind) && !statusAuthForContext(ctx, forge).known {
+		return statusAuthMemoryWrite(ctx, path, data, observed)
+	}
 	if !statusSecureCacheDir(filepath.Dir(path)) {
 		return false
 	}
@@ -337,7 +353,7 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 	if tmp.Close() != nil {
 		return false
 	}
-	if !statusAuthSharedKind(kind) && !statusAuthCurrent(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return false
 	}
 	return os.Rename(tmp.Name(), path) == nil

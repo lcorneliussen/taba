@@ -301,9 +301,10 @@ func (c *Context) statusScopedSnapshotPath(ctx context.Context) string {
 	return filepath.Join(statusForgeCacheDir(), "snapshot-"+hex.EncodeToString(sum[:])+".json")
 }
 func statusSnapshotKnownAuth(ctx context.Context, snapshot StatusSnapshot) bool {
+	forges := map[string]bool{}
 	for _, row := range snapshot.Repos {
-		if row.Forge != "" && !statusAuthCurrent(ctx, row.Forge) {
-			return false
+		if row.Forge != "" {
+			forges[row.Forge] = true
 		}
 	}
 	for _, row := range snapshot.PRs {
@@ -317,12 +318,19 @@ func statusSnapshotKnownAuth(ctx context.Context, snapshot StatusSnapshot) bool 
 		if strings.HasPrefix(*row.URL, "https://bitbucket.org/") {
 			forge = "bitbucket.org"
 		}
-		if forge == "" || !statusAuthCurrent(ctx, forge) {
+		if forge == "" {
+			return false
+		}
+		forges[forge] = true
+	}
+	for forge := range forges {
+		if !statusAuthCurrent(ctx, forge) {
 			return false
 		}
 	}
 	return true
 }
+
 func (c *Context) ReadScopedStatusSnapshot() (StatusSnapshot, error) {
 	ctx := statusAuthOperation(c.resourceContext())
 	path := c.statusScopedSnapshotPath(ctx)
@@ -348,6 +356,7 @@ func (c *Context) ReadScopedStatusSnapshot() (StatusSnapshot, error) {
 		return StatusSnapshot{}, fmt.Errorf("scoped status credential context unavailable or changed")
 	}
 	snapshot.authContext = statusAuthSnapshotScope(ctx)
+	snapshot.authInputs = snapshot.authContext
 	return snapshot, nil
 }
 

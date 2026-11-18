@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -107,7 +108,7 @@ func statusResolveAuthContext(forge string) statusAuthContext {
 		if token == "" {
 			token = os.Getenv("GITHUB_TOKEN")
 		}
-		for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_REPO"} {
+		for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST", "GH_REPO"} {
 			add(name)
 			add(os.Getenv(name))
 		}
@@ -125,9 +126,6 @@ func statusResolveAuthContext(forge string) statusAuthContext {
 		config, configOK := statusAuthReadFile(filepath.Join(dir, "config.yml"))
 		add(string(config))
 		known = token != "" && configOK
-		if host := os.Getenv("GH_HOST"); host != "" && host != forge {
-			return statusAuthContext{}
-		}
 		if token == "" && hostsOK && configOK {
 			var hostsConfig map[string]struct {
 				Token string `yaml:"oauth_token"`
@@ -136,6 +134,24 @@ func statusResolveAuthContext(forge string) statusAuthContext {
 				known = hostsConfig[forge].Token != ""
 			}
 		}
+		// Unresolved host routing cannot establish which host's keychain is used.
+		// Keep the fingerprint for invalidation, while collecting live data only.
+		if host := os.Getenv("GH_HOST"); host != "" && host != forge {
+			known = false
+		}
+		if os.Getenv("GH_HOST") == "" && len(hosts) > 0 {
+			var configured map[string]any
+			if yaml.Unmarshal(hosts, &configured) != nil {
+				known = false
+			} else {
+				for host := range configured {
+					if host != forge {
+						known = false
+					}
+				}
+			}
+		}
+
 	case "bitbucket.org":
 		// The direct HTTP reader and the external CLI have different precedence.
 		// Hash their complete local candidate set rather than equating usernames.
@@ -153,7 +169,16 @@ func statusResolveAuthContext(forge string) statusAuthContext {
 			OAuth    string `json:"oauthAccessToken"`
 		}
 		valid := len(raw) == 0 || json.Unmarshal(raw, &config) == nil
-		user, pass := bitbucketCredentials()
+		user, pass := "", ""
+		for _, pair := range [][2]string{{"BB_API_USER", "BB_API_PASS"}, {"BB_USERNAME", "BB_API_TOKEN"}, {"ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN"}} {
+			if u, p := os.Getenv(pair[0]), os.Getenv(pair[1]); u != "" && p != "" {
+				user, pass = u, p
+				break
+			}
+		}
+		if user == "" {
+			user, pass = config.Username, config.Token
+		}
 		known = ok && valid && user != "" && pass != "" && config.OAuth == ""
 	default:
 		return statusAuthContext{}
@@ -182,38 +207,114 @@ func statusAuthReadFile(path string) ([]byte, bool) {
 }
 
 func statusAuthSharedKind(kind string) bool {
-	return kind == "budget" || kind == "cool" || kind == "pending"
+	return kind == "budget" || kind == "cool" || kind == "pending" || kind == "identity-schedule-v1"
 }
 
 type statusAuthOperationKey struct{}
 type statusAuthSelection map[string]statusAuthContext
+type statusAuthObservation struct {
+	data     []byte
+	observed time.Time
+}
+type statusAuthOperationState struct {
+	selection    statusAuthSelection
+	nonce        string
+	mu           sync.Mutex
+	observations map[string]statusAuthObservation
+	gates        map[string]chan struct{}
+}
 
-// Freeze local selection for one observation. Every cache reader, lock and
-// publication uses that namespace; a changed selection invalidates the work.
+// Freeze local selection for one observation. Unknown encrypted credentials can
+// supply live data, but that data exists only in this operation's memory. It
+// cannot become a reusable observation in another process or refresh.
 func statusAuthOperation(ctx context.Context) context.Context {
-	if _, ok := ctx.Value(statusAuthOperationKey{}).(statusAuthSelection); ok {
+	if _, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState); ok {
 		return ctx
 	}
-	return context.WithValue(ctx, statusAuthOperationKey{}, statusAuthSelection{
-		"github.com":    statusResolveAuthContext("github.com"),
-		"bitbucket.org": statusResolveAuthContext("bitbucket.org"),
-	})
+	var nonce [16]byte
+	_, _ = rand.Read(nonce[:])
+	state := &statusAuthOperationState{selection: statusAuthSelection{
+		"github.com": statusResolveAuthContext("github.com"), "bitbucket.org": statusResolveAuthContext("bitbucket.org")}, nonce: hex.EncodeToString(nonce[:]), observations: map[string]statusAuthObservation{}, gates: map[string]chan struct{}{}}
+	return context.WithValue(ctx, statusAuthOperationKey{}, state)
 }
 func statusAuthForContext(ctx context.Context, forge string) statusAuthContext {
-	if selection, ok := ctx.Value(statusAuthOperationKey{}).(statusAuthSelection); ok {
-		return selection[forge]
+	if state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState); ok {
+		return state.selection[forge]
 	}
 	return statusResolveAuthContext(forge)
 }
+func statusAuthSelectionMatches(ctx context.Context, forge string) bool {
+	return statusAuthForContext(ctx, forge) == statusResolveAuthContext(forge)
+}
 func statusAuthCurrent(ctx context.Context, forge string) bool {
-	auth := statusAuthForContext(ctx, forge)
-	return auth.known && auth == statusResolveAuthContext(forge)
+	return statusAuthForContext(ctx, forge).known && statusAuthSelectionMatches(ctx, forge)
 }
 func statusAuthSnapshotScope(ctx context.Context) string {
-	selection, _ := statusAuthOperation(ctx).Value(statusAuthOperationKey{}).(statusAuthSelection)
-	return selection["github.com"].scope + ":" + selection["bitbucket.org"].scope
+	state, _ := statusAuthOperation(ctx).Value(statusAuthOperationKey{}).(*statusAuthOperationState)
+	return state.selection["github.com"].scope + ":" + state.selection["bitbucket.org"].scope
+}
+func statusAuthSelectionCurrent(ctx context.Context) bool {
+	return statusAuthSelectionMatches(ctx, "github.com") && statusAuthSelectionMatches(ctx, "bitbucket.org")
+}
+func statusAuthMemoryRead(ctx context.Context, path string, age time.Duration) ([]byte, time.Time, bool) {
+	state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState)
+	if !ok {
+		return nil, time.Time{}, false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	entry, ok := state.observations[path]
+	if !ok || time.Since(entry.observed) >= age {
+		return nil, time.Time{}, false
+	}
+	return append([]byte(nil), entry.data...), entry.observed, len(entry.data) > 0
+}
+func statusAuthMemoryWrite(ctx context.Context, path string, data []byte, observed time.Time) bool {
+	state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState)
+	if !ok || len(data) == 0 {
+		return false
+	}
+	if observed.IsZero() {
+		observed = time.Now()
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.observations[path] = statusAuthObservation{data: append([]byte(nil), data...), observed: observed}
+	return true
 }
 
-func statusAuthSelectionCurrent(ctx context.Context) bool {
-	return statusAuthForContext(ctx, "github.com") == statusResolveAuthContext("github.com") && statusAuthForContext(ctx, "bitbucket.org") == statusResolveAuthContext("bitbucket.org")
+func statusAuthMemoryPath(ctx context.Context, path string) {
+	state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState)
+	if !ok {
+		return
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.gates[path] == nil {
+		gate := make(chan struct{}, 1)
+		gate <- struct{}{}
+		state.gates[path] = gate
+	}
+}
+func statusAuthMemoryLock(ctx context.Context, path string) (func(), bool, error) {
+	state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState)
+	if !ok {
+		return nil, false, nil
+	}
+	state.mu.Lock()
+	gate := state.gates[path]
+	state.mu.Unlock()
+	if gate == nil {
+		return nil, false, nil
+	}
+	select {
+	case <-ctx.Done():
+		return nil, true, ctx.Err()
+	case <-gate:
+		if err := ctx.Err(); err != nil {
+			gate <- struct{}{}
+			return nil, true, err
+		}
+		return func() { gate <- struct{}{} }, true, nil
+	}
 }

@@ -13,6 +13,11 @@ context without an identity API call. A keychain-only login is unknown to this
 local reader. Bitbucket includes the local candidates used by direct HTTP reads
 and the external CLI; OAuth refresh credentials are not treated as an established
 stable context. Unknown contexts cannot reuse known or legacy observations.
+Unknown credentials can still supply live status. Their observations and
+inflight work live only in the current collection operation's memory, allowing
+one live list to enrich several PRs without refetching the list. They are never
+saved as active fallback or shared with a later operation or another pane. The
+same aggregate request limits apply; a deferred refresh stays visibly deferred.
 This does not add an authentication probe on a frame, cache hit or status pane.
 
 Detail, lists, checks, builds, terminal observations, ordering receipts and

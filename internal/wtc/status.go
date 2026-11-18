@@ -16,7 +16,8 @@ import (
 // and process facts are added by later collection stages.
 type StatusSnapshot struct {
 	// authContext is in-memory provenance only; the public snapshot schema is unchanged.
-	authContext string
+	authContext string `json:"-"`
+	authInputs  string `json:"-"`
 	// RuntimeObservedAt orders concurrent in-process service reads. It is not a cache timestamp or wire field.
 	RuntimeObservedAt time.Time `json:"-"`
 	Schema            int       `json:"schema"`
@@ -610,4 +611,50 @@ func statusRetainedPRFacts(row StatusPRRow) *StatusPRFacts {
 		Freshness: row.Freshness, ObservedAt: row.ObservedAt, StateSource: row.StateSource,
 		ObservationReason: row.ObservationReason, RetryAt: row.RetryAt,
 		MergeConflicts: append([]string(nil), row.MergeConflicts...), MergeSource: row.MergeSource, MergeHead: row.MergeHead, MergeBase: row.MergeBase}
+}
+
+// StatusSnapshotAuthCurrent revalidates local selection at delivery boundaries,
+// never during painting. A local-only snapshot has no provider provenance.
+func StatusSnapshotAuthCurrent(snapshot StatusSnapshot) bool {
+	if snapshot.authContext == "" {
+		return true
+	}
+	inputs := snapshot.authInputs
+	if inputs == "" {
+		inputs = snapshot.authContext
+	}
+	return inputs == statusAuthSnapshotScope(context.Background())
+}
+
+// StatusWithoutChangedAuth removes provider observations and derived actions
+// while retaining local Git/runtime facts until the replacement read completes.
+func StatusWithoutChangedAuth(snapshot StatusSnapshot) (StatusSnapshot, bool) {
+	if StatusSnapshotAuthCurrent(snapshot) {
+		return snapshot, false
+	}
+	records := []StatusPRRow{}
+	for _, row := range snapshot.PRs {
+		if row.StateSource == "registry" && row.State == "MERGED" {
+			records = append(records, row)
+		}
+	}
+	snapshot.PRs = records
+	snapshot.Orphans = nil
+	snapshot.Retirement = nil
+	snapshot.Repos = append([]StatusRepo(nil), snapshot.Repos...)
+	for i := range snapshot.Repos {
+		row := &snapshot.Repos[i]
+		if row.PR == nil || row.PR.StateSource != "registry" {
+			row.PR = nil
+			row.PRUnconfirmed = true
+		}
+		row.Tip = nil
+		row.Prod = nil
+		row.Landing = nil
+		row.Next = nil
+		row.Choices = nil
+	}
+	snapshot.authContext = ""
+	snapshot.authInputs = ""
+	return snapshot, true
 }

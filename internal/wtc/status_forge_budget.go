@@ -340,6 +340,9 @@ func statusLockCacheContext(ctx context.Context, path string) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if unlock, handled, err := statusAuthMemoryLock(ctx, path); handled {
+		return unlock, err
+	}
 	if !statusSecureCacheDir(statusForgeCacheDir()) {
 		return nil, errors.New("forge cache")
 	}
@@ -487,10 +490,7 @@ func statusFetchShared(kind, forge, slug, key string, fetch func() ([]byte, erro
 
 func statusFetchSharedContext(ctx context.Context, kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, bool, error) {
 	ctx = statusAuthOperation(ctx)
-	if !statusAuthForContext(ctx, forge).known {
-		return statusWithForgeBudgetKeyContext(ctx, forge, "", nil, fetch)
-	}
-	if !statusAuthCurrent(ctx, forge) {
+	if !statusAuthSelectionMatches(ctx, forge) {
 		return nil, false, errors.New("forge credential context changed")
 	}
 	if !statusAuthSharedKind(kind) {

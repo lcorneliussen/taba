@@ -928,6 +928,8 @@ func TestStatusListStateMustMatchObservation(t *testing.T) {
 							t.Fatal(err)
 						}
 						statusHideBitbucketLogin(t)
+						t.Setenv("BB_USERNAME", "synthetic-cache-user")
+						t.Setenv("BB_API_TOKEN", "synthetic-cache-token")
 					}
 					record := PRRecord{Repo: "widget", Number: "7", Branch: "topic", URL: "https://" + forge + "/example/widget/" + segment + "/7"}
 					if _, err := c.EnlistPR(record); err != nil {

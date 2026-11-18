@@ -384,6 +384,7 @@ func (c *Context) statusEnrichRecords(records []PRRecord, rows []StatusRepo) ([]
 }
 
 func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent StatusRefreshIntent, records []PRRecord, rows []StatusRepo) ([]statusPRDetail, []StatusObservation, error) {
+	ctx = statusAuthOperation(ctx)
 	repos := c.prRepositories()
 	identities := make([][2]string, len(records))
 	details := make([]statusPRDetail, len(records))
@@ -499,6 +500,7 @@ func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent Status
 	// Collect local rows without issuing an unused preliminary head read.
 	snapshot, err := c.statusLocalSnapshot(false, false)
 	snapshot.authContext = statusAuthSnapshotScope(ctx)
+	snapshot.authInputs = snapshot.authContext
 	if err != nil {
 		return snapshot, err
 	}

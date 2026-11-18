@@ -96,6 +96,8 @@ func (c *Context) StatusLiveSnapshot(all, noFetch bool) (StatusSnapshot, StatusF
 }
 
 func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.Duration) (StatusSnapshot, StatusFetchReport, error) {
+	ctx := statusAuthOperation(c.resourceContext())
+	c = c.WithStatusContext(ctx)
 	var report StatusFetchReport
 	if all {
 		if err := c.RequireWorkspace("status --all"); err != nil {
@@ -141,6 +143,8 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 		snapshot.Retirement = append(snapshot.Retirement, part.Retirement...)
 		snapshot.StaleCount += part.StaleCount
 	}
+	snapshot.authInputs = statusAuthSnapshotScope(ctx)
+	snapshot.authContext = statusSnapshotAuthStamp(ctx, snapshot)
 	c.statusRetired(&snapshot)
 	c.statusRuntime(&snapshot, true)
 	// Read leftover assessments too, without rerunning the complete status collector.

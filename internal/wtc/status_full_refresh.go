@@ -443,7 +443,7 @@ func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, inc
 		return incremental
 	}
 	defer unlock()
-	corrected, found := statusAuditedCorrection(slug, branch, incremental)
+	corrected, found := statusAuditedCorrectionContext(ctx, slug, branch, incremental)
 	if !statusFullRefreshDueContext(ctx, "bitbucket.org", slug, "build:"+branch) {
 		if found {
 			return corrected
@@ -496,18 +496,22 @@ func statusPreferAuditedBuildContext(ctx context.Context, slug, branch string, p
 	if pageBuild == nil || statusFullRefreshDueContext(ctx, "bitbucket.org", slug, "build:"+branch) {
 		return nil, false
 	}
-	return statusAuditedCorrection(slug, branch, pageBuild)
+	return statusAuditedCorrectionContext(ctx, slug, branch, pageBuild)
 }
 
 func statusAuditedCorrection(slug, branch string, pageBuild *StatusBuild) (*StatusBuild, bool) {
+	return statusAuditedCorrectionContext(context.Background(), slug, branch, pageBuild)
+}
+
+func statusAuditedCorrectionContext(ctx context.Context, slug, branch string, pageBuild *StatusBuild) (*StatusBuild, bool) {
 	if pageBuild == nil {
 		return nil, false
 	}
-	raw, ok := statusReadForgeEntryAny("full", "bitbucket.org", slug, "build:"+branch)
+	raw, ok := statusReadForgeEntryAnyContext(ctx, "full", "bitbucket.org", slug, "build:"+branch)
 	if !ok || string(raw) != statusBuildFingerprint(pageBuild) {
 		return nil, false
 	}
-	saved, ok := statusReadForgeEntryAny("build", "bitbucket.org", slug, branch)
+	saved, ok := statusReadForgeEntryAnyContext(ctx, "build", "bitbucket.org", slug, branch)
 	if !ok {
 		return nil, false
 	}
