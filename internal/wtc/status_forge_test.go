@@ -167,7 +167,7 @@ printf '%s\n' '{"number":7,"state":"MERGED","title":"Finished change","mergedAt"
 	}
 }
 
-func TestStatusForgePreviewRecordsMergesOnlyWhenEnabled(t *testing.T) {
+func TestStatusScopedCollectorRecordsMergesPreviewsDoNot(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	c := newWorkspaceFixture(t)
 	other, err := c.NewCollection(NewOptions{Slug: "other", Repos: []string{"widget"}})
@@ -224,11 +224,17 @@ printf '%s\n' '{"number":7,"state":"MERGED","title":"Finished change","mergedAt"
 	if _, err := c.StatusForgePreview(); err != nil {
 		t.Fatal(err)
 	}
+	if data, err := os.ReadFile(c.PRFile()); err != nil || strings.Contains(string(data), "\n# merged-pr ") {
+		t.Fatalf("explicit preview recorded a merge: %s %v", data, err)
+	}
+	if _, _, err := c.StatusLiveSnapshot(false, true); err != nil {
+		t.Fatal(err)
+	}
 	if data, err := os.ReadFile(c.PRFile()); err != nil || !strings.Contains(string(data), "# merged-pr agent-harness 7 2026-09-30T12:00:00Z SUCCESS") {
-		t.Fatalf("scoped preview did not record final merge: %s %v", data, err)
+		t.Fatalf("scoped collector did not record final merge: %s %v", data, err)
 	}
 	if _, err := os.Stat(filepath.Join(c.Workspace, "other", ".wtc-prs.lock")); !os.IsNotExist(err) {
-		t.Fatalf("preview wrote another collection's registry lock: %v", err)
+		t.Fatalf("status wrote another collection's registry lock: %v", err)
 	}
 }
 
