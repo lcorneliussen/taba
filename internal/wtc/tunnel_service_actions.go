@@ -84,8 +84,8 @@ func (c *Context) managedRuntimeAction(action, target string, wait time.Duration
 			running[item.Group] = true
 		}
 	}
-	// Selection needs only the declarations; the collection env is read once
-	// a named tunnel is actually wanted.
+	// Selection needs only the declarations; reading the collection env is
+	// deferred until a named tunnel is actually wanted.
 	plan, _, err := c.runtimePlanWithTunnels("dekit", false)
 	if err != nil {
 		return result, err

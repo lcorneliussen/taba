@@ -110,11 +110,8 @@ func (c *Context) runtimePlan(binary string) (*runtimeManifest, []byte, error) {
 
 // Native declarations are sufficient to resolve target identity and approve a
 // replacement. Rendering remains stricter and refuses retained old obligations.
-//
-// Only a plan for an absolute runtime binary, that is one about to be
-// rendered, reads x-wtc url_env and port_env. Reading them sources the
-// collection env files, which are receiver-owned shell code, so discovery,
-// dry runs and enlistment checks (binary "dekit") leave those URLs empty.
+// Here only a plan for an absolute runtime binary, one about to be rendered,
+// resolves the collection env; see runtimePlanResolving.
 func (c *Context) runtimePlanWithTunnels(binary string, managed bool) (*runtimeManifest, []byte, error) {
 	return c.runtimePlanResolving(binary, managed, filepath.IsAbs(binary))
 }
@@ -122,13 +119,18 @@ func (c *Context) runtimePlanWithTunnels(binary string, managed bool) (*runtimeM
 // namedTunnelPlan is the plan an explicit named tunnel action reads. The
 // action targets this receiving collection's own service, so it resolves
 // url_env and port_env the way rendering does: the target, and with it the
-// definition digest, then matches the rendered runtime. It never names a
-// runtime binary, plans managed hosts or runs dekit.
+// definition digest, then matches the rendered runtime. "dekit" is only the
+// unresolved kernel placeholder; no binary is looked up or run, and no
+// managed hosts are planned.
 func (c *Context) namedTunnelPlan() (*runtimeManifest, error) {
 	plan, _, err := c.runtimePlanResolving("dekit", false, true)
 	return plan, err
 }
 
+// runtimePlanResolving reads x-wtc url_env and port_env only with resolveEnv.
+// Reading them sources the collection env files, which are receiver-owned
+// shell code, so discovery, dry runs, enlistment checks and removal leave
+// those URLs empty. Rendering and namedTunnelPlan are the two readers.
 func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) (*runtimeManifest, []byte, error) {
 	if err := c.runtimePathsSafe(); err != nil {
 		return nil, nil, err

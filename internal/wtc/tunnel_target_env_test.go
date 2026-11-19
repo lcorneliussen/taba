@@ -43,7 +43,7 @@ func namedTargetStart(t *testing.T, c *Context) (*tailscaleFakeDaemon, error) {
 	return daemon, nil
 }
 
-// The named tunnel command builds its plan without a runtime binary. A target
+// The named tunnel command plans with the unresolved "dekit" placeholder. A target
 // declared through port_env or url_env must still resolve, exactly as the
 // rendered runtime resolves it.
 func TestNamedTunnelTargetResolvesFromCollectionEnv(t *testing.T) {
@@ -172,8 +172,8 @@ func TestNamedTunnelTargetPortEnvIsProviderIndependent(t *testing.T) {
 	}
 }
 
-// Plans built for discovery, dry runs, enlistment checks and removal still
-// never source the collection env: it is executable receiver code.
+// Discovery, dry-run render and recorded status still never source the
+// collection env: it is executable receiver code.
 func TestNamedTunnelTargetLeavesReadOnlyPlansUnresolved(t *testing.T) {
 	c := namedTargetFixture(t, "{port_env: WIDGET_PORT, url_env: WIDGET_URL}", "")
 	marker := filepath.Join(c.Collection, "forbidden")
@@ -228,5 +228,28 @@ func TestNamedTunnelTargetPortEnvStartsWithServiceInReceivingCollection(t *testi
 	config, calls := daemon.snapshot()
 	if calls == 0 || !strings.Contains(config, `"Proxy":"http://127.0.0.1:4173"`) {
 		t.Fatalf("start_with_service did not serve the port_env target: %s", config)
+	}
+}
+
+// svc up reads the collection env for a named tunnel only when it is about to
+// start one. Without a wanted entry it sources the env exactly as often as a
+// collection with no tunnel policy at all.
+func TestNamedTunnelTargetServiceUpWithoutWantedTunnelAddsNoEnvRead(t *testing.T) {
+	sourced := func(c *Context) int {
+		t.Helper()
+		counter := filepath.Join(c.Collection, "sourced")
+		fixtureFile(t, filepath.Join(c.Collection, ".env.collection"), "echo x >> "+counter+"\nWIDGET_PORT=4173\n", 0600)
+		if _, err := c.RuntimeAction("up", "widget/web", 0); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := os.ReadFile(counter)
+		return strings.Count(string(data), "x")
+	}
+	baseline := runtimeFixture(t)
+	fixtureFile(t, filepath.Join(baseline.Collection, "widget/.harness/dekit.tasks.yaml"), "tasks:\n web/server:\n  cmd: [echo, synthetic]\n  x-wtc: {port_env: WIDGET_PORT}\n", 0644)
+	want := sourced(baseline)
+	unwanted := namedTargetFixture(t, "{port_env: WIDGET_PORT}", "")
+	if got := sourced(unwanted); want == 0 || got != want {
+		t.Fatalf("env sourced %d times with an unwanted named tunnel, %d without policy", got, want)
 	}
 }
