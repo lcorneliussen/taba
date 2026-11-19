@@ -234,8 +234,9 @@ func statusLocalEvidenceHinted(ctx context.Context, forge, slug, number string) 
 // statusLocalMergeEvidence reads local hints for enlisted PRs whose branch is
 // checked out: a gone upstream, and whether the checkout head is contained in
 // its development tip. The hints schedule a provider read only behind an open
-// list served stale, and are reported as evidence. Neither is a forge-confirmed merge: they never set a MERGED
-// state, record a merge, or authorize a checkout move.
+// list served stale, and are reported as evidence. Neither is a
+// forge-confirmed merge: they never set a MERGED state, record a merge, or
+// authorize a checkout move.
 func (c *Context) statusLocalMergeEvidence(rows []StatusRepo, records []PRRecord) []string {
 	repos := c.prRepositories()
 	out := make([]string, len(records))
@@ -289,8 +290,8 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	// unchanged stamp means its fingerprinted summary is unchanged too (GitHub:
 	// update time, check rollup, reviews and mergeability; Bitbucket: update
 	// time and participants, with checks read per head elsewhere). Its time
-	// therefore dates the row and its action-gating freshness, as before this
-	// change. Conflicting audit detail keeps its own age. The persisted
+	// therefore dates the row and its action-gating freshness. Conflicting
+	// audit detail keeps its own age. The persisted
 	// confirmation only dates the state of later fallbacks, which have no such
 	// list item, and never improves their freshness.
 	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
@@ -565,8 +566,9 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 // branches. A forge failure never becomes a merged claim. It serves the
 // --forge preview and the next-step recheck, and neither records merges in
 // the PR registry, repairs PR references, returns merged worktrees nor writes
-// a snapshot. Scoped collections (one-shot, periodic and explicit refresh)
-// still do; a workspace sweep does not. Like any status read it may publish
+// a snapshot. Scoped one-shot and periodic collections do all of these; an
+// explicit refresh records merges and returns worktrees but skips reference
+// repair; a workspace sweep does none. Like any status read it may publish
 // provider observations to the account-scoped forge cache.
 func (c *Context) StatusForgePreview() (StatusSnapshot, error) {
 	return c.statusForgePreview(true, false)

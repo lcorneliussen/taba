@@ -228,7 +228,27 @@ func TestStatus445PreviewsLeaveGitRegistryAndSnapshotsUnchanged(t *testing.T) {
 			if _, err := f.c.ReadStatusSnapshot(); !os.IsNotExist(err) {
 				t.Fatalf("--cached found a snapshot no preview should have written: %v", err)
 			}
+			// --cached without a snapshot falls back to the legacy text.
+			if _, err := f.c.LegacyStatusText(); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
 			if diff := fixture445Diff(before, fixture445State(t, f)); diff != "" {
+				t.Fatalf("--cached changed collection or Git state:\n%s", diff)
+			}
+			// With a completed snapshot from a full collector (retaining the
+			// branch), --cached reads it and its age without changing anything.
+			t.Setenv("WTC_STATUS_RETURN_MERGED", "off")
+			if _, _, err := f.c.StatusLiveSnapshotWithFetchAge(false, true, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			collected := fixture445State(t, f)
+			if snapshot, err := f.c.ReadStatusSnapshot(); err != nil || len(snapshot.PRs) != 1 {
+				t.Fatalf("cached snapshot: %+v %v", snapshot, err)
+			}
+			if _, err := f.c.CachedStatusAge(); err != nil {
+				t.Fatal(err)
+			}
+			if diff := fixture445Diff(collected, fixture445State(t, f)); diff != "" {
 				t.Fatalf("--cached changed collection or Git state:\n%s", diff)
 			}
 		})
