@@ -112,6 +112,8 @@ type runtimeManifest struct {
 	Tasks         []runtimeTask                  `json:"tasks"`
 	Resources     []runtimeResource              `json:"resources,omitempty"`
 	Declared      []runtimeDeclaredResource      `json:"declared,omitempty"`
+	// envResolved records that url_env and port_env were read for this plan.
+	envResolved bool
 }
 
 type RuntimeResult struct {

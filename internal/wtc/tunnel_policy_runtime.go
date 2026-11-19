@@ -325,11 +325,16 @@ func (c *Context) tunnelDefinitionFor(e tunnelEffectiveEntry, plan *runtimeManif
 			}
 		}
 	}
-	if d.Target == "" && portEnv != "" {
-		return d, fmt.Errorf("named tunnel service needs an explicit local URL/port: set %s to a port number in the collection env", portEnv)
-	}
 	if d.Target == "" {
-		return d, fmt.Errorf("named tunnel service needs an explicit local URL/port: declare x-wtc.port_env or x-wtc.url")
+		// Advice only when the env was read: an unresolved plan cannot tell.
+		switch {
+		case !plan.envResolved:
+			return d, fmt.Errorf("named tunnel service needs an explicit local URL/port")
+		case portEnv != "":
+			return d, fmt.Errorf("named tunnel service needs an explicit local URL/port: set %s to a port number in the collection env", portEnv)
+		default:
+			return d, fmt.Errorf("named tunnel service needs an explicit local URL/port: declare x-wtc.port_env or x-wtc.url")
+		}
 	}
 	local, err := url.Parse(d.Target)
 	if err != nil || local.Hostname() != "localhost" && local.Hostname() != "127.0.0.1" && local.Hostname() != "::1" {

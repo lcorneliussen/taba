@@ -110,8 +110,8 @@ func (c *Context) runtimePlan(binary string) (*runtimeManifest, []byte, error) {
 
 // Native declarations are sufficient to resolve target identity and approve a
 // replacement. Rendering remains stricter and refuses retained old obligations.
-// Here only a plan for an absolute runtime binary, one about to be rendered,
-// resolves the collection env; see runtimePlanResolving.
+// Only a plan for an absolute runtime binary resolves the collection env here;
+// see runtimePlanResolving.
 func (c *Context) runtimePlanWithTunnels(binary string, managed bool) (*runtimeManifest, []byte, error) {
 	return c.runtimePlanResolving(binary, managed, filepath.IsAbs(binary))
 }
@@ -119,9 +119,9 @@ func (c *Context) runtimePlanWithTunnels(binary string, managed bool) (*runtimeM
 // namedTunnelPlan is the plan an explicit named tunnel action reads. The
 // action targets this receiving collection's own service, so it resolves
 // url_env and port_env the way rendering does: the target, and with it the
-// definition digest, then matches the rendered runtime. "dekit" is only the
-// unresolved kernel placeholder; no binary is looked up or run, and no
-// managed hosts are planned.
+// definition digest, then matches the rendered runtime. The plan is never
+// rendered, so it names the default "dekit" without looking up or running a
+// binary, and it plans no managed hosts.
 func (c *Context) namedTunnelPlan() (*runtimeManifest, error) {
 	plan, _, err := c.runtimePlanResolving("dekit", false, true)
 	return plan, err
@@ -129,8 +129,9 @@ func (c *Context) namedTunnelPlan() (*runtimeManifest, error) {
 
 // runtimePlanResolving reads x-wtc url_env and port_env only with resolveEnv.
 // Reading them sources the collection env files, which are receiver-owned
-// shell code, so discovery, dry runs, enlistment checks and removal leave
-// those URLs empty. Rendering and namedTunnelPlan are the two readers.
+// shell code. Plans for an absolute binary (rendering, svc add validation,
+// legacy tunnel actions) and namedTunnelPlan set it; discovery, dry runs,
+// the svc add duplicate check and removal leave those URLs empty.
 func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) (*runtimeManifest, []byte, error) {
 	if err := c.runtimePathsSafe(); err != nil {
 		return nil, nil, err
@@ -142,7 +143,7 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 	if err != nil {
 		return nil, nil, err
 	}
-	m := &runtimeManifest{Schema: 1, Root: c.runtimeRoot(), Binary: binary, Tasks: []runtimeTask{}}
+	m := &runtimeManifest{Schema: 1, Root: c.runtimeRoot(), Binary: binary, Tasks: []runtimeTask{}, envResolved: resolveEnv}
 	native := map[string]any{}
 	// The resolved port of each service, by group, for its tasks' env.
 	ports := map[string][2]string{}

@@ -43,8 +43,8 @@ func namedTargetStart(t *testing.T, c *Context) (*tailscaleFakeDaemon, error) {
 	return daemon, nil
 }
 
-// The named tunnel command plans with the unresolved "dekit" placeholder. A target
-// declared through port_env or url_env must still resolve, exactly as the
+// Named tunnel actions plan with namedTunnelPlan. A target declared through
+// port_env or url_env resolves from the collection env, exactly as the
 // rendered runtime resolves it.
 func TestNamedTunnelTargetResolvesFromCollectionEnv(t *testing.T) {
 	for _, tc := range []struct {
@@ -251,5 +251,24 @@ func TestNamedTunnelTargetServiceUpWithoutWantedTunnelAddsNoEnvRead(t *testing.T
 	unwanted := namedTargetFixture(t, "{port_env: WIDGET_PORT}", "")
 	if got := sourced(unwanted); want == 0 || got != want {
 		t.Fatalf("env sourced %d times with an unwanted named tunnel, %d without policy", got, want)
+	}
+}
+
+// A plan that never read the env cannot know whether a variable is set, so it
+// gives no advice about one.
+func TestNamedTunnelTargetUnresolvedPlanGivesNoEnvAdvice(t *testing.T) {
+	for _, metadata := range []string{"{port_env: WIDGET_PORT}", "{url_env: WIDGET_URL}"} {
+		c := namedTargetFixture(t, metadata, "WIDGET_PORT=4173\nWIDGET_URL=http://127.0.0.1:5173\n")
+		plan, _, err := c.runtimePlanWithTunnels("dekit", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries, err := c.effectiveTunnels(plan)
+		if err != nil || len(entries) != 1 {
+			t.Fatal(entries, err)
+		}
+		if _, err = c.tunnelDefinitionFor(entries[0], plan); err == nil || err.Error() != "named tunnel service needs an explicit local URL/port" {
+			t.Fatalf("%s: unresolved plan gave env advice: %v", metadata, err)
+		}
 	}
 }
