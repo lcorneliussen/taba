@@ -30,8 +30,10 @@ func statusObservationUnavailable(freshness string) bool {
 	return freshness == "stale" || freshness == "deferred" || freshness == "unavailable"
 }
 
-// The observation time dates the PR state. Freshness derives from it and gates
-// actions; separately observed checks or mergeability are not re-read here.
+// The observation time dates the PR state. Freshness is derived from it when a
+// read first sets that time, and gates actions; a later list confirmation moves
+// only the state time (statusNewerListedContext). Separately observed checks
+// or mergeability are not re-read here.
 // A detail-cache time needs a matching state and head; a newer list
 // confirmation (statusNewerListedContext) needs the same state and, when both
 // sides know it, the same head, and never changes freshness.

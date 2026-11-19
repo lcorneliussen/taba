@@ -285,10 +285,12 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	}
 	detail = statusConfirmFullPRLockedContext(ctx, record, slug, forge, detail, source)
 	detail = statusObserveDetailContext(ctx, detail, slug, forge)
-	// The list in this pass observed the matching OPEN/DRAFT state, and its
-	// item carries the check rollup and review summary the stamp fingerprints,
-	// so its time dates the row and its action-gating freshness (unchanged
-	// behavior). Conflicting audit detail keeps its own age. The persisted
+	// The list in this pass observed the matching OPEN/DRAFT state, and an
+	// unchanged stamp means its fingerprinted summary is unchanged too (GitHub:
+	// update time, check rollup, reviews and mergeability; Bitbucket: update
+	// time and participants, with checks read per head elsewhere). Its time
+	// therefore dates the row and its action-gating freshness, as before this
+	// change. Conflicting audit detail keeps its own age. The persisted
 	// confirmation only dates the state of later fallbacks, which have no such
 	// list item, and never improves their freshness.
 	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
@@ -560,10 +562,12 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 }
 
 // StatusForgePreview adds enlisted PRs and discovers open PRs on active
-// branches. A forge failure never becomes a merged claim. A preview does not
-// record merges in the PR registry, repair PR references, return merged
-// worktrees or write a snapshot; only full collectors do. Like any status
-// read it may publish provider observations to the account-scoped forge cache.
+// branches. A forge failure never becomes a merged claim. It serves the
+// --forge preview and the next-step recheck, and neither records merges in
+// the PR registry, repairs PR references, returns merged worktrees nor writes
+// a snapshot. Scoped collections (one-shot, periodic and explicit refresh)
+// still do; a workspace sweep does not. Like any status read it may publish
+// provider observations to the account-scoped forge cache.
 func (c *Context) StatusForgePreview() (StatusSnapshot, error) {
 	return c.statusForgePreview(true, false)
 }

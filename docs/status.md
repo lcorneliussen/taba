@@ -223,7 +223,9 @@ cancellation or a deadline names that reason; its older facts are `deferred`.
 `observed_at` is the newest observation of the PR's state: a later open-list
 confirmation of the same open state can supply it, without renewing freshness,
 checks or reviews. When an enlisted PR's branch is checked out and its upstream
-is gone, status reads that PR directly rather than trusting the open list, and
+is gone, an open list served stale after a refused read does not keep that PR
+open: status confirms it with its own read (on Bitbucket, in the existing
+confirmation queue; on GitHub, deferred with its reason until admitted), and
 JSON reports `local_merge_evidence` (for example `upstream-gone; head in
 origin/main`). That evidence is never a merge: it records nothing and returns
 no worktree. A Bitbucket decline keeps archive treatment by its closure time
