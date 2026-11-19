@@ -1,10 +1,12 @@
 package wtc
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,8 +29,8 @@ type ReviewStatus struct {
 }
 
 type reviewComment struct {
-	ID      any    `json:"id"`
-	Body    string `json:"body"`
+	ID      json.RawMessage `json:"id"`
+	Body    string          `json:"body"`
 	Content struct {
 		Raw string `json:"raw"`
 	} `json:"content"`
@@ -45,13 +47,66 @@ type reviewComment struct {
 }
 
 var reviewStatusLine = regexp.MustCompile(`wtc-review v1 head=([0-9a-f]{12,40}) verdict=([a-z-]+) blockers=([0-9]+) round=([0-9]+)`)
-var reviewIssueCommentID = regexp.MustCompile(`issuecomment-([0-9]+)`)
+var reviewCommentURLID = map[string]*regexp.Regexp{
+	"github":    regexp.MustCompile(`#issuecomment-([0-9]+)$`),
+	"bitbucket": regexp.MustCompile(`#comment-([0-9]+)$`),
+}
+var reviewDecimalCommentID = regexp.MustCompile(`^[1-9][0-9]{0,38}$`)
+
+// reviewCommentIDText reads a forge comment id as exact decimal text: a JSON
+// integer or a quoted one, never through float64. Absent and null are "";
+// zero, signs, fractions, exponents and anything else are errors.
+func reviewCommentIDText(raw json.RawMessage) (string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	text := string(raw)
+	if raw[0] == '"' {
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return "", fmt.Errorf("invalid comment id %s", raw)
+		}
+	}
+	if !reviewDecimalCommentID.MatchString(text) {
+		return "", fmt.Errorf("invalid comment id %s", raw)
+	}
+	return text, nil
+}
+
+// reviewCommentIdentity combines the id field with the id in the comment's
+// forge link. Either alone identifies the comment; both must agree.
+func reviewCommentIdentity(forge string, rawID json.RawMessage, link string) (string, error) {
+	id, err := reviewCommentIDText(rawID)
+	if err != nil {
+		return "", err
+	}
+	fromLink := ""
+	if pattern := reviewCommentURLID[forge]; pattern != nil {
+		if found := pattern.FindStringSubmatch(link); len(found) > 0 {
+			if fromLink, err = reviewCommentIDText(json.RawMessage(found[1])); err != nil {
+				return "", err
+			}
+		}
+	}
+	if id != "" && fromLink != "" && id != fromLink {
+		return "", fmt.Errorf("comment id %s contradicts its link %s", id, link)
+	}
+	if id == "" {
+		id = fromLink
+	}
+	return id, nil
+}
 
 func ParseReviewStatusComments(data []byte, pr int, head, forge, slug, collection string, trusted bool) (ReviewStatus, error) {
 	status := ReviewStatus{State: "none", PR: pr, PRHead: head}
 	var root any
-	if err := json.Unmarshal(data, &root); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber() // keep comment ids exact; see reviewCommentIDText
+	if err := decoder.Decode(&root); err != nil {
 		return status, fmt.Errorf("review comments: %w", err)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return status, fmt.Errorf("review comments: unexpected data after JSON value")
 	}
 	var raw []any
 	switch v := root.(type) {
@@ -98,11 +153,19 @@ func ParseReviewStatusComments(data []byte, pr int, head, forge, slug, collectio
 		if url == "" {
 			url = c.HTMLURL
 		}
-		cid := ""
-		if found := reviewIssueCommentID.FindStringSubmatch(url); len(found) > 0 {
-			cid = found[1]
-		} else if c.ID != nil {
-			cid = fmt.Sprint(c.ID)
+		// GitHub: the id field is a GraphQL node id, so only the
+		// #issuecomment-<n> link carries the REST id a receipt names; an
+		// unreadable link leaves no identity.
+		// Bitbucket: the id field and the #comment-<n> link are both read and
+		// must agree; an unreadable or contradictory id leaves no identity.
+		// A comment without an identity never has a trusted receipt.
+		rawID := c.ID
+		if forge == "github" {
+			rawID = nil
+		}
+		cid, err := reviewCommentIdentity(forge, rawID, url)
+		if err != nil {
+			cid = ""
 		}
 		status = ReviewStatus{State: "stale", PR: pr, Verdict: m[2], Blockers: &blockers, Round: &round, ReviewHead: m[1], PRHead: head, CommentURL: url, CommentID: cid}
 		if SameReviewSHA(m[1], head) {
@@ -110,7 +173,7 @@ func ParseReviewStatusComments(data []byte, pr int, head, forge, slug, collectio
 		}
 	}
 	if trusted && status.State == "current" {
-		if !reviewReceiptExists(collection, forge, slug, strconv.Itoa(pr), status.ReviewHead, status.CommentID, status.Verdict) {
+		if status.CommentID == "" || !reviewReceiptExists(collection, forge, slug, strconv.Itoa(pr), status.ReviewHead, status.CommentID, status.Verdict) {
 			status.State = "untrusted"
 		}
 	}

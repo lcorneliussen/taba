@@ -301,21 +301,77 @@ func postReviewComment(m ReviewManifest, cid, body string) (ReviewPostResult, er
 	if cid != "" {
 		return ReviewPostResult{CommentID: cid, URL: m.URL}, nil
 	}
-	var result struct {
-		ID    int64 `json:"id"`
+	return parseBitbucketCreatedComment(out, m.PR, "")
+}
+
+// parseBitbucketCreatedComment reads the comment a Bitbucket write returned:
+// the REST comment itself ({"id", "links"}), or bb's --json envelope
+// ({"success": true, "pullRequestId", "comment": {...}}, bb 1.8.3 and 2.2.1).
+// The id is kept as exact decimal text. Any error, refusal, other PR, or two
+// ids that disagree is an error, so an uncertain create stays pending.
+// want, when set, is the id an update targeted; the response must name it.
+func parseBitbucketCreatedComment(out []byte, pr, want string) (ReviewPostResult, error) {
+	type rawComment struct {
+		ID    json.RawMessage `json:"id"`
 		Links struct {
 			HTML struct {
 				Href string `json:"href"`
 			} `json:"html"`
 		} `json:"links"`
 	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return ReviewPostResult{}, err
+	var envelope struct {
+		rawComment
+		Type          string          `json:"type"`
+		Error         json.RawMessage `json:"error"`
+		Success       json.RawMessage `json:"success"`
+		PullRequestID json.RawMessage `json:"pullRequestId"`
+		Comment       *rawComment     `json:"comment"`
 	}
-	if result.ID == 0 {
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	if err := decoder.Decode(&envelope); err != nil {
+		return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response: %w", err)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response has data after its JSON object")
+	}
+	if envelope.Type == "error" || len(envelope.Error) != 0 && string(envelope.Error) != "null" {
+		return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response is an error: %s", strings.TrimSpace(string(out[:min(400, len(out))])))
+	}
+	if len(envelope.Success) != 0 && string(envelope.Success) != "true" {
+		return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response is not successful")
+	}
+	if len(envelope.PullRequestID) != 0 {
+		if got, err := reviewCommentIDText(envelope.PullRequestID); err != nil || got != pr {
+			return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response names pull request %s, not %s", envelope.PullRequestID, pr)
+		}
+	}
+	top, err := reviewCommentIdentity("bitbucket", envelope.ID, envelope.Links.HTML.Href)
+	if err != nil {
+		return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response: %w", err)
+	}
+	id, link := top, envelope.Links.HTML.Href
+	if envelope.Comment != nil {
+		nested, err := reviewCommentIdentity("bitbucket", envelope.Comment.ID, envelope.Comment.Links.HTML.Href)
+		if err != nil {
+			return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response: %w", err)
+		}
+		if top != "" && nested != "" && top != nested {
+			return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response has conflicting ids %s and %s", top, nested)
+		}
+		if nested != "" {
+			id = nested
+		}
+		if envelope.Comment.Links.HTML.Href != "" {
+			link = envelope.Comment.Links.HTML.Href
+		}
+	}
+	if id == "" {
 		return ReviewPostResult{}, fmt.Errorf("Bitbucket comment response has no id")
 	}
-	return ReviewPostResult{CommentID: strconv.FormatInt(result.ID, 10), URL: result.Links.HTML.Href}, nil
+	if want != "" && id != want {
+		return ReviewPostResult{}, fmt.Errorf("Bitbucket updated comment %s, not %s", id, want)
+	}
+	return ReviewPostResult{CommentID: id, URL: link}, nil
 }
 
 func bitbucketReviewCommentAPI(m ReviewManifest, cid, body, inlineFile string, inlineLine int, parent string) (ReviewPostResult, bool, error) {
@@ -367,21 +423,8 @@ func bitbucketReviewCommentAPI(m ReviewManifest, cid, body, inlineFile string, i
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return ReviewPostResult{}, true, fmt.Errorf("Bitbucket comment API returned %s: %s", response.Status, strings.TrimSpace(string(raw[:min(400, len(raw))])))
 	}
-	var result struct {
-		ID    int64 `json:"id"`
-		Links struct {
-			HTML struct {
-				Href string `json:"href"`
-			} `json:"html"`
-		} `json:"links"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return ReviewPostResult{}, true, err
-	}
-	if result.ID == 0 {
-		return ReviewPostResult{}, true, fmt.Errorf("Bitbucket comment response has no id")
-	}
-	return ReviewPostResult{CommentID: strconv.FormatInt(result.ID, 10), URL: result.Links.HTML.Href}, true, nil
+	result, err := parseBitbucketCreatedComment(raw, m.PR, cid)
+	return result, true, err
 }
 
 func inlineReviewKey(concern, path string, line int, title string) string {
@@ -571,11 +614,10 @@ func postReviewInline(m ReviewManifest, bundle string) (posted, failed, skipped 
 				} else if len(body) <= 8192 && !strings.HasPrefix(body, "-") {
 					out, err := reviewBitbucketCommand(m, []string{"pr", "comments", "add", m.PR, body, "--file", f.File, "--line-to", strconv.Itoa(f.Line), "--json"}, nil)
 					if err == nil {
-						var result struct {
-							ID int64 `json:"id"`
-						}
-						if json.Unmarshal(out, &result) == nil && result.ID != 0 {
-							row.ID = strconv.FormatInt(result.ID, 10)
+						if result, err := parseBitbucketCreatedComment(out, m.PR, ""); err == nil {
+							row.ID, row.URL = result.CommentID, result.URL
+						} else {
+							row.Error = err.Error()
 						}
 					} else {
 						row.Error = err.Error()
