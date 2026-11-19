@@ -14,7 +14,11 @@ type StatusFetchReport struct {
 }
 
 func statusCommonDir(worktree string) (string, error) {
-	common, err := statusGit(worktree, "rev-parse", "--git-common-dir")
+	return statusCommonDirContext(context.Background(), worktree)
+}
+
+func statusCommonDirContext(ctx context.Context, worktree string) (string, error) {
+	common, err := statusGitContext(ctx, worktree, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return "", err
 	}
@@ -43,7 +47,7 @@ func (c *Context) StatusRefreshRefsWithAge(all bool, maxAge time.Duration) (Stat
 		if target.noRemote {
 			continue // No remote to fetch from; local branches are the only refs.
 		}
-		common, err := statusCommonDir(target.path)
+		common, err := statusCommonDirContext(c.resourceContext(), target.path)
 		if err != nil {
 			report.Failed++
 			continue
@@ -58,7 +62,7 @@ func (c *Context) StatusRefreshRefsWithAge(all bool, maxAge time.Duration) (Stat
 		}
 		report.Attempted++
 		c.statusProgress(fmt.Sprintf("Fetching remote refs %d", report.Attempted))
-		if _, err := statusCommand(30*time.Second, "git", "--git-dir="+common, "fetch", "--prune", "origin"); err != nil {
+		if _, err := statusCommandContext(c.resourceContext(), 30*time.Second, "git", "--git-dir="+common, "fetch", "--prune", "origin"); err != nil {
 			report.Failed++
 		}
 	}
@@ -106,12 +110,8 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 		}
 	}
 	if !all {
-		snapshot, err := c.StatusForgePreview()
-		if err != nil {
-			return snapshot, report, err
-		}
-		c.statusProgress("Writing status snapshot")
-		return snapshot, report, c.WriteStatusSnapshot(snapshot)
+		snapshot, err := c.statusForgePreviewFinalized(c.resourceContext(), StatusRefreshBackground, true, true, 0, c.statusFinalizePublication)
+		return snapshot, report, err
 	}
 	collections, err := WorkspaceCollections(c.Workspace)
 	if err != nil {
@@ -121,7 +121,7 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 		CLIVersion:           RunningCLIVersion(),
 		ShowCollectionColumn: true, Repos: []StatusRepo{}, PRs: []StatusPRRow{}, Orphans: []StatusOrphan{}}
 	for i, dir := range collections {
-		collection, err := OpenCollection(dir)
+		collection, err := OpenCollectionContext(c.resourceContext(), dir)
 		if err != nil {
 			return snapshot, report, err
 		}
@@ -159,14 +159,19 @@ func (c *Context) StatusForegroundSnapshot(ctx context.Context) (StatusSnapshot,
 }
 
 func (c *Context) statusForegroundSnapshot(ctx context.Context, metadataBudget time.Duration) (StatusSnapshot, error) {
+	ctx = statusResourceOperation(ctx)
+	c = c.WithStatusContext(ctx)
 	// A metadata-phase deadline is a deferred per-record outcome. The caller's
 	// cancellation still prevents subsequent snapshot publication.
-	snapshot, err := c.statusForgePreviewWithIntent(ctx, StatusRefreshForeground, true, true, metadataBudget)
+	return c.statusForgePreviewFinalized(ctx, StatusRefreshForeground, true, true, metadataBudget, c.statusFinalizePublication)
+}
+
+// StatusLiveSnapshotContext retains the complete collector and its accounting;
+// cancellation applies to context-aware reads and prevents queued publication.
+func (c *Context) StatusLiveSnapshotContext(ctx context.Context, all, noFetch bool, maxAge time.Duration) (StatusSnapshot, StatusFetchReport, error) {
+	receiver, err := c.StatusReadContext(ctx)
 	if err != nil {
-		return snapshot, err
+		return StatusSnapshot{}, StatusFetchReport{}, err
 	}
-	if err := ctx.Err(); err != nil {
-		return snapshot, err
-	}
-	return snapshot, c.WriteStatusSnapshot(snapshot)
+	return receiver.StatusLiveSnapshotWithFetchAge(all, noFetch, maxAge)
 }

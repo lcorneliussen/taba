@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func (c *Context) statusRuntime(snapshot *StatusSnapshot, all bool) {
@@ -12,7 +13,7 @@ func (c *Context) statusRuntime(snapshot *StatusSnapshot, all bool) {
 		return
 	}
 	if !all {
-		snapshot.Runtime = c.RuntimeStatus()
+		snapshot.Runtime, snapshot.RuntimeObservedAt = c.RuntimeStatusObserved()
 	} else {
 		// A sweep uses this collection's trusted executable, never a binary
 		// selected by a foreign collection's manifest or hook.
@@ -22,7 +23,7 @@ func (c *Context) statusRuntime(snapshot *StatusSnapshot, all bool) {
 			return
 		}
 		for _, dir := range dirs {
-			target, err := OpenCollection(dir)
+			target, err := OpenCollectionContext(c.resourceContext(), dir)
 			if err != nil {
 				continue
 			}
@@ -53,6 +54,9 @@ func (c *Context) statusRuntime(snapshot *StatusSnapshot, all bool) {
 			m.Binary = binary
 			add(runtimeTaskDiagnostics(target.runtimeStatusObservation(m)))
 		}
+	}
+	if snapshot.RuntimeObservedAt.IsZero() {
+		snapshot.RuntimeObservedAt = time.Now()
 	}
 	for i := range snapshot.Repos {
 		row := &snapshot.Repos[i]

@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,14 +24,18 @@ var statusWatcherDirs = []string{statusWatcherDir, ".taba-status-watchers"}
 // A removed or replaced lease also cancels the view. No persisted PID is
 // trusted, so stale leases cannot signal a reused process.
 func (c *Context) RegisterStatusWatcher(stop func()) (func(), error) {
+	return c.RegisterStatusWatcherContext(context.Background(), stop)
+}
+
+func (c *Context) RegisterStatusWatcherContext(ctx context.Context, stop func()) (func(), error) {
 	if RetiredFolder(c.Collection) {
 		return nil, retiredFolderError(c.Collection)
 	}
 	var cleanup func()
-	err := c.withStatusWatcherLock(func() error {
+	err := c.withStatusWatcherLockContext(ctx, func() error {
 		// Retirement holds this same lock through folder removal. Reopen after
 		// acquiring it so an already-discovered context cannot revive a retire.
-		if _, err := OpenCollection(c.Collection); err != nil {
+		if _, err := OpenCollectionContext(ctx, c.Collection); err != nil {
 			return err
 		}
 		var err error
@@ -41,6 +46,10 @@ func (c *Context) RegisterStatusWatcher(stop func()) (func(), error) {
 }
 
 func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
+	return c.registerStatusWatcherWithEvents(stop, statusResourceLeaseEvents)
+}
+
+func (c *Context) registerStatusWatcherWithEvents(stop func(), watch func(*os.File) (<-chan struct{}, func())) (func(), error) {
 	dir := filepath.Join(c.Collection, statusWatcherDir)
 	if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
 		return nil, err
@@ -64,35 +73,50 @@ func (c *Context) registerStatusWatcher(stop func()) (func(), error) {
 		_ = f.Close()
 		return nil, err
 	}
+	events, closeEvents := watch(f)
 	done := make(chan struct{})
 	var once sync.Once
 	cleanup := func() {
 		once.Do(func() {
 			close(done)
+			closeEvents()
 			if current, err := os.Lstat(f.Name()); err == nil && os.SameFile(identity, current) {
 				_ = os.Remove(f.Name())
 			}
 			_ = f.Close()
 			// Release the lease before taking the watcher lock: retirement
 			// may own that lock while it waits for this watcher to stop.
-			_ = c.withStatusWatcherLock(func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			defer cancel()
+			_ = c.withStatusWatcherLockContext(ctx, func() error {
 				_ = os.Remove(dir) // Only remove an empty registry.
 				return nil
 			})
 		})
 	}
 	go func() {
-		ticker := time.NewTicker(50 * time.Millisecond)
+		every := 500 * time.Millisecond
+		if events != nil {
+			every = 5 * time.Second
+		}
+		ticker := time.NewTicker(every)
 		defer ticker.Stop()
 		for {
+			// Also check immediately after installing the notifications, so
+			// a change during registration cannot be lost.
+			current, err := os.Lstat(f.Name())
+			if err != nil || !os.SameFile(identity, current) || current.Size() != 0 {
+				stop()
+				return
+			}
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				current, err := os.Lstat(f.Name())
-				if err != nil || !os.SameFile(identity, current) || current.Size() != 0 {
-					stop()
-					return
+			case _, ok := <-events:
+				if !ok {
+					events = nil
+					ticker.Reset(500 * time.Millisecond)
 				}
 			}
 		}
@@ -194,6 +218,10 @@ func (c *Context) withStatusWatcherLock(fn func() error) error {
 }
 
 func (c *Context) lockStatusWatchers() (func(), error) {
+	return c.lockStatusWatchersContext(context.Background())
+}
+
+func (c *Context) lockStatusWatchersContext(ctx context.Context) (func(), error) {
 	path := filepath.Join(c.Collection, ".wtc-status-watchers.lock")
 	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0600)
 	if err != nil {
@@ -212,6 +240,9 @@ func (c *Context) lockStatusWatchers() (func(), error) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
 		if err == nil {
 			locked = true
@@ -223,6 +254,22 @@ func (c *Context) lockStatusWatchers() (func(), error) {
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("status watcher lifecycle is busy")
 		}
-		time.Sleep(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
 	}
+}
+
+func (c *Context) withStatusWatcherLockContext(ctx context.Context, fn func() error) error {
+	unlock, err := c.lockStatusWatchersContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return fn()
 }

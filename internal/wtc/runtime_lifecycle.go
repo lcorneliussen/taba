@@ -94,7 +94,7 @@ func runtimeCommandContext(parent context.Context, m *runtimeManifest, sourceEnv
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	argv := append([]string{"-C", m.Root, "--json"}, args...)
-	receiver, err := OpenCollection(filepath.Dir(filepath.Dir(m.Root)))
+	receiver, err := OpenCollectionContext(ctx, filepath.Dir(filepath.Dir(m.Root)))
 	if err != nil {
 		return nil, err
 	}

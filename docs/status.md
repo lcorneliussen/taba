@@ -144,9 +144,14 @@ Such an on-branch PR row retains its recorded C/M/R observations; they are
 not cleared merely because it merged, and are not a new post-merge gate.
 Its title and JSON give the fuller explanation. Older merged entries move
 behind the `a` archive toggle after the configured age; hiding does not delete.
-Closed, declined or superseded enlisted PRs leave the active PR rows. If their
-branch is still checked out, an orphan warning identifies it below the table;
-closure alone does not establish landing or authorize discarding local work.
+Confirmed closed and declined PRs use the same archive age and `a` toggle as
+merged entries. Expanded unmerged closures retain a `closed`/`declined` label
+and show struck-through links and titles in supporting terminals. NO_COLOR
+keeps the textual state and links. GitHub uses its closure date; Bitbucket uses
+its last update conservatively, so later updates can delay archival. Missing,
+malformed or future dates stay unarchived. A still-checked-out branch also stays
+unarchived with the existing orphan warning; closure does not establish landing
+or authorize discarding local work. Superseded entries retain their omission rule.
 
 ## What is detected and supported
 
@@ -196,8 +201,14 @@ merges are reused without metadata queries. Bitbucket active-PR checks are
 rechecked for the reported commit under the same phase budget, charging each
 page, head-resolution request and redirect separately. Incomplete checks cannot
 claim success or absence; a known failure for that exact head keeps its original
-observation time when fresh checks are unavailable. Periodic collection, branch discovery,
-local refs, runtime and build coverage retain their existing policies.
+observation time when fresh checks are unavailable. Periodic collection still
+includes branch discovery, local refs, runtime and build facts.
+
+Active PR state observations expire on screen using their original observation
+time and the configured forge cache age, even between background refreshes.
+Expiry does not make a provider request or change saved evidence. Missing or
+future observation times cannot establish currentness. Confirmed merges retain
+their terminal authority; checks and reviews remain separate observations.
 
 The PR STATE cell uses compact `s:age` (stale), `d:age` (deferred), and `u:age`
 (unavailable) marks so titles remain visible. `never` means no known observation;
@@ -208,9 +219,51 @@ unknown. Age can establish observation expiration, but never a provider rate lim
 remain visible. JSON adds `observation_reason` and `retry_at` without changing
 the meaning of `observed_at`. Reading or rendering does not renew observations.
 
-This foreground metadata change does not provide cached-first startup or full
-collector child cancellation. Those lifecycle changes remain separate work;
-visibility/attachment information is not inferred from unsupported host APIs.
+Interactive startup paints a loading frame before expensive collection or service
+discovery. Saved rows appear only after receiving scope validates. Their ages
+come from the saved observation timestamps, including when cache files were
+copied; missing or future timestamps remain unknown. Help, resize and quit work
+while discovery or watcher admission is pending, and cached actions stay blocked
+until watcher admission succeeds. Explicit one-shot and cached output flags keep
+their existing contracts.
+
+Focus and input are bounded positive hints, not proof of an attached viewer.
+Without a current hint, the default full refresh interval is five minutes and
+service observations have a one-minute safety interval. A recent hint enables
+the normal 30-second full refresh and three-second service cadence for up to one
+minute. Local declaration/identity changes and service-change signals can wake
+observations sooner. Unchanged service declarations reuse validated local
+inventory instead of running Git discovery on every service read. Working-tree
+changes without a local change signal are caught by the bounded full refresh.
+`WTC_STATUS_WATCH` and `WTC_STATUS_WATCH_BG` tune full refresh intervals; manual
+`r` keeps its foreground admission, coalescing and shared cooldown behavior.
+Read-only identity requests share a process-local cache of at most 128 entries.
+Each reuse rechecks current canonical paths, ownership, worktree and Git
+configuration inputs; it does not reuse branch, working-tree, provider,
+retirement or action facts. Registry and receiving scope validate at each
+observation. When supported, trusted Git reports only its system/global config
+paths for validation. Unknown provenance, includes, symlinks, unsupported Git or
+environment overrides fall back to direct reads. No configuration values are
+recorded by discovery. Resource coverage still requires measurement under the
+actual configuration; isolated fixture settings do not establish that coverage.
+
+No per-view host visibility command or unsupported attached-client API is used.
+Painting, including key feedback and new observations, is capped at one frame
+per second. Input and collector work run independently, so the paint cadence
+does not throttle manual refresh or provider admission.
+
+If a shared cache or budget lock is unavailable, provider reads fail closed:
+status reports deferred or unavailable observations instead of dispatching
+without shared accounting. The same rule applies to background and one-shot
+status reads; it does not increase provider limits.
+
+Quit cancels discovery and watcher waits, selected PR/build provider reads,
+the read-only build hook, guarded retirement Git reads, and queued
+cache/admission waits. Snapshot publication
+checks cancellation before committing each file. Already committed observations
+remain authoritative. Filesystem I/O already in progress and arbitrary hook
+descendants are not universally cancellable; this is not a promise of complete
+collector process-tree cancellation.
 
 ```sh
 taba status                 # interactive live view in a terminal

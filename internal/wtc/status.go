@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -14,9 +15,11 @@ import (
 // and, once ported, the live renderer. This is the local Git portion; forge
 // and process facts are added by later collection stages.
 type StatusSnapshot struct {
-	Schema      int    `json:"schema"`
-	Collection  string `json:"collection"`
-	GeneratedAt string `json:"generated_at"`
+	// RuntimeObservedAt orders concurrent in-process service reads. It is not a cache timestamp or wire field.
+	RuntimeObservedAt time.Time `json:"-"`
+	Schema            int       `json:"schema"`
+	Collection        string    `json:"collection"`
+	GeneratedAt       string    `json:"generated_at"`
 	// CLIVersion identifies the snapshot producer, not a later cache reader.
 	// Absent in older schema-1 snapshots.
 	CLIVersion           string         `json:"cli_version,omitempty"`
@@ -200,7 +203,11 @@ func (c *Context) statusProgress(message string) {
 }
 
 func statusCount(worktree, rangeSpec string) (int, error) {
-	value, err := statusGit(worktree, "rev-list", "--count", rangeSpec)
+	return statusCountContext(context.Background(), worktree, rangeSpec)
+}
+
+func statusCountContext(ctx context.Context, worktree, rangeSpec string) (int, error) {
+	value, err := statusGitContext(ctx, worktree, "rev-list", "--count", rangeSpec)
 	if err != nil {
 		return 0, err
 	}
@@ -212,14 +219,30 @@ func statusCount(worktree, rangeSpec string) (int, error) {
 }
 
 func statusLocalRepo(t catchUpTarget) (StatusRepo, error) {
+	return statusLocalRepoContext(context.Background(), t)
+}
+
+func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, error) {
 	dir := filepath.Base(t.path)
 	row := StatusRepo{Collection: t.collection, Dir: dir, Repo: t.repo,
 		Worktree: t.path, Tree: "clean", baseRef: t.ref, ComparisonRef: t.ref, DevelopmentBase: t.developmentBase, RenamedTo: t.renamed}
-	remote, err := statusGit(t.path, "remote", "get-url", "origin")
+	remote, err := statusGitContext(ctx, t.path, "remote", "get-url", "origin")
 	if err == nil {
 		row.Slug, row.Forge = catchUpForge(remote)
 	}
-	branch, err := statusGit(t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	local, batched := statusResourceLocalRead(ctx, t.path)
+	branch := ""
+	var branchErr error
+	if batched {
+		branch = local.branch
+		if branch == "(detached)" {
+			// The marker is also a legal branch name; confirm it with symbolic-ref.
+			branch, branchErr = statusGitContext(ctx, t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
+		}
+	} else {
+		branch, branchErr = statusGitContext(ctx, t.path, "symbolic-ref", "--quiet", "--short", "HEAD")
+	}
+	err = branchErr
 	if err == nil {
 		row.BranchKind = "branch"
 		row.Branch = branch
@@ -235,42 +258,76 @@ func statusLocalRepo(t catchUpTarget) (StatusRepo, error) {
 	}
 	upstream := t.ref
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
-	if row.BranchKind == "branch" {
-		if found, err := statusGit(t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
+	branchBatch := batched && row.BranchKind == "branch" && local.branch == row.Branch
+	trackingBatch := branchBatch && local.tracking && local.upstream == t.ref
+	if trackingBatch {
+		upstream = local.upstream
+		row.AheadBasis, row.UpstreamState = "upstream", "tracking"
+	} else if row.BranchKind == "branch" && !(branchBatch && local.noUpstream) {
+		// The upstream probe and fallback share a 60-second bound.
+		upstreamCtx, stop := context.WithTimeout(ctx, 60*time.Second)
+		if found, state, ok := statusResourceUpstream(upstreamCtx, t.path, row.Branch); ok {
+			row.UpstreamState = state
+			if state == "tracking" {
+				upstream = found
+				row.AheadBasis = "upstream"
+			}
+			if state == "gone" {
+				row.BranchDisplay += " [gone]"
+			}
+		} else if found, err := statusGitContext(upstreamCtx, t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
 			upstream = found
 			row.AheadBasis, row.UpstreamState = "upstream", "tracking"
-		} else if tracking, err := statusGit(t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
+		} else if tracking, err := statusGitContext(upstreamCtx, t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
 			row.UpstreamState = "gone"
 			row.BranchDisplay += " [gone]"
 		}
+		stop()
 	}
 	row.AheadRef = upstream
-	row.Ahead, err = statusCount(t.path, upstream+"..HEAD")
-	if err != nil {
-		return StatusRepo{}, fmt.Errorf("%s ahead count: %w", t.path, err)
+	if trackingBatch {
+		row.Ahead, row.Behind = local.ahead, local.behind
+	} else if ahead, behind, ok := statusResourceCounts(ctx, t.path, upstream, t.ref); ok {
+		row.Ahead, row.Behind = ahead, behind
+	} else {
+		row.Ahead, err = statusCountContext(ctx, t.path, upstream+"..HEAD")
+		if err != nil {
+			return StatusRepo{}, fmt.Errorf("%s ahead count: %w", t.path, err)
+		}
+		row.Behind, err = statusCountContext(ctx, t.path, "HEAD.."+t.ref)
+		if err != nil {
+			return StatusRepo{}, fmt.Errorf("%s development-tip count: %w", t.path, err)
+		}
 	}
-	row.Behind, err = statusCount(t.path, "HEAD.."+t.ref)
-	if err != nil {
-		return StatusRepo{}, fmt.Errorf("%s development-tip count: %w", t.path, err)
+	if batched {
+		row.Changed, row.Conflict = local.changed, local.conflict
+	} else {
+		porcelain, err := statusGitContext(ctx, t.path, "status", "--porcelain")
+		if err != nil {
+			return StatusRepo{}, fmt.Errorf("%s working tree: %w", t.path, err)
+		}
+		if porcelain != "" {
+			row.Changed = len(strings.Split(porcelain, "\n"))
+		}
+		if unmerged, err := statusGitContext(ctx, t.path, "diff", "--name-only", "--diff-filter=U"); err == nil && unmerged != "" {
+			row.Conflict = true
+		}
 	}
-	porcelain, err := statusGit(t.path, "status", "--porcelain")
-	if err != nil {
-		return StatusRepo{}, fmt.Errorf("%s working tree: %w", t.path, err)
-	}
-	if porcelain != "" {
-		row.Changed = len(strings.Split(porcelain, "\n"))
+	if row.Changed != 0 {
 		row.Tree = fmt.Sprintf("±%d", row.Changed)
 	}
-	row.Operation = catchUpOperation(t)
-	if unmerged, err := statusGit(t.path, "diff", "--name-only", "--diff-filter=U"); err == nil && unmerged != "" {
-		row.Conflict = true
-	}
+	row.Operation = statusResourceOperationState(ctx, t)
+
 	return row, nil
 }
 
 // StatusLocalSnapshot reads worktrees and local refs without contacting a
 // forge, updating refs, or writing a cache. All is an explicit workspace sweep.
 func (c *Context) StatusLocalSnapshot(all bool) (StatusSnapshot, error) {
+	return c.statusLocalSnapshot(all, true)
+}
+
+func (c *Context) statusLocalSnapshot(all, includeChoices bool) (StatusSnapshot, error) {
 	snapshot := StatusSnapshot{Schema: 1,
 		CLIVersion:           RunningCLIVersion(),
 		GeneratedAt:          time.Now().UTC().Format("2006-01-02T15:04:05Z"),
@@ -288,7 +345,7 @@ func (c *Context) StatusLocalSnapshot(all bool) (StatusSnapshot, error) {
 	}
 	for i, target := range targets {
 		c.statusProgress(fmt.Sprintf("Reading worktrees %d/%d", i+1, len(targets)))
-		row, err := statusLocalRepo(target)
+		row, err := statusLocalRepoContext(c.resourceContext(), target)
 		if err != nil {
 			return snapshot, err
 		}
@@ -301,13 +358,26 @@ func (c *Context) StatusLocalSnapshot(all bool) (StatusSnapshot, error) {
 		c.statusRetired(&snapshot)
 	}
 	c.statusRuntime(&snapshot, all)
-	statusNext(&snapshot)
+	if err := c.resourceContext().Err(); err != nil {
+		return snapshot, err
+	}
+	if includeChoices {
+		statusNextContext(c.resourceContext(), &snapshot)
+	}
 	c.statusRetirement(&snapshot, all)
 	return snapshot, nil
 }
 
 // statusNext reads each repository's next step from its row.
-func statusNext(snapshot *StatusSnapshot) {
+func statusNext(snapshot *StatusSnapshot) { statusNextContext(context.Background(), snapshot) }
+
+func statusNextContext(ctx context.Context, snapshot *StatusSnapshot) {
+	_ = statusNextWithHeads(ctx, snapshot, statusCurrentHeads)
+}
+
+type statusHeadReader func(context.Context, StatusRepo) (string, string, error)
+
+func statusNextWithHeads(ctx context.Context, snapshot *StatusSnapshot, readHeads statusHeadReader) error {
 	for i := range snapshot.Repos {
 		r := &snapshot.Repos[i]
 		r.Next = nil
@@ -321,7 +391,10 @@ func statusNext(snapshot *StatusSnapshot) {
 		if r.ReviewOnly || blocked {
 			continue
 		}
-		f := statusFacts(*r)
+		f, err := statusFactsWithHeads(ctx, *r, readHeads)
+		if err != nil {
+			return err
+		}
 		if r.PR == nil && r.BranchKind == "branch" {
 			for _, pr := range snapshot.PRs {
 				if !pr.OnBranch || statusObservationUnavailable(pr.Freshness) || pr.State != "MERGED" || !statusPRMatchesRepo(pr, *r) {
@@ -341,13 +414,33 @@ func statusNext(snapshot *StatusSnapshot) {
 	}
 	// Refresh collection blockers after PR/build facts change, without source reads.
 	statusRetirementFacts(snapshot)
+	return nil
 }
 
 // statusFacts is what a local row tells about the next step. Ahead counts
 // against the branch's upstream (the development tip when it has none), so
 // its development-tip fallback can include residual squash history.
 // Observational landing fields do not change next-action authority.
-func statusFacts(r StatusRepo) next.Facts {
+func statusFacts(r StatusRepo) next.Facts { return statusFactsContext(context.Background(), r) }
+
+func statusFactsContext(ctx context.Context, r StatusRepo) next.Facts {
+	f, _ := statusFactsWithHeads(ctx, r, statusCurrentHeads)
+	return f
+}
+
+func statusCurrentHeads(ctx context.Context, r StatusRepo) (string, string, error) {
+	if head, base, ok := statusResourceHeads(ctx, r.Worktree, r.baseRef); ok {
+		return head, base, nil
+	}
+	head, _ := statusGitContext(ctx, r.Worktree, "rev-parse", "HEAD")
+	base := ""
+	if r.baseRef != "" {
+		base, _ = statusGitContext(ctx, r.Worktree, "rev-parse", r.baseRef)
+	}
+	return head, base, nil
+}
+
+func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHeadReader) (next.Facts, error) {
 	f := next.Facts{Collection: r.Collection, Repo: r.Repo, Host: next.HostLocal, Base: r.baseRef,
 		Ahead: r.Ahead, Behind: r.Behind, Dirty: r.Changed, InProgress: r.Operation}
 	if r.Repo == "" {
@@ -360,11 +453,12 @@ func statusFacts(r StatusRepo) next.Facts {
 		f.Branch = r.Branch
 		f.ToPush = r.Ahead
 	}
-	f.Head, _ = statusGit(r.Worktree, "rev-parse", "HEAD")
-	if r.baseRef != "" {
-		f.BaseHead, _ = statusGit(r.Worktree, "rev-parse", r.baseRef)
+	var err error
+	f.Head, f.BaseHead, err = readHeads(ctx, r)
+	if err != nil {
+		return f, err
 	}
-	if r.Behind > 0 && r.baseRef != "" && f.InProgress == "" {
+	if ctx.Err() == nil && r.Behind > 0 && r.baseRef != "" && f.InProgress == "" {
 		var ok bool
 		f.MergeConflicts, ok = next.PredictMerge(r.Worktree, r.baseRef)
 		f.MergeUnknown = !ok
@@ -383,7 +477,7 @@ func statusFacts(r StatusRepo) next.Facts {
 			f.PR.Mergeable = "mergeable"
 		}
 	}
-	return f
+	return f, nil
 }
 
 // StatusPreferNewerObservations protects presentation from an older collector

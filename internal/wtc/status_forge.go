@@ -20,6 +20,7 @@ type statusPRDetail struct {
 	Merge           string
 	Review          string
 	Title           string
+	ClosedOn        string
 	MergedOn        string
 	Base            string
 	MergeCommit     string
@@ -79,6 +80,7 @@ func statusGHDetail(raw []byte, fallback PRRecord) (statusPRDetail, error) {
 		MergeStateStatus string `json:"mergeStateStatus"`
 		Mergeable        string `json:"mergeable"`
 		MergedAt         string `json:"mergedAt"`
+		ClosedAt         string `json:"closedAt"`
 		BaseRefName      string `json:"baseRefName"`
 		HeadRefOid       string `json:"headRefOid"`
 		MergeCommit      *struct {
@@ -101,7 +103,7 @@ func statusGHDetail(raw []byte, fallback PRRecord) (statusPRDetail, error) {
 	checks, unsettled := statusCheckResult(p.StatusCheckRollup)
 	d := statusPRDetail{Number: fmt.Sprint(p.Number), State: strings.ToUpper(p.State),
 		Checks: checks, ChecksUnsettled: unsettled, Merge: p.MergeStateStatus,
-		Title: cleanPRField(p.Title), MergedOn: p.MergedAt, Base: p.BaseRefName, HeadCommit: p.HeadRefOid}
+		Title: cleanPRField(p.Title), ClosedOn: p.ClosedAt, MergedOn: p.MergedAt, Base: p.BaseRefName, HeadCommit: p.HeadRefOid}
 	if strings.EqualFold(p.Mergeable, "CONFLICTING") {
 		d.Merge = "CONFLICTING"
 	}
@@ -110,6 +112,19 @@ func statusGHDetail(raw []byte, fallback PRRecord) (statusPRDetail, error) {
 	}
 	if p.MergeCommit != nil {
 		d.MergeCommit = p.MergeCommit.OID
+	}
+	// A provider-confirmed merge date distinguishes closed-by-merge from
+	// an unmerged closure; closure alone never grants merged authority.
+	if d.State == "CLOSED" {
+		if at, e := time.Parse(time.RFC3339, p.MergedAt); e == nil && !at.After(time.Now()) {
+			d.State = "MERGED"
+		} else {
+			d.MergedOn = ""
+			d.MergeCommit = ""
+			if d.Merge == "MERGED" {
+				d.Merge = "UNKNOWN"
+			}
+		}
 	}
 	if d.State == "OPEN" && p.IsDraft {
 		d.State = "DRAFT"
@@ -151,6 +166,7 @@ func statusBBDetail(raw []byte, fallback PRRecord) (statusPRDetail, error) {
 		Draft       bool   `json:"draft"`
 		Title       string `json:"title"`
 		MergedOn    string `json:"merged_on"`
+		UpdatedOn   string `json:"updated_on"`
 		MergeCommit *struct {
 			Hash string `json:"hash"`
 		} `json:"merge_commit"`
@@ -179,7 +195,7 @@ func statusBBDetail(raw []byte, fallback PRRecord) (statusPRDetail, error) {
 		return statusPRDetail{}, fmt.Errorf("missing Bitbucket PR identity or state")
 	}
 	d := statusPRDetail{Number: fmt.Sprint(p.ID), State: strings.ToUpper(p.State),
-		Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: cleanPRField(p.Title), Base: p.Destination.Branch.Name,
+		Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: cleanPRField(p.Title), ClosedOn: p.UpdatedOn, Base: p.Destination.Branch.Name,
 		HeadCommit: p.Source.Commit.Hash, BaseCommit: p.Destination.Commit.Hash}
 	if d.Title == "" {
 		d.Title = fallback.Title

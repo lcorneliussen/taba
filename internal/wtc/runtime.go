@@ -329,13 +329,18 @@ const runtimeObservationTimeout = 5 * time.Second
 
 // RuntimeStatus reads recorded tunnel facts and the existing runner. Provider
 // credentials, accounts and daemon state are never probed by a read/status.
-func (c *Context) RuntimeStatus() []RuntimeItem {
-	ctx, cancel := context.WithTimeout(context.Background(), runtimeObservationTimeout)
+func (c *Context) RuntimeStatus() []RuntimeItem { items, _ := c.RuntimeStatusObserved(); return items }
+
+// RuntimeStatusObserved dates service facts when the runner read finishes,
+// before a slower declaration inventory or address probe can delay delivery.
+func (c *Context) RuntimeStatusObserved() ([]RuntimeItem, time.Time) {
+	ctx, cancel := context.WithTimeout(c.resourceContext(), runtimeObservationTimeout)
 	defer cancel()
 	items := runtimeTaskDiagnostics(c.runtimeStatusOnlyContext(ctx))
+	observedAt := time.Now()
 	// Ready non-tunnel application addresses can be checked for answering.
 	runtimeAnswering(items, runtimeAnswerCheck)
-	return c.runtimeWithDeclarations(items)
+	return c.WithStatusContext(ctx).runtimeWithDeclarations(items), observedAt
 }
 
 // runtimeStatusOnly is the runner's view, without looking at addresses: what
@@ -432,7 +437,7 @@ func (c *Context) runtimeStatus(m *runtimeManifest) []RuntimeItem {
 }
 
 func (c *Context) runtimeStatusObservation(m *runtimeManifest) []RuntimeItem {
-	ctx, cancel := context.WithTimeout(context.Background(), runtimeObservationTimeout)
+	ctx, cancel := context.WithTimeout(c.resourceContext(), runtimeObservationTimeout)
 	defer cancel()
 	return c.runtimeStatusContext(ctx, m)
 }
