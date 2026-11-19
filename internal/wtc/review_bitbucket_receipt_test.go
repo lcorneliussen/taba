@@ -126,6 +126,11 @@ func TestReviewStatusCommentIDsAreExact(t *testing.T) {
 	if status, _ := ParseReviewStatusComments([]byte(comment("9007199254740993", "")), 8, head, "bitbucket", "example/app", collection, true); status.State != "untrusted" {
 		t.Errorf("other PR trusted: %+v", status)
 	}
+	otherHead := "abcdef1234567890abcdef1234567890abcdef12"
+	otherLine := strings.ReplaceAll(comment("9007199254740993", ""), head, otherHead)
+	if status, _ := ParseReviewStatusComments([]byte(otherLine), 7, otherHead, "bitbucket", "example/app", collection, true); status.State != "untrusted" {
+		t.Errorf("other head trusted: %+v", status)
+	}
 	if _, err := ParseReviewStatusComments([]byte(comment("1", "")+" []"), 7, head, "bitbucket", "example/app", collection, false); err == nil {
 		t.Error("trailing data accepted")
 	}

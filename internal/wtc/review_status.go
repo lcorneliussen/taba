@@ -154,10 +154,11 @@ func ParseReviewStatusComments(data []byte, pr int, head, forge, slug, collectio
 			url = c.HTMLURL
 		}
 		// GitHub: the id field is a GraphQL node id, so only the
-		// #issuecomment-<n> link carries the REST id a receipt names.
+		// #issuecomment-<n> link carries the REST id a receipt names; an
+		// unreadable link leaves no identity.
 		// Bitbucket: the id field and the #comment-<n> link are both read and
-		// must agree. Either way, an unreadable or contradictory id leaves the
-		// comment without an identity and therefore without a trusted receipt.
+		// must agree; an unreadable or contradictory id leaves no identity.
+		// A comment without an identity never has a trusted receipt.
 		rawID := c.ID
 		if forge == "github" {
 			rawID = nil
