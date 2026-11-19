@@ -153,10 +153,10 @@ State of `main` at contract version 1. `bb` = `bb` CLI, REST = direct HTTP.
 | Review | PR head for checks and before posting | R | `bb pr view` | budget for checks; no deadline |
 | Review | PR metadata for a bundle | R | `bb pr view` | no deadline; falls back to local refs |
 | Review | prior review comments | R | `bb pr comments list --limit 1000` | unknown envelope = completeness unknown |
-| Review | review status gate | R | `bb pr view`, `bb pr comments list --all` | no deadline |
+| Review | review status gate | R | `bb pr view`, `bb pr comments list --all` | no deadline; trusts only exact comment ids and `#comment-<n>` links |
 | Open review | PR discovery by branch | R | `bb pr list --limit 100` / `bb pr view` | 15 s; reaching the limit is an error |
 | **Catch-up** | **enlisted PR state** | R | **`bb pr view` (default) or TWG (selected)** | 30 s; no budget, no cache; strict decoding |
-| Review | summary comment create/update | W | REST, else `bb pr comments add/edit` | create-intent file, saved id, receipt |
+| Review | summary comment create/update | W | REST, else `bb pr comments add/edit` | create-intent file, saved id, receipt; a missing, conflicting or malformed id stays pending |
 | Review | inline comment create | W | REST, else `bb pr comments add` | marker-key de-duplication; fail closed when prior comments are unreadable |
 | Review | inline reply and resolve | W | REST reply / `bb pr comments reply`; `bb pr comments resolve` | no automatic retry |
 | Review | mark ready | W | `bb pr ready` | gated by review status |
@@ -166,12 +166,11 @@ State of `main` at contract version 1. `bb` = `bb` CLI, REST = direct HTTP.
 Release differences: 0.2.7 predates the authenticated status-cache partition
 ([#441](https://github.com/lcorneliussen/taba/issues/441)); status caches in
 0.2.7 are not scoped by credential context, and budget files stay compatible
-with 0.2.7 consumers. Status currentness
+with 0.2.7 consumers. After 0.2.7, status currentness
 ([#445](https://github.com/lcorneliussen/taba/issues/445)) changed when status
-refreshes these reads but added no Bitbucket operation. An open change to
-Bitbucket review receipts
-([#444](https://github.com/lcorneliussen/taba/issues/444)) alters the review
-write rows above; they are updated when it lands, not before.
+refreshes these reads, and Bitbucket review receipts
+([#444](https://github.com/lcorneliussen/taba/issues/444)) changed how the
+summary comment id is read back; neither added a Bitbucket operation.
 
 ## Next steps
 
