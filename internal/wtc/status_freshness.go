@@ -30,7 +30,8 @@ func statusObservationUnavailable(freshness string) bool {
 	return freshness == "stale" || freshness == "deferred" || freshness == "unavailable"
 }
 
-// Freshness describes PR state, not separate checks or mergeability evidence.
+// The observation time dates the PR state. Freshness derives from it and gates
+// actions; separately observed checks or mergeability are not re-read here.
 // Only matching state and head may supply the state-observation timestamp.
 func statusObserveDetail(detail statusPRDetail, slug, forge string) statusPRDetail {
 	return statusObserveDetailContext(context.Background(), detail, slug, forge)

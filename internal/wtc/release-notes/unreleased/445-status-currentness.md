@@ -7,8 +7,9 @@
   as a merge. A deferred read reports the newest observation of the PR's
   state, names its reason (shared budget, provider cooldown, cache lock,
   cancellation or deadline), and a deferred Bitbucket decline keeps archive
-  treatment by its closure time. Bitbucket merges observed by an explicit
-  refresh record their merge time again. `taba status --forge` no longer
-  records merges, repairs PR references or returns merged worktrees; only a
-  full collector does.
+  treatment by its closure time. Every status path that observes a Bitbucket
+  merge without a merge time reads it from the activity log, under the shared
+  allowance, so the merge is recorded again. `taba status --forge` and the
+  status view's check before running a next step no longer record merges,
+  repair PR references or return merged worktrees; only a full collector does.
   ([#445](https://github.com/lcorneliussen/taba/issues/445)).

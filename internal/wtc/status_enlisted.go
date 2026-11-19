@@ -287,11 +287,12 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	}
 	detail = statusConfirmFullPRLockedContext(ctx, record, slug, forge, detail, source)
 	detail = statusObserveDetailContext(ctx, detail, slug, forge)
-	// The list in this pass observed the matching OPEN/DRAFT state, so its time
-	// becomes the state observation and its freshness (statusObserveDetail:
-	// freshness describes state, not checks, reviews or mergeability).
-	// Conflicting audit detail keeps its own age. The persisted confirmation
-	// only dates later fallbacks and never improves their freshness.
+	// The list in this pass observed the matching OPEN/DRAFT state, and its
+	// item carries the check rollup and review summary the stamp fingerprints,
+	// so its time dates the row and its action-gating freshness (unchanged
+	// behavior). Conflicting audit detail keeps its own age. The persisted
+	// confirmation only dates the state of later fallbacks, which have no such
+	// list item, and never improves their freshness.
 	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
 	listed, listErr := statusParseForgeDetail(forge, item.Raw, record)
 	if listErr == nil && listed.State == detail.State && (detail.State == "OPEN" || detail.State == "DRAFT") {
@@ -714,9 +715,10 @@ func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent Status
 			Merge: statusString(detail.Merge), Review: statusString(detail.Review), Title: detail.Title,
 			DisplayTitle: detail.Title, Slug: slug, URL: statusString(url), MergedOn: statusString(detail.MergedOn),
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
-			// A Bitbucket decline is final, so a deferred observation of it keeps
-			// archive treatment by its closure time. A GitHub close can be
-			// reopened and needs a current observation; neither grants actions.
+			// A Bitbucket decline is final, so any observation of it (current,
+			// stale, deferred or unavailable) keeps archive treatment by its
+			// closure time. A GitHub close can be reopened and needs a current
+			// observation; neither grants actions.
 			Archived: branchRow < 0 &&
 				(detail.State == "MERGED" && statusArchived(detail.MergedOn, time.Now()) ||
 					(detail.State == "DECLINED" || detail.State == "CLOSED" && !statusObservationUnavailable(detail.Freshness)) && statusArchived(detail.ClosedOn, time.Now())),

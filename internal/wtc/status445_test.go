@@ -249,17 +249,13 @@ func TestStatus445CollectorNotPreviewReturnsMergedCheckout(t *testing.T) {
 	if _, _, err := f.c.StatusLiveSnapshotWithFetchAge(false, true, time.Hour); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixtureGitErr(f.worktree, "symbolic-ref", "-q", "HEAD"); err == nil {
+	if _, err := statusGit(f.worktree, "symbolic-ref", "-q", "HEAD"); err == nil {
 		t.Fatal("collector did not return the landed, clean, merged checkout")
 	}
 	data, _ := os.ReadFile(filepath.Join(f.c.Collection, ".wtc-prs"))
 	if !strings.Contains(string(data), fixture445MergedAt) {
 		t.Fatalf("collector did not record the merge: %q", data)
 	}
-}
-
-func fixtureGitErr(dir string, args ...string) (string, error) {
-	return statusGit(dir, args...)
 }
 
 // A stale open list that still lists a PR whose branch is gone locally must not
@@ -295,8 +291,9 @@ func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 	}
 }
 
-// With the provider unavailable, local ancestry and a gone upstream are reported as evidence only. They never produce MERGED, a
-// return, or a recorded merge.
+// With the provider unavailable, local ancestry and a gone upstream are
+// reported as evidence only. They never produce MERGED, a return, or a
+// recorded merge.
 func TestStatus445LocalEvidenceIsNotForgeMerge(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
@@ -346,7 +343,6 @@ func TestStatus445NewerListObservationOutlivesOlderDetail(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
 			f := newFixture445(t, forge, "OPEN", false)
-			_ = f
 			ctx := statusAuthOperation(context.Background())
 			detailAt := time.Now().Add(-150 * time.Minute)
 			listAt := time.Now().Add(-90 * time.Minute)
@@ -676,5 +672,26 @@ func TestStatus445BitbucketRetainedMergeTime(t *testing.T) {
 				t.Fatalf("unavailable activity invented a time: %+v %q %v", row, data, f.providerCalls())
 			}
 		})
+	}
+}
+
+// A failed provider read leaves an earlier DECLINED observation unavailable;
+// the decline is still final and keeps archive treatment by its closure time.
+func TestStatus445UnavailableDeclineKeepsArchive(t *testing.T) {
+	f := newFixture445(t, "bitbucket.org", "DECLINED", false)
+	fixtureFile(t, filepath.Join(f.c.Collection, ".wtc-prs"), "widget 7 other-branch\n", 0644)
+	bin := t.TempDir()
+	fixtureFile(t, filepath.Join(bin, "bb"), "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$STATUS_445_CALLS\"\nexit 1\n", 0700)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	ctx := statusAuthOperation(context.Background())
+	old := time.Now().Add(-3 * time.Hour)
+	statusWriteForgeEntrySinceObservedContext(ctx, "pr", "bitbucket.org", f.slug, "7", []byte(`{"id":7,"state":"DECLINED","title":"Synthetic change","updated_on":"2026-10-01T09:00:00Z"}`), old, old)
+	snapshot, err := f.c.StatusForgePreview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := snapshot.PRs[0]
+	if row.State != "DECLINED" || row.Freshness != "unavailable" || !row.Archived || f.detailCalls() != 1 {
+		t.Fatalf("unavailable decline: %+v calls=%v", row, f.providerCalls())
 	}
 }
