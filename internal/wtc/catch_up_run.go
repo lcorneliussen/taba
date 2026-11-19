@@ -101,6 +101,12 @@ func catchUpJSON(args ...string) ([]byte, error) {
 	return out, err
 }
 
+// catchUpClientRun runs one migrated forge client read under the same bound
+// as catchUpJSON.
+func catchUpClientRun(env []string, args ...string) ([]byte, error) {
+	return bitbucketCommand(catchUpForgeTimeout, env, args...)
+}
+
 func catchUpForge(remote string) (string, string) {
 	remote = normalizeCatchUpRemote(remote)
 	for _, host := range []string{"github.com", "bitbucket.org"} {
@@ -267,51 +273,34 @@ func (c *Context) catchUpPRState(t catchUpTarget, branch string) catchUpPR {
 	chosen := catchUpPR{state: "UNKNOWN"}
 	liveState := ""
 	liveBase := ""
+	var bitbucket bitbucketPRReader
+	if forge == "bitbucket.org" {
+		client, err := selectedBitbucketClient()
+		if err != nil {
+			return catchUpLookupUnavailable(identity+" select Bitbucket client", "unsupported "+bitbucketClientVariable+" value; set it to bb or twg, or unset it, and retry")
+		}
+		bitbucket = newBitbucketPRReader(client, catchUpClientRun)
+	}
 	for _, record := range selected {
 		number := record.Number
 		if _, err := strconv.ParseUint(number, 10, 64); err != nil {
 			number = "[invalid number]"
 		}
-		cli := "gh"
-		if forge == "bitbucket.org" {
-			cli = "bb"
-		}
-		operation = identity + " PR #" + number + ": " + cli + " pr view"
-		if forge == "bitbucket.org" {
+		operation = identity + " PR #" + number + ": gh pr view"
+		if bitbucket != nil {
+			operation = identity + " PR #" + number + ": " + bitbucket.Operation()
 			parts := strings.SplitN(slug, "/", 2)
-			out, err := catchUpJSON("bb", "pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json")
+			facts, err := bitbucket.PullRequest(parts[0], parts[1], record.Number)
 			if err != nil {
+				var classified *bitbucketReadError
+				if errors.As(err, &classified) {
+					return catchUpLookupUnavailable(operation+" failed", classified.cause)
+				}
 				return catchUpLookupUnavailable(operation+" failed", catchUpLookupCause(err))
 			}
-			var facts struct {
-				State string `json:"state"`
-				Draft bool   `json:"draft"`
-				Merge struct {
-					Hash string `json:"hash"`
-				} `json:"merge_commit"`
-				Source struct {
-					Commit struct {
-						Hash string `json:"hash"`
-					} `json:"commit"`
-				} `json:"source"`
-				Destination struct {
-					Branch struct {
-						Name string `json:"name"`
-					} `json:"branch"`
-				} `json:"destination"`
-			}
-			if json.Unmarshal(out, &facts) != nil {
-				return catchUpLookupUnavailable(operation+" failed", "invalid JSON response; check forge CLI compatibility and retry")
-			}
-			state := strings.ToUpper(facts.State)
-			if facts.Draft && state == "OPEN" {
-				state = "DRAFT"
-			}
-			if !catchUpValidPRState(state) {
-				return catchUpLookupUnavailable(operation+" failed", "unrecognized PR state; check forge CLI compatibility and retry")
-			}
+			state := facts.State
 			if state == "OPEN" || state == "DRAFT" {
-				base := facts.Destination.Branch.Name
+				base := facts.Destination
 				if liveState != "" && liveBase != base {
 					return catchUpLookupUnavailable(operation+" failed", "ambiguous open PR merge targets; inspect enlisted PRs and correct enlistment")
 				}
@@ -322,7 +311,7 @@ func (c *Context) catchUpPRState(t catchUpTarget, branch string) catchUpPR {
 				continue
 			}
 			if chosen.state == "UNKNOWN" || chosen.state == "NONE" {
-				chosen = catchUpPR{state: state, head: facts.Source.Commit.Hash, mergeCommit: facts.Merge.Hash}
+				chosen = catchUpPR{state: state, head: facts.Head, mergeCommit: facts.MergeCommit}
 			}
 			continue
 		}

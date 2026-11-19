@@ -1,0 +1,16 @@
+{
+  "workspace": "example",
+  "repository": "agent-harness",
+  "partial": false,
+  "items": [
+    {
+      "input": "7",
+      "ok": false,
+      "error": {
+        "code": "TWG_AUTH_REQUIRED",
+        "kind": "auth_required",
+        "message": "synthetic secret-value"
+      }
+    }
+  ]
+}
