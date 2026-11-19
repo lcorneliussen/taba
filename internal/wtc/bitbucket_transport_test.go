@@ -93,8 +93,8 @@ func TestBitbucketClientSelection(t *testing.T) {
 		if tc.wtc != "" {
 			t.Setenv("WTC_BITBUCKET_TRANSPORT", tc.wtc)
 		}
-		got, err := selectedBitbucketClient()
-		if (err != nil) != tc.err || got != tc.want {
+		got, err := selectedBitbucketClient("")
+		if (err != nil) != tc.err || got.Client != tc.want {
 			t.Errorf("selection %q/%q = %q, %v", tc.taba, tc.wtc, got, err)
 		}
 	}
@@ -111,9 +111,11 @@ func TestTWGVersionSupport(t *testing.T) {
 	}
 }
 
-// TestTWGReaderContract runs the reader against every synthetic contract
-// fixture: a usable answer must be complete and pinned to the requested
-// repository and PR, and everything else must be a classified failure.
+// TestTWGReaderContract runs the reader against the listed synthetic
+// contract fixtures: a usable answer must be complete and pinned to the
+// requested repository and PR, and everything else must be a classified
+// failure. Completeness metadata variants are in
+// TestTWGCompletenessMetadataAtEveryLevel.
 func TestTWGReaderContract(t *testing.T) {
 	exitOne := &exec.ExitError{ProcessState: lookupExitState(t)}
 	for _, tc := range []struct {
@@ -319,9 +321,9 @@ func TestCatchUpTWGMatchesBBForTheSamePullRequest(t *testing.T) {
 	}
 }
 
-// TestCatchUpTWGFailureNeverFallsBackOrMoves checks that every TWG failure
-// leaves the branch alone with the public failure shape, and that bb is
-// never asked instead.
+// TestCatchUpTWGFailureNeverFallsBackOrMoves checks that the listed TWG
+// failure shapes leave the branch alone with the public failure shape, and
+// that bb is never asked instead.
 func TestCatchUpTWGFailureNeverFallsBackOrMoves(t *testing.T) {
 	for _, tc := range []struct{ fixture, want string }{
 		{"failure-denied.json", "PR #7: twg bitbucket pull-requests get failed: authentication or authorization failed"},

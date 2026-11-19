@@ -262,6 +262,7 @@ func run() error {
 			return err
 		}
 		checks = append(checks, requirements)
+		checks = append(checks, bitbucketClientCheck(c))
 		okay := true
 		for _, check := range checks {
 			if check["name"] == "git" || check["name"] == "registry" || check["name"] == "compatibility" || check["name"] == "requirements" {
