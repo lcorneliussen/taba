@@ -191,8 +191,10 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 	if statusLocalEvidenceHinted(ctx, forge, slug, record.Number) {
 		// A checked-out branch whose upstream is gone is likely merged or
 		// declined. An open list, possibly served stale under a spent
-		// allowance, cannot confirm that; read the PR itself, as an omission
-		// confirmation, at most once per cache interval.
+		// allowance, cannot confirm that. A current cached terminal state is
+		// confirmed as for an omitted PR (a full read only when due); otherwise
+		// read the PR itself, as an omission confirmation, at most once per
+		// cache interval.
 		if detail, ok := statusReadCachedDetailContext(ctx, record, slug, forge); ok && detail.State != "OPEN" && detail.State != "DRAFT" {
 			return statusConfirmFullPRContext(ctx, record, slug, forge, detail, "branch-gone")
 		}

@@ -32,7 +32,9 @@ func statusObservationUnavailable(freshness string) bool {
 
 // The observation time dates the PR state. Freshness derives from it and gates
 // actions; separately observed checks or mergeability are not re-read here.
-// Only matching state and head may supply the state-observation timestamp.
+// A detail-cache time needs a matching state and head; a newer list
+// confirmation (statusNewerListedContext) needs the same state and, when both
+// sides know it, the same head, and never changes freshness.
 func statusObserveDetail(detail statusPRDetail, slug, forge string) statusPRDetail {
 	return statusObserveDetailContext(context.Background(), detail, slug, forge)
 }
@@ -53,8 +55,9 @@ func statusObserveDetailContext(ctx context.Context, detail statusPRDetail, slug
 	return statusNewerListedContext(ctx, statusObserveAt(detail, observed, "detail-cache"), slug, forge)
 }
 
-// A list that confirms an unchanged open state does not rewrite the detail
-// entry (its checks and reviews keep their own age). The confirmation itself
+// A list that confirms an unchanged open state does not itself rewrite the
+// detail entry (its checks and reviews keep their own age; a due full refresh
+// in the same pass still can). The confirmation itself
 // is kept separately, so a later fallback reports the newest observation of
 // that state rather than the older detail read.
 func statusListedValue(detail statusPRDetail) []byte {
