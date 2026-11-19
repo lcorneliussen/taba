@@ -102,8 +102,8 @@ func TestBitbucketClientSelection(t *testing.T) {
 
 func TestTWGVersionSupport(t *testing.T) {
 	for version, want := range map[string]bool{
-		"1.4.4": true, "1.4.4\n": true, "v1.4.5": true, "1.5.0": true, "1.10.0": true, "1.4.4-beta.1": true,
-		"1.4.3": false, "1.3.9": false, "0.9.0": false, "2.0.0": false, "": false, "twg 1.4.4": false, "1.4": false,
+		"1.4.4": true, "1.4.4\n": true, "v1.4.5": true, "1.5.0": true, "1.10.0": true, "1.4.5-beta.1": true, "1.4.4+build.7": true,
+		"1.4.4-beta.1": false, "1.4.4-rc.1+build": false, "1.4.3": false, "1.3.9": false, "0.9.0": false, "2.0.0": false, "": false, "twg 1.4.4": false, "1.4": false,
 	} {
 		if got := twgVersionSupported(version); got != want {
 			t.Errorf("twgVersionSupported(%q) = %v, want %v", version, got, want)

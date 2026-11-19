@@ -76,12 +76,14 @@ with `TWG_AGENT_DEFAULTS=1` added to that child process only.
   `destination.repository.full_name` must equal the requested
   `<workspace>/<repo>` (case-insensitive), or the answer is refused.
 - Decoded fields: `state`, `draft`, `destination.branch.name` (required for an
-  open PR), `source.commit.hash`, `merge_commit.hash`. States other than
-  `OPEN`, `MERGED`, `DECLINED` and `SUPERSEDED` are refused.
+  open PR), `source.commit.hash`, `merge_commit.hash`. The accepted states are
+  those catch-up already accepts from `bb` (`OPEN`, `MERGED`, `DECLINED`,
+  `SUPERSEDED`, and `CLOSED`, which Bitbucket does not use); anything else is
+  refused.
 - Version: before its first read in a process, the reader runs
   `twg --version` once per resolved executable. TWG 1.x at or above 1.4.4 is
-  accepted; older versions, another major version or unparseable output are
-  refused before any read. A failed version check is not remembered.
+  accepted (a pre-release of 1.4.4 is not); older versions, another major
+  version or unparseable output are refused before any read. A failed version check is not remembered.
 - Deadline: each call is bounded by the catch-up forge timeout (30 s) and the
   owned process is killed when it expires. Processes that TWG itself starts are
   not tracked.

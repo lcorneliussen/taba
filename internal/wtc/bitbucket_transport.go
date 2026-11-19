@@ -54,8 +54,8 @@ func selectedBitbucketClient() (bitbucketClient, error) {
 }
 
 // bitbucketPR is the normalized result of one pull-request read. State is one
-// of OPEN, DRAFT, MERGED, DECLINED or SUPERSEDED; anything else is refused
-// before a value of this type exists.
+// that catchUpValidPRState accepts (OPEN, DRAFT, MERGED, CLOSED, DECLINED or
+// SUPERSEDED); anything else is refused before a value of this type exists.
 type bitbucketPR struct {
 	State       string
 	Destination string
@@ -64,7 +64,9 @@ type bitbucketPR struct {
 }
 
 // bitbucketReadError is a classified failure with a fixed, value-free cause.
-// Causes never echo response bodies, stderr, URLs or account details.
+// Causes never echo response bodies, stderr, URLs or account details; the only
+// response value they may carry is a TWG error code that passed
+// twgErrorCodePattern.
 type bitbucketReadError struct{ cause string }
 
 func (e *bitbucketReadError) Error() string { return e.cause }
@@ -111,8 +113,8 @@ func (r bbBitbucketReader) PullRequest(workspace, repo, number string) (bitbucke
 	if json.Unmarshal(out, &facts) != nil {
 		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseInvalidJSON}
 	}
-	// The bb client has always been trusted for its own target; its output
-	// carries no repository identity that this reader could pin.
+	// Unlike the TWG reader, this reader does not check the response's PR id
+	// or repository: it keeps the pre-adapter bb behavior unchanged.
 	return facts.normalize()
 }
 
@@ -173,7 +175,9 @@ func (twgBitbucketReader) Operation() string { return "twg bitbucket pull-reques
 // against. A newer major version is not assumed to keep it.
 var twgMinimumVersion = [3]int{1, 4, 4}
 
-var twgVersionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(?:[-+][0-9A-Za-z.+-]*)?$`)
+// twgVersionPattern accepts a bare semantic version as `twg --version` prints
+// it, with optional pre-release (-...) and build (+...) suffixes.
+var twgVersionPattern = regexp.MustCompile(`^v?([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 
 func twgVersionSupported(output string) bool {
 	match := twgVersionPattern.FindStringSubmatch(strings.TrimSpace(output))
@@ -196,7 +200,8 @@ func twgVersionSupported(output string) bool {
 			return got[i] > twgMinimumVersion[i]
 		}
 	}
-	return true
+	// A pre-release of the minimum itself precedes it.
+	return match[4] == ""
 }
 
 // twgVersionChecks remembers one version answer per resolved executable for
@@ -250,19 +255,7 @@ func (r twgBitbucketReader) PullRequest(workspace, repo, number string) (bitbuck
 		return bitbucketPR{}, failure
 	}
 	if runErr != nil {
-		// Under --strict a failed batch read exits non-zero but keeps its
-		// envelope; prefer the classified item failure. A non-zero exit is
-		// never a usable answer, whatever stdout holds.
-		var exit *exec.ExitError
-		if errors.As(runErr, &exit) {
-			if _, err := twgSinglePullRequest(out, number); err != nil {
-				var classified *bitbucketReadError
-				if errors.As(err, &classified) && classified.cause != bitbucketCauseInvalidJSON {
-					return bitbucketPR{}, err
-				}
-			}
-		}
-		return bitbucketPR{}, runErr
+		return bitbucketPR{}, twgExitError(out, number, runErr)
 	}
 	data, err := twgSinglePullRequest(out, number)
 	if err != nil {
@@ -296,6 +289,26 @@ func (r twgBitbucketReader) PullRequest(workspace, repo, number string) (bitbuck
 	return pr, nil
 }
 
+// twgExitError chooses the error for a TWG process that did not succeed. A
+// non-zero exit is never a usable answer, whatever stdout holds. Under
+// --strict a failed batch read exits non-zero but keeps its envelope, so a
+// classified item failure (incomplete, denied, identity) is preferred, except
+// when stdout is not JSON at all: then the process error is more specific
+// (timeout, missing CLI, exit status).
+func twgExitError(out []byte, number string, runErr error) error {
+	var exit *exec.ExitError
+	if !errors.As(runErr, &exit) {
+		return runErr
+	}
+	if _, err := twgSinglePullRequest(out, number); err != nil {
+		var classified *bitbucketReadError
+		if errors.As(err, &classified) && classified.cause != bitbucketCauseInvalidJSON {
+			return err
+		}
+	}
+	return runErr
+}
+
 // twgEnvelope is the union of the TWG shapes this reader accepts: a failure
 // envelope ({"ok":false,"error":{...}}), a batch ({"items":[...],"partial":…}),
 // or the pull-request resource itself.
@@ -314,8 +327,9 @@ type twgError struct {
 
 var twgErrorCodePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 
-// twgFailure reports a TWG failure envelope. Only the documented code and kind
-// are inspected; the message, repair text and diagnostics are never echoed.
+// twgFailure reports a TWG failure envelope. Only error.code, error.kind and
+// error.statusCode are inspected; the message, repair text and diagnostics are
+// never echoed.
 func twgFailure(out []byte) (*bitbucketReadError, bool) {
 	var envelope twgEnvelope
 	if len(bytes.TrimSpace(out)) == 0 || json.Unmarshal(out, &envelope) != nil {
@@ -349,8 +363,9 @@ func classifyTWGError(e *twgError) *bitbucketReadError {
 }
 
 // twgSinglePullRequest returns the one pull-request resource in a TWG reply.
-// A batch reply must hold exactly one successful, complete item for the
-// requested input; anything else is incomplete, never empty.
+// A batch reply must hold exactly one successful, complete item; anything else
+// is incomplete, never empty. An item input given as a string must equal the
+// requested number. PullRequest then pins the resource id and repository.
 func twgSinglePullRequest(out []byte, number string) ([]byte, error) {
 	var envelope twgEnvelope
 	if json.Unmarshal(out, &envelope) != nil {
