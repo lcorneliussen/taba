@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -202,9 +201,9 @@ func fixture445Diff(before, after string) string {
 	return strings.Join(out, "\n")
 }
 
-// Finding 5: explicit previews must not move a worktree, rewrite the PR
-// registry, or publish a snapshot, even when the provider confirms a merge
-// that would make a full collector return the checkout.
+// Explicit previews must not move a worktree, rewrite the PR registry, or
+// publish a snapshot, even when the provider confirms a merge that would make a
+// full collector return the checkout.
 func TestStatus445PreviewsLeaveGitRegistryAndSnapshotsUnchanged(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
@@ -236,10 +235,9 @@ func TestStatus445PreviewsLeaveGitRegistryAndSnapshotsUnchanged(t *testing.T) {
 	}
 }
 
-// Finding 5, the other half: the checkout moves only when a full collector
-// (the running view) acts on the confirmed merge under its own eligibility
-// gates. A preview followed by a collector pass is distinguishable from the
-// preview acting alone.
+// The checkout moves only when a full collector (the running view) acts on the
+// confirmed merge under its own eligibility gates. A preview followed by a
+// collector pass is distinguishable from the preview acting alone.
 func TestStatus445CollectorNotPreviewReturnsMergedCheckout(t *testing.T) {
 	f := newFixture445(t, "github.com", "MERGED", true)
 	if _, _, err := f.c.StatusLivePreviewWithFetchAge(true, time.Hour); err != nil {
@@ -260,22 +258,12 @@ func TestStatus445CollectorNotPreviewReturnsMergedCheckout(t *testing.T) {
 	}
 }
 
-// fixture445Field reads a field that may not exist on the released tag, so the
-// same file compiles there to record failing-before evidence.
-func fixture445Field(value any, name string) string {
-	field := reflect.ValueOf(value).FieldByName(name)
-	if !field.IsValid() {
-		return "<absent>"
-	}
-	return field.String()
-}
-
 func fixtureGitErr(dir string, args ...string) (string, error) {
 	return statusGit(dir, args...)
 }
 
-// Finding 1: a stale open list that still lists a PR whose branch is gone
-// locally must not hide that PR from a detail read. Local evidence schedules
+// A stale open list that still lists a PR whose branch is gone locally must not
+// hide that PR from a detail read. Local evidence schedules
 // the read; it never becomes a MERGED claim by itself.
 func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
@@ -307,8 +295,7 @@ func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 	}
 }
 
-// Finding 1 safety: with the provider unavailable, local ancestry and a gone
-// upstream are reported as evidence only. They never produce MERGED, a
+// With the provider unavailable, local ancestry and a gone upstream are reported as evidence only. They never produce MERGED, a
 // return, or a recorded merge.
 func TestStatus445LocalEvidenceIsNotForgeMerge(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
@@ -328,7 +315,7 @@ func TestStatus445LocalEvidenceIsNotForgeMerge(t *testing.T) {
 			if row.State != "OPEN" || row.Freshness != "deferred" || row.ObservationReason != "provider-cooldown" || row.RetryAt != until.UTC().Format(time.RFC3339Nano) {
 				t.Fatalf("cooling read misreported: %+v", row)
 			}
-			if got := fixture445Field(row, "LocalMergeEvidence"); got != "upstream-gone; head in origin/main" {
+			if got := row.LocalMergeEvidence; got != "upstream-gone; head in origin/main" {
 				t.Fatalf("local evidence missing: %q", got)
 			}
 			if branch := fixtureGit(t, "-C", f.worktree, "symbolic-ref", "--short", "HEAD"); branch != "topic" {
@@ -353,8 +340,8 @@ func TestStatus445LocalEvidenceIsNotForgeMerge(t *testing.T) {
 	}
 }
 
-// Finding 2: the newest observation of a state wins, whatever its source.
-// A later list confirmation of the same open state dates a deferred fallback.
+// The newest observation of a state wins, whatever its source. A later list
+// confirmation of the same open state dates a deferred fallback.
 func TestStatus445NewerListObservationOutlivesOlderDetail(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
@@ -370,7 +357,7 @@ func TestStatus445NewerListObservationOutlivesOlderDetail(t *testing.T) {
 			if listed.StateSource != "open-list" {
 				t.Fatalf("list did not date matching state: %+v", listed)
 			}
-			// The list later omits the PR and no request is admissible.
+			// A by-number read is then refused by the shared budget.
 			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
 			foreground424Budget(t, forge, 0, time.Now())
 			got := statusViewPRWithLiveContext(statusAuthOperation(context.Background()), PRRecord{Number: "7"}, f.slug, forge, true, false, nil)
@@ -378,15 +365,15 @@ func TestStatus445NewerListObservationOutlivesOlderDetail(t *testing.T) {
 			if got.Freshness != "deferred" || got.StateSource != "open-list" || !at.Equal(listAt.Truncate(time.Second)) && !at.Equal(listAt) {
 				t.Fatalf("older detail replaced newer list observation: freshness=%s source=%s observed=%s want≈%s", got.Freshness, got.StateSource, got.ObservedAt, listAt.UTC().Format(time.RFC3339Nano))
 			}
-			if reason := fixture445Field(got, "Reason"); reason != "shared-budget" {
+			if reason := got.Reason; reason != "shared-budget" {
 				t.Fatalf("deferral reason unclassified: %q", reason)
 			}
 		})
 	}
 }
 
-// Finding 3: a provider observation that says DECLINED keeps archive
-// treatment by its closure time when the next read is deferred.
+// A provider observation that says DECLINED keeps archive treatment by its
+// closure time when the next read is deferred.
 func TestStatus445DeferredDeclineKeepsArchive(t *testing.T) {
 	f := newFixture445(t, "bitbucket.org", "DECLINED", false)
 	fixtureFile(t, filepath.Join(f.c.Collection, ".wtc-prs"), "widget 7 other-branch\n", 0644)
@@ -408,8 +395,8 @@ func TestStatus445DeferredDeclineKeepsArchive(t *testing.T) {
 	}
 }
 
-// Finding 4: a Bitbucket merge observed by an explicit refresh records its
-// merge time and registry line, as 0.2.6 did for background reads.
+// A Bitbucket merge observed by an explicit refresh records its merge time and
+// registry line.
 func TestStatus445BitbucketForegroundMergeRecordsTime(t *testing.T) {
 	f := newFixture445(t, "bitbucket.org", "MERGED", false)
 	t.Setenv("WTC_STATUS_RETURN_MERGED", "off")
@@ -579,6 +566,114 @@ func TestStatus445ListedObservationNegativeControls(t *testing.T) {
 				if got := read(ctx); got.StateSource != "detail-cache" {
 					t.Fatalf("malformed metadata %q redated: %+v", value, got)
 				}
+			}
+		})
+	}
+}
+
+// A by-number read whose cache lock cannot be taken names the lock; one that
+// waits past its deadline names the deadline. Neither dispatches a request.
+func TestStatus445LockRefusalsAreClassified(t *testing.T) {
+	f := newFixture445(t, "github.com", "OPEN", false)
+	ctx := statusAuthOperation(context.Background())
+	old := time.Now().Add(-time.Hour)
+	statusWriteForgeEntrySinceObservedContext(ctx, "pr", "github.com", f.slug, "7", []byte(`{"number":7,"state":"OPEN","title":"Synthetic"}`), old, old)
+	path := statusForgeEntryPathContext(ctx, "pr", "github.com", f.slug, "7")
+	if err := os.Mkdir(path+".lock", 0700); err != nil {
+		t.Fatal(err)
+	}
+	got := statusViewPRWithLiveContext(ctx, PRRecord{Number: "7"}, f.slug, "github.com", true, false, nil)
+	if got.Freshness != "deferred" || got.Reason != "cache-lock" {
+		t.Fatalf("unusable lock: %+v", got)
+	}
+	if err := os.Remove(path + ".lock"); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := statusLockCacheContext(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	short, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	got = statusViewPRWithLiveContext(short, PRRecord{Number: "7"}, f.slug, "github.com", true, false, nil)
+	if got.Freshness != "deferred" || got.Reason != "deadline" {
+		t.Fatalf("held lock: %+v", got)
+	}
+	if len(f.providerCalls()) != 0 {
+		t.Fatalf("refused reads dispatched: %v", f.providerCalls())
+	}
+}
+
+// A PR that stays open after its branch was deleted is read at most once per
+// cache interval, not on every pass.
+func TestStatus445GoneBranchReadIsBoundedPerInterval(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		t.Run(forge, func(t *testing.T) {
+			f := newFixture445(t, forge, "OPEN", false)
+			for pass := 0; pass < 3; pass++ {
+				snapshot, err := f.c.StatusForgePreview()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if row := snapshot.PRs[0]; row.State != "OPEN" || row.LocalMergeEvidence != "upstream-gone" {
+					t.Fatalf("pass %d: %+v", pass, row)
+				}
+			}
+			if f.detailCalls() != 1 {
+				t.Fatalf("detail reads across three passes: %v", f.providerCalls())
+			}
+		})
+	}
+}
+
+// A GitHub close can be reopened, so a deferred CLOSED observation keeps its
+// row active rather than archiving it.
+func TestStatus445DeferredGitHubCloseStaysActive(t *testing.T) {
+	f := newFixture445(t, "github.com", "CLOSED", false)
+	fixtureFile(t, filepath.Join(f.c.Collection, ".wtc-prs"), "widget 7 other-branch\n", 0644)
+	ctx := statusAuthOperation(context.Background())
+	old := time.Now().Add(-3 * time.Hour)
+	statusWriteForgeEntrySinceObservedContext(ctx, "pr", "github.com", f.slug, "7", []byte(`{"number":7,"state":"CLOSED","title":"Synthetic","closedAt":"2026-10-01T09:00:00Z"}`), old, old)
+	statusForgeCoolContext(ctx, "github.com", time.Hour)
+	snapshot, err := f.c.StatusForgePreview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := snapshot.PRs[0]; row.State != "CLOSED" || row.Freshness != "deferred" || row.Archived {
+		t.Fatalf("deferred close archived: %+v", row)
+	}
+}
+
+// A retained Bitbucket merge observed without a merge time completes it from
+// the activity log and is recorded; with the activity read unavailable the
+// time stays unknown and nothing is recorded.
+func TestStatus445BitbucketRetainedMergeTime(t *testing.T) {
+	for _, available := range []bool{true, false} {
+		t.Run(fmt.Sprint(available), func(t *testing.T) {
+			f := newFixture445(t, "bitbucket.org", "MERGED", false)
+			t.Setenv("WTC_STATUS_RETURN_MERGED", "off")
+			fixtureFile(t, filepath.Join(f.c.Collection, ".wtc-prs"), "widget 7 other-branch\n", 0644)
+			ctx := statusAuthOperation(context.Background())
+			at := time.Now().Add(-10 * time.Minute)
+			statusWriteForgeEntrySinceObservedContext(ctx, "pr", "bitbucket.org", f.slug, "7", []byte(`{"id":7,"state":"MERGED","title":"Synthetic"}`), at, at)
+			if !available {
+				statusForgeCoolContext(ctx, "bitbucket.org", time.Hour)
+			}
+			snapshot, _, err := f.c.StatusLiveSnapshotWithFetchAge(false, true, time.Hour)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := snapshot.PRs[0]
+			data, _ := os.ReadFile(filepath.Join(f.c.Collection, ".wtc-prs"))
+			if available {
+				if row.State != "MERGED" || row.MergedOn == nil || *row.MergedOn != fixture445MergedAt || !strings.Contains(string(data), fixture445MergedAt) {
+					t.Fatalf("retained merge time not completed: %+v %q", row, data)
+				}
+				return
+			}
+			if row.State != "MERGED" || row.MergedOn != nil || string(data) != "widget 7 other-branch\n" || len(f.providerCalls()) != 0 {
+				t.Fatalf("unavailable activity invented a time: %+v %q %v", row, data, f.providerCalls())
 			}
 		})
 	}

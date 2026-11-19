@@ -432,8 +432,9 @@ func statusWithForgeBudgetKeyContext(ctx context.Context, forge, confirmation st
 	return body, live, err
 }
 
-// statusRefusal records why a provider read was not dispatched, so a caller
-// serving older bytes can say so instead of reporting an unknown deferral.
+// statusRefusal records why a provider read produced no usable result (not
+// admitted, cooling, rate limited or cancelled), so a caller serving older
+// bytes can say so instead of reporting an unknown deferral.
 type statusRefusal struct {
 	reason string
 	retry  time.Time

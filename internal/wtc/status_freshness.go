@@ -140,9 +140,10 @@ func statusFreshnessLabel(freshness, observed string) string {
 	return "(" + label + ")"
 }
 
-// Observe cached payloads without fetching ancillary evidence or changing their
-// timestamps. Age bounds ordinary detail; retained MERGED state is bounded by
-// statusMergedCacheAge.
+// Observe cached payloads without fetching ancillary evidence or rewriting
+// them. A newer list confirmation of the same open state can supply the state
+// observation time (never freshness). Age bounds ordinary detail; retained
+// MERGED state is bounded by statusMergedCacheAge.
 func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
 	// Ordinary detail cannot supersede retained merge state in the same
 	// credential context. Original age still controls freshness and action gates.

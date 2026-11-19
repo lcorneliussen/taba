@@ -287,8 +287,11 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	}
 	detail = statusConfirmFullPRLockedContext(ctx, record, slug, forge, detail, source)
 	detail = statusObserveDetailContext(ctx, detail, slug, forge)
-	// A newer list dates only matching OPEN/DRAFT state here, not checks,
-	// reviews or mergeability. Conflicting audit detail keeps its own age.
+	// The list in this pass observed the matching OPEN/DRAFT state, so its time
+	// becomes the state observation and its freshness (statusObserveDetail:
+	// freshness describes state, not checks, reviews or mergeability).
+	// Conflicting audit detail keeps its own age. The persisted confirmation
+	// only dates later fallbacks and never improves their freshness.
 	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
 	listed, listErr := statusParseForgeDetail(forge, item.Raw, record)
 	if listErr == nil && listed.State == detail.State && (detail.State == "OPEN" || detail.State == "DRAFT") {
@@ -555,9 +558,10 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 }
 
 // StatusForgePreview adds enlisted PRs and discovers open PRs on active
-// branches. A forge failure never becomes a merged claim. A preview is read
-// only: it neither records merges in the PR registry, repairs PR references,
-// nor returns merged worktrees; only full collectors do.
+// branches. A forge failure never becomes a merged claim. A preview does not
+// record merges in the PR registry, repair PR references, return merged
+// worktrees or write a snapshot; only full collectors do. Like any status
+// read it may publish provider observations to the account-scoped forge cache.
 func (c *Context) StatusForgePreview() (StatusSnapshot, error) {
 	return c.statusForgePreview(true, false)
 }
