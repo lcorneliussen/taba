@@ -137,8 +137,8 @@ func TestNamedTunnelTargetRefusesUnusableEnvValues(t *testing.T) {
 	}
 }
 
-// The other providers read the same definition. ngrok registration is enough
-// to show the target resolved before any provider request.
+// The other providers read the same definition: a successful ngrok
+// registration records the env-resolved target after exactly one request.
 func TestNamedTunnelTargetPortEnvIsProviderIndependent(t *testing.T) {
 	c := runtimeFixture(t)
 	fixtureFile(t, filepath.Join(c.Collection, "widget/.harness/dekit.tasks.yaml"), "tasks:\n web/server:\n  cmd: [echo, synthetic]\n  x-wtc: {port_env: WIDGET_PORT}\n", 0644)
