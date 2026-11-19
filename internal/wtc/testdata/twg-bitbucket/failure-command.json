@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "error": {
+    "code": "TWG_COMMAND_FAILED",
+    "kind": "twg_command_failed",
+    "message": "synthetic secret-value",
+    "repair": "synthetic",
+    "retry": {
+      "recommended": false,
+      "guidance": "do_not_retry_unchanged"
+    }
+  }
+}

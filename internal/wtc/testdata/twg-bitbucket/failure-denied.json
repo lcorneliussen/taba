@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "error": {
+    "code": "TWG_PERMISSION_DENIED",
+    "kind": "permission_denied",
+    "message": "synthetic secret-value",
+    "repair": "synthetic",
+    "retry": {
+      "recommended": false,
+      "guidance": "do_not_retry_unchanged"
+    }
+  }
+}

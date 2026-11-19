@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "\u001b[31msecret-value https://private.invalid/x",
+    "kind": "",
+    "message": "secret-value"
+  }
+}

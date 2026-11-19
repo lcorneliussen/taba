@@ -1,0 +1,21 @@
+{
+  "workspace": "example",
+  "repository": "agent-harness",
+  "summary": {
+    "requested": 1,
+    "succeeded": 0,
+    "failed": 1
+  },
+  "partial": true,
+  "items": [
+    {
+      "input": "7",
+      "ok": false,
+      "error": {
+        "code": "TWG_COMMAND_FAILED",
+        "kind": "twg_command_failed",
+        "message": "synthetic"
+      }
+    }
+  ]
+}
