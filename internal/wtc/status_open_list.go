@@ -30,7 +30,15 @@ func statusOpenPRs(forge, slug string) (map[string]statusOpenPR, bool, error) {
 }
 
 func statusOpenPRsContext(ctx context.Context, forge, slug string) (map[string]statusOpenPR, bool, error) {
-	raw, err := statusSingleFlightContext(ctx, "openprs", forge, slug, "open", func() ([]byte, error) {
+	byNumber, truncated, _, err := statusOpenPRsCurrentContext(ctx, forge, slug)
+	return byNumber, truncated, err
+}
+
+// statusOpenPRsCurrentContext also reports whether the list is current: read
+// live, or a cache entry within its age. Older bytes served after a refused
+// read are not current.
+func statusOpenPRsCurrentContext(ctx context.Context, forge, slug string) (map[string]statusOpenPR, bool, bool, error) {
+	raw, _, refused, err := statusFetchSharedAdmissionContext(ctx, "openprs", forge, slug, "open", func() ([]byte, error) {
 		switch forge {
 		case "github.com":
 			return statusFetchGHOpenListContext(ctx, slug)
@@ -41,11 +49,11 @@ func statusOpenPRsContext(ctx context.Context, forge, slug string) (map[string]s
 		}
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	list, truncated, started, err := statusParseOpenPRs(raw)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	byNumber := make(map[string]statusOpenPR, len(list))
 	for _, pr := range list {
@@ -54,7 +62,7 @@ func statusOpenPRsContext(ctx context.Context, forge, slug string) (map[string]s
 			byNumber[pr.Number] = pr
 		}
 	}
-	return byNumber, truncated, nil
+	return byNumber, truncated, refused.reason == "", nil
 }
 
 func statusParseOpenPRs(raw []byte) ([]statusOpenPR, bool, time.Time, error) {

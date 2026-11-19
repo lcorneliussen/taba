@@ -29,6 +29,10 @@ type statusPRDetail struct {
 	MergeConflicts  []string
 	MergeSource     string
 	ChecksUnsettled bool
+	// Reason and RetryAt explain a deferred or unavailable read. They are
+	// set only where the refusal actually happened, never inferred from age.
+	Reason  string
+	RetryAt string
 }
 
 func statusCheckResult(rollup []struct {

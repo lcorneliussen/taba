@@ -428,10 +428,44 @@ func statusWithForgeBudgetKey(forge, confirmation string, stale []byte, fetch fu
 }
 
 func statusWithForgeBudgetKeyContext(ctx context.Context, forge, confirmation string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
+	body, live, _, err = statusWithForgeAdmissionContext(ctx, forge, confirmation, stale, fetch)
+	return body, live, err
+}
+
+// statusRefusal records why a provider read produced no usable result (not
+// admitted, cooling, rate limited or cancelled), so a caller serving older
+// bytes can say so instead of reporting an unknown deferral.
+type statusRefusal struct {
+	reason string
+	retry  time.Time
+}
+
+func (r statusRefusal) apply(detail statusPRDetail) statusPRDetail {
+	if r.reason == "" {
+		return detail
+	}
+	detail.Freshness, detail.Reason, detail.RetryAt = "deferred", r.reason, ""
+	if !r.retry.IsZero() {
+		detail.RetryAt = r.retry.UTC().Format(time.RFC3339Nano)
+	}
+	return detail
+}
+
+func statusRefusalFor(err error) statusRefusal {
+	outcome := statusObservationFailure(err)
+	if outcome.Freshness != "deferred" {
+		return statusRefusal{}
+	}
+	refusal := statusRefusal{reason: outcome.Reason}
+	refusal.retry, _ = time.Parse(time.RFC3339Nano, outcome.RetryAt)
+	return refusal
+}
+
+func statusWithForgeAdmissionContext(ctx context.Context, forge, confirmation string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, refused statusRefusal, err error) {
 	ctx = statusAuthOperation(ctx)
 	selected := statusAuthForContext(ctx, forge)
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, false, statusRefusalFor(err), err
 	}
 	// GitHub identity recovery already schedules its ordinary and repair reads.
 	// Reserve admission only for Bitbucket omission confirmations.
@@ -439,40 +473,43 @@ func statusWithForgeBudgetKeyContext(ctx context.Context, forge, confirmation st
 		confirmation = ""
 	}
 	if statusForgeCooling(forge) {
+		refused = statusRefusal{reason: "provider-cooldown", retry: statusForgeCoolingUntil(forge)}
 		if len(stale) > 0 {
-			return stale, false, nil
+			return stale, false, refused, nil
 		}
-		return nil, false, errForgeCooling
+		return nil, false, refused, errForgeCooling
 	}
 	if !statusTakeForgeTokenForContext(ctx, forge, statusConfirmationKey(confirmation)) {
 		if err := ctx.Err(); err != nil {
-			return nil, false, err
+			return nil, false, statusRefusalFor(err), err
 		}
+		refused = statusRefusal{reason: "shared-budget"}
 		if len(stale) > 0 {
-			return stale, false, nil
+			return stale, false, refused, nil
 		}
-		return nil, false, errForgeBudget
+		return nil, false, refused, errForgeBudget
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, false, statusRefusalFor(err), err
 	}
 	raw, err := fetch()
 	if selected != statusResolveAuthContext(forge) {
-		return nil, false, errors.New("forge credential context changed")
+		return nil, false, refused, errors.New("forge credential context changed")
 	}
 	if ctx.Err() != nil {
-		return nil, false, ctx.Err()
+		return nil, false, statusRefusalFor(ctx.Err()), ctx.Err()
 	}
 	if err != nil {
 		if statusRateLimited(err) {
-			statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
+			until, _ := statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
+			refused = statusRefusal{reason: "provider-cooldown", retry: until}
 			if len(stale) > 0 {
-				return stale, false, nil
+				return stale, false, refused, nil
 			}
 		}
-		return nil, false, err
+		return nil, false, refused, err
 	}
-	return raw, true, nil
+	return raw, true, refused, nil
 }
 
 func statusSingleFlight(kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, error) {
@@ -489,38 +526,49 @@ func statusFetchShared(kind, forge, slug, key string, fetch func() ([]byte, erro
 }
 
 func statusFetchSharedContext(ctx context.Context, kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, bool, error) {
+	raw, live, _, err := statusFetchSharedAdmissionContext(ctx, kind, forge, slug, key, fetch)
+	return raw, live, err
+}
+
+// statusFetchSharedAdmissionContext is statusFetchSharedContext that also
+// reports why a read was refused when older bytes are served instead.
+func statusFetchSharedAdmissionContext(ctx context.Context, kind, forge, slug, key string, fetch func() ([]byte, error)) ([]byte, bool, statusRefusal, error) {
 	ctx = statusAuthOperation(ctx)
 	if !statusAuthSelectionMatches(ctx, forge) {
-		return nil, false, errors.New("forge credential context changed")
+		return nil, false, statusRefusal{}, errors.New("forge credential context changed")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return nil, false, statusRefusalFor(err), err
 	}
 	if data, ok := statusReadForgeEntryContext(ctx, kind, forge, slug, key); ok {
-		return data, false, nil
+		return data, false, statusRefusal{}, nil
 	}
 	stale, _ := statusReadForgeEntryAnyContext(ctx, kind, forge, slug, key)
 	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, kind, forge, slug, key))
 	if lockErr != nil {
-		return nil, false, lockErr
+		refused := statusRefusalFor(lockErr)
+		if refused.reason == "" {
+			refused.reason = "cache-lock"
+		}
+		return nil, false, refused, lockErr
 	}
 	defer unlock()
 	if data, ok := statusReadForgeEntryContext(ctx, kind, forge, slug, key); ok {
-		return data, false, nil
+		return data, false, statusRefusal{}, nil
 	}
 	started := time.Now()
-	raw, live, err := statusWithForgeBudgetKeyContext(ctx, forge, "", stale, fetch)
+	raw, live, refused, err := statusWithForgeAdmissionContext(ctx, forge, "", stale, fetch)
 	if err != nil {
-		return nil, false, err
+		return nil, false, refused, err
 	}
 	if live && !statusResourceWriteSince(ctx, kind, forge, slug, key, raw, started) {
 		if err := ctx.Err(); err != nil {
-			return nil, false, err
+			return nil, false, statusRefusalFor(err), err
 		}
 		if winner, ok := statusReadForgeEntryAnyContext(ctx, kind, forge, slug, key); ok {
-			return winner, false, nil
+			return winner, false, statusRefusal{}, nil
 		}
-		return nil, false, errors.New("superseding forge observation is unavailable")
+		return nil, false, statusRefusal{}, errors.New("superseding forge observation is unavailable")
 	}
-	return raw, live, ctx.Err()
+	return raw, live, refused, ctx.Err()
 }
