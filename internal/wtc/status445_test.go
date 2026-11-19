@@ -259,8 +259,11 @@ func TestStatus445CollectorNotPreviewReturnsMergedCheckout(t *testing.T) {
 }
 
 // A stale open list that still lists a PR whose branch is gone locally must not
-// hide that PR from a detail read. Local evidence schedules
-// the read; it never becomes a MERGED claim by itself.
+// hide that PR from a detail read. When the list is served stale after a
+// refused read, the PR is confirmed as an omitted one: on Bitbucket it keeps
+// its confirmation queue place and is read at the next refill; on GitHub,
+// which has no confirmation queue, it is deferred with its reason. Local
+// evidence schedules the read; it never becomes a MERGED claim by itself.
 func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
@@ -273,9 +276,10 @@ func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 			list, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: raw, Fingerprint: "same"}}, false, old)
 			statusWriteForgeEntrySinceObservedContext(ctx, "openprs", forge, f.slug, "open", list, old, old)
 			statusWriteForgeEntryObservedContext(ctx, "stamp", forge, f.slug, "7", []byte("same"), old)
-			// Exactly one request is admissible now; no refill within the pass.
-			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-			foreground424Budget(t, forge, 1, time.Now())
+			// The allowance is spent: the ordinary list read is refused and
+			// served stale; the next refill is one second away.
+			t.Setenv("WTC_FORGE_MIN_INTERVAL", "1")
+			foreground424Budget(t, forge, 0, time.Now())
 			snapshot, err := f.c.StatusForgePreview()
 			if err != nil {
 				t.Fatal(err)
@@ -284,8 +288,35 @@ func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 				t.Fatalf("rows: %+v", snapshot.PRs)
 			}
 			row := snapshot.PRs[0]
-			if row.State != "MERGED" || row.Freshness != "live" || f.detailCalls() != 1 {
-				t.Fatalf("gone branch PR not read: state=%s freshness=%s source=%s reason=%s calls=%v", row.State, row.Freshness, row.StateSource, row.ObservationReason, f.providerCalls())
+			if row.LocalMergeEvidence != "upstream-gone; head in origin/main" || f.listHits.Load() != 0 {
+				t.Fatalf("evidence=%q list requests=%d", row.LocalMergeEvidence, f.listHits.Load())
+			}
+			if forge == "bitbucket.org" {
+				if row.State != "MERGED" || row.Freshness != "live" || f.detailCalls() != 1 {
+					t.Fatalf("gone branch PR not confirmed: state=%s freshness=%s source=%s reason=%s calls=%v", row.State, row.Freshness, row.StateSource, row.ObservationReason, f.providerCalls())
+				}
+				return
+			}
+			if row.State != "OPEN" || row.Freshness != "deferred" || row.ObservationReason != "shared-budget" || len(f.providerCalls()) != 0 {
+				t.Fatalf("GitHub deferral: %+v calls=%v", row, f.providerCalls())
+			}
+		})
+	}
+}
+
+// A current open list is trusted: with an allowance available, the live list
+// read omits the merged PR and the existing omission confirmation reads it.
+func TestStatus445GoneBranchTrustsCurrentList(t *testing.T) {
+	for _, forge := range []string{"github.com", "bitbucket.org"} {
+		t.Run(forge, func(t *testing.T) {
+			f := newFixture445(t, forge, "MERGED", true)
+			t.Setenv("WTC_STATUS_RETURN_MERGED", "off")
+			snapshot, err := f.c.StatusForgePreview()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row := snapshot.PRs[0]; row.State != "MERGED" || f.detailCalls() != 1 {
+				t.Fatalf("%+v calls=%v", row, f.providerCalls())
 			}
 		})
 	}

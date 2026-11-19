@@ -188,19 +188,15 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 		// still need their own admitted refreshes.
 		statusForgetConfirmation(forge, slug+"#"+record.Number)
 	}
-	if statusLocalEvidenceHinted(ctx, forge, slug, record.Number) {
-		// A checked-out branch whose upstream is gone is likely merged or
-		// declined. An open list, possibly served stale under a spent
-		// allowance, cannot confirm that. A current cached terminal state is
-		// confirmed as for an omitted PR (a full read only when due); otherwise
-		// read the PR itself, as an omission confirmation, at most once per
-		// cache interval.
-		if detail, ok := statusReadCachedDetailContext(ctx, record, slug, forge); ok && detail.State != "OPEN" && detail.State != "DRAFT" {
-			return statusConfirmFullPRContext(ctx, record, slug, forge, detail, "branch-gone")
+	if listed, truncated, current, err := statusOpenPRsCurrentContext(ctx, forge, slug); err == nil {
+		if _, ok := listed[record.Number]; ok && !current && statusLocalEvidenceHinted(ctx, forge, slug, record.Number) {
+			// A checked-out branch whose upstream is gone is likely merged or
+			// declined. An open list served stale after a refused read cannot
+			// confirm it is still open; confirm the PR itself as for an
+			// omitted PR (Bitbucket keeps its confirmation queue place), at
+			// most once per cache interval. A current list is trusted.
+			return statusViewPRWithLiveContext(ctx, record, slug, forge, true, false, nil)
 		}
-		return statusViewPRWithLiveContext(ctx, record, slug, forge, true, false, nil)
-	}
-	if listed, truncated, err := statusOpenPRsContext(ctx, forge, slug); err == nil {
 		if item, ok := listed[record.Number]; ok {
 			statusForgetConfirmation(forge, slug+"#"+record.Number)
 			return statusEnrichListedContext(ctx, record, slug, forge, item)
@@ -299,7 +295,10 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	listed, listErr := statusParseForgeDetail(forge, item.Raw, record)
 	if listErr == nil && listed.State == detail.State && (detail.State == "OPEN" || detail.State == "DRAFT") {
 		statusRecordListedContext(ctx, forge, slug, listed, item.Started)
-		if item.Started.After(observed) {
+		// A confirmation persisted by an earlier pass of this same list may
+		// already have dated the state to item.Started; this pass's list
+		// still observed it, so equal time also dates the row.
+		if !item.Started.Before(observed) {
 			detail.Freshness = ""
 			detail = statusObserveAt(detail, item.Started, "open-list")
 		}
