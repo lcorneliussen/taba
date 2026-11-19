@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"taba.sh/taba/internal/branding"
@@ -228,10 +229,106 @@ func (c *Context) ensureBare(repo Repo) (string, error) {
 			fmt.Fprintf(os.Stderr, "%s: origin now follows the registry remote %s\n", repo.Name, repo.Remote)
 		}
 	}
+	if c.ownerFetches.current(bare) {
+		return bare, nil
+	}
 	if _, err := gitOutput("--git-dir="+bare, "fetch", "--prune", "origin"); err != nil {
 		return "", err
 	}
+	c.ownerFetches.fetched(bare)
 	return bare, nil
+}
+
+// ownerFetches remembers which shared owners one collection creation already
+// fetched, and from which origin. Creation fetches its existing owners
+// together, then checks out each repository in order without fetching the same
+// owner again. Any other caller has no record and always fetches.
+type ownerFetches struct {
+	mu      sync.Mutex
+	origins map[string]string
+}
+
+func ownerOrigin(bare string) (string, error) {
+	return gitOutput("--git-dir="+bare, "remote", "get-url", "origin")
+}
+
+// fetched records a successful fetch of bare from its current origin.
+func (f *ownerFetches) fetched(bare string) {
+	if f == nil {
+		return
+	}
+	origin, err := ownerOrigin(bare)
+	if err != nil {
+		return
+	}
+	f.record(bare, origin)
+}
+
+func (f *ownerFetches) record(bare, origin string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.origins == nil {
+		f.origins = map[string]string{}
+	}
+	f.origins[filepath.Clean(bare)] = origin
+}
+
+// current reports whether bare was fetched during this creation from the
+// origin it has now. An origin moved since (a forge rename) fetches again.
+func (f *ownerFetches) current(bare string) bool {
+	if f == nil {
+		return false
+	}
+	f.mu.Lock()
+	origin, ok := f.origins[filepath.Clean(bare)]
+	f.mu.Unlock()
+	if !ok {
+		return false
+	}
+	now, err := ownerOrigin(bare)
+	return err == nil && now == origin
+}
+
+// prefetchOwners fetches the existing shared owners of names concurrently,
+// each once. It only saves network wall time: a failure is not recorded, so
+// the ordered checkout fetches that owner again and reports the error at the
+// same point as before. Missing owners are left to the ordered clone.
+func (c *Context) prefetchOwners(names []string) {
+	if c.ownerFetches == nil || c.AdHoc {
+		return
+	}
+	type owner struct{ bare, origin string }
+	var owners []owner
+	seen := map[string]bool{}
+	for _, name := range names {
+		bare, err := c.bareFor(name)
+		if err != nil || seen[filepath.Clean(bare)] || c.ownerFetches.current(bare) {
+			continue
+		}
+		seen[filepath.Clean(bare)] = true
+		if info, err := os.Stat(bare); err != nil || !info.IsDir() {
+			continue
+		}
+		origin, err := ownerOrigin(bare)
+		if err != nil {
+			continue
+		}
+		owners = append(owners, owner{bare, origin})
+	}
+	if len(owners) < 2 {
+		return // Nothing to overlap; the ordered checkout fetches as before.
+	}
+	var wg sync.WaitGroup
+	for _, o := range owners {
+		wg.Add(1)
+		go func(o owner) {
+			defer wg.Done()
+			if _, err := gitOutput("--git-dir="+o.bare, "fetch", "--prune", "origin"); err == nil {
+				c.ownerFetches.record(o.bare, o.origin)
+			}
+		}(o)
+	}
+	wg.Wait()
 }
 
 // AddWorktree checks out the current development tip without claiming a branch.

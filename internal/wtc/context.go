@@ -108,6 +108,8 @@ type Context struct {
 	ConfigRoot               string          `json:"config_root"`
 	Project                  *ProjectContext `json:"project,omitempty"`
 	creatingReceiver         bool
+	// ownerFetches is set only while NewCollection runs; see prefetchOwners.
+	ownerFetches *ownerFetches
 	// AdHoc marks a collection without a harness repository. Its Harness is the
 	// collection-local config directory and its registry is tracked nowhere.
 	AdHoc bool `json:"ad_hoc,omitempty"`

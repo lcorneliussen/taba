@@ -53,6 +53,11 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 		}
 		return c.newAdHoc(opt)
 	}
+	// Record the owners this creation fetches on a private copy, so the
+	// caller's context and any later command keep fetching normally.
+	scoped := *c
+	scoped.ownerFetches = &ownerFetches{}
+	c = &scoped
 	if (opt.Issue != "" && opt.Tracker != "") || (opt.PR != "" && (opt.Issue != "" || opt.Tracker != "")) {
 		return result, fmt.Errorf("choose one source: issue, tracker, or PR")
 	}
@@ -210,6 +215,10 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	// The receiver's local base file remains the only override input.
 	creating := *c
 	creating.Collection = result.Collection
+	// Fetch the independent existing owners concurrently. The checkouts below
+	// stay in order and skip any owner this creation already fetched from its
+	// current origin.
+	c.prefetchOwners(result.Repositories)
 	// Preserve the shell command's ordering: harness first, then the primary
 	// issue/PR repository, then explicit siblings.
 	for _, name := range result.Repositories {
