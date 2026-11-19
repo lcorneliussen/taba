@@ -110,7 +110,26 @@ func (c *Context) runtimePlan(binary string) (*runtimeManifest, []byte, error) {
 
 // Native declarations are sufficient to resolve target identity and approve a
 // replacement. Rendering remains stricter and refuses retained old obligations.
+//
+// Only a plan for an absolute runtime binary, that is one about to be
+// rendered, reads x-wtc url_env and port_env. Reading them sources the
+// collection env files, which are receiver-owned shell code, so discovery,
+// dry runs and enlistment checks (binary "dekit") leave those URLs empty.
 func (c *Context) runtimePlanWithTunnels(binary string, managed bool) (*runtimeManifest, []byte, error) {
+	return c.runtimePlanResolving(binary, managed, filepath.IsAbs(binary))
+}
+
+// namedTunnelPlan is the plan an explicit named tunnel action reads. The
+// action targets this receiving collection's own service, so it resolves
+// url_env and port_env the way rendering does: the target, and with it the
+// definition digest, then matches the rendered runtime. It never names a
+// runtime binary, plans managed hosts or runs dekit.
+func (c *Context) namedTunnelPlan() (*runtimeManifest, error) {
+	plan, _, err := c.runtimePlanResolving("dekit", false, true)
+	return plan, err
+}
+
+func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) (*runtimeManifest, []byte, error) {
 	if err := c.runtimePathsSafe(); err != nil {
 		return nil, nil, err
 	}
@@ -208,7 +227,7 @@ func (c *Context) runtimePlanWithTunnels(binary string, managed bool) (*runtimeM
 					if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(name) {
 						return nil, nil, fmt.Errorf("%s: invalid URL variable", full)
 					}
-					if filepath.IsAbs(binary) {
+					if resolveEnv {
 						value, err := runtimeURLFromEnv(c.Collection, name)
 						if err != nil {
 							return nil, nil, err
@@ -221,7 +240,7 @@ func (c *Context) runtimePlanWithTunnels(binary string, managed bool) (*runtimeM
 						return nil, nil, fmt.Errorf("%s: invalid port variable", full)
 					}
 					item.PortEnv = name
-					if filepath.IsAbs(binary) {
+					if resolveEnv {
 						if port, err := runtimeEnvValue(c.Collection, name); err == nil && regexp.MustCompile(`^[0-9]{1,5}$`).MatchString(port) {
 							if item.URL == "" {
 								item.URL = "http://127.0.0.1:" + port

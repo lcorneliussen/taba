@@ -84,6 +84,8 @@ func (c *Context) managedRuntimeAction(action, target string, wait time.Duration
 			running[item.Group] = true
 		}
 	}
+	// Selection needs only the declarations; the collection env is read once
+	// a named tunnel is actually wanted.
 	plan, _, err := c.runtimePlanWithTunnels("dekit", false)
 	if err != nil {
 		return result, err
@@ -92,6 +94,7 @@ func (c *Context) managedRuntimeAction(action, target string, wait time.Duration
 	if err != nil {
 		return result, err
 	}
+	resolved := false
 	for _, entry := range entries {
 		if entry.Disabled || !entry.Matched {
 			continue
@@ -102,6 +105,12 @@ func (c *Context) managedRuntimeAction(action, target string, wait time.Duration
 		}
 		if !wanted {
 			continue
+		}
+		if !resolved {
+			if plan, err = c.namedTunnelPlan(); err != nil {
+				return result, err
+			}
+			resolved = true
 		}
 		d, e := c.tunnelDefinitionFor(entry, plan)
 		if e != nil {
