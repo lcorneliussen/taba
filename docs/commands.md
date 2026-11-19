@@ -80,39 +80,46 @@ broadened by a selection, and follow-up steps require a new selection.
 ## Share a local preview with a selected reviewer
 
 For a one-off browser review, you can use qURL with a development service
-that Taba already runs. This uses the qURL CLI alongside Taba. Taba does not
-manage the share or observe its access policy.
+that Taba already runs. The reviewer needs your approval before qURL connects
+to the app. Local publication needs no qURL account or API key. This uses the
+qURL CLI alongside Taba; Taba does not manage the share or observe its policy.
 
 1. Start the preview with `wtc up <name>`. Check its assigned port in
    `wtc svc status` or the service log. Use a preview with test data. Share
    only the app port, and keep the Taba control panel and admin APIs local.
-2. Install the [qURL CLI](https://github.com/layervai/qurl-integrations/releases).
-   Replace `3000` with the preview port. Choose a new local ID for
-   this review. The example uses `taba-review-1`:
+2. Install the [qURL CLI](https://github.com/layervai/qurl-integrations/releases),
+   version 4.4.4 or later. Replace `3000` with the preview port. Choose a new
+   local ID for this review. The example uses `taba-review-1`:
 
    ```sh
-   qurl publish http://127.0.0.1:3000 --id taba-review-1 --access review -o json
+   qurl publish http://127.0.0.1:3000 --id taba-review-1 --name "Taba preview" --allow-requests --foreground -o json
    ```
 
-3. Check for `found_existing: false`, `private: true`, and
-   `consumer_access.mode: review` in the JSON. If any check fails, stop here.
-   Send `resource_url` to one reviewer. Ask them to request access in
-   their browser. Check the pending request for their verified email and use
-   its decision ID and current version:
+   Keep this terminal and the preview running.
+3. Check for `status: serving`, `found_existing: false`, `private: true`, and
+   `access_requests: true` in the JSON. If any check fails, stop here. Do not
+   change or delete a resource you did not create for this review.
+   Send the returned `resource_url` to one reviewer. In their own browser,
+   they choose **Request access**, save a passkey and give you the six-digit
+   code on their screen through a conversation you trust. A typed name is
+   not proof of identity. In another terminal, approve only the code from your
+   intended reviewer:
 
    ```sh
-   qurl access list_grants <CRID> -o json
-   qurl access approve <CRID> <decision-id> --version <version>
+   qurl approve '<CRID>' '<CODE>'
    ```
 
-4. Ask the approved reviewer to return to the access page and click **Open**.
-   Check that the app loads for them. For a test of the access policy, check
-   that an unapproved browser cannot load the app and watch the app log for
-   requests before approval. Keep the preview and its host running during
-   the review.
-5. End the qURL share with `qurl delete <CRID>` after the review. This
-   permanently removes that qURL resource. Stop the development service
-   separately if you no longer need it.
+4. Ask the approved reviewer to choose **Open** and confirm that the app and
+   one agreed action work. An unapproved browser must not load the app;
+   watch the app log for requests before approval. Keep the app's sign-in,
+   Host and Origin checks. For a dev-server rejection, use its documented
+   exact-host or exact-origin setting instead of disabling the check.
+5. Delete the review resource with `qurl delete '<CRID>'` **before** stopping
+   or reusing the app port. This permanently removes that qURL resource.
+   Then stop the foreground publisher and, if no longer needed, the Taba
+   development service. Stopping the app alone does not delete the share.
+
+[First-share walkthrough](https://qurl.link/share-without-deploying?utm_source=taba-github&utm_medium=referral&utm_campaign=first-share-pilot)
 
 ## Retirement readiness
 
