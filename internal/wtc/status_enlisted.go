@@ -233,8 +233,8 @@ func statusLocalEvidenceHinted(ctx context.Context, forge, slug, number string) 
 
 // statusLocalMergeEvidence reads local hints for enlisted PRs whose branch is
 // checked out: a gone upstream, and whether the checkout head is contained in
-// its development tip. The hints only schedule a provider read and are shown
-// as evidence. Neither is a forge-confirmed merge: they never set a MERGED
+// its development tip. The hints schedule a provider read only behind an open
+// list served stale, and are reported as evidence. Neither is a forge-confirmed merge: they never set a MERGED
 // state, record a merge, or authorize a checkout move.
 func (c *Context) statusLocalMergeEvidence(rows []StatusRepo, records []PRRecord) []string {
 	repos := c.prRepositories()
