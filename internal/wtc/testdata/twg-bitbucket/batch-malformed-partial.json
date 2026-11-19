@@ -1,0 +1,61 @@
+{
+  "workspace": "example",
+  "repository": "agent-harness",
+  "partial": "false",
+  "items": [
+    {
+      "input": "7",
+      "ok": true,
+      "meta": {},
+      "data": {
+        "type": "pullrequest",
+        "id": 7,
+        "title": "Synthetic fixture change",
+        "state": "OPEN",
+        "draft": false,
+        "author": {
+          "type": "user",
+          "display_name": "Example Author"
+        },
+        "created_on": "2026-01-02T10:00:00.000000+00:00",
+        "updated_on": "2026-01-03T10:00:00.000000+00:00",
+        "source": {
+          "branch": {
+            "name": "topic"
+          },
+          "commit": {
+            "type": "commit",
+            "hash": "1111111111111111111111111111111111111111"
+          },
+          "repository": {
+            "type": "repository",
+            "full_name": "example/agent-harness",
+            "name": "agent-harness"
+          }
+        },
+        "destination": {
+          "branch": {
+            "name": "main"
+          },
+          "commit": {
+            "type": "commit",
+            "hash": "2222222222222222222222222222222222222222"
+          },
+          "repository": {
+            "type": "repository",
+            "full_name": "example/agent-harness",
+            "name": "agent-harness"
+          }
+        },
+        "merge_commit": null,
+        "comment_count": 0,
+        "task_count": 0,
+        "links": {
+          "html": {
+            "href": "https://bitbucket.org/example/agent-harness/pull-requests/7"
+          }
+        }
+      }
+    }
+  ]
+}

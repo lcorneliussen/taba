@@ -78,6 +78,7 @@ const (
 	bitbucketCauseIncomplete   = "incomplete or partial response; retry, and inspect the forge CLI locally if it persists"
 	bitbucketCauseAuth         = "authentication or authorization failed; check CLI login and repository access, then retry"
 	bitbucketCauseMissingField = "required field missing from response; check forge CLI compatibility and retry"
+	bitbucketCauseMalformed    = "malformed or conflicting completeness metadata in response; check forge CLI compatibility and retry"
 )
 
 // bitbucketRunner runs one owned client process with a bounded deadline. env
@@ -309,14 +310,11 @@ func twgExitError(out []byte, number string, runErr error) error {
 	return runErr
 }
 
-// twgEnvelope is the union of the TWG shapes this reader accepts: a failure
-// envelope ({"ok":false,"error":{...}}), a batch ({"items":[...],"partial":…}),
-// or the pull-request resource itself.
+// twgEnvelope is the failure envelope ({"ok":false,"error":{...}}). Batch and
+// resource replies are read by twgSinglePullRequest.
 type twgEnvelope struct {
-	OK      *bool           `json:"ok"`
-	Error   *twgError       `json:"error"`
-	Items   json.RawMessage `json:"items"`
-	Partial *bool           `json:"partial"`
+	OK    *bool     `json:"ok"`
+	Error *twgError `json:"error"`
 }
 
 type twgError struct {
@@ -363,47 +361,120 @@ func classifyTWGError(e *twgError) *bitbucketReadError {
 }
 
 // twgSinglePullRequest returns the one pull-request resource in a TWG reply.
-// A batch reply must hold exactly one successful, complete item; anything else
-// is incomplete, never empty. An item input given as a string must equal the
+// Completeness metadata is checked at every level that can carry it: the
+// envelope, the batch item and the resource itself (twgComplete). A batch
+// reply must hold exactly one item whose ok is true; anything else is
+// incomplete, never empty. An item input given as a string must equal the
 // requested number. PullRequest then pins the resource id and repository.
 func twgSinglePullRequest(out []byte, number string) ([]byte, error) {
-	var envelope twgEnvelope
-	if json.Unmarshal(out, &envelope) != nil {
-		return nil, &bitbucketReadError{bitbucketCauseInvalidJSON}
+	top, err := twgObject(out)
+	if err != nil {
+		return nil, err
 	}
-	if envelope.Items == nil {
-		if envelope.Partial != nil && *envelope.Partial {
-			return nil, &bitbucketReadError{bitbucketCauseIncomplete}
-		}
+	if err := twgComplete(top); err != nil {
+		return nil, err
+	}
+	rawItems, batch := top["items"]
+	if !batch {
 		return out, nil
 	}
-	if envelope.Partial != nil && *envelope.Partial {
-		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
-	}
-	var items []struct {
-		Input json.RawMessage `json:"input"`
-		OK    *bool           `json:"ok"`
-		Error *twgError       `json:"error"`
-		Data  json.RawMessage `json:"data"`
-	}
-	if json.Unmarshal(envelope.Items, &items) != nil {
-		return nil, &bitbucketReadError{bitbucketCauseInvalidJSON}
+	var items []json.RawMessage
+	if json.Unmarshal(rawItems, &items) != nil || items == nil {
+		return nil, &bitbucketReadError{bitbucketCauseMalformed}
 	}
 	if len(items) != 1 {
 		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
 	}
-	item := items[0]
-	if item.OK != nil && !*item.OK {
-		return nil, classifyTWGError(item.Error)
+	item, err := twgObject(items[0])
+	if err != nil {
+		return nil, &bitbucketReadError{bitbucketCauseMalformed}
 	}
-	if item.OK == nil || len(item.Data) == 0 || string(item.Data) == "null" {
+	switch strings.TrimSpace(string(item["ok"])) {
+	case "true":
+	case "false":
+		var failure *twgError
+		if json.Unmarshal(item["error"], &failure) != nil {
+			failure = nil
+		}
+		return nil, classifyTWGError(failure)
+	case "":
+		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+	default:
+		return nil, &bitbucketReadError{bitbucketCauseMalformed}
+	}
+	if err := twgComplete(item); err != nil {
+		return nil, err
+	}
+	if raw, ok := item["input"]; ok {
+		var input string
+		if json.Unmarshal(raw, &input) == nil && input != "" && input != number {
+			return nil, &bitbucketReadError{bitbucketCauseIdentity}
+		}
+	}
+	data, ok := item["data"]
+	if !ok {
 		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
 	}
-	var input string
-	if json.Unmarshal(item.Input, &input) == nil && input != "" && input != number {
-		return nil, &bitbucketReadError{bitbucketCauseIdentity}
+	resource, err := twgObject(data)
+	if err != nil {
+		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
 	}
-	return item.Data, nil
+	if err := twgComplete(resource); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+// twgObject decodes one JSON object. null, arrays and scalars are refused.
+func twgObject(raw []byte) (map[string]json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil {
+		return nil, &bitbucketReadError{bitbucketCauseInvalidJSON}
+	}
+	if object == nil {
+		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+	}
+	return object, nil
+}
+
+// twgComplete fails closed on completeness metadata at one level of a reply.
+// Only the explicitly complete forms pass: partial absent or false, _failures
+// absent, null or empty, ok absent or true, and error absent or null. A true
+// partial or a non-empty _failures is incomplete; a wrong type, or an error
+// beside a success, is malformed. ok false is a failure the caller reports
+// before this check.
+func twgComplete(object map[string]json.RawMessage) error {
+	if raw, ok := object["partial"]; ok {
+		switch strings.TrimSpace(string(raw)) {
+		case "false":
+		case "true":
+			return &bitbucketReadError{bitbucketCauseIncomplete}
+		default:
+			return &bitbucketReadError{bitbucketCauseMalformed}
+		}
+	}
+	if raw, ok := object["_failures"]; ok && strings.TrimSpace(string(raw)) != "null" {
+		var failures []json.RawMessage
+		if json.Unmarshal(raw, &failures) != nil {
+			return &bitbucketReadError{bitbucketCauseMalformed}
+		}
+		if len(failures) > 0 {
+			return &bitbucketReadError{bitbucketCauseIncomplete}
+		}
+	}
+	if raw, ok := object["ok"]; ok {
+		switch strings.TrimSpace(string(raw)) {
+		case "true":
+		case "false":
+			return &bitbucketReadError{bitbucketCauseIncomplete}
+		default:
+			return &bitbucketReadError{bitbucketCauseMalformed}
+		}
+	}
+	if raw, ok := object["error"]; ok && strings.TrimSpace(string(raw)) != "null" {
+		return &bitbucketReadError{bitbucketCauseMalformed}
+	}
+	return nil
 }
 
 // bitbucketCommand runs one owned client process under a deadline. Cancelling

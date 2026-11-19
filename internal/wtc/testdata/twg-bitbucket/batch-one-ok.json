@@ -1,11 +1,6 @@
 {
   "workspace": "example",
   "repository": "agent-harness",
-  "summary": {
-    "requested": 1,
-    "succeeded": 1,
-    "failed": 0
-  },
   "partial": false,
   "items": [
     {

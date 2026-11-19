@@ -63,10 +63,14 @@ with `TWG_AGENT_DEFAULTS=1` added to that child process only.
   `bitbucket.org/<workspace>/<repo>` origin; the read never relies on TWG's
   local-remote inference or a `me`/global scope.
 - No optional hydration (`--comments`, `--statuses`, `--diff`, `--full`).
-- `--strict` and the batch fields are decoded strictly: a top-level
-  `partial: true`, a non-empty `_failures` list, a batch that is not exactly one
-  successful item for the requested input, or a non-zero exit status is
-  unavailable, never empty or terminal.
+- `--strict` and completeness metadata are decoded strictly at every level
+  that can carry them — the envelope, the batch item and the resource. Only
+  `partial` absent or `false`, `_failures` absent, `null` or empty, `ok` absent
+  or `true` (required `true` on a batch item) and `error` absent or `null`
+  count as complete. A `partial: true`, a non-empty `_failures` list, a wrong
+  type, an `error` beside a success, a batch that is not exactly one successful
+  item for the requested input, or a non-zero exit status is unavailable, never
+  empty or terminal.
 - An `ok: false` failure envelope is a failure whatever the exit status. Only
   `error.code`, `error.kind` and `error.statusCode` are read, to choose between
   "authentication or authorization failed" and "TWG reported error `<code>`";

@@ -331,6 +331,8 @@ func TestCatchUpTWGFailureNeverFallsBackOrMoves(t *testing.T) {
 		{"pr-hydration-failure.json", "incomplete or partial response"},
 		{"pr-bad-state.json", "unrecognized PR state"},
 		{"failure-hostile-code.json", "TWG reported error unrecognized"},
+		{"batch-envelope-failures.json", "twg bitbucket pull-requests get failed: incomplete or partial response"},
+		{"batch-malformed-partial.json", "twg bitbucket pull-requests get failed: malformed or conflicting completeness metadata"},
 	} {
 		t.Run(tc.fixture, func(t *testing.T) {
 			c, bbCalls, _ := catchUpBitbucketFixture(t, tc.fixture)
@@ -411,6 +413,115 @@ func TestTWGReaderNonZeroExitIsNeverAnAnswer(t *testing.T) {
 		got, err := reader.PullRequest("example", "agent-harness", "7")
 		if err == nil || got != (bitbucketPR{}) {
 			t.Fatalf("%s: non-zero exit produced %+v, %v", fixture, got, err)
+		}
+	}
+}
+
+// TestTWGCompletenessMetadataAtEveryLevel varies the completeness metadata of
+// a real-shaped one-item batch at the envelope, item and resource level. Only
+// explicitly complete forms are usable; everything else is unavailable.
+func TestTWGCompletenessMetadataAtEveryLevel(t *testing.T) {
+	base := func(t *testing.T) map[string]any {
+		var envelope map[string]any
+		if err := json.Unmarshal(twgFixture(t, "batch-one-ok.json"), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		return envelope
+	}
+	item := func(e map[string]any) map[string]any { return e["items"].([]any)[0].(map[string]any) }
+	data := func(e map[string]any) map[string]any { return item(e)["data"].(map[string]any) }
+	failure := []any{map[string]any{"source": "pull-request", "operation": "get", "message": "synthetic", "statusCode": 502}}
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+		cause  string // empty: usable
+	}{
+		{"complete", func(map[string]any) {}, ""},
+		{"envelope failures empty", func(e map[string]any) { e["_failures"] = []any{} }, ""},
+		{"envelope failures null", func(e map[string]any) { e["_failures"] = nil }, ""},
+		{"envelope ok true", func(e map[string]any) { e["ok"] = true }, ""},
+		{"envelope error null", func(e map[string]any) { e["error"] = nil }, ""},
+		{"envelope failures nonempty", func(e map[string]any) { e["_failures"] = failure }, bitbucketCauseIncomplete},
+		{"envelope failures object", func(e map[string]any) { e["_failures"] = map[string]any{} }, bitbucketCauseMalformed},
+		{"envelope failures string", func(e map[string]any) { e["_failures"] = "none" }, bitbucketCauseMalformed},
+		{"envelope partial true", func(e map[string]any) { e["partial"] = true }, bitbucketCauseIncomplete},
+		{"envelope partial string", func(e map[string]any) { e["partial"] = "false" }, bitbucketCauseMalformed},
+		{"envelope partial null", func(e map[string]any) { e["partial"] = nil }, bitbucketCauseMalformed},
+		{"envelope ok string", func(e map[string]any) { e["ok"] = "true" }, bitbucketCauseMalformed},
+		{"envelope error beside success", func(e map[string]any) { e["error"] = map[string]any{"code": "X"} }, bitbucketCauseMalformed},
+		{"items null", func(e map[string]any) { e["items"] = nil }, bitbucketCauseMalformed},
+		{"items object", func(e map[string]any) { e["items"] = map[string]any{} }, bitbucketCauseMalformed},
+		{"item not object", func(e map[string]any) { e["items"] = []any{"7"} }, bitbucketCauseMalformed},
+		{"item ok missing", func(e map[string]any) { delete(item(e), "ok") }, bitbucketCauseIncomplete},
+		{"item ok string", func(e map[string]any) { item(e)["ok"] = "true" }, bitbucketCauseMalformed},
+		{"item ok null", func(e map[string]any) { item(e)["ok"] = nil }, bitbucketCauseMalformed},
+		{"item error beside ok", func(e map[string]any) { item(e)["error"] = map[string]any{"code": "X"} }, bitbucketCauseMalformed},
+		{"item failures nonempty", func(e map[string]any) { item(e)["_failures"] = failure }, bitbucketCauseIncomplete},
+		{"item failures wrong type", func(e map[string]any) { item(e)["_failures"] = 1 }, bitbucketCauseMalformed},
+		{"item partial true", func(e map[string]any) { item(e)["partial"] = true }, bitbucketCauseIncomplete},
+		{"item data missing", func(e map[string]any) { delete(item(e), "data") }, bitbucketCauseIncomplete},
+		{"item data null", func(e map[string]any) { item(e)["data"] = nil }, bitbucketCauseIncomplete},
+		{"item data array", func(e map[string]any) { item(e)["data"] = []any{} }, bitbucketCauseIncomplete},
+		{"resource failures nonempty", func(e map[string]any) { data(e)["_failures"] = failure }, bitbucketCauseIncomplete},
+		{"resource failures wrong type", func(e map[string]any) { data(e)["_failures"] = "x" }, bitbucketCauseMalformed},
+		{"resource partial true", func(e map[string]any) { data(e)["partial"] = true }, bitbucketCauseIncomplete},
+		{"resource error", func(e map[string]any) { data(e)["error"] = map[string]any{"message": "x"} }, bitbucketCauseMalformed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			envelope := base(t)
+			tc.mutate(envelope)
+			body, err := json.Marshal(envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, shape := range []string{"batch", "exit"} {
+				exit := error(nil)
+				if shape == "exit" {
+					if tc.cause == "" {
+						continue
+					}
+					exit = &exec.ExitError{ProcessState: lookupExitState(t)}
+				}
+				reader := twgBitbucketReader{run: func(env []string, args ...string) ([]byte, error) {
+					if len(args) == 2 && args[1] == "--version" {
+						return []byte("1.4.4"), nil
+					}
+					return body, exit
+				}}
+				twgVersionChecks.Range(func(key, _ any) bool { twgVersionChecks.Delete(key); return true })
+				t.Setenv("PATH", fakeTWGDir(t)+":"+os.Getenv("PATH"))
+				got, err := reader.PullRequest("example", "agent-harness", "7")
+				if tc.cause == "" {
+					if err != nil || got.State != "OPEN" {
+						t.Fatalf("complete form refused: %+v %v", got, err)
+					}
+					continue
+				}
+				var classified *bitbucketReadError
+				if got != (bitbucketPR{}) || err == nil {
+					t.Fatalf("%s: incomplete form usable: %+v", shape, got)
+				}
+				if shape == "batch" && (!errors.As(err, &classified) || classified.cause != tc.cause) {
+					t.Fatalf("cause = %v, want %q", err, tc.cause)
+				}
+			}
+		})
+	}
+	// The bare resource form carries the same metadata at its top level.
+	for name, mutate := range map[string]func(map[string]any){
+		"bare failures":       func(r map[string]any) { r["_failures"] = []any{map[string]any{"source": "statuses"}} },
+		"bare partial":        func(r map[string]any) { r["partial"] = true },
+		"bare partial string": func(r map[string]any) { r["partial"] = "no" },
+		"bare error":          func(r map[string]any) { r["error"] = map[string]any{"message": "x"} },
+	} {
+		var resource map[string]any
+		if err := json.Unmarshal(twgFixture(t, "pr-open.json"), &resource); err != nil {
+			t.Fatal(err)
+		}
+		mutate(resource)
+		body, _ := json.Marshal(resource)
+		if _, err := twgSinglePullRequest(body, "7"); err == nil {
+			t.Errorf("%s: incomplete bare resource accepted", name)
 		}
 	}
 }
