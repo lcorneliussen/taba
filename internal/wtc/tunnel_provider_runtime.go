@@ -83,7 +83,7 @@ func (p *tunnelProviderRuntime) authorize(ctx context.Context, call tunnelEffect
 		}
 	}
 	if call.Stage == "register" || call.Stage == "start" {
-		plan, _, err := p.c.runtimePlanWithTunnels("dekit", false)
+		plan, err := p.c.namedTunnelPlan()
 		if err != nil {
 			return err
 		}

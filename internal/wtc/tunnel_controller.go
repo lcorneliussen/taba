@@ -197,7 +197,7 @@ func (c *Context) runManagedTunnel(ctx context.Context, opt TunnelOptions, actio
 		}
 		return c.executeRetainedTunnel(ctx, old, action, p)
 	}
-	plan, _, err := c.runtimePlanWithTunnels("dekit", false)
+	plan, err := c.namedTunnelPlan()
 	if err != nil {
 		return err
 	}

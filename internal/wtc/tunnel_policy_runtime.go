@@ -313,14 +313,28 @@ func (c *Context) tunnelDefinitionFor(e tunnelEffectiveEntry, plan *runtimeManif
 	d.Directory = identity.dir()
 	identityBytes, _ := json.Marshal([3]string{identity.name, prForgeIdentity(identity.remote), d.Directory})
 	d.RepositoryIdentity = tunnelDigest(identityBytes)
+	portEnv := ""
 	for _, task := range plan.Tasks {
-		if task.Repo == e.Key.Repo && task.Dir == d.Directory && task.Group == task.Dir+"/"+e.Key.Service && task.Kind == "service" && task.URL != "" {
-			d.Target = task.URL
-			break
+		if task.Repo == e.Key.Repo && task.Dir == d.Directory && task.Group == task.Dir+"/"+e.Key.Service && task.Kind == "service" {
+			if task.URL != "" {
+				d.Target = task.URL
+				break
+			}
+			if portEnv == "" {
+				portEnv = task.PortEnv
+			}
 		}
 	}
 	if d.Target == "" {
-		return d, fmt.Errorf("named tunnel service needs an explicit local URL/port")
+		// Advice only when the env was read: an unresolved plan cannot tell.
+		switch {
+		case !plan.envResolved:
+			return d, fmt.Errorf("named tunnel service needs an explicit local URL/port")
+		case portEnv != "":
+			return d, fmt.Errorf("named tunnel service needs an explicit local URL/port: set %s to a port number in the collection env", portEnv)
+		default:
+			return d, fmt.Errorf("named tunnel service needs an explicit local URL/port: declare x-wtc.port_env or x-wtc.url")
+		}
 	}
 	local, err := url.Parse(d.Target)
 	if err != nil || local.Hostname() != "localhost" && local.Hostname() != "127.0.0.1" && local.Hostname() != "::1" {
