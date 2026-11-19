@@ -310,6 +310,9 @@ func openShellCommand(argv []string) bool {
 	return false
 }
 
+// openSettleSleep paces settle sampling; tests count it instead of sleeping.
+var openSettleSleep = time.Sleep
+
 func openWaitIdle(session, pane string, budget time.Duration) bool {
 	deadline := time.Now().Add(budget)
 	steady := 0
@@ -326,7 +329,7 @@ func openWaitIdle(session, pane string, budget time.Duration) bool {
 		if !time.Now().Before(deadline) {
 			return false
 		}
-		time.Sleep(time.Second)
+		openSettleSleep(time.Second)
 	}
 }
 
@@ -351,6 +354,6 @@ func openWaitWorkspaceIdle(session, workspace string) {
 		if steady >= 3 {
 			return
 		}
-		time.Sleep(time.Second)
+		openSettleSleep(time.Second)
 	}
 }

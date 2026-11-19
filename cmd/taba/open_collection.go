@@ -23,6 +23,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		return item
 	}
 	workspaces := []openWorkspaceInfo{}
+	fresh := false
 	if running {
 		workspaces, err = openWorkspaces(opt.Session)
 		if err != nil {
@@ -68,7 +69,8 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 			item.Error = err.Error()
 			return item
 		}
-		openWaitWorkspaceIdle(opt.Session, item.Workspace)
+		// Settled below, once tool panes have been split from these shells.
+		fresh = true
 		item.Actions = append(item.Actions, "workspace created ("+desired+")")
 	} else {
 		current, panes, err := openLayoutState(opt.Session, item.Workspace)
@@ -129,8 +131,14 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		return item
 	}
 	added, err := openEnsureTools(opt.Session, item.Workspace, target.Collection, item.Layout, opt.Tools)
-	for _, pane := range added {
-		openWaitIdle(opt.Session, pane, 10*time.Second)
+	if fresh {
+		// Every shell of a new workspace, tool panes included, starts together:
+		// one settle covers them all instead of one more per added pane.
+		openWaitWorkspaceIdle(opt.Session, item.Workspace)
+	} else {
+		for _, pane := range added {
+			openWaitIdle(opt.Session, pane, 10*time.Second)
+		}
 	}
 	if len(added) > 0 {
 		item.Actions = append(item.Actions, fmt.Sprintf("%d tool pane(s) added", len(added)))
