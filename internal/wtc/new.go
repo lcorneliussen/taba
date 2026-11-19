@@ -215,8 +215,9 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	// The receiver's local base file remains the only override input.
 	creating := *c
 	creating.Collection = result.Collection
-	// Network waits for independent owners overlap; checkouts below stay in
-	// order and fetch only an owner this did not refresh.
+	// Fetch the independent existing owners concurrently. The checkouts below
+	// stay in order and skip any owner this creation already fetched from its
+	// current origin.
 	c.prefetchOwners(result.Repositories)
 	// Preserve the shell command's ordering: harness first, then the primary
 	// issue/PR repository, then explicit siblings.

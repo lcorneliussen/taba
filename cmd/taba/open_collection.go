@@ -132,8 +132,8 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 	}
 	added, err := openEnsureTools(opt.Session, item.Workspace, target.Collection, item.Layout, opt.Tools)
 	if fresh {
-		// Every shell of a new workspace, tool panes included, starts together:
-		// one settle covers them all instead of one more per added pane.
+		// Tool panes are split after the layout shells, so settle once after
+		// the split: the guard then covers every pane, the new ones included.
 		openWaitWorkspaceIdle(opt.Session, item.Workspace)
 	} else {
 		for _, pane := range added {
