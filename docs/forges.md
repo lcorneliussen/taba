@@ -166,9 +166,12 @@ State of `main` at contract version 1. `bb` = `bb` CLI, REST = direct HTTP.
 Release differences: 0.2.7 predates the authenticated status-cache partition
 ([#441](https://github.com/lcorneliussen/taba/issues/441)); status caches in
 0.2.7 are not scoped by credential context, and budget files stay compatible
-with 0.2.7 consumers. Open changes to review receipts and status currentness
-alter review and status operations above; their rows are updated when those
-changes land, not before.
+with 0.2.7 consumers. Status currentness
+([#445](https://github.com/lcorneliussen/taba/issues/445)) changed when status
+refreshes these reads but added no Bitbucket operation. An open change to
+Bitbucket review receipts
+([#444](https://github.com/lcorneliussen/taba/issues/444)) alters the review
+write rows above; they are updated when it lands, not before.
 
 ## Next steps
 
