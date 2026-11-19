@@ -504,12 +504,19 @@ func TestStatusWorkspaceSweepDoesNotRepairSiblingPRMetadata(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(other.Collection, ".wtc-prs.lock")); !os.IsNotExist(err) {
 		t.Fatal("workspace sweep acquired sibling registry write authority")
 	}
-	// The sibling's own scoped status refresh has write authority.
+	// The sibling's own scoped status refresh has write authority; an
+	// explicit preview of it does not.
 	other, err = OpenCollection(created.Collection)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := other.StatusForgePreview(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(other.PRFile()); string(data) != before {
+		t.Fatal("preview repaired its own registry")
+	}
+	if _, _, err := other.StatusLiveSnapshot(false, true); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(other.PRFile()); string(data) != strings.Replace(before, "old-name", "new-name", 1) {
