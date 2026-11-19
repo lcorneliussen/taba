@@ -386,7 +386,10 @@ func status319Collection(t *testing.T, slug string) (*Context, string, string) {
 func status319Age(t *testing.T, kind, slug, key string) {
 	t.Helper()
 	if kind == "pr" {
+		// Every observation of the PR ages together: retained merge evidence
+		// and the list confirmation of its open state.
 		status319Age(t, "merge", slug, key)
+		status319Age(t, "listed", slug, key)
 	}
 	path := statusForgeEntryPath(kind, "bitbucket.org", slug, key)
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -983,6 +986,11 @@ func TestStatus319ProductionExpiredListProvenance(t *testing.T) {
 	}
 	for _, number := range []string{"7", "8", "9"} {
 		if err := os.Chtimes(statusForgeCachePath("bitbucket.org", "example/widget", number), prior, prior); err != nil {
+			t.Fatal(err)
+		}
+		// The warm list's confirmation of each open state belongs to the list
+		// whose observation time was just rewritten.
+		if err := os.Chtimes(statusForgeEntryPath("listed", "bitbucket.org", "example/widget", number), old, old); err != nil {
 			t.Fatal(err)
 		}
 		statusWriteForgeEntry("since", "bitbucket.org", "example/widget", "pr:"+number, []byte(fmt.Sprint(prior.UnixNano())))
