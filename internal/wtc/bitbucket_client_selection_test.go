@@ -65,6 +65,9 @@ func TestBitbucketClientDefaultsFailClosed(t *testing.T) {
 	if got, err := selectedBitbucketClient(root); !errors.Is(err, errBitbucketClientDefaults) || got.Client != "" {
 		t.Fatalf("directory defaults: %+v, %v", got, err)
 	}
+	if ok, detail := BitbucketClientReport(root); ok || detail != "advisory: selection unavailable; machine defaults (taba.env) cannot be read safely" {
+		t.Fatalf("doctor detail for unreadable defaults: %v %q", ok, detail)
+	}
 
 	outside := t.TempDir()
 	fixtureFile(t, filepath.Join(outside, "taba.env"), "TABA_BITBUCKET_TRANSPORT=twg\n", 0600)

@@ -52,8 +52,9 @@ var errBitbucketClientSelection = errors.New("unsupported Bitbucket transport se
 var errBitbucketClientDefaults = errors.New("Bitbucket transport selection unavailable")
 
 // bitbucketClientSelection is one resolved selection and where it came from.
-// Source is "environment", the defaults file name, or "default"; it never
-// holds a path or a value.
+// Source is "environment", the defaults file name ("taba.env" or "wtc.env"),
+// "machine defaults" when the defaults file could not even be identified, or
+// "default". It never holds a path or a value.
 type bitbucketClientSelection struct {
 	Client bitbucketClient
 	Source string
@@ -132,7 +133,11 @@ func BitbucketClientReport(root string) (ok bool, detail string) {
 	from := " from " + selection.Source
 	switch {
 	case errors.Is(err, errBitbucketClientDefaults):
-		return false, "advisory: selection unavailable; machine defaults (" + selection.Source + ") cannot be read safely"
+		where := "machine defaults"
+		if selection.Source != where {
+			where += " (" + selection.Source + ")"
+		}
+		return false, "advisory: selection unavailable; " + where + " cannot be read safely"
 	case err != nil:
 		return false, "advisory: unsupported " + bitbucketClientVariable + " value" + from + "; set it to bb or twg, or unset it"
 	case selection.Client == bitbucketClientBB:
@@ -554,8 +559,10 @@ func twgObject(raw []byte) (map[string]json.RawMessage, error) {
 // absent, null or empty, ok absent or true, and error absent or null. A true
 // partial or a non-empty _failures is incomplete; a wrong type, or an error
 // beside a success, is malformed. An ok false that reaches this check is
-// incomplete: the envelope and batch-item failures are classified before it,
-// so only a resource-level ok false arrives here.
+// reported as incomplete. Envelope failures are normally classified first by
+// twgFailure and batch-item failures by twgSinglePullRequest; what still
+// arrives here is a resource-level ok false, or an envelope ok false whose
+// error object does not decode.
 func twgComplete(object map[string]json.RawMessage) error {
 	if raw, ok := object["partial"]; ok {
 		switch strings.TrimSpace(string(raw)) {
