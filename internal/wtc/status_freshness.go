@@ -17,6 +17,9 @@ func statusDetailObservation(detail statusPRDetail) StatusObservation {
 	case "deferred", "unavailable":
 		out.Reason = "unknown"
 	}
+	if detail.Reason != "" && statusObservationUnavailable(detail.Freshness) {
+		out.Reason, out.RetryAt = detail.Reason, detail.RetryAt
+	}
 	if detail.ObservedAt == "" && (detail.State == "UNKNOWN" || detail.State == "") {
 		out.Reason = "never-observed"
 	}
@@ -27,8 +30,13 @@ func statusObservationUnavailable(freshness string) bool {
 	return freshness == "stale" || freshness == "deferred" || freshness == "unavailable"
 }
 
-// Freshness describes PR state, not separate checks or mergeability evidence.
-// Only matching state and head may supply the state-observation timestamp.
+// The observation time dates the PR state. Freshness is derived from it when a
+// read first sets that time, and gates actions; a later list confirmation moves
+// only the state time (statusNewerListedContext). Separately observed checks
+// or mergeability are not re-read here.
+// A detail-cache time needs a matching state and head; a newer list
+// confirmation (statusNewerListedContext) needs the same state and, when both
+// sides know it, the same head, and never changes freshness.
 func statusObserveDetail(detail statusPRDetail, slug, forge string) statusPRDetail {
 	return statusObserveDetailContext(context.Background(), detail, slug, forge)
 }
@@ -46,7 +54,73 @@ func statusObserveDetailContext(ctx context.Context, detail statusPRDetail, slug
 	if err != nil || saved.State != detail.State || saved.HeadCommit != detail.HeadCommit {
 		return detail
 	}
-	return statusObserveAt(detail, observed, "detail-cache")
+	return statusNewerListedContext(ctx, statusObserveAt(detail, observed, "detail-cache"), slug, forge)
+}
+
+// A list that confirms an unchanged open state does not itself rewrite the
+// detail entry (its checks and reviews keep their own age; a due full refresh
+// in the same pass still can). The confirmation itself is kept separately, so
+// a later fallback reports the newest observation of that state rather than
+// the older detail read.
+func statusListedValue(detail statusPRDetail) []byte {
+	head := detail.HeadCommit
+	if !statusListedHead(head) {
+		head = ""
+	}
+	return []byte(detail.State + "\x00" + head)
+}
+
+// The stored value is bounded: a state name and an optional commit id.
+const statusListedMax = len("DRAFT") + 1 + 64
+
+func statusListedHead(head string) bool {
+	if len(head) > 64 {
+		return false
+	}
+	for _, ch := range head {
+		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// statusRecordListedContext keeps the newest list confirmation of an open
+// state. Callers hold the PR entry lock, which orders competing writers.
+func statusRecordListedContext(ctx context.Context, forge, slug string, detail statusPRDetail, observed time.Time) {
+	if (detail.State != "OPEN" && detail.State != "DRAFT") || observed.IsZero() || observed.After(time.Now()) || ctx.Err() != nil {
+		return
+	}
+	if _, at, ok := statusReadForgeEntryObservedContext(ctx, "listed", forge, slug, detail.Number, 365*24*time.Hour); ok && !observed.After(at) {
+		return
+	}
+	statusWriteForgeEntryObservedContext(ctx, "listed", forge, slug, detail.Number, statusListedValue(detail), observed)
+}
+
+// statusNewerListedContext dates an open state by a newer list confirmation
+// of the same state (and head, when both are known). Only the state
+// observation moves: freshness, and with it check/review age and action
+// eligibility, stays as the detail read left it.
+func statusNewerListedContext(ctx context.Context, detail statusPRDetail, slug, forge string) statusPRDetail {
+	if (detail.State != "OPEN" && detail.State != "DRAFT") || detail.ObservedAt == "" {
+		return detail
+	}
+	current, err := time.Parse(time.RFC3339Nano, detail.ObservedAt)
+	if err != nil {
+		return detail
+	}
+	raw, at, ok := statusReadForgeEntryObservedContext(ctx, "listed", forge, slug, detail.Number, 365*24*time.Hour)
+	if !ok || len(raw) > statusListedMax || !at.After(current) || at.After(time.Now()) {
+		return detail
+	}
+	state, head, _ := strings.Cut(string(raw), "\x00")
+	if state != detail.State || !statusListedHead(head) || head != "" && detail.HeadCommit != "" && head != detail.HeadCommit {
+		return detail
+	}
+	freshness := detail.Freshness
+	detail = statusObserveAt(detail, at, "open-list")
+	detail.Freshness = freshness
+	return detail
 }
 
 func statusObserveAt(detail statusPRDetail, observed time.Time, source string) statusPRDetail {
@@ -72,9 +146,10 @@ func statusFreshnessLabel(freshness, observed string) string {
 	return "(" + label + ")"
 }
 
-// Observe cached payloads without fetching ancillary evidence or changing their
-// timestamps. Age bounds ordinary detail; retained MERGED state is bounded by
-// statusMergedCacheAge.
+// Observe cached payloads without fetching ancillary evidence or rewriting
+// them. A newer list confirmation of the same open state can supply the state
+// observation time (never freshness). Age bounds ordinary detail; retained
+// MERGED state is bounded by statusMergedCacheAge.
 func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
 	// Ordinary detail cannot supersede retained merge state in the same
 	// credential context. Original age still controls freshness and action gates.
@@ -111,7 +186,11 @@ func statusReadObservedDetailKindContext(ctx context.Context, kind string, recor
 	if err != nil {
 		return statusPRDetail{}, false
 	}
-	return statusObserveAt(detail, observed, "detail-cache"), true
+	detail = statusObserveAt(detail, observed, "detail-cache")
+	if kind == "pr" {
+		detail = statusNewerListedContext(ctx, detail, slug, forge)
+	}
+	return detail, true
 }
 
 func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {

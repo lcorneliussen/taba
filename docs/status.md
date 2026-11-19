@@ -218,6 +218,19 @@ reason and retry time when known. Missing admission or budget reasons remain
 unknown. Age can establish observation expiration, but never a provider rate limit. Existing landing warnings
 remain visible. JSON adds `observation_reason` and `retry_at` without changing
 the meaning of `observed_at`. Reading or rendering does not renew observations.
+A read refused by the shared budget, a provider cooldown, a cache lock,
+cancellation or a deadline names that reason; its older facts are `deferred`.
+`observed_at` is the newest observation of the PR's state: a later open-list
+confirmation of the same open state can supply it, without renewing freshness,
+checks or reviews. When an enlisted PR's branch is checked out and its upstream
+is gone, an open list served stale after a refused read does not keep that PR
+open: status confirms it with its own read (on Bitbucket, in the existing
+confirmation queue; on GitHub, deferred with its reason until admitted), and
+JSON reports `local_merge_evidence` (for example `upstream-gone; head in
+origin/main`). That evidence is never a merge: it records nothing and returns
+no worktree. A Bitbucket decline keeps archive treatment by its closure time
+from any observation, even when the next read is deferred; a GitHub close
+needs a current read.
 
 Interactive startup paints a loading frame before expensive collection or service
 discovery. Saved rows appear only after receiving scope validates. Their ages
@@ -273,7 +286,10 @@ taba status --cached --json # completed snapshot; no Git or forge calls
 taba status --local --json  # local preview; no forge calls
 ```
 
-`--forge` previews Git and forge facts without writing a completed snapshot.
+`--forge` previews Git and forge facts without writing a completed snapshot. It
+does not record merges, repair PR references or move any worktree; with
+`--no-fetch` it changes no Git state at all. The status view's check before it
+runs a selected next step uses the same preview.
 `--cached` preserves the snapshot producer version and age; the live TUI shows
 its own process version. See [version display](status-version.md).
 
