@@ -84,13 +84,14 @@ func statusDetailFromOpenItem(record PRRecord, slug, forge string, item statusOp
 }
 
 func statusDetailFromOpenItemContext(ctx context.Context, record PRRecord, slug, forge string, item statusOpenPR) (statusPRDetail, bool, bool) {
+	ctx = statusAuthOperation(ctx)
 	// Within statusMergedCacheAge, a changed list fingerprint cannot reopen a
 	// retained merge, even while its merge time or checks are still being collected.
 	if known, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
 		return known, true, true
 	}
-	if stamp, ok := statusReadForgeEntryAny("stamp", forge, slug, record.Number); ok && string(stamp) == item.Fingerprint {
-		if cached, ok := statusReadForgeEntryAny("pr", forge, slug, record.Number); ok {
+	if stamp, ok := statusReadForgeEntryAnyContext(ctx, "stamp", forge, slug, record.Number); ok && string(stamp) == item.Fingerprint {
+		if cached, ok := statusReadForgeEntryAnyContext(ctx, "pr", forge, slug, record.Number); ok {
 			if detail, err := statusParseForgeDetail(forge, cached, record); err == nil {
 				return detail, true, true
 			}
@@ -336,6 +337,10 @@ func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, err
 }
 
 func statusFetchBBBranch(slug, branch string) ([]byte, error) {
+	return statusFetchBBBranchContext(context.Background(), slug, branch)
+}
+
+func statusFetchBBBranchContext(ctx context.Context, slug, branch string) ([]byte, error) {
 	user, pass := bitbucketCredentials()
 	if user == "" || pass == "" {
 		return nil, fmt.Errorf("no Bitbucket API credentials")
@@ -350,7 +355,7 @@ func statusFetchBBBranch(slug, branch string) ([]byte, error) {
 	query.Set("fields", "values.id,values.source.branch.name")
 	query.Set("q", `source.branch.name="`+statusBBQueryString(branch)+`"`)
 	endpoint := statusBBAPI + "/repositories/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/pullrequests?" + query.Encode()
-	return statusBBGET(endpoint, user, pass)
+	return statusBBGETContext(ctx, StatusRefreshBackground, endpoint, user, pass)
 }
 
 func statusBBQueryString(value string) string {

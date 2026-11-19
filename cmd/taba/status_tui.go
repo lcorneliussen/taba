@@ -654,6 +654,15 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.requestID != 0 && msg.requestID != m.refreshID {
 			return m, nil
 		}
+		if clean, changed := wtc.StatusWithoutChangedAuth(m.snapshot); changed {
+			m.snapshot = clean
+			m.snapshotLoaded = false
+		}
+		if msg.err == nil && !wtc.StatusSnapshotAuthCurrent(msg.snapshot) {
+			msg.err = fmt.Errorf("forge credential context changed before delivery")
+			msg.snapshot = wtc.StatusSnapshot{}
+		}
+
 		if m.refreshCancel != nil {
 			m.refreshCancel()
 			m.refreshCancel = nil
@@ -799,6 +808,13 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			signature := m.context.StatusResourceSignature()
 			changed = m.resourceSignature != "" && signature != m.resourceSignature
 			m.resourceSignature = signature
+			if changed {
+				if clean, invalid := wtc.StatusWithoutChangedAuth(m.snapshot); invalid {
+					m.snapshot = clean
+					m.snapshotLoaded = false
+				}
+			}
+
 		}
 		if !m.watcherPending && !m.refreshing && !m.nextRunning && (changed || !m.nextRefresh.IsZero() && !now.Before(m.nextRefresh)) {
 			if m.devRestart == nil {
@@ -2284,7 +2300,7 @@ func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick b
 	model.progressStep = "Registering status watcher"
 	if !all && !procs {
 		model.snapshot.Collection = filepath.Base(c.Collection)
-		if cached, err := c.ReadStatusSnapshot(); err == nil {
+		if cached, err := c.ReadScopedStatusSnapshot(); err == nil {
 			// Saved runtime may come from another process for this collection.
 			// Display its original snapshot age until a newer observation replaces it.
 			model.snapshot = cached

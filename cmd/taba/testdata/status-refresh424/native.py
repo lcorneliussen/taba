@@ -44,7 +44,7 @@ else:print('{}')
     provider.chmod(0o700)
     env = {k: os.environ[k] for k in ("PATH", "LANG", "TMPDIR") if k in os.environ}
     (root / "tmp").mkdir()
-    env.update(TMPDIR=str(root / "tmp"), HOME=str(root), PATH=str(tools) + os.pathsep + env.get("PATH", "/usr/bin:/bin"), TERM="xterm-256color", NO_COLOR="1", TABA_DEV_BUILD="off", WTC_DEV_BUILD="off", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", NATIVE_424_ROOT=str(root), NATIVE_424_CHILDROOT=str(fixture))
+    env.update(TMPDIR=str(root / "tmp"), HOME=str(root), PATH=str(tools) + os.pathsep + env.get("PATH", "/usr/bin:/bin"), GH_TOKEN="synthetic-native-fixture", BB_USERNAME="synthetic-native-user", BB_API_TOKEN="synthetic-native-fixture", TERM="xterm-256color", NO_COLOR="1", TABA_DEV_BUILD="off", WTC_DEV_BUILD="off", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", NATIVE_424_ROOT=str(root), NATIVE_424_CHILDROOT=str(fixture))
     args = [str(binary), "-test.run=^TestStatus424NativeChild$"] if len(sys.argv) > 2 else [str(binary), "status", "--tui", "--no-fetch", "--no-click"]
     pid, master = pty.fork()
     if pid == 0:

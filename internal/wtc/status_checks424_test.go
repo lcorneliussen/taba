@@ -334,13 +334,16 @@ func TestStatusChecks424FailureBeforeLaterPageCancellation(t *testing.T) {
 	}
 }
 
-func TestStatusChecks424MissingCredentialsKeepsKnownFailure(t *testing.T) {
+func TestStatusChecks424LogoutDoesNotBorrowKnownFailure(t *testing.T) {
 	setupHeadCheckServer(t, func(w http.ResponseWriter, r *http.Request) { t.Error("unexpected HTTP") })
 	saved := checks424Seed(t, checkHeadB, "FAILURE")
+	t.Setenv("BB_USERNAME", "")
+	t.Setenv("BB_API_TOKEN", "")
+	t.Setenv("ATLASSIAN_ACCOUNT_EMAIL", "")
 	t.Setenv("BB_API_USER", "")
 	t.Setenv("BB_API_PASS", "")
 	e, err := statusBBHeadChecksContext(context.Background(), StatusRefreshForeground, "example/widget", checkHeadB, true)
-	if err == nil || e.Result != "FAILURE" || e.Complete || e.ObservedAt != saved.ObservedAt {
+	if err == nil || e.Result != "UNKNOWN" || e.Complete || e.ObservedAt == saved.ObservedAt {
 		t.Fatalf("e=%+v err=%v", e, err)
 	}
 }

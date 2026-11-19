@@ -89,6 +89,7 @@ func (c *Context) statusResourceSignature(repoState bool) string {
 		}
 	}
 	fmt.Fprintln(hash, c.Collection)
+	fmt.Fprintln(hash, statusResolveAuthContext("github.com"), statusResolveAuthContext("bitbucket.org"))
 	if info, err := os.Lstat(c.Collection); err == nil {
 		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 			fmt.Fprintln(hash, stat.Dev, stat.Ino)

@@ -304,6 +304,8 @@ func TestStatusCappedPRCacheRespectsFreshnessAndAllowance(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
 			statusHideBitbucketLogin(t)
+			t.Setenv("BB_USERNAME", "synthetic-cache-user")
+			t.Setenv("BB_API_TOKEN", "synthetic-cache-token")
 			t.Setenv("WTC_FORGE_CACHE_AGE", "")
 			t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
 			t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")

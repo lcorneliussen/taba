@@ -13,7 +13,35 @@ import (
 func TestMain(m *testing.M) {
 	unsetTabaEnvironment()
 	statusTurnOffSharedForgeBudgetAndAudit()
-	os.Exit(m.Run())
+	// Create synthetic selection and isolated stores unless inheriting a parent test fixture.
+	home := os.Getenv("WTC_TEST_AUTH_HOME")
+	owned := home == ""
+	if owned {
+		for _, name := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST", "GH_REPO", "BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN", "XDG_CONFIG_HOME"} {
+			os.Unsetenv(name)
+		}
+		os.Setenv("GH_TOKEN", "synthetic-status-fixture")
+		os.Setenv("BB_USERNAME", "synthetic-status-user")
+		os.Setenv("BB_API_TOKEN", "synthetic-status-fixture")
+		var err error
+		home, err = os.MkdirTemp("", "taba-test-home-")
+		if err != nil {
+			panic(err)
+		}
+		os.Setenv("WTC_TEST_AUTH_HOME", home)
+		os.Setenv("HOME", home)
+		os.Setenv("GH_CONFIG_DIR", filepath.Join(home, "gh"))
+	}
+	// Respect explicit child test stores; the process fixture shares cache salt
+	// and provenance with its parent, rather than silently selecting a new store.
+	if os.Getenv("GH_CONFIG_DIR") == "" {
+		os.Setenv("GH_CONFIG_DIR", filepath.Join(home, "gh"))
+	}
+	code := m.Run()
+	if owned {
+		os.RemoveAll(home)
+	}
+	os.Exit(code)
 }
 
 // A collection shell carries generated TABA_ variables, and readers prefer

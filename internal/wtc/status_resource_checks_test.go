@@ -248,15 +248,15 @@ func TestStatusResourceBackgroundChecksExactHeadAndCost(t *testing.T) {
 	}
 }
 
-func TestStatusResourceBackgroundChecksMissingAuthKeepsFailure(t *testing.T) {
+func TestStatusResourceBackgroundChecksUnknownDoesNotBorrowFailure(t *testing.T) {
 	resourceCancellationFixture(t)
 	for _, name := range []string{"BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN"} {
 		t.Setenv(name, "")
 	}
-	before := checks424Seed(t, checkHeadB, "FAILURE")
+	checks424Seed(t, checkHeadB, "FAILURE")
 	got, err := statusBBHeadChecksContext(context.Background(), StatusRefreshBackground, "example/widget", checkHeadB, false)
-	if err == nil || got.Result != "FAILURE" || got.Complete || got.ObservedAt != before.ObservedAt {
-		t.Fatalf("auth failure erased known check: %+v %v", got, err)
+	if err != nil || got.Result != "UNKNOWN" || got.Complete {
+		t.Fatalf("unknown credentials borrowed a check: %+v %v", got, err)
 	}
 	got, _ = statusBBHeadChecksContext(context.Background(), StatusRefreshBackground, "example/widget", checkHeadA, false)
 	if got.Result == "FAILURE" {

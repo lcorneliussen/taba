@@ -30,10 +30,15 @@ func statusObservationUnavailable(freshness string) bool {
 // Freshness describes PR state, not separate checks or mergeability evidence.
 // Only matching state and head may supply the state-observation timestamp.
 func statusObserveDetail(detail statusPRDetail, slug, forge string) statusPRDetail {
+	return statusObserveDetailContext(context.Background(), detail, slug, forge)
+}
+
+func statusObserveDetailContext(ctx context.Context, detail statusPRDetail, slug, forge string) statusPRDetail {
+	ctx = statusAuthOperation(ctx)
 	if detail.ObservedAt != "" || detail.State == "UNKNOWN" || detail.State == "" {
 		return detail
 	}
-	raw, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, detail.Number, 365*24*time.Hour)
+	raw, observed, ok := statusReadForgeEntryObservedContext(ctx, "pr", forge, slug, detail.Number, 365*24*time.Hour)
 	if !ok {
 		return detail
 	}
@@ -71,8 +76,8 @@ func statusFreshnessLabel(freshness, observed string) string {
 // timestamps. Age bounds ordinary detail; retained MERGED state is bounded by
 // statusMergedCacheAge.
 func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
-	// A fresh active detail from a released writer cannot supersede retained
-	// merge state. Its original age still controls freshness and action gates.
+	// Ordinary detail cannot supersede retained merge state in the same
+	// credential context. Original age still controls freshness and action gates.
 	if detail, ok := statusRetainedMerge(record, slug, forge); ok {
 		return detail, true
 	}
@@ -80,17 +85,25 @@ func statusReadObservedDetail(record PRRecord, slug, forge string, age time.Dura
 }
 
 func statusReadObservedDetailContext(ctx context.Context, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool, error) {
-	// A fresh active detail from a released writer cannot supersede retained
-	// merge state. Its original age still controls freshness and action gates.
+	ctx = statusAuthOperation(ctx)
+	// Ordinary detail cannot supersede retained merge state in the same
+	// credential context. Original age still controls freshness and action gates.
 	if detail, ok, err := statusRetainedMergeContext(ctx, record, slug, forge); ok || err != nil {
 		return detail, ok, err
 	}
-	detail, ok := statusReadObservedDetailKind("pr", record, slug, forge, age)
+	detail, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, age)
 	return detail, ok, ctx.Err()
 }
 
 func statusReadObservedDetailKind(kind string, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
-	raw, observed, ok := statusReadForgeEntryObserved(kind, forge, slug, record.Number, age)
+	return statusReadObservedDetailKindContext(context.Background(), kind, record, slug, forge, age)
+}
+
+func statusReadObservedDetailKindContext(ctx context.Context, kind string, record PRRecord, slug, forge string, age time.Duration) (statusPRDetail, bool) {
+	if !statusAuthSharedKind(kind) {
+		ctx = statusAuthOperation(ctx)
+	}
+	raw, observed, ok := statusReadForgeEntryObservedContext(ctx, kind, forge, slug, record.Number, age)
 	if !ok {
 		return statusPRDetail{}, false
 	}
@@ -107,21 +120,22 @@ func statusRetainedMerge(record PRRecord, slug, forge string) (statusPRDetail, b
 }
 
 func statusRetainedMergeContext(ctx context.Context, record PRRecord, slug, forge string) (statusPRDetail, bool, error) {
-	detail, known := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
+	ctx = statusAuthOperation(ctx)
+	detail, known := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge())
 	known = known && detail.State == "MERGED"
 	if err := ctx.Err(); err != nil {
 		return detail, known, err
 	}
-	raw, observed, ok := statusReadForgeEntryObserved("pr", forge, slug, record.Number, statusMergedCacheAge())
+	raw, observed, ok := statusReadForgeEntryObservedContext(ctx, "pr", forge, slug, record.Number, statusMergedCacheAge())
 	if ok {
 		current, err := statusParseForgeDetail(forge, raw, record)
 		retainedAt, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
 		if err == nil && current.State == "MERGED" && (!known || observed.After(retainedAt)) {
-			// Accept legacy authority only after preserving the same bytes and age
-			// independently of released writers' ordinary cache publications.
+			// Copy only scoped evidence from the pinned credential context,
+			// preserving bytes and observation time independently of ordinary detail.
 			retained, retainErr := statusRetainMergeObservationContext(ctx, forge, slug, record.Number, raw, observed)
 			if retained {
-				winner, found := statusReadObservedDetailKind("merge", record, slug, forge, statusMergedCacheAge())
+				winner, found := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge())
 				if found && winner.State == "MERGED" {
 					return winner, true, retainErr
 				}

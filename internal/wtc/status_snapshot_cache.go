@@ -2,13 +2,18 @@ package wtc
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -182,10 +187,25 @@ func (c *Context) writeStatusSnapshotContext(ctx context.Context, snapshot Statu
 			return fmt.Errorf("write %s: %w", file.name, err)
 		}
 	}
+
+	if snapshot.authContext != "" && snapshot.authContext == statusAuthSnapshotScope(ctx) && statusSnapshotKnownAuth(ctx, snapshot) {
+		if !statusSecureCacheDir(statusForgeCacheDir()) {
+			return fmt.Errorf("scoped snapshot cache unavailable")
+		}
+		if err := statusAtomicWriteContext(ctx, c.statusScopedSnapshotPath(ctx), canonical); err != nil {
+			return err
+		}
+		if err := os.Chmod(c.statusScopedSnapshotPath(ctx), 0600); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (c *Context) statusPublicationError(ctx context.Context, snapshot StatusSnapshot) error {
+	if snapshot.authContext != "" && !strings.HasPrefix(snapshot.authContext, "unknown-") && (snapshot.authContext != statusAuthSnapshotScope(ctx) || !statusAuthSelectionCurrent(ctx)) {
+		return fmt.Errorf("snapshot credential context changed")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -272,4 +292,81 @@ func (c *Context) LegacyStatusText() (string, error) {
 		fmt.Fprintf(&b, "%-16s %-24s %-8s %-4d %-4d %s\n", row.Repo, row.Branch, pr, row.Ahead, row.Behind, row.Tree)
 	}
 	return b.String(), nil
+}
+
+// The canonical cache remains an explicit offline preview. Active startup only
+// accepts this separate, same-schema copy from the selected credential context.
+func (c *Context) statusScopedSnapshotPath(ctx context.Context) string {
+	sum := sha256.Sum256([]byte("snapshot-auth-v1\x00" + statusAuthSnapshotScope(ctx) + "\x00" + c.Collection))
+	return filepath.Join(statusForgeCacheDir(), "snapshot-"+hex.EncodeToString(sum[:])+".json")
+}
+func statusSnapshotKnownAuth(ctx context.Context, snapshot StatusSnapshot) bool {
+	forges := map[string]bool{}
+	for _, row := range snapshot.Repos {
+		if row.Forge != "" {
+			forges[row.Forge] = true
+		}
+	}
+	for _, row := range snapshot.PRs {
+		if row.URL == nil {
+			continue
+		}
+		forge := ""
+		if strings.HasPrefix(*row.URL, "https://github.com/") {
+			forge = "github.com"
+		}
+		if strings.HasPrefix(*row.URL, "https://bitbucket.org/") {
+			forge = "bitbucket.org"
+		}
+		if forge == "" {
+			return false
+		}
+		forges[forge] = true
+	}
+	for forge := range forges {
+		if !statusAuthCurrent(ctx, forge) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Context) ReadScopedStatusSnapshot() (StatusSnapshot, error) {
+	ctx := statusAuthOperation(c.resourceContext())
+	path := c.statusScopedSnapshotPath(ctx)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return StatusSnapshot{}, err
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return StatusSnapshot{}, fmt.Errorf("invalid scoped status cache")
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, 16<<20))
+	if err != nil {
+		return StatusSnapshot{}, err
+	}
+	var snapshot StatusSnapshot
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return snapshot, err
+	}
+	if snapshot.Schema != 1 || snapshot.Collection != filepath.Base(c.Collection) || !statusSnapshotKnownAuth(ctx, snapshot) {
+		return StatusSnapshot{}, fmt.Errorf("scoped status credential context unavailable or changed")
+	}
+	snapshot.authContext = statusAuthSnapshotScope(ctx)
+	snapshot.authInputs = snapshot.authContext
+	return snapshot, nil
+}
+
+func statusSnapshotAuthStamp(ctx context.Context, snapshot StatusSnapshot) string {
+	if statusSnapshotKnownAuth(ctx, snapshot) {
+		return statusAuthSnapshotScope(ctx)
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "unknown-unavailable"
+	}
+	return "unknown-" + hex.EncodeToString(nonce[:])
 }

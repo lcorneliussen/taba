@@ -104,6 +104,7 @@ func prIdentityGitHubReady() bool {
 }
 
 func (c *Context) prIdentityOrdinary(records []PRRecord, indices []int, state *prIdentitySchedule) (bool, error) {
+	ctx := statusAuthOperation(c.resourceContext())
 	repos := c.prRepositories()
 	for _, i := range prIdentityOrder(records, indices, state.OrdinaryAfter) {
 		record := records[i]
@@ -111,13 +112,13 @@ func (c *Context) prIdentityOrdinary(records []PRRecord, indices []int, state *p
 		if err != nil || forge != "github.com" {
 			continue
 		}
-		unlock, err := statusLockCache(statusForgeCachePath(forge, slug, record.Number))
+		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "pr", forge, slug, record.Number))
 		if err != nil {
 			return false, err
 		}
-		raw, fresh := statusReadForgeCache(forge, slug, record.Number)
+		raw, fresh := statusReadForgeCacheContext(ctx, forge, slug, record.Number)
 		detail, parseErr := statusParseForgeDetail(forge, raw, record)
-		if fresh && parseErr == nil && detail.State != "" && detail.State != "UNKNOWN" && !statusFullRefreshDue(forge, slug, record.Number) {
+		if fresh && parseErr == nil && detail.State != "" && detail.State != "UNKNOWN" && !statusFullRefreshDueContext(ctx, forge, slug, record.Number) {
 			unlock()
 			continue
 		}
@@ -127,15 +128,15 @@ func (c *Context) prIdentityOrdinary(records []PRRecord, indices []int, state *p
 		}
 		issued := false
 		started := time.Now()
-		raw, err = statusFetchPRRawWithRequest(record, slug, forge, func() { issued = true })
+		raw, err = statusFetchPRRawWithRequestContext(ctx, record, slug, forge, func() { issued = true })
 		if issued {
 			state.OrdinaryAfter = prIdentityKey(record)
 			state.Repair = true
 		}
 		if err == nil {
 			if _, parseErr := statusParseForgeDetail(forge, raw, record); parseErr == nil {
-				statusWriteForgeEntrySince("pr", forge, slug, record.Number, raw, started)
-				statusMarkFullRefresh(forge, slug, record.Number)
+				statusResourceWriteSince(ctx, "pr", forge, slug, record.Number, raw, started)
+				statusMarkFullRefreshContext(ctx, forge, slug, record.Number)
 			}
 		}
 		unlock()

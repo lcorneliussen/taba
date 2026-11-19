@@ -845,7 +845,7 @@ func TestStatusOlderListPreservesNewerDetailObservation(t *testing.T) {
 	}
 }
 
-func TestStatusRetainedMergeSurvivesReleasedCacheOverwrite(t *testing.T) {
+func TestStatusRetainedMergeSurvivesUnscopedCacheWriter(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
@@ -891,6 +891,9 @@ func TestStatusRetainedMergeSurvivesReleasedCacheOverwrite(t *testing.T) {
 			if err := os.Chtimes(path, expired, expired); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.Chtimes(statusForgeCachePath(forge, slug, "7"), expired, expired); err != nil {
+				t.Fatal(err)
+			}
 			if _, ok := statusRetainedMerge(record, slug, forge); ok {
 				t.Fatal("expired merge retained authority")
 			}
@@ -928,6 +931,8 @@ func TestStatusListStateMustMatchObservation(t *testing.T) {
 							t.Fatal(err)
 						}
 						statusHideBitbucketLogin(t)
+						t.Setenv("BB_USERNAME", "synthetic-cache-user")
+						t.Setenv("BB_API_TOKEN", "synthetic-cache-token")
 					}
 					record := PRRecord{Repo: "widget", Number: "7", Branch: "topic", URL: "https://" + forge + "/example/widget/" + segment + "/7"}
 					if _, err := c.EnlistPR(record); err != nil {
@@ -1076,7 +1081,7 @@ func TestStatusRejectedURLBlocksLocalBranchActions(t *testing.T) {
 	}
 }
 
-func TestStatusLegacyMergeMigrationPreservesAgeAndOrdering(t *testing.T) {
+func TestStatusScopedMergeRetentionPreservesAgeAndOrdering(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
@@ -1084,10 +1089,11 @@ func TestStatusLegacyMergeMigrationPreservesAgeAndOrdering(t *testing.T) {
 			record := PRRecord{Number: "7"}
 			slug := "example/widget"
 			old := time.Now().Add(-23 * time.Hour)
-			raw := []byte(`{"number":7,"id":7,"state":"MERGED","title":"Legacy synthetic merge"}`)
-			if !status319ReleasedWriteForgeEntrySince("pr", forge, slug, "7", raw, old) {
-				t.Fatal("released publication failed")
+			raw := []byte(`{"number":7,"id":7,"state":"MERGED","title":"Scoped synthetic merge"}`)
+			if !statusWriteForgeEntryObserved("pr", forge, slug, "7", raw, old) {
+				t.Fatal("scoped publication failed")
 			}
+			statusWriteForgeEntry("since", forge, slug, "pr:7", []byte(fmt.Sprint(old.UnixNano())))
 			source := statusForgeCachePath(forge, slug, "7")
 			target := statusForgeEntryPath("merge", forge, slug, "7")
 			if err := os.Chtimes(source, old, old); err != nil {

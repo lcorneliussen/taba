@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -46,10 +47,15 @@ func statusParseBranchList(forge string, raw []byte, branch string) (string, err
 }
 
 func statusDiscoverBranch(forge, slug, branch string) (string, error) {
+	return statusDiscoverBranchContext(context.Background(), forge, slug, branch)
+}
+
+func statusDiscoverBranchContext(ctx context.Context, forge, slug, branch string) (string, error) {
+	ctx = statusAuthOperation(ctx)
 	if forge == "" || slug == "" || branch == "" {
 		return "", nil
 	}
-	listed, truncated, err := statusOpenPRs(forge, slug)
+	listed, truncated, err := statusOpenPRsContext(ctx, forge, slug)
 	if err != nil {
 		return "", err
 	}
@@ -61,19 +67,24 @@ func statusDiscoverBranch(forge, slug, branch string) (string, error) {
 	switch forge {
 	case "github.com":
 		if truncated || len(listed) >= statusOpenListLimit {
-			return statusDiscoverGitHubBranch(slug, branch)
+			return statusDiscoverGitHubBranchContext(ctx, slug, branch)
 		}
 	case "bitbucket.org":
 		if truncated {
-			return statusDiscoverBitbucketBranch(slug, branch)
+			return statusDiscoverBitbucketBranchContext(ctx, slug, branch)
 		}
 	}
 	return "", nil
 }
 
 func statusDiscoverGitHubBranch(slug, branch string) (string, error) {
-	raw, err := statusSingleFlight("branch", "github.com", slug, branch, func() ([]byte, error) {
-		return statusJSON("gh", "pr", "list", "--repo", slug, "--head", branch, "--state", "open", "--limit", "20", "--json", "number,headRefName")
+	return statusDiscoverGitHubBranchContext(context.Background(), slug, branch)
+}
+
+func statusDiscoverGitHubBranchContext(ctx context.Context, slug, branch string) (string, error) {
+	ctx = statusAuthOperation(ctx)
+	raw, err := statusSingleFlightContext(ctx, "branch", "github.com", slug, branch, func() ([]byte, error) {
+		return statusJSONContext(ctx, "gh", "pr", "list", "--repo", slug, "--head", branch, "--state", "open", "--limit", "20", "--json", "number,headRefName")
 	})
 	if err != nil {
 		return "", err
@@ -82,8 +93,13 @@ func statusDiscoverGitHubBranch(slug, branch string) (string, error) {
 }
 
 func statusDiscoverBitbucketBranch(slug, branch string) (string, error) {
-	raw, err := statusSingleFlight("branch", "bitbucket.org", slug, branch, func() ([]byte, error) {
-		return statusFetchBBBranch(slug, branch)
+	return statusDiscoverBitbucketBranchContext(context.Background(), slug, branch)
+}
+
+func statusDiscoverBitbucketBranchContext(ctx context.Context, slug, branch string) (string, error) {
+	ctx = statusAuthOperation(ctx)
+	raw, err := statusSingleFlightContext(ctx, "branch", "bitbucket.org", slug, branch, func() ([]byte, error) {
+		return statusFetchBBBranchContext(ctx, slug, branch)
 	})
 	if err != nil {
 		return "", err
