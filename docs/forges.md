@@ -1,6 +1,6 @@
 # Forge operations — Bitbucket client contract
 
-Contract version: **1** (issue [#127](https://github.com/lcorneliussen/taba/issues/127)).
+Contract version: **2** (issue [#127](https://github.com/lcorneliussen/taba/issues/127)).
 
 This is the single list of every Bitbucket operation taba performs, which
 client performs it, and the rules a client change must keep. Later migration
@@ -31,7 +31,16 @@ them as interchangeable:
 ## Selecting the client
 
 `TABA_BITBUCKET_TRANSPORT` (legacy alias `WTC_BITBUCKET_TRANSPORT`) selects
-the client for **migrated** operations only:
+the client for **migrated** operations only. It is resolved when each
+operation runs, with the same precedence as the TWG site default:
+
+1. the process environment, when set — even set empty;
+2. the machine defaults file in the control root (`taba.env`, or legacy
+   `wtc.env`), which must be a regular file inside the control root;
+3. otherwise the default, `bb`.
+
+A defaults file that cannot be read safely leaves the selection unknown: the
+operation fails as unavailable instead of falling back to the default.
 
 | Value | Effect |
 |---|---|
@@ -39,10 +48,21 @@ the client for **migrated** operations only:
 | `twg` | TWG for migrated operations |
 | anything else | the operation fails as unavailable with a fixed diagnostic; no client runs |
 
-An installed `twg` alone changes nothing. The selection is read from the
-process environment when the operation runs; it is not yet a machine default
-in `taba.env`, and `taba doctor` does not report it. Operations that are not
-migrated ignore it. GitHub operations never consult it.
+An installed `twg` alone changes nothing. Because the selection is resolved
+per operation, a changed selection applies to the next operation; nothing
+observed through the previous client is held or reused. Catch-up keeps no
+response cache, so no observation is ever labelled with another client's or
+account's identity. A future cached read must include the client and its
+selection source in its authenticated context, and treat an unknown TWG
+profile as operation-private, before it can migrate. Operations that are not
+migrated ignore the selection. GitHub operations never consult it.
+
+`taba doctor` in a collection shows a `bitbucket-client` row with the
+selected client and where it came from (environment, `taba.env`/`wtc.env` or
+default). When TWG is selected it also runs `twg --version` once and reports
+whether that version is supported. The row is advisory: it never fails doctor,
+and it never contacts a forge, reads credentials or probes an account. A
+configured value that is not understood is reported without echoing it.
 
 ## Migrated operations
 
@@ -87,7 +107,10 @@ with `TWG_AGENT_DEFAULTS=1` added to that child process only.
 - Version: before its first read in a process, the reader runs
   `twg --version` once per resolved executable. TWG 1.x at or above 1.4.4 is
   accepted (a pre-release of 1.4.4 is not); older versions, another major
-  version or unparseable output are refused before any read. A failed version check is not remembered.
+  version or unparseable output are refused before any read. An unsupported
+  answer is remembered per executable (path, size and modification time), so
+  an upgrade in place is asked again; a version check that fails to run is not
+  remembered and is retried by the next read.
 - Deadline: each call is bounded by the catch-up forge timeout (30 s) and the
   owned process is killed when it expires. Processes that TWG itself starts are
   not tracked.
@@ -161,7 +184,7 @@ State of `main` at contract version 1. `bb` = `bb` CLI, REST = direct HTTP.
 | Review | prior review comments | R | `bb pr comments list --limit 1000` | unknown envelope = completeness unknown |
 | Review | review status gate | R | `bb pr view`, `bb pr comments list --all` | no deadline; trusts only exact comment ids and `#comment-<n>` links |
 | Open review | PR discovery by branch | R | `bb pr list --limit 100` / `bb pr view` | 15 s; reaching the limit is an error |
-| **Catch-up** | **enlisted PR state** | R | **`bb pr view` (default) or TWG (selected)** | 30 s; no budget, no cache; strict decoding |
+| **Catch-up** | **enlisted PR state** | R | **`bb pr view` (default) or TWG (selected)** | 30 s; no budget, no cache; strict decoding and identity pinning with TWG only |
 | Review | summary comment create/update | W | REST, else `bb pr comments add/edit` | create-intent file, saved id, receipt; a missing, conflicting or malformed id stays pending |
 | Review | inline comment create | W | REST, else `bb pr comments add` | marker-key de-duplication; fail closed when prior comments are unreadable |
 | Review | inline reply and resolve | W | REST reply / `bb pr comments reply`; `bb pr comments resolve` | no automatic retry |

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,23 +36,135 @@ const (
 )
 
 // bitbucketClientVariable selects the client for migrated Bitbucket reads.
-// WTC_BITBUCKET_TRANSPORT is accepted as the legacy alias.
+// WTC_BITBUCKET_TRANSPORT is accepted as the legacy alias. The process
+// environment wins, even when set empty; otherwise the machine defaults file
+// (taba.env, or legacy wtc.env) in the control root supplies it, with the same
+// precedence and source checks as the TWG site default.
 const bitbucketClientVariable = "TABA_BITBUCKET_TRANSPORT"
 
 // errBitbucketClientSelection is returned for a selection this version does
 // not understand. It is never treated as "use the default".
 var errBitbucketClientSelection = errors.New("unsupported Bitbucket transport selection")
 
-func selectedBitbucketClient() (bitbucketClient, error) {
-	value, _ := envcompat.LookupEnv(bitbucketClientVariable)
+// errBitbucketClientDefaults is returned when the machine defaults file that
+// could hold the selection cannot be read safely. The selection is then
+// unknown, never the default.
+var errBitbucketClientDefaults = errors.New("Bitbucket transport selection unavailable")
+
+// bitbucketClientSelection is one resolved selection and where it came from.
+// Source is "environment", the defaults file name ("taba.env" or "wtc.env"),
+// "machine defaults" when the defaults file could not even be identified, or
+// "default". It never holds a path or a value.
+type bitbucketClientSelection struct {
+	Client bitbucketClient
+	Source string
+}
+
+// selectedBitbucketClient resolves the selection when an operation runs, so a
+// changed selection applies to the next operation and nothing observed
+// through the previous client is reused. root is the control root; empty
+// skips the defaults file.
+func selectedBitbucketClient(root string) (bitbucketClientSelection, error) {
+	value, set := envcompat.LookupEnv(bitbucketClientVariable)
+	source := "environment"
+	if !set {
+		var err error
+		value, source, err = machineBitbucketClient(root)
+		if err != nil {
+			return bitbucketClientSelection{Source: source}, errBitbucketClientDefaults
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", "bb":
-		return bitbucketClientBB, nil
+		return bitbucketClientSelection{Client: bitbucketClientBB, Source: source}, nil
 	case "twg":
-		return bitbucketClientTWG, nil
+		return bitbucketClientSelection{Client: bitbucketClientTWG, Source: source}, nil
 	}
-	return "", errBitbucketClientSelection
+	return bitbucketClientSelection{Source: source}, errBitbucketClientSelection
 }
+
+// machineBitbucketClient reads the selection from the machine defaults file,
+// mirroring machineTWGSite: the file must sit inside the control root and be a
+// regular file. A missing file or key is the default.
+func machineBitbucketClient(root string) (value, source string, err error) {
+	if root == "" {
+		return "", "default", nil
+	}
+	path, err := MachineEnvFile(root)
+	if err != nil {
+		return "", "machine defaults", err
+	}
+	source = filepath.Base(path)
+	canonicalRoot, err := canonicalPath(root)
+	if err != nil {
+		return "", source, err
+	}
+	if err := (ResolvedScope{Root: canonicalRoot}).validateSourcePath(path); err != nil {
+		return "", source, err
+	}
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return "", "default", nil
+	}
+	if err != nil {
+		return "", source, err
+	}
+	if !info.Mode().IsRegular() {
+		return "", source, errBitbucketClientDefaults
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", source, err
+	}
+	value, set := envcompat.LookupMap(bitbucketClientVariable, envcompat.Assignments(data))
+	if !set {
+		return "", "default", nil
+	}
+	return value, source, nil
+}
+
+// BitbucketClientReport describes the Bitbucket client selection for doctor.
+// It reads only local configuration and, when TWG is selected, asks the
+// selected executable for its version once; it never contacts a forge, reads
+// credentials or probes an account. ok is false when a migrated read would be
+// refused; the check is advisory.
+func BitbucketClientReport(root string) (ok bool, detail string) {
+	selection, err := selectedBitbucketClient(root)
+	from := " from " + selection.Source
+	switch {
+	case errors.Is(err, errBitbucketClientDefaults):
+		where := "machine defaults"
+		if selection.Source != where {
+			where += " (" + selection.Source + ")"
+		}
+		return false, "advisory: selection unavailable; " + where + " cannot be read safely"
+	case err != nil:
+		return false, "advisory: unsupported " + bitbucketClientVariable + " value" + from + "; set it to bb or twg, or unset it"
+	case selection.Client == bitbucketClientBB:
+		if selection.Source == "default" {
+			return true, "bb (default)"
+		}
+		return true, "bb" + from
+	}
+	reader := twgBitbucketReader{run: func(env []string, args ...string) ([]byte, error) {
+		return bitbucketCommand(bitbucketDoctorTimeout, env, args...)
+	}}
+	if err := reader.checkVersion(); err != nil {
+		var classified *bitbucketReadError
+		switch {
+		case errors.Is(err, exec.ErrNotFound):
+			return false, "advisory: twg" + from + ", but twg is not installed; migrated reads stay unavailable"
+		case errors.As(err, &classified):
+			return false, "advisory: twg" + from + ", but its version is unsupported (needs 1.x at or above 1.4.4)"
+		default:
+			return false, "advisory: twg" + from + ", but its version could not be read"
+		}
+	}
+	return true, "twg" + from + "; version supported"
+}
+
+// bitbucketDoctorTimeout bounds doctor's one version subprocess.
+var bitbucketDoctorTimeout = 10 * time.Second
 
 // bitbucketPR is the normalized result of one pull-request read. State is one
 // that catchUpValidPRState accepts (OPEN, DRAFT, MERGED, CLOSED, DECLINED or
@@ -119,8 +232,11 @@ func (r bbBitbucketReader) PullRequest(workspace, repo, number string) (bitbucke
 	return facts.normalize()
 }
 
-// bitbucketRESTPullRequest is the Bitbucket Cloud pull-request resource as both
-// clients return it. Only the fields a read needs are decoded.
+// bitbucketRESTPullRequest is the Bitbucket Cloud pull-request resource. The
+// bb shape is the one catch-up has always read; the TWG shape follows TWG
+// 1.4.4 help and has not been checked against a live capture. Only the fields
+// a read needs are decoded. _failures is TWG completeness metadata, not part
+// of the Bitbucket resource.
 type bitbucketRESTPullRequest struct {
 	ID    json.RawMessage `json:"id"`
 	State string          `json:"state"`
@@ -363,8 +479,9 @@ func classifyTWGError(e *twgError) *bitbucketReadError {
 // twgSinglePullRequest returns the one pull-request resource in a TWG reply.
 // Completeness metadata is checked at every level that can carry it: the
 // envelope, the batch item and the resource itself (twgComplete). A batch
-// reply must hold exactly one item whose ok is true; anything else is
-// incomplete, never empty. An item input given as a string must equal the
+// reply must hold exactly one item. Its ok decides the outcome: false is a
+// classified TWG failure, a missing ok is incomplete, and any other non-true
+// value is malformed. An item input given as a string must equal the
 // requested number. PullRequest then pins the resource id and repository.
 func twgSinglePullRequest(out []byte, number string) ([]byte, error) {
 	top, err := twgObject(out)
@@ -441,8 +558,11 @@ func twgObject(raw []byte) (map[string]json.RawMessage, error) {
 // Only the explicitly complete forms pass: partial absent or false, _failures
 // absent, null or empty, ok absent or true, and error absent or null. A true
 // partial or a non-empty _failures is incomplete; a wrong type, or an error
-// beside a success, is malformed. ok false is a failure the caller reports
-// before this check.
+// beside a success, is malformed. An ok false that reaches this check is
+// reported as incomplete. Envelope failures are normally classified first by
+// twgFailure and batch-item failures by twgSinglePullRequest; what still
+// arrives here is a resource-level ok false, or an envelope ok false whose
+// error object does not decode.
 func twgComplete(object map[string]json.RawMessage) error {
 	if raw, ok := object["partial"]; ok {
 		switch strings.TrimSpace(string(raw)) {

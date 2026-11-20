@@ -87,8 +87,9 @@ func catchUpFetch(owner string) error {
 // catchUpForgeTimeout bounds one forge CLI call, as status bounds its own.
 var catchUpForgeTimeout = 30 * time.Second
 
-// catchUpJSON runs a forge CLI. A stalled gh or bb fails the lookup, which
-// leaves the branch untouched, instead of blocking a sweep or status refresh.
+// catchUpJSON runs the gh CLI for catch-up. A stalled gh fails the lookup,
+// which leaves the branch untouched, instead of blocking a sweep or status
+// refresh. Bitbucket reads are bounded the same way by catchUpClientRun.
 func catchUpJSON(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), catchUpForgeTimeout)
 	defer cancel()
@@ -275,11 +276,18 @@ func (c *Context) catchUpPRState(t catchUpTarget, branch string) catchUpPR {
 	liveBase := ""
 	var bitbucket bitbucketPRReader
 	if forge == "bitbucket.org" {
-		client, err := selectedBitbucketClient()
-		if err != nil {
-			return catchUpLookupUnavailable(identity+" select Bitbucket client", "unsupported "+bitbucketClientVariable+" value; set it to bb or twg, or unset it, and retry")
+		selection, err := selectedBitbucketClient(c.ConfigRoot)
+		if errors.Is(err, errBitbucketClientDefaults) {
+			return catchUpLookupUnavailable(identity+" select Bitbucket client", "selection unavailable; machine defaults cannot be read safely, inspect the control root and retry")
 		}
-		bitbucket = newBitbucketPRReader(client, catchUpClientRun)
+		if err != nil {
+			where := ""
+			if selection.Source != "environment" {
+				where = " in " + selection.Source
+			}
+			return catchUpLookupUnavailable(identity+" select Bitbucket client", "unsupported "+bitbucketClientVariable+" value"+where+"; set it to bb or twg, or unset it, and retry")
+		}
+		bitbucket = newBitbucketPRReader(selection.Client, catchUpClientRun)
 	}
 	for _, record := range selected {
 		number := record.Number
