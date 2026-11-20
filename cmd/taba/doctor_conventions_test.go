@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -48,7 +49,7 @@ func TestDoctorAllReportsConventionsFromTheWorkspaceRoot(t *testing.T) {
 		if err != nil {
 			t.Fatalf("from %s: %s: %v", dir, out, err)
 		}
-		for _, want := range []string{"harness-config", "old/WTC-SCOPE.md", "moved: migrated", "2 collection(s): 1 with nothing left to migrate by hand, 1 with wtc conventions to migrate"} {
+		for _, want := range []string{"harness-config", "old/WTC-SCOPE.md", "moved: migrated", "2 collection(s): 1 with nothing left to migrate by hand, 1 with wtc conventions to migrate", "finish the migration to taba"} {
 			if !strings.Contains(out, want) {
 				t.Fatalf("from %s: missing %q in:\n%s", dir, want, out)
 			}
@@ -72,7 +73,7 @@ func TestDoctorAllReportsConventionsFromTheWorkspaceRoot(t *testing.T) {
 	// Plain doctor in one collection lists its findings and still passes:
 	// during 0.2.x wtc conventions never fail it.
 	out, err = run(filepath.Join(workspace, "old"), "doctor")
-	if err != nil || !strings.Contains(out, "conventions     migrate") || !strings.Contains(out, "harness-config:") || !strings.Contains(out, "old/WTC-SCOPE.md") {
+	if err != nil || !strings.Contains(out, "conventions     migrate") || !strings.Contains(out, "harness-config:") || !strings.Contains(out, "old/WTC-SCOPE.md") || !strings.Contains(out, "finish the migration to taba") {
 		t.Fatalf("doctor in a collection: %v\n%s", err, out)
 	}
 	out, err = run(filepath.Join(workspace, "old"), "doctor", "--json")
@@ -125,5 +126,29 @@ func TestDoctorAllReportsConventionsFromTheWorkspaceRoot(t *testing.T) {
 	sort.Strings(missing)
 	if len(missing) > 0 {
 		t.Fatalf("wtc.ConventionCommands misses %v", missing)
+	}
+}
+
+// Findings that are only waiting or only to review leave the check ok and
+// do not ask anyone to migrate.
+func TestConventionsCheckWithoutActionableFindings(t *testing.T) {
+	findings := []wtc.ConventionFinding{
+		{ID: "generated-state", Path: "c", Blocked: true},
+		{ID: "repo-references", Path: "c/r/README.md", Detail: "1 other mention(s) of wtc; line 1", Review: true},
+	}
+	check := conventionsCheck(findings)
+	if check["ok"] != true || check["detail"] != "0 wtc convention(s) to migrate, 1 waiting for taba, 1 to review" {
+		t.Fatalf("check = %v", check)
+	}
+	var out bytes.Buffer
+	printConventionSection(&out, findings)
+	if strings.Contains(out.String(), "finish the migration") || !strings.Contains(out.String(), "review: c/r/README.md") {
+		t.Fatalf("section:\n%s", out.String())
+	}
+	findings = append(findings, wtc.ConventionFinding{ID: "scope-file", Path: "c/WTC-SCOPE.md"})
+	out.Reset()
+	printConventionSection(&out, findings)
+	if !strings.Contains(out.String(), "finish the migration") {
+		t.Fatalf("section without hint:\n%s", out.String())
 	}
 }
