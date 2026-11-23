@@ -38,7 +38,14 @@ func (c *Context) StatusRefreshRefsWithAge(all bool, maxAge time.Duration) (Stat
 	if err != nil {
 		return report, err
 	}
-	if inventory.ExitStatus != 0 {
+	if err := statusCanceled(c.resourceContext(), nil); err != nil {
+		return report, err
+	}
+	// A workspace sweep refreshes the owners of every readable target. A
+	// collection that cannot be opened contributes none and is reported by the
+	// sweep itself; a repository without an owner is skipped alone. A scoped
+	// status still requires its own inventory.
+	if inventory.ExitStatus != 0 && !all {
 		return report, fmt.Errorf("cannot read status worktree inventory")
 	}
 	seen := map[string]bool{}
@@ -125,7 +132,13 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 	for i, dir := range collections {
 		collection, err := OpenCollectionContext(c.resourceContext(), dir)
 		if err != nil {
-			return snapshot, report, err
+			if err := statusCanceled(c.resourceContext(), err); err != nil {
+				return snapshot, report, err
+			}
+			// A rejected context stays closed: beyond the files its rejection
+			// was read from, nothing of it is run, fetched or written.
+			snapshot.Unreadable = append(snapshot.Unreadable, StatusUnreadable{Collection: runtimeTextSafe(filepath.Base(dir)), Reason: collectionOpenFailure(err)})
+			continue
 		}
 		collection.StatusProgress = c.StatusProgress
 		// Its services are read below, with this collection's dekit, never
@@ -137,7 +150,11 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 		// their local PR registries.
 		part, err := collection.statusForgePreview(false, false)
 		if err != nil {
-			return snapshot, report, err
+			if err := statusSweepFatal(ctx, err); err != nil {
+				return snapshot, report, err
+			}
+			snapshot.Unreadable = append(snapshot.Unreadable, StatusUnreadable{Collection: runtimeTextSafe(filepath.Base(dir)), Reason: unreadableStatus})
+			continue
 		}
 		snapshot.Repos = append(snapshot.Repos, part.Repos...)
 		snapshot.Retirement = append(snapshot.Retirement, part.Retirement...)

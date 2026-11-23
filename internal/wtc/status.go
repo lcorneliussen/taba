@@ -36,6 +36,10 @@ type StatusSnapshot struct {
 	PRsEmptyHint bool                   `json:"prs_empty_hint,omitempty"`
 	Runtime      []RuntimeItem          `json:"runtime,omitempty"`
 	Retirement   []RetirementAssessment `json:"retirement,omitempty"`
+	// Unreadable lists collections a workspace sweep could not read, and in a
+	// local sweep repositories without a resolvable Git owner, each with a
+	// sanitized reason. A non-empty list is a partial result.
+	Unreadable []StatusUnreadable `json:"unreadable,omitempty"`
 }
 
 type StatusRepo struct {
@@ -348,8 +352,15 @@ func (c *Context) statusLocalSnapshot(all, includeChoices bool) (StatusSnapshot,
 	if err != nil {
 		return snapshot, err
 	}
+	if err := statusCanceled(c.resourceContext(), nil); err != nil {
+		return snapshot, err
+	}
 	if report.ExitStatus != 0 {
-		return snapshot, fmt.Errorf("cannot read %d collection(s) in status inventory", len(report.Outcomes))
+		if !all {
+			return snapshot, fmt.Errorf("cannot read %d collection(s) in status inventory", len(report.Outcomes))
+		}
+		// A workspace sweep reads the collections it can and names the rest.
+		snapshot.Unreadable = statusInventoryUnreadable(report)
 	}
 	for i, target := range targets {
 		c.statusProgress(fmt.Sprintf("Reading worktrees %d/%d", i+1, len(targets)))
