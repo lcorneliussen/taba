@@ -74,9 +74,10 @@ type Provenance struct {
 	Skipped         []Skip   `json:"skipped,omitempty"`
 }
 
-// Text is rendered prompt content. Agent dispatch points accept Text rather
-// than string, so assembled strings cannot reach them; outside this package
-// only Render produces a non-empty Text.
+// Text is rendered prompt content. The registry's dispatch points (herdr
+// agent prompts, launch-note writes, the review checks suffix) accept Text
+// rather than string; outside this package only Render produces a non-empty
+// Text. Review concern and lead templates resolve separately.
 type Text struct {
 	s    string
 	prov Provenance
@@ -240,7 +241,12 @@ func List(ctx Context) ([]Provenance, error) {
 	sort.Strings(ids)
 	list := make([]Provenance, 0, len(ids))
 	for _, id := range ids {
-		res, err := Resolve(Context{Harness: ctx.Harness, Defaults: ctx.Defaults}, id)
+		if ctx.Audience == Public {
+			if def, err := Lookup(ctx, id); err == nil && def.Audience != Public {
+				continue
+			}
+		}
+		res, err := Resolve(ctx, id)
 		if err != nil {
 			return nil, err
 		}

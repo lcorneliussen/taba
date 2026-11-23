@@ -87,6 +87,9 @@ func TestOverrideWithoutFrontmatterIsBody(t *testing.T) {
 	if err != nil || text.String() != "Yo Ada" {
 		t.Fatalf("plain override = %q (%v)", text, err)
 	}
+	if p := text.Provenance(); p.Source != SourceProject || p.BaseVersion != 0 || p.BaseFile != "" {
+		t.Fatalf("override without a recorded base reports one: %+v", p)
+	}
 }
 
 func TestOverrideFailsOnUnknownPlaceholderOrWrongID(t *testing.T) {
@@ -127,6 +130,11 @@ func TestListReportsEffectiveSources(t *testing.T) {
 	}
 	if len(list) != 2 || list[0].ID != "demo.greet" || list[0].Source != SourceEmbedded || list[1].Source != SourceProject {
 		t.Fatalf("list = %+v", list)
+	}
+	ctx.Audience = Public
+	list, err = List(ctx)
+	if err != nil || len(list) != 1 || list[0].ID != "demo.public" || list[0].Source != SourceEmbedded {
+		t.Fatalf("public list = %+v (%v)", list, err)
 	}
 }
 
