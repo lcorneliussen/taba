@@ -21,10 +21,10 @@ import (
 // Explicit previews do not write snapshots that a status pane could mistake
 // for a completed one-shot collection.
 func addStatusCommand(root *cobra.Command, asJSON *bool) {
-	var local, forge, all, md, ansi, reposOnly, cached, noFetch, tui, procs, noClick, click, noWatch, silent bool
+	var local, forge, all, md, ansi, reposOnly, cached, noFetch, tui, procs, noClick, click, mouse, noWatch, silent bool
 	var watchSeconds, fetchAgeSeconds int
 	cmd := &cobra.Command{Use: "status [collection]", Short: "Inspect worktree collection status",
-		Long: branding.Text("Show repository and PR status for this collection, a named collection, or --all. Bare {{command}} status opens the live view when stdin and stdout are terminals; --no-watch prints one pass. Explicit JSON, Markdown, ANSI, preview, and cached modes remain one-shot. Interactive one-shot runs log collector progress on stderr; --silent suppresses it. --cached reads snapshots without Git or forge calls. In the live view, click refreshing or press l for its log. Captured output prints one pass. Watch defaults can be set in WTC_CONFIG_ROOT/wtc.env with WTC_STATUS_WATCH, WTC_STATUS_WATCH_BG, and WTC_STATUS_NO_CLICK."),
+		Long: branding.Text("Show repository and PR status for this collection, a named collection, or --all. Bare {{command}} status opens the live view when stdin and stdout are terminals; --no-watch prints one pass. Explicit JSON, Markdown, ANSI, preview, and cached modes remain one-shot. Interactive one-shot runs log collector progress on stderr; --silent suppresses it. --cached reads snapshots without Git or forge calls. In the live view, press l for the refresh log (with --mouse, clicking refreshing also opens it); press v to select beyond the visible rows. Captured output prints one pass. Watch defaults can be set in WTC_CONFIG_ROOT/wtc.env with WTC_STATUS_WATCH, WTC_STATUS_WATCH_BG, and WTC_STATUS_NO_CLICK."),
 		Args: cobra.MaximumNArgs(1)}
 	cmd.Flags().BoolVar(&local, "local", false, "Preview local Git facts (no forge facts or cache writes)")
 	cmd.Flags().BoolVar(&forge, "forge", false, "Preview local Git and PR facts (no snapshot writes)")
@@ -38,6 +38,7 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 	cmd.Flags().BoolVar(&procs, "procs", false, "Show processes under the herdr session")
 	cmd.Flags().BoolVar(&noClick, "no-click", false, "Disable PR and build URL mouse targets in the TUI")
 	cmd.Flags().BoolVar(&click, "click", false, "Enable PR and build URL mouse targets in the TUI")
+	cmd.Flags().BoolVar(&mouse, "mouse", false, "Capture the mouse in the TUI for in-app wheel, click targets and hover text; by default drag selection stays with the terminal")
 	cmd.Flags().BoolVar(&noWatch, "no-watch", false, "Print one status pass and exit")
 	cmd.Flags().BoolVar(&silent, "silent", false, "Suppress progress messages during one-shot terminal output")
 	cmd.Flags().IntVar(&fetchAgeSeconds, "fetch-age", 300, "Refresh remote refs older than this many seconds")
@@ -88,7 +89,7 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 		var c *wtc.Context
 		if interactive {
 			var handled bool
-			c, handled, err = runStatusStartup(cwd, args, statusStartupOptions{all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, click: click, reposChanged: cmd.Flags().Changed("repos"), noClickChanged: cmd.Flags().Changed("no-click"), watchSeconds: watchSeconds, fetchAgeSeconds: fetchAgeSeconds, incompatible: local || forge || cached || md || ansi || *asJSON})
+			c, handled, err = runStatusStartup(cwd, args, statusStartupOptions{all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, click: click, mouse: mouse, reposChanged: cmd.Flags().Changed("repos"), noClickChanged: cmd.Flags().Changed("no-click"), watchSeconds: watchSeconds, fetchAgeSeconds: fetchAgeSeconds, incompatible: local || forge || cached || md || ansi || *asJSON})
 			if handled || err != nil {
 				return err
 			}
@@ -144,7 +145,7 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 				if local || forge || cached || md || ansi || *asJSON {
 					return fmt.Errorf("--tui/--watch cannot be combined with preview, cached, Markdown, or JSON output")
 				}
-				return runStatusTUI(c, all, procs, reposOnly, noFetch, noClick, time.Duration(seconds)*time.Second, time.Duration(background)*time.Second, time.Duration(fetchAgeSeconds)*time.Second)
+				return runStatusTUI(c, all, procs, reposOnly, noFetch, noClick, mouse, time.Duration(seconds)*time.Second, time.Duration(background)*time.Second, time.Duration(fetchAgeSeconds)*time.Second)
 			}
 		}
 		if procs {

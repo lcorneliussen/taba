@@ -11,7 +11,7 @@ metadata. No version probes or network requests run on refresh.
 
 Stable versions link to that version's GitHub release notes using a native
 terminal hyperlink (modifier-click in supporting terminals). `--no-click`
-disables the TUI's ordinary mouse targets; native terminal hyperlinks remain.
+disables the ordinary mouse targets of `--mouse`; native terminal hyperlinks remain.
 `NO_COLOR` preserves links, while `TERM=dumb` renders plain text. Development,
 prerelease and custom builds show their build label without inventing a release
 URL. A missing version appears as `unknown`.

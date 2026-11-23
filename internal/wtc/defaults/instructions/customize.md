@@ -138,8 +138,8 @@ commit the build ran on, 7 to 64 hex characters) and the same `branch`:
 Keep the provider fast and safe to call during watched refreshes. The CLI
 stops a call after 15 seconds, rejects invalid JSON, a different branch, a
 non-HTTP(S) URL or a malformed commit, and never infers a passing build when
-the provider cannot answer. Clicking a build cell opens its URL unless
-`--no-click` is set.
+the provider cannot answer. A build cell is a terminal hyperlink; with
+`--mouse`, an ordinary click opens its URL unless `--no-click` is set.
 
 ### Browse view
 
