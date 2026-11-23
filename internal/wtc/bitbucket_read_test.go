@@ -3,6 +3,7 @@ package wtc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -140,6 +141,11 @@ func newNoBBHost(t *testing.T) noBBHost {
 	t.Setenv("GIT_SSH_COMMAND", filepath.Join(h.bin, "ssh"))
 	t.Setenv("TABA_CONFIG_ROOT", "")
 	t.Setenv("WTC_CONFIG_ROOT", "")
+	// Without a control root the read identity key falls back to the user's
+	// configuration directory: keep that inside this test.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	unsetEnv(t, "TABA_BITBUCKET_TRANSPORT", "WTC_BITBUCKET_TRANSPORT", "TABA_BITBUCKET_READ_CREDENTIAL", "WTC_BITBUCKET_READ_CREDENTIAL", "TWG_BBC_TOKEN", "TWG_BBC_USER")
 	if path, _ := exec.LookPath("bb"); path != filepath.Join(h.bin, "bb") {
 		t.Fatalf("synthetic host must shadow bb with its poison tool, found %q", path)
@@ -724,7 +730,7 @@ func TestBitbucketDoctorReadRowProbesOnlyWhenAsked(t *testing.T) {
 	t.Setenv("FAKE_TWG_MODE", "denied")
 	bitbucketHostCredentials = sync.Map{}
 	d = BitbucketReadDiagnose("", "alpha", "acme/alpha", true)
-	if d.OK || d.Cause != RefusalUnauthorized || d.Status != 401 || !strings.Contains(d.Detail, "invalid or expired") {
+	if d.OK || d.Cause != RefusalUnauthorized || d.Status != 401 || !strings.Contains(d.Detail, "HTTP 401") {
 		t.Fatalf("denied = %+v", d)
 	}
 	assertNoPoison(t, "doctor row", d.Detail+d.Client+d.Credential)
@@ -739,7 +745,7 @@ func TestBitbucketRefusalsNameTheirCause(t *testing.T) {
 		t.Setenv("FAKE_TWG_STATUS", status)
 		_, err := BitbucketBranchPullRequest("", "acme/alpha", "feature")
 		refusal := ClassifyBitbucketRefusal(err, label)
-		if refusal.Cause != cause || !refusal.Access() || !strings.Contains(refusal.Message, "("+status+")") || !strings.Contains(refusal.Message, "repository access token") {
+		if refusal.Cause != cause || !refusal.Access() || !strings.Contains(refusal.Message, "HTTP "+status) || !strings.Contains(refusal.Message, "repository access token") {
 			t.Fatalf("%s: %+v (%v)", status, refusal, err)
 		}
 		assertNoPoison(t, "refusal", refusal.Message)
@@ -822,5 +828,213 @@ func TestStatusRowNamesARefusedBitbucketRead(t *testing.T) {
 	}
 	if got := statusObservationFailure(errors.New("Bitbucket API request failed")); got.Reason != "refresh-failed" {
 		t.Fatalf("a network failure must not read as a refusal: %+v", got)
+	}
+}
+
+// Causes say what was observed and offer explanations; they never assert an
+// expiry or a missing scope, and transport classes stay distinct.
+func TestBitbucketRefusalWordingAndTransportClasses(t *testing.T) {
+	for _, status := range []int{401, 403, 404} {
+		r := ClassifyBitbucketRefusal(&bitbucketHTTPError{status, "x"}, "the host's API token")
+		if !strings.Contains(r.Message, fmt.Sprintf("HTTP %d", status)) {
+			t.Fatalf("%d: %q does not name the observed status", status, r.Message)
+		}
+		for _, claim := range []string{"is expired", "has expired", "is invalid", "lacks", "missing scope"} {
+			if strings.Contains(r.Message, claim) {
+				t.Fatalf("%d: %q asserts %q without evidence", status, r.Message, claim)
+			}
+		}
+	}
+	if r := ClassifyBitbucketRefusal(&bitbucketHTTPError{503, "x"}, ""); r.Cause != RefusalProvider || r.Access() {
+		t.Fatalf("5xx = %+v", r)
+	}
+	if r := ClassifyBitbucketRefusal(classifyTWGError(&twgError{Code: "UPSTREAM", StatusCode: 502}), ""); r.Cause != RefusalProvider {
+		t.Fatalf("TWG 5xx = %+v", r)
+	}
+	if r := ClassifyBitbucketRefusal(classifyTWGError(&twgError{Code: "TLS_CERT_INVALID"}), ""); r.Cause != RefusalTLS {
+		t.Fatalf("TWG TLS = %+v", r)
+	}
+	if r := ClassifyBitbucketRefusal(classifyTWGError(&twgError{Code: "ECONNREFUSED", Kind: "network"}), ""); r.Cause != RefusalNetwork || r.Access() {
+		t.Fatalf("TWG network = %+v", r)
+	}
+
+	// Real local servers: an untrusted TLS certificate, a closed port, and an
+	// error body carrying a marker that must not be echoed.
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer tlsServer.Close()
+	ctx := statusAuthOperation(context.Background())
+	_, err := statusBBGETWithOptionsContext(ctx, StatusRefreshBackground, tlsServer.URL+"/2.0/x", "", "synthetic-token", false)
+	if r := ClassifyBitbucketRefusal(err, ""); r.Cause != RefusalTLS || strings.Contains(err.Error(), tlsServer.URL) {
+		t.Fatalf("untrusted certificate: %v -> %+v", err, r)
+	}
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+	_, err = statusBBGETWithOptionsContext(ctx, StatusRefreshBackground, closedURL+"/2.0/x", "", "synthetic-token", false)
+	if r := ClassifyBitbucketRefusal(err, ""); r.Cause != RefusalNetwork || strings.Contains(err.Error(), closedURL) {
+		t.Fatalf("closed port: %v -> %+v", err, r)
+	}
+	body := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error":{"message":"poison-body-marker-5c1"}}`))
+	}))
+	defer body.Close()
+	_, err = statusBBGETWithOptionsContext(ctx, StatusRefreshBackground, body.URL+"/2.0/x", "", "synthetic-token", false)
+	if r := ClassifyBitbucketRefusal(err, ""); r.Cause != RefusalProvider || r.Status != 502 || strings.Contains(err.Error(), "poison-body-marker") {
+		t.Fatalf("5xx body: %v -> %+v", err, r)
+	}
+}
+
+// The read identity is a non-secret digest: stable for an unchanged host
+// token, new after rotation, and never shared by an unknown context.
+func TestBitbucketReadIdentityFollowsTheCredentialWithoutRevealingIt(t *testing.T) {
+	newNoBBHost(t)
+	tokens := t.TempDir()
+	t.Setenv("FAKE_TOKEN_DIR", tokens)
+	if err := os.MkdirAll(filepath.Join(tokens, "acme"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	set := func(token string) {
+		bitbucketHostCredentials = sync.Map{}
+		if err := os.WriteFile(filepath.Join(tokens, "acme", "alpha"), []byte(token), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"values":[]}`)) }))
+	defer server.Close()
+	statusBBAPI = server.URL // restored by newNoBBHost's cleanup
+	config, err := os.UserConfigDir()
+	if err != nil || !strings.HasPrefix(config, os.Getenv("HOME")) {
+		t.Fatalf("the user configuration directory %q is not inside this test", config)
+	}
+	set("synthetic-identity-one")
+	first := BitbucketBranchRead("", "acme/alpha", "feature")
+	set("synthetic-identity-one")
+	again := BitbucketBranchRead("", "acme/alpha", "feature")
+	set("synthetic-identity-two")
+	rotated := BitbucketBranchRead("", "acme/alpha", "feature")
+	unknown := BitbucketBranchRead("", "acme/gamma", "feature") // the helper has nothing for gamma
+	if _, err := os.Stat(filepath.Join(config, "taba", bitbucketReadIdentityKeyName)); err != nil {
+		t.Fatalf("without a control root the key is kept in this test's configuration directory: %v", err)
+	}
+	if !strings.HasPrefix(first.Identity, "k:") || first.Identity != again.Identity {
+		t.Fatalf("unchanged token: %q vs %q", first.Identity, again.Identity)
+	}
+	if rotated.Identity == first.Identity {
+		t.Fatal("a rotated token must be another read identity")
+	}
+	if !strings.HasPrefix(unknown.Identity, "u:") || unknown.Err == nil {
+		t.Fatalf("no credential: %+v", unknown)
+	}
+	for _, r := range []BitbucketBranchReadResult{first, rotated, unknown} {
+		if r.ObservedAt.IsZero() {
+			t.Fatal("a read must say when it completed")
+		}
+		for _, secret := range []string{"synthetic-identity-one", "synthetic-identity-two", poisonTokenAlpha, poisonTokenBeta} {
+			if strings.Contains(r.Identity, secret) {
+				t.Fatalf("identity %q reveals a credential", r.Identity)
+			}
+		}
+	}
+}
+
+// The read identity is keyed by its own durable key, not the disposable
+// status cache key: clearing the cache keeps it; rotation, another
+// principal, repository or control root changes it (#471).
+func TestBitbucketReadIdentitySurvivesCacheCleanupAndSeparatesContexts(t *testing.T) {
+	newNoBBHost(t)
+	t.Setenv("TMPDIR", t.TempDir()) // the status cache lives under it
+	rootA, rootB := t.TempDir(), t.TempDir()
+	t.Setenv("TABA_CONFIG_ROOT", rootA)
+	tokens := t.TempDir()
+	t.Setenv("FAKE_TOKEN_DIR", tokens)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"values":[]}`)) }))
+	defer server.Close()
+	statusBBAPI = server.URL
+	for _, repo := range []string{"alpha", "beta"} {
+		if err := os.MkdirAll(filepath.Join(tokens, "acme"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tokens, "acme", repo), []byte("synthetic-stable-token"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	identity := func(slug string) string {
+		bitbucketHostCredentials = sync.Map{}
+		return BitbucketBranchRead("", slug, "feature").Identity
+	}
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	first := identity("acme/alpha")
+	if !strings.HasPrefix(first, "k:") {
+		t.Fatalf("identity = %q", first)
+	}
+	// The disposable status cache, its key included, is cleared.
+	if _, err := os.Stat(filepath.Join(statusForgeCacheDir(), ".auth-context-key-v1")); err != nil {
+		t.Fatalf("the status cache key should exist before cleanup: %v", err)
+	}
+	if err := os.RemoveAll(statusForgeCacheDir()); err != nil {
+		t.Fatal(err)
+	}
+	if again := identity("acme/alpha"); again != first {
+		t.Fatalf("an unchanged credential changed identity after a cache cleanup: %q -> %q", first, again)
+	}
+	if other := identity("acme/beta"); other == first {
+		t.Fatal("another repository must be another identity")
+	}
+	t.Setenv("TABA_CONFIG_ROOT", rootB)
+	if other := identity("acme/alpha"); other == first || !strings.HasPrefix(other, "k:") {
+		t.Fatalf("another control root must be another identity: %q", other)
+	}
+	t.Setenv("TABA_CONFIG_ROOT", rootA)
+	if err := os.WriteFile(filepath.Join(tokens, "acme", "alpha"), []byte("synthetic-rotated-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rotated := identity("acme/alpha"); rotated == first {
+		t.Fatal("a rotated token must be another identity")
+	}
+
+	// TWG with a token in the environment: the principal is part of it.
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "")
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-env-token")
+	t.Setenv("TWG_BBC_USER", "person-one@example.invalid")
+	one := identity("acme/alpha")
+	t.Setenv("TWG_BBC_USER", "person-two@example.invalid")
+	two := identity("acme/alpha")
+	if !strings.HasPrefix(one, "k:") || one == two {
+		t.Fatalf("principals: %q vs %q", one, two)
+	}
+	// A TWG profile login is not seen by taba: unknown, never a known identity.
+	t.Setenv("TWG_BBC_TOKEN", "")
+	if unknown := identity("acme/alpha"); !strings.HasPrefix(unknown, "u:") {
+		t.Fatalf("profile login identity = %q", unknown)
+	}
+
+	// The key is random, private, and holds no credential.
+	path := filepath.Join(rootA, bitbucketReadIdentityKeyName)
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 || info.Size() != 32 {
+		t.Fatalf("read identity key: %v %v", info, err)
+	}
+	data, _ := os.ReadFile(path)
+	for _, secret := range []string{"synthetic-stable-token", "synthetic-rotated-token", "synthetic-env-token"} {
+		if strings.Contains(string(data), secret) || strings.Contains(first, secret) {
+			t.Fatal("credential material in the key or identity")
+		}
+	}
+	// A key file that is not a valid key is never overwritten, and a
+	// credential taba sees then has an unknown identity.
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-env-token")
+	if id := identity("acme/alpha"); id != two {
+		t.Fatalf("an unchanged principal must keep its identity: %q vs %q", id, two)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if id := identity("acme/alpha"); !strings.HasPrefix(id, "u:") {
+		t.Fatalf("an invalid key must give an unknown identity, got %q", id)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "x" {
+		t.Fatal("an invalid key file was overwritten")
 	}
 }

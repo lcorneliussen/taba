@@ -263,22 +263,46 @@ export function pullRequestWatch(file, now = Date.now) {
       c.at = now();
       const lines = [];
       c.refusals ??= {};
+      c.observed ??= {};
       for (const r of repos) {
         if (!r.path || r.error) continue;
         const name = r.repo ?? r.project ?? path.basename(r.path);
-        // A refused read is news once per cause (#471): the conversation can
-        // explain it instead of taking the pull request for unenlisted. A
-        // transient failure (network, timeout, rate limit) is no news and
-        // does not reset that; a successful read after a refusal is news once.
+        // A result older than one already seen for this checkout (a read
+        // still in flight when a newer one finished) is not news (#471).
+        // Instants are compared, not strings (RFC 3339 fractions vary in
+        // width); a fence later than now (the clock stepped back) is dropped.
+        // pullRequestRead is set for every completed Bitbucket read: a pull
+        // request, a refusal, or none found.
+        const observedAt = Date.parse(r.pullRequestRead?.observedAt ?? r.pullRequestRefusal?.observedAt ?? r.pullRequest?.observedAt ?? "");
+        const fresh = Number.isFinite(observedAt);
+        if (fresh) {
+          const fence = c.observed[r.path];
+          if (Number.isFinite(fence) && fence <= Date.now() && observedAt < fence) continue;
+          c.observed[r.path] = observedAt;
+        }
+        // A refused read is news once per read identity and cause (#471):
+        // the conversation can explain it instead of taking the pull request
+        // for unenlisted. Another read identity (a rotated or switched
+        // credential) is news again; an unknown identity never merges with a
+        // known one. A transient failure (network, timeout, rate limit,
+        // provider error) is no news and does not reset that; a successful
+        // read after a refusal is news once. Only the identity's digest and
+        // the cause are kept, never a credential.
         const refusal = r.pullRequestRefusal;
         if (refusal) {
-          if (refusal.access && c.refusals[r.path] !== refusal.cause) {
-            c.refusals[r.path] = refusal.cause;
+          const key = `${refusal.readIdentity ?? ""}|${refusal.cause}`;
+          // An entry kept by an older version holds only the cause.
+          const seen = c.refusals[r.path] === key || (c.refusals[r.path] === refusal.cause && !String(c.refusals[r.path]).includes("|"));
+          if (refusal.access && !seen) {
             lines.push(`${name}: its pull request cannot be read — ${refusal.message}. Its state is unknown until that is fixed.`);
           }
+          if (refusal.access) c.refusals[r.path] = key;
           continue;
         }
         if (c.refusals[r.path]) {
+          // Only a read known to be newer clears a refusal: a result without
+          // its completion time could be older than the refusal.
+          if (!fresh) continue;
           delete c.refusals[r.path];
           lines.push(`${name}: its pull request can be read again.`);
         }

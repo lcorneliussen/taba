@@ -16,12 +16,12 @@ func TestCheckoutStatusReadsBitbucketPullRequestsThroughTheHook(t *testing.T) {
 	old := BitbucketPullRequest
 	t.Cleanup(func() { BitbucketPullRequest = old })
 	var asked string
-	BitbucketPullRequest = func(_, owner, repo, branch string) (*PullRequest, *ReadRefusal) {
+	BitbucketPullRequest = func(_, owner, repo, branch string) (*PullRequest, *ReadRefusal, *ReadFreshness) {
 		asked = owner + "/" + repo + "@" + branch
-		return &PullRequest{Number: 7, State: "open", Checks: "success"}, nil
+		return &PullRequest{Number: 7, State: "open", Checks: "success"}, nil, &ReadFreshness{ReadIdentity: "k:a", ObservedAt: "2026-11-23T10:00:00Z"}
 	}
 	s := checkoutStatus(dir, true)
-	if asked != "example-ws/widget@feature" || s.PullRequest == nil || s.PullRequest.Number != 7 {
+	if asked != "example-ws/widget@feature" || s.PullRequest == nil || s.PullRequest.Number != 7 || s.PullRequestRead == nil || s.PullRequestRead.ObservedAt != "2026-11-23T10:00:00Z" {
 		t.Fatalf("asked %q, pull request %+v", asked, s.PullRequest)
 	}
 	asked = ""
