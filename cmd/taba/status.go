@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -203,26 +204,30 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 		if err != nil {
 			return err
 		}
-		if *asJSON {
-			if err := json.NewEncoder(os.Stdout).Encode(snapshot); err != nil {
-				return err
-			}
-		} else if ansi || (!md && term.IsTerminal(os.Stdout.Fd())) {
-			fmt.Print(statusTable(snapshot, reposOnly, statusTerminalWidth()))
-		} else if reposOnly {
-			fmt.Print(snapshot.ReposMarkdown())
-		} else {
-			fmt.Print(snapshot.Markdown())
-		}
-		return statusPartialError(snapshot)
+		table := ansi || (!md && term.IsTerminal(os.Stdout.Fd()))
+		return writeStatusReport(os.Stdout, snapshot, *asJSON, table, reposOnly, statusTerminalWidth())
 	}
 	root.AddCommand(cmd)
 }
 
-// statusPartialError is the exit of a rendered report. A workspace sweep that
-// could not read every collection is a partial result: the report stands, and
-// the exit status says so.
-func statusPartialError(snapshot wtc.StatusSnapshot) error {
+// writeStatusReport renders a live or local report, then returns its exit. A
+// workspace sweep that could not read every collection is a partial result:
+// the report is written in full, and the exit status says so.
+func writeStatusReport(w io.Writer, snapshot wtc.StatusSnapshot, asJSON, table, reposOnly bool, width int) error {
+	var err error
+	switch {
+	case asJSON:
+		err = json.NewEncoder(w).Encode(snapshot)
+	case table:
+		_, err = io.WriteString(w, statusTable(snapshot, reposOnly, width))
+	case reposOnly:
+		_, err = io.WriteString(w, snapshot.ReposMarkdown())
+	default:
+		_, err = io.WriteString(w, snapshot.Markdown())
+	}
+	if err != nil {
+		return err
+	}
 	if len(snapshot.Unreadable) != 0 {
 		return fmt.Errorf("partial status: %d collection(s) unreadable", len(snapshot.Unreadable))
 	}

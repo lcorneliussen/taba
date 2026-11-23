@@ -44,13 +44,33 @@ func TestStatusTUIShowsUnreadableCollections(t *testing.T) {
 	}
 }
 
-// The report is rendered first; a partial sweep then exits nonzero.
-func TestStatusPartialErrorOnlyForUnreadableCollections(t *testing.T) {
-	if err := statusPartialError(wtc.StatusSnapshot{Schema: 1}); err != nil {
-		t.Fatalf("complete sweep failed: %v", err)
-	}
-	err := statusPartialError(wtc.StatusSnapshot{Schema: 1, Unreadable: []wtc.StatusUnreadable{{Collection: "a", Reason: "x"}, {Collection: "b", Reason: "y"}}})
-	if err == nil || err.Error() != "partial status: 2 collection(s) unreadable" {
-		t.Fatalf("partial sweep exit: %v", err)
+// Every output mode writes the full report first; a partial sweep then exits
+// nonzero, and a complete one does not.
+func TestWriteStatusReportRendersThenExitsForPartialSweep(t *testing.T) {
+	complete := wtc.StatusSnapshot{Schema: 1, ShowCollectionColumn: true, Repos: []wtc.StatusRepo{{Collection: "clean", Dir: "harness"}}}
+	partial := complete
+	partial.Unreadable = []wtc.StatusUnreadable{{Collection: "conflict", Reason: "collection context could not be opened"}, {Collection: "other", Reason: "x"}}
+	for _, mode := range []struct {
+		name                     string
+		asJSON, table, reposOnly bool
+		want                     string
+	}{
+		{"json", true, false, false, `"unreadable":[{"collection":"conflict"`},
+		{"table", false, true, false, "unreadable conflict: collection context could not be opened"},
+		{"markdown", false, false, false, "**conflict** — collection context could not be opened"},
+		{"repos-markdown", false, false, true, ""},
+	} {
+		var out strings.Builder
+		err := writeStatusReport(&out, partial, mode.asJSON, mode.table, mode.reposOnly, 120)
+		if err == nil || err.Error() != "partial status: 2 collection(s) unreadable" {
+			t.Fatalf("%s: partial sweep exit: %v", mode.name, err)
+		}
+		if out.Len() == 0 || !strings.Contains(out.String(), mode.want) {
+			t.Fatalf("%s: report missing before exit:\n%s", mode.name, out.String())
+		}
+		out.Reset()
+		if err := writeStatusReport(&out, complete, mode.asJSON, mode.table, mode.reposOnly, 120); err != nil || out.Len() == 0 {
+			t.Fatalf("%s: complete sweep: %v %q", mode.name, err, out.String())
+		}
 	}
 }

@@ -41,9 +41,10 @@ func (c *Context) StatusRefreshRefsWithAge(all bool, maxAge time.Duration) (Stat
 	if err := statusCanceled(c.resourceContext(), nil); err != nil {
 		return report, err
 	}
-	// A workspace sweep refreshes the owners of every readable collection.
-	// Unreadable collections contribute no targets and are reported by the
-	// sweep itself; a scoped status still requires its own inventory.
+	// A workspace sweep refreshes the owners of every readable target. A
+	// collection that cannot be opened contributes none and is reported by the
+	// sweep itself; a repository without an owner is skipped alone. A scoped
+	// status still requires its own inventory.
 	if inventory.ExitStatus != 0 && !all {
 		return report, fmt.Errorf("cannot read status worktree inventory")
 	}
@@ -134,7 +135,8 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 			if err := statusCanceled(c.resourceContext(), err); err != nil {
 				return snapshot, report, err
 			}
-			// A rejected context stays closed: nothing of it is read or run.
+			// A rejected context stays closed: beyond the files its rejection
+			// was read from, nothing of it is run, fetched or written.
 			snapshot.Unreadable = append(snapshot.Unreadable, StatusUnreadable{Collection: runtimeTextSafe(filepath.Base(dir)), Reason: collectionOpenFailure(err)})
 			continue
 		}

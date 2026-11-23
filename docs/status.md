@@ -291,10 +291,11 @@ context cannot be opened, for example because its generated environment names a
 control root the receiving policy rejects, is listed under unreadable collections
 with a fixed reason; the other collections are still read and their shared owners
 refreshed. A local sweep also lists a collection whose checked-out repository has
-no resolvable Git owner, naming that repository. Nothing in a rejected collection is run, fetched or written. Such a
-partial sweep still prints its report, adds an `unreadable` list to `--json`, and
-exits nonzero. Dirty worktrees are observed as usual. `taba catch-up` keeps its
-own refusals and exit status.
+no resolvable Git owner, naming that repository. Nothing in a rejected collection
+is run, fetched or written. Such a partial sweep still prints its report, adds an
+`unreadable` list to `--json`, and exits nonzero. A forge credential selection
+that changes during the sweep ends it instead. Dirty worktrees are observed as
+usual. `taba catch-up` keeps its own refusals and exit status.
 
 `--forge` previews Git and forge facts without writing a completed snapshot. It
 does not record merges, repair PR references or move any worktree; with

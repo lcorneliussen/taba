@@ -9,7 +9,8 @@ import (
 
 // StatusUnreadable is one collection a workspace sweep could not read. The
 // reason is a fixed class, never the raw error: an open failure may carry
-// paths, environment values or output that the report must not repeat.
+// paths, environment values or output that the report must not repeat. Only a
+// repository-owner reason adds the sanitized repository name.
 type StatusUnreadable struct {
 	Collection string `json:"collection"`
 	Reason     string `json:"reason"`
@@ -24,7 +25,7 @@ const (
 	unreadableRegistry      = "harness registry is missing or invalid"
 	unreadableRetired       = "collection is being retired"
 	unreadableNotCollection = "not a collection"
-	unreadableName          = "invalid collection name"
+	unreadableName          = "invalid collection name" // catch-up's row reason for the same case
 	unreadableOther         = "collection context could not be opened"
 	unreadableStatus        = "collection status could not be read"
 	unreadableRepoOwner     = "cannot find Git owner of"
