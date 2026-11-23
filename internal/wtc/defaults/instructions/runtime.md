@@ -403,9 +403,12 @@ restart; the others keep running. An existing runner keeps its launch
 environment apart from `port_env` values; use a full `down`/`up` after
 changing other variables or credentials. If the pinned dekit has no `reload`
 command, the change is applied by restarting the runner only when the runner
-reports dekit 0.10.0 running that same binary; otherwise it is refused before
-anything is written, because a newer runner's restart imports nothing. Use
-`down`/`up` to apply it.
+reports dekit 0.10.0 running that same binary. Otherwise it is refused before
+the generated config is written: a dekit 0.10.3 runner was observed to restart
+without importing it, and other versions are unverified. Use `down`/`up` to
+apply it. If the runner changes after that check, the config is already
+written and is not rolled back; the error says so, and a later render does not
+retry the change.
 
 `taba retire` verifies the target runner stopped, clears its saved definitions,
 and runs strict resource teardown **before removing any worktree**. An

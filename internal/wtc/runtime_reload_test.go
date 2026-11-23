@@ -92,7 +92,8 @@ func TestRuntimeReloadConfigLegacyFallback(t *testing.T) {
 		{name: "invalid configuration", status: runtimeReloadNewerRunner, reloadError: "invalid task configuration", fails: true},
 		{name: "legacy client and verified legacy runner", status: runtimeReloadLegacyRunner, legacy: true, restart: true},
 		{name: "legacy client and newer runner binary", status: runtimeReloadNewerRunner, legacy: true, fails: true, diagnosis: "(version 0.10.3)"},
-		// The pinned file may have been replaced after the runner loaded it.
+		// The version gates: a path that names the pinned file now does not
+		// show which binary the runner loaded.
 		{name: "pinned path reporting a newer runner", status: runtimeReloadStatus{version: "0.10.3"}, legacy: true, fails: true, diagnosis: "(version 0.10.3)"},
 		{name: "legacy version from another binary", status: runtimeReloadStatus{binary: "other", version: "0.10.0"}, legacy: true, fails: true, diagnosis: "(version 0.10.0)"},
 		{name: "unverified 0.10 patch", status: runtimeReloadStatus{version: "0.10.1"}, legacy: true, fails: true, diagnosis: "(version 0.10.1)"},
@@ -117,9 +118,11 @@ func TestRuntimeReloadConfigLegacyFallback(t *testing.T) {
 				t.Fatalf("unexpected legacy restart: %s", calls)
 			}
 			if tc.diagnosis != "" {
+				// The fallback runs after rendering wrote the config: it must
+				// not claim the config was left unwritten.
 				message := err.Error()
-				if !strings.Contains(message, "not applied") && !strings.Contains(message, "runner status") {
-					t.Fatalf("diagnosis is not actionable: %v", err)
+				if !strings.Contains(message, "was written but the runner did not take it") || strings.Contains(message, "not written") || !strings.Contains(message, "does not retry") || strings.Contains(message, "down") {
+					t.Fatalf("post-write diagnosis is wrong: %v", err)
 				}
 				if !strings.Contains(message, tc.diagnosis) || strings.Contains(message, root) || strings.ContainsAny(message, "\x1b\n") || strings.Contains(message, "forged") {
 					t.Fatalf("diagnosis %q missing, or it echoes a path or control bytes: %q", tc.diagnosis, message)
@@ -154,11 +157,97 @@ func TestRuntimeReloadPreflight(t *testing.T) {
 			if (err != nil) != tc.fails {
 				t.Fatalf("preflight error = %v", err)
 			}
+			if err != nil && (!strings.Contains(err.Error(), "not applied and not written") || strings.Contains(err.Error(), root)) {
+				t.Fatalf("preflight diagnosis is wrong: %v", err)
+			}
 			calls := runtimeReloadCalls(t, root)
 			// Only read-only probes: no --yes, no restart of runner or tasks.
 			for _, call := range strings.Split(strings.TrimSpace(calls), "\n") {
 				if call != "reload" && call != "runner status" {
 					t.Fatalf("preflight changed state: %q", calls)
+				}
+			}
+		})
+	}
+}
+
+// Rendering against a running runner the pinned client cannot reload must
+// refuse before it writes the config or manifest, removes a task, or restarts
+// anything; a verified 0.10.0 runner of the pinned binary still applies live.
+func TestRuntimeRenderRefusesBeforeWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		same    bool
+		fails   bool
+	}{
+		{name: "newer runner", version: "0.10.3", fails: true},
+		{name: "newer runner at the pinned path", version: "0.10.3", same: true, fails: true},
+		{name: "verified legacy runner", version: "0.10.0", same: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := runtimeFixture(t)
+			binary := filepath.Join(t.TempDir(), "dekit")
+			runner := filepath.Join(t.TempDir(), "dekit")
+			fixtureFile(t, runner, "#!/bin/sh\n", 0755)
+			if tc.same {
+				runner = binary
+			}
+			t.Setenv("RUNTIME_TEST_STATUS", fmt.Sprintf(`{"status":"running","version":%q,"binary":%q}`, tc.version, runner))
+			fixtureFile(t, binary, `#!/bin/sh
+if [ "$1" = --version ]; then echo 'dekit 0.10.0'; exit; fi
+root=$2
+shift 3
+printf '%s\n' "$*" >> "$root/calls"
+case "$*" in
+ reload*) echo 'Error: unknown command or unsupported file: `+"`reload`"+` (expected a subcommand or a .js script)' >&2; exit 1 ;;
+ 'runner status') if [ -f "$root/running" ]; then printf '%s\n' "$RUNTIME_TEST_STATUS"; else echo '{"status":"absent"}'; fi ;;
+ 'ls') echo '{"tasks":[{"path":"widget/web/server","state":"ready"},{"path":"widget/web/tunnel","state":"ready"}]}' ;;
+ *) echo '{}' ;;
+esac
+`, 0755)
+			c.Config.Runtime.Binary = binary
+			if _, err := c.renderRuntime(); err != nil {
+				t.Fatal(err)
+			}
+			root := c.runtimeRoot()
+			fixtureFile(t, filepath.Join(root, "running"), "", 0600)
+			if err := os.Remove(filepath.Join(root, "calls")); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			read := func(name string) string {
+				t.Helper()
+				data, err := os.ReadFile(filepath.Join(root, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			config, manifest := read("dekit.yaml"), read("manifest.json")
+			// Change one task and drop the other.
+			fixtureFile(t, filepath.Join(c.Collection, "widget/.harness/dekit.tasks.yaml"), `tasks:
+ web/server:
+  cmd: [sh, -c, 'sleep 61']
+  autostart: true
+  ready: {log: READY}
+`, 0644)
+			_, err := c.renderRuntime()
+			calls := runtimeReloadCalls(t, root)
+			if !tc.fails {
+				if err != nil || !strings.Contains(calls, "runner restart") || read("dekit.yaml") == config {
+					t.Fatalf("verified legacy runner did not apply live: %v\n%s", err, calls)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), "not applied and not written") {
+				t.Fatalf("render error = %v", err)
+			}
+			if read("dekit.yaml") != config || read("manifest.json") != manifest {
+				t.Fatal("refused render wrote the generated config or manifest")
+			}
+			for _, call := range strings.Split(strings.TrimSpace(calls), "\n") {
+				if call != "runner status" && call != "reload" && call != "ls" {
+					t.Fatalf("refused render changed the runner: %q", calls)
 				}
 			}
 		})
@@ -233,7 +322,7 @@ func TestDekitRuntimeReloadRunnerMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatalf("render reported success although the runner kept the old definition; log: %q", logged())
 	}
-	if !strings.Contains(err.Error(), "not applied") {
+	if !strings.Contains(err.Error(), "not applied and not written") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if generated() != before {
