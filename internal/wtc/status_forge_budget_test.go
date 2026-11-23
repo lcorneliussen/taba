@@ -13,7 +13,7 @@ import (
 
 func TestMain(m *testing.M) { testenv.Main(m, forgeFixtures) }
 
-func forgeFixtures() (cleanup func()) {
+func forgeFixtures() (cleanup func() error) {
 	statusTurnOffSharedForgeBudgetAndAudit()
 	// Create synthetic selection and isolated stores unless inheriting a parent test fixture.
 	home := os.Getenv("WTC_TEST_AUTH_HOME")
@@ -39,10 +39,11 @@ func forgeFixtures() (cleanup func()) {
 	if os.Getenv("GH_CONFIG_DIR") == "" {
 		os.Setenv("GH_CONFIG_DIR", filepath.Join(home, "gh"))
 	}
-	return func() {
+	return func() error {
 		if owned {
 			os.RemoveAll(home)
 		}
+		return nil
 	}
 }
 

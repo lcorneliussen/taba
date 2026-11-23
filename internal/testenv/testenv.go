@@ -1,5 +1,7 @@
 // Package testenv runs every test package in the environment CI gives it,
-// whatever shell runs `go test`.
+// whatever shell runs `go test`. It only scrubs the caller's product and Git
+// settings and then runs the package's fixtures, and leaves HOME, proxy and
+// GO* variables as they are.
 package testenv
 
 import (
@@ -20,12 +22,13 @@ const gitConfig = "[user]\n\tname = fixture\n\temail = fixture@example.invalid\n
 
 // Main is the TestMain of every test package. It removes what a developer's
 // shell adds to CI's environment, runs setup, then the tests, and exits.
-// setup holds a package's own fixtures and returns their cleanup.
-func Main(m *testing.M, setup ...func() (cleanup func())) {
+// setup holds a package's own fixtures, in order. Each returns a cleanup,
+// run in reverse order; a cleanup error fails the run.
+func Main(m *testing.M, setup ...func() (cleanup func() error)) {
 	os.Exit(run(m, setup))
 }
 
-func run(m *testing.M, setup []func() func()) int {
+func run(m *testing.M, setup []func() func() error) (code int) {
 	if os.Getenv(marker) == "" {
 		dir, err := isolate()
 		if err != nil {
@@ -36,7 +39,12 @@ func run(m *testing.M, setup []func() func()) int {
 	}
 	for _, fixture := range setup {
 		cleanup := fixture()
-		defer cleanup()
+		defer func() {
+			if err := cleanup(); err != nil {
+				fmt.Fprintln(os.Stderr, "testenv:", err)
+				code = 1
+			}
+		}()
 	}
 	return m.Run()
 }

@@ -1,6 +1,7 @@
 package testenv_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -15,7 +16,43 @@ import (
 	"taba.sh/taba/internal/testenv"
 )
 
-func TestMain(m *testing.M) { testenv.Main(m) }
+func TestMain(m *testing.M) { testenv.Main(m, fixture("first"), fixture("second")) }
+
+// fixture logs its cleanup to TABA_TEST_CLEANUP_LOG, and fails the cleanup
+// when TABA_TEST_FAIL_CLEANUP names it.
+func fixture(name string) func() func() error {
+	return func() func() error {
+		return func() error {
+			if log := os.Getenv("TABA_TEST_CLEANUP_LOG"); log != "" {
+				file, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(file, name)
+				file.Close()
+			}
+			if os.Getenv("TABA_TEST_FAIL_CLEANUP") == name {
+				return fmt.Errorf("%s cleanup failed", name)
+			}
+			return nil
+		}
+	}
+}
+
+// A fixture's cleanup error fails a run whose tests passed, and cleanups run
+// in reverse order.
+func TestMainFailsOnACleanupError(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "cleanups")
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(), "TABA_TEST_CLEANUP_LOG="+log, "TABA_TEST_FAIL_CLEANUP=second")
+	out, err := cmd.CombinedOutput()
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 || !strings.Contains(string(out), "second cleanup failed") {
+		t.Fatalf("run with a failing cleanup: %v\n%s", err, out)
+	}
+	if got, _ := os.ReadFile(log); string(got) != "second\nfirst\n" {
+		t.Fatalf("cleanup order = %q, want second, then first", got)
+	}
+}
 
 // A package whose tests skip testenv.Main inherits the developer's shell.
 func TestEveryTestPackageCallsMain(t *testing.T) {
