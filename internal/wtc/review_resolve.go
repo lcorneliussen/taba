@@ -42,8 +42,9 @@ func (c *Context) ResolveReviewBundle(bundle string, opt ReviewResolveOptions) (
 	if err := reviewPublicationAllowed(manifest); err != nil {
 		return ReviewResolveResult{}, err
 	}
-	// Replies are writes by repository name; thread lookups and resolution
-	// go through GraphQL node IDs and follow a rename on their own.
+	// Replies are REST writes by repository name. The thread lookup reads by
+	// name through GraphQL, which follows a rename; resolving a thread is a
+	// write by node ID.
 	target := manifest
 	if opt.Reply != "" {
 		if target, err = reviewWriteTarget(manifest); err != nil {
@@ -118,7 +119,7 @@ func resolveReviewInline(m ReviewManifest, id, threadID string) error {
 		return err
 	}
 	mutation := `mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}`
-	_, err := reviewForgeCommand(m.RepoDir, "gh", []string{"api", "graphql", "-f", "query=" + mutation, "-f", "id=" + threadID}, nil)
+	_, err := reviewGitHubAPI(m.RepoDir, []string{"graphql", "-f", "query=" + mutation, "-f", "id=" + threadID}, nil)
 	return err
 }
 
@@ -131,11 +132,11 @@ func reviewThreadID(m ReviewManifest, id string) (string, bool, error) {
 	target, _ := strconv.ParseInt(id, 10, 64)
 	cursor := ""
 	for page := 0; page < 100; page++ {
-		args := []string{"api", "graphql", "-f", "query=" + query, "-f", "o=" + parts[0], "-f", "n=" + parts[1], "-F", "num=" + m.PR}
+		args := []string{"graphql", "-f", "query=" + query, "-f", "o=" + parts[0], "-f", "n=" + parts[1], "-F", "num=" + m.PR}
 		if cursor != "" {
 			args = append(args, "-f", "after="+cursor)
 		}
-		out, err := reviewForgeCommand(m.RepoDir, "gh", args, nil)
+		out, err := reviewGitHubAPI(m.RepoDir, args, nil)
 		if err != nil {
 			return "", false, err
 		}

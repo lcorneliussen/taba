@@ -48,9 +48,9 @@ func (r reviewGitHubRepositoryNode) valid() bool {
 		len(parts) == 2 && statusPRForgePart(parts[0]) && statusPRForgePart(parts[1])
 }
 
-// reviewGitHubAPI runs one gh API call against github.com. ReviewRepo only
-// accepts github.com remotes, so an inherited GH_HOST must not redirect a
-// review read or write to another forge.
+// reviewGitHubAPI runs one gh API call against github.com. ReviewRepo maps
+// only github.com remotes to the github forge, so an inherited GH_HOST must not
+// send identity checks or review writes to another host.
 var reviewGitHubAPI = func(dir string, args []string, input []byte) ([]byte, error) {
 	return reviewForgeCommand(dir, "gh", append(append([]string{"api"}, args...), "--hostname", "github.com"), input)
 }

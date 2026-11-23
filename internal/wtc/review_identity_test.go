@@ -208,8 +208,9 @@ func TestReviewPostRenameRefusals(t *testing.T) {
 	}
 }
 
-// Without recovery the write still reaches the old name's REST path and fails
-// with the redirect; the uncertain-create marker then stays and blocks reposts.
+// A create whose outcome is unknown, such as one that failed with the redirect
+// before this change, keeps blocking reposts after a verified rename: the
+// marker refuses the create before any write and is left as is.
 func TestReviewPostUncertainCreateSurvivesRename(t *testing.T) {
 	f := newReviewIdentityFixture(t, "R_widget")
 	pending := filepath.Join(f.bundle, "comment.create-pending")
@@ -288,8 +289,13 @@ func TestReviewResolveReplyFollowsVerifiedRename(t *testing.T) {
 		t.Fatalf("resolve: %+v %v\n%s", result, err, f.requests(t))
 	}
 	writes := reviewIdentityWrites(f.requests(t))
-	if len(writes) != 2 || !strings.Contains(writes[0], "-X POST repos/example/widget/pulls/7/comments") {
+	if len(writes) != 2 || !strings.Contains(writes[0], "-X POST repos/example/widget/pulls/7/comments") || !strings.Contains(writes[1], "resolveReviewThread") {
 		t.Fatalf("reply not sent to the verified repository: %q", writes)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(f.requests(t)), "\n") {
+		if strings.HasPrefix(line, "api ") && !strings.HasSuffix(line, "--hostname github.com") {
+			t.Fatalf("review API call not pinned to github.com: %q", line)
+		}
 	}
 	g := newReviewIdentityFixture(t, "")
 	if err := writeInlineRecords(g.bundle, []ReviewInlineRecord{{Key: "012345abcd", ID: "401"}}); err != nil {
