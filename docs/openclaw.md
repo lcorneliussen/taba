@@ -678,7 +678,7 @@ instead. An agent asked to set Taba up starts with `taba docs setup.md`.
 4. **Bitbucket**, if repositories live there:
 
    ```sh
-   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.6 --accept-capabilities
+   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.7 --accept-capabilities
    openclaw config set plugins.entries.bitbucket.config.execLogin false
    ```
 
@@ -775,11 +775,11 @@ image instead (above).
    this step, the Collection panel says that the plugin and the gateway's
    `wtc` differ.
 3. **openclaw-bitbucket**, when its release notes call for it: install the
-   verified 0.3.6 tag over the old one, preserving enablement, allowlists and
+   verified 0.3.7 tag over the old one, preserving enablement, allowlists and
    denylists with `--no-enable`:
 
    ```sh
-   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.6 --force --no-enable --accept-capabilities
+   openclaw plugins install git:github.com/lcorneliussen/openclaw-bitbucket@v0.3.7 --force --no-enable --accept-capabilities
    ```
 
    For an enabled installation, run `openclaw plugins reload bitbucket`, then
