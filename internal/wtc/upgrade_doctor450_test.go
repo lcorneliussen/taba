@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -380,5 +381,67 @@ func TestUpgradeDoctorBoundsFindings450(t *testing.T) {
 	}
 	if d.Findings[1].Name != "check-0" || d.Findings[1].Detail != "map[n:0]" {
 		t.Fatalf("structured detail: %+v", d.Findings[1])
+	}
+}
+
+// A doctor that hangs is cut off at the timeout even when a child it started
+// still holds the output pipes, and is reported as a failed diagnosis.
+func TestUpgradeDoctorTimesOutAndReleasesPipes450(t *testing.T) {
+	c, bin := upgradeFixture(t)
+	f := newDoctor450Fixture(t, bin)
+	fixtureFile(t, filepath.Join(f.tools, "0.1.12", "wtc"), `#!/bin/sh
+case "$1" in --version) echo "wtc version 0.1.12" ;; doctor) sleep 30; echo '{"ok":true,"data":[]}' ;; esac
+`, 0755)
+	saved := upgradeDoctorTimeout
+	upgradeDoctorTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { upgradeDoctorTimeout = saved })
+	start := time.Now()
+	d := c.upgradeDoctor(c, "0.1.12")
+	if elapsed := time.Since(start); elapsed > 15*time.Second {
+		t.Fatalf("doctor wait not bounded: %s", elapsed)
+	}
+	if d.Status != "failed" || !strings.Contains(d.Reason, "timed out") {
+		t.Fatalf("timeout not reported: %+v", d)
+	}
+}
+
+func TestLimitedBufferKeepsTheBound450(t *testing.T) {
+	var b limitedBuffer
+	chunk := []byte(strings.Repeat("x", 4096))
+	for i := 0; i < upgradeDoctorMaxOutput/len(chunk)+3; i++ {
+		if n, err := b.Write(chunk); n != len(chunk) || err != nil {
+			t.Fatalf("write %d: %d %v", i, n, err)
+		}
+	}
+	if b.Len() != upgradeDoctorMaxOutput {
+		t.Fatalf("kept %d bytes", b.Len())
+	}
+}
+
+// A failing diagnosis alone never fails the rollout.
+func TestRolloutDoctorFailureIsAdvisory450(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if _, err := c.NewCollection(NewOptions{Slug: "quiet"}); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(c.Workspace, "bin")
+	f := newDoctor450Fixture(t, bin)
+	f.release(t, "0.1.12", "0.1.12", doctor450Fail, 1)
+	t.Setenv("PATH", bin+":"+fixtureSystemPath(t))
+	source := filepath.Join(c.Workspace, "source-agent-harness")
+	fixtureFile(t, filepath.Join(source, ".wtc-cli-version"), "0.1.12\n", 0644)
+	fixtureGit(t, "-C", source, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qam", "pin 0.1.12")
+	report, err := c.CatchUp(CatchUpOptions{Collections: []string{"quiet"}, Repos: []string{"harness"}, InstallTools: true, UpgradeDoctor: true, NoSkills: true, NoMCP: true, NoSecrets: true})
+	var doctor *CatchUpRow
+	for i, row := range report.Outcomes {
+		if row.Repo == "doctor" {
+			doctor = &report.Outcomes[i]
+		}
+	}
+	if doctor == nil || doctor.Outcome != "problems" || doctor.Doctor == nil || doctor.Doctor.Status != "failed" || !strings.Contains(doctor.Reason, "compatibility") {
+		t.Fatalf("failing doctor row: %+v", doctor)
+	}
+	if err != nil || report.ExitStatus != 0 {
+		t.Fatalf("advisory failure failed the rollout: %v, exit %d, %+v", err, report.ExitStatus, report.Outcomes)
 	}
 }
