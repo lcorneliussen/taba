@@ -167,7 +167,10 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ Review
 	dirs := reviewRunDirs{bundle: bundle, runner: bundle, repo: manifest.RepoDir}
 	callerBundle := bundle
 	if manifest.Public {
-		x, err := newReviewExecContext(c.Collection, bundle, manifest)
+		// Assign, not declare: the deferred finish must report into the
+		// function's named err, not a block-scoped copy.
+		var x *reviewExecContext
+		x, err = newReviewExecContext(c.Collection, bundle, manifest)
 		if err != nil {
 			return ReviewRunResult{}, err
 		}

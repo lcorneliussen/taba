@@ -41,6 +41,8 @@ case "${MUTATE:-}" in
   extra) printf 'x' > "$bundle/scratch.txt" ;;
 esac
 if [ "$id" = lead ] && [ "${MUTATE:-}" = drop-finding ]; then rm -f "$bundle/findings/code.json"; fi
+# Another writer changes the caller's bundle while the run is in progress.
+if [ -n "${CALLER_BUNDLE:-}" ] && [ "$id" != lead ]; then printf 'concurrent\n' > "$CALLER_BUNDLE/findings/$id.json"; fi
 observe() {
   printf 'cwd=%s|markers=%s|sentinel=%s|wanted=%s|path=%s|repo=%s|repo_feature=%s|repo_write=%s|target_rule=%s|poster=%s' \
     "$(pwd -P)" "$markers" "${SENTINEL_PARENT_VALUE:-absent}" "${WANTED_VALUE:-absent}" "$PATH" "$repo" "$(cat "$repo/feature.go" 2>/dev/null)" "$repo_write" "$target_rule" "$poster"
@@ -246,7 +248,7 @@ func TestPublicReviewRunsOutsideCollectionContext(t *testing.T) {
 			t.Fatalf("provenance leaks %q: %s", leak, record)
 		}
 	}
-	if !strings.Contains(string(record), "symlinks with absolute or parent-step targets omitted") || !strings.Contains(string(record), "submodule contents not materialized") || strings.Contains(string(record), "as stored") {
+	if !strings.Contains(string(record), "symlinks with empty, absolute or parent-step targets omitted") || !strings.Contains(string(record), "submodule contents not materialized") || strings.Contains(string(record), "as stored") {
 		t.Fatalf("provenance overstates the snapshot: %s", record)
 	}
 	if !strings.Contains(string(record), `"mode": "public-operator-launcher"`) || !strings.Contains(string(record), `"commit": "`+bundle.Manifest.HeadSHA) || !strings.Contains(string(record), `"unchanged": true`) || !strings.Contains(string(record), `"WANTED_VALUE"`) || strings.Contains(string(record), "SENTINEL_PARENT_VALUE") {
@@ -467,5 +469,30 @@ func TestPublicReviewSnapshotIsTheStoredTree(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(dest, "docs", "guide.md"), []byte("x"), 0644); err == nil {
 		t.Fatal("snapshot is writable")
+	}
+}
+
+// A conflict while returning results must fail the run, not vanish: the
+// caller's bundle keeps the concurrent change and gets no fresh summary.
+func TestPublicReviewReportsResultConflict(t *testing.T) {
+	f := newReviewSentinelFixture(t)
+	bundle := f.bundle(t)
+	if err := os.MkdirAll(filepath.Join(bundle.Dir, "findings"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle.Dir, "summary.md"), []byte("earlier summary\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CALLER_BUNDLE", bundle.Dir)
+	t.Setenv("WTC_REVIEW_ENV", "CALLER_BUNDLE")
+	_, err := f.c.RunReviewBundle(bundle.Dir, reviewSentinelOptions)
+	if err == nil || !strings.Contains(err.Error(), "changed in the bundle during the run") {
+		t.Fatalf("result conflict was not reported: %v", err)
+	}
+	if body, _ := os.ReadFile(filepath.Join(bundle.Dir, "findings", "code.json")); string(body) != "concurrent\n" {
+		t.Fatalf("concurrent change was overwritten: %q", body)
+	}
+	if body, _ := os.ReadFile(filepath.Join(bundle.Dir, "summary.md")); string(body) != "earlier summary\n" {
+		t.Fatalf("summary changed despite the conflict: %q", body)
 	}
 }

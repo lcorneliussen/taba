@@ -229,7 +229,7 @@ func (x *reviewExecContext) prepare(bundle string, manifest ReviewManifest) erro
 		Version: 1, Mode: mode,
 		WorkingDir:  "fresh temporary directory outside the collection; no agent configuration found in its ancestors",
 		Environment: reviewContextEnvRec{Policy: "allowlist"},
-		Source:      reviewSourceRec{Commit: x.sourceSHA, Snapshot: "read-only files of the reviewed head written from raw blob contents (no export attributes or filters); symlinks with absolute or parent-step targets omitted; submodule contents not materialized", TreeBefore: x.sourceTree},
+		Source:      reviewSourceRec{Commit: x.sourceSHA, Snapshot: "read-only files of the reviewed head written from raw blob contents (no export attributes or filters); symlinks with empty, absolute or parent-step targets omitted; submodule contents not materialized", TreeBefore: x.sourceTree},
 		Limits: []string{
 			"client restrictions and file-tool confinement are not an OS sandbox",
 			"unexpected writes are detected after each phase, not prevented",
@@ -523,8 +523,8 @@ func sweepReviewContexts() {
 // snapshotReviewSource writes the reviewed head's files read-only from raw
 // blob contents in the object database. git archive is not used because it
 // applies export-ignore and export-subst, and checkout would run repository
-// filters. It is not the complete tree: symlinks with absolute or parent-step
-// targets are omitted, and submodules become empty directories without their
+// filters. It is not the complete tree: symlinks with empty, absolute or
+// parent-step targets are omitted, and submodules become empty directories without their
 // contents.
 func snapshotReviewSource(repo, commit, dest string) error {
 	list, err := reviewGit(repo, "ls-tree", "-r", "-z", "--full-tree", commit)
@@ -643,8 +643,9 @@ func snapshotReviewSource(repo, commit, dest string) error {
 	return err
 }
 
-// reviewLinkEscapes keeps only links that cannot leave the snapshot: relative
-// targets without parent steps, so no chain of links resolves outside it.
+// reviewLinkEscapes reports a link the snapshot omits: an empty or absolute
+// target, or one with a parent step. The links kept cannot form a chain that
+// resolves outside the snapshot.
 func reviewLinkEscapes(target string) bool {
 	if target == "" || filepath.IsAbs(target) {
 		return true
@@ -658,7 +659,8 @@ func reviewLinkEscapes(target string) bool {
 }
 
 // reviewTreeFiles hashes every regular file below root by relative path.
-// Symlinks are recorded by target; other file types are refused.
+// Symlinks are recorded by target; other file types are recorded as
+// "special", which no phase allows.
 func reviewTreeFiles(root string) (map[string]string, error) {
 	files := map[string]string{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
