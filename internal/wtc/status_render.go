@@ -208,6 +208,12 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 	if len(s.Runtime) != 0 {
 		b.WriteString("\n## Runtime\n\n```text\n" + RuntimeText(s.Runtime) + "```\n")
 	}
+	if len(s.Unreadable) != 0 {
+		b.WriteString("\n## Unreadable collections\n\n")
+		for _, row := range s.Unreadable {
+			fmt.Fprintf(&b, "- **%s** — %s\n", runtimeTextSafe(row.Collection), runtimeTextSafe(row.Reason))
+		}
+	}
 	if len(s.Retired) != 0 {
 		b.WriteString("\n## Retired leftovers\n\n")
 		for _, row := range s.Retired {

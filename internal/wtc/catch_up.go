@@ -113,6 +113,10 @@ func catchUpBranchName(ref string) string {
 	return ref
 }
 
+// catchUpOpenFailurePrefix starts the row of a collection whose context
+// cannot be opened; a sanitized class follows it.
+const catchUpOpenFailurePrefix = "missing or invalid harness: "
+
 var catchUpSelector = regexp.MustCompile(`^[A-Za-z0-9_./-]+$`)
 
 func (r *CatchUpReport) add(kind, collection, repo, outcome, reason, source, target, result string) {
@@ -269,7 +273,9 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 		}
 		target, err := OpenCollectionContext(c.resourceContext(), filepath.Join(c.Workspace, name))
 		if err != nil {
-			report.add("collection", name, "", "failed", "missing or invalid harness", "", "", "")
+			// Keep the established prefix and add only a fixed class: the raw
+			// error may carry paths or environment values.
+			report.add("collection", name, "", "failed", catchUpOpenFailurePrefix+collectionOpenFailure(err), "", "", "")
 			continue
 		}
 		harnessRepo, err := target.catchUpHarnessRepo()
