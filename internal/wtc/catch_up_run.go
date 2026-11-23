@@ -827,6 +827,9 @@ func (c *Context) catchUpHooks(report *CatchUpReport, t catchUpTarget, opt Catch
 			})
 		}
 	}
+	if opt.UpgradeDoctor {
+		c.catchUpUpgradeDoctor(report, t, opt, target, openErr)
+	}
 	if opt.ReloadStatus {
 		// Keep the old process alive when the target environment/tools did not
 		// become usable. Installing alone does not restart a pane; the guarded

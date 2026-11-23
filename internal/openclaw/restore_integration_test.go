@@ -89,14 +89,29 @@ func (g *gateway) as(port, method string, params any) reply {
 
 // restartGateway stops the gateway and starts it with the current config.
 // ready is a script that succeeds once the new gateway answers.
+//
+// A stopping gateway first drains its active work, and a replacement started
+// while the old process still owns the state directory refuses to become
+// ready. So the old process must have exited before the new one starts. The
+// wait is bounded by the host's own drain cap (315s, plus time for cleanup);
+// past it the test fails with the gateway's drain report instead of starting
+// a second gateway.
 func (g *gateway) restartGateway(ready string) {
 	g.t.Helper()
-	// [d]ist keeps pkill from matching the shell running it.
-	g.sh(gatewayEnv + `pkill -f "[d]ist/index.js gateway run" || true
-for _ in $(seq 1 30); do pgrep -f "[d]ist/index.js gateway run" >/dev/null || break; sleep 1; done
+	// [d]ist keeps pkill and pgrep from matching the shell running them.
+	g.sh(gatewayEnv + `pkill -TERM -f "[d]ist/index.js gateway run" || true
+stopped=
+for _ in $(seq 1 330); do pgrep -f "[d]ist/index.js gateway run" >/dev/null || { stopped=1; break; }; sleep 1; done
+if [ -z "$stopped" ]; then
+  echo "the previous gateway did not exit within 330s; not starting a replacement" >&2
+  pgrep -af "[d]ist/index.js gateway run" >&2
+  grep -a "still draining\|shutdown\|stop (" /tmp/gateway.log | tail -5 >&2
+  exit 1
+fi
+[ -f /tmp/gateway.log ] && mv /tmp/gateway.log /tmp/gateway.prev.log
 nohup node dist/index.js gateway run --allow-unconfigured > /tmp/gateway.log 2>&1 &
 for _ in $(seq 1 120); do ` + ready + ` >/dev/null 2>&1 && exit 0; sleep 1; done
-grep -a -i "error\|failed" /tmp/gateway.log | tail -5 >&2; exit 1`)
+grep -a -i "error\|failed\|already owns" /tmp/gateway.log | tail -5 >&2; exit 1`)
 }
 
 // editConfig applies a JavaScript statement to the gateway's config object c.
@@ -149,6 +164,10 @@ func TestCheckoutRestoreUsesTheRequestersGatewayIdentity(t *testing.T) {
 
 	// OpenClaw 2026.10.2 installs this plugin only with explicit consent to the
 	// capabilities it declares (gateway method dispatch under the request).
+	// The synthetic gateway runs no scheduled agent turns (automations, and
+	// with them heartbeats): without a model they only hold up each restart's
+	// drain. Manual and event-driven wakes are unaffected.
+	g.editConfig(`c.cron={...(c.cron||{}),enabled:false}`)
 	g.sh(gatewayEnv + `node dist/index.js plugins install -l /home/node/wtc-plugin --force --accept-capabilities >/dev/null 2>&1`)
 	g.restartGateway(`node dist/index.js gateway call health --token t --json`)
 
