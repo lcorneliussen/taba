@@ -87,10 +87,8 @@ func TestStatusPRLayoutMergedLandingOneLine(t *testing.T) {
 						if want := strings.TrimSpace(statusTUIFit(tc.state, l.state)); state != want {
 							t.Errorf("width=%d styled=%v: STATE %q, want %q", width, styled, state, tc.state)
 						}
-						// The PR title leads the title cell; landing metadata may
-						// follow only when there is room.
-						// Wherever the title cell has room for one, require at
-						// least a 5-cell visible title prefix.
+						// The PR title leads the title cell (at least a 5-cell prefix
+						// where there is room); landing metadata follows only if it fits.
 						if l.title >= 6 && !strings.HasPrefix(title, row.Title[:5]) {
 							t.Errorf("width=%d styled=%v: title displaced: %q", width, styled, title)
 						}
@@ -173,7 +171,7 @@ func TestStatusPRLayoutFreshnessOneLine(t *testing.T) {
 						t.Errorf("width=%d styled=%v: STATE %q want %q", width, styled, state, tc.mark)
 					}
 					// Below 32 columns the fixed REPO/STATE columns leave the title
-					// about one cell (unchanged); freshness lives in STATE either way.
+					// about one cell; freshness lives in STATE either way.
 					if (width >= 32 && !strings.HasPrefix(title, "Synth")) || strings.Contains(title, "observed") || strings.Contains(title, "last open") {
 						t.Errorf("width=%d styled=%v: freshness metadata displaced title: %q", width, styled, title)
 					}

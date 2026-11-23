@@ -1867,8 +1867,8 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		retained := row.OnBranch && (row.State == "MERGED" || merged)
 		if title := statusTUISafe(row.Title); retained && title != "" {
 			// One line per PR: the title leads; STATE carries the landing state
-			// and the full explanation follows only where it fits. Help repeats
-			// it for every retained branch.
+			// (unless a merge conflict takes precedence) and the full explanation
+			// follows only where it fits. Help repeats it for every retained branch.
 			label = title + " · " + row.LandingLabel()
 		}
 		closed := !merged && confirmedClosed && row.Freshness != "unavailable"
