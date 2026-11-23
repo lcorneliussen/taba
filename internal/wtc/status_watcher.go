@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"taba.sh/taba/internal/retry"
 )
 
 const statusWatcherDir = ".wtc-status-watchers"
@@ -187,23 +189,17 @@ func stopStatusWatcherLease(f *os.File, path string) error {
 	if err := f.Truncate(1); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			if current, err := os.Lstat(path); err == nil && os.SameFile(identity, current) {
-				return os.Remove(path)
-			}
-			return nil // A stale lease never signals a process.
-		}
-		if err != unix.EWOULDBLOCK && err != unix.EAGAIN {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("status watcher did not stop before retirement")
-		}
-		time.Sleep(25 * time.Millisecond)
+	err = retry.Poll(context.Background(), retry.Policy{Every: 25 * time.Millisecond, Within: 5 * time.Second}, flockAttempt(int(f.Fd())))
+	if errors.Is(err, retry.ErrExhausted) {
+		return fmt.Errorf("status watcher did not stop before retirement")
 	}
+	if err != nil {
+		return err
+	}
+	if current, err := os.Lstat(path); err == nil && os.SameFile(identity, current) {
+		return os.Remove(path)
+	}
+	return nil // A stale lease never signals a process.
 }
 
 // This lock covers only watcher registration, cleanup and retirement. Service
@@ -238,28 +234,18 @@ func (c *Context) lockStatusWatchersContext(ctx context.Context) (func(), error)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("status watcher lock must be a regular file")
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			locked = true
-			return func() { _ = f.Close() }, nil // Close releases the flock.
-		}
-		if err != unix.EWOULDBLOCK && err != unix.EAGAIN {
-			return nil, err
-		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("status watcher lifecycle is busy")
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(25 * time.Millisecond):
-		}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
+	err = retry.Poll(ctx, retry.Policy{Every: 25 * time.Millisecond, Within: 5 * time.Second}, flockAttempt(fd))
+	if errors.Is(err, retry.ErrExhausted) {
+		return nil, fmt.Errorf("status watcher lifecycle is busy")
+	}
+	if err != nil {
+		return nil, err
+	}
+	locked = true
+	return func() { _ = f.Close() }, nil // Close releases the flock.
 }
 
 func (c *Context) withStatusWatcherLockContext(ctx context.Context, fn func() error) error {

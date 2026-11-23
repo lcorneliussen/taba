@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"taba.sh/taba/internal/retry"
 )
 
 func ownedByCurrentUser(info os.FileInfo) bool {
@@ -27,27 +29,16 @@ func lockDevFile(ctx context.Context, path string) (func(), error) {
 		f.Close()
 		return nil, fmt.Errorf("unsafe dev-mode lock")
 	}
-	for {
-		err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			current, statErr := os.Lstat(path)
-			if statErr != nil || !os.SameFile(info, current) {
-				f.Close()
-				return nil, fmt.Errorf("dev lock was removed or replaced while waiting")
-			}
-			return func() { _ = f.Close() }, nil
-		}
-		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
-			f.Close()
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			f.Close()
-			return nil, ctx.Err()
-		case <-time.After(25 * time.Millisecond):
-		}
+	if err := retry.Poll(ctx, retry.Policy{Every: 25 * time.Millisecond}, flockAttempt(fd)); err != nil {
+		f.Close()
+		return nil, err
 	}
+	current, statErr := os.Lstat(path)
+	if statErr != nil || !os.SameFile(info, current) {
+		f.Close()
+		return nil, fmt.Errorf("dev lock was removed or replaced while waiting")
+	}
+	return func() { _ = f.Close() }, nil
 }
 
 func lockDevRetirement(collection string) (func(), error) {
