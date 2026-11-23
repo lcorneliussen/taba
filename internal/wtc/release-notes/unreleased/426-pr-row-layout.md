@@ -6,4 +6,5 @@
   no landing record), `⚠ extra` (follow-up work) or `merged?` (landing
   unknown). The full explanation follows the title where it fits, and the
   interactive view's `?` help always shows it.
-  ([#426](https://github.com/lcorneliussen/taba/issues/426)).
+  ([#426](https://github.com/lcorneliussen/taba/issues/426),
+  [#469](https://github.com/lcorneliussen/taba/pull/469)).
