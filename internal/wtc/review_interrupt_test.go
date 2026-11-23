@@ -28,6 +28,19 @@ phase=concern
 [ "$id" = lead ] && phase=lead
 echo "$phase" >> "$ev/started"
 if [ "$REVIEW487_BLOCK" = "$phase" ]; then
+  if [ -n "$REVIEW487_ESCAPE" ]; then
+    # Leaves the reviewer's process group, so the runner does not own it.
+    # On the test's word it writes a blocker and a passing summary into the
+    # bundle path it was given, recreating directories if they are gone.
+    perl -e 'setpgrp(0,0); exec @ARGV' sh -c '
+      echo $$ > "$1/escaped.pid"
+      while [ ! -e "$1/go" ]; do sleep 0.05; done
+      mkdir -p "$2/findings"
+      printf "{\"concern\":\"code\",\"status\":\"issues\",\"findings\":[{\"severity\":\"blocker\",\"title\":\"late\"}]}\n" > "$2/findings/code.json"
+      printf "**Local review: pass** late\n" > "$2/summary.md"
+      printf "pass\n" > "$2/verdict"
+      echo done > "$1/escaped.done"' _ "$ev" "$4" </dev/null >/dev/null 2>&1 &
+  fi
   if [ -n "$REVIEW487_IGNORE_TERM" ]; then
     ( trap '' TERM; sleep 300; echo late > "$ev/late" ) &
   else
@@ -106,10 +119,11 @@ func newReview487Fixture(t *testing.T, public bool) review487Fixture {
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
 	t.Setenv("WTC_REVIEW_AGENT_CMD", filepath.Join(bin, "review-agent"))
 	// Public reviewers receive only allowlisted variables.
-	t.Setenv("WTC_REVIEW_ENV", "REVIEW487_DIR REVIEW487_BLOCK REVIEW487_IGNORE_TERM")
+	t.Setenv("WTC_REVIEW_ENV", "REVIEW487_DIR REVIEW487_BLOCK REVIEW487_IGNORE_TERM REVIEW487_ESCAPE")
 	t.Setenv("REVIEW487_DIR", ev)
 	t.Setenv("REVIEW487_BLOCK", "")
 	t.Setenv("REVIEW487_IGNORE_TERM", "")
+	t.Setenv("REVIEW487_ESCAPE", "")
 	c, err := OpenCollection(collection)
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +167,7 @@ func review487Gone(pid int) bool {
 // assertion failed while they were alive.
 func review487Cleanup(t *testing.T, ev string) {
 	t.Cleanup(func() {
-		for _, name := range []string{"concern.child", "concern.desc", "lead.child", "lead.desc"} {
+		for _, name := range []string{"concern.child", "concern.desc", "lead.child", "lead.desc", "escaped.pid"} {
 			if data, err := os.ReadFile(filepath.Join(ev, name)); err == nil {
 				if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 1 {
 					_ = syscall.Kill(pid, syscall.SIGKILL)
@@ -352,5 +366,83 @@ func TestReviewRunTimeoutStopsGroupAndContinues(t *testing.T) {
 	review487WaitFor(t, "timed-out group stopped", 10*time.Second, func() bool { return review487Gone(desc) })
 	if _, err := os.Stat(filepath.Join(f.bundle, "verdict")); err != nil {
 		t.Fatalf("lead did not run after a timeout: %v", err)
+	}
+}
+
+// A descendant that leaves its reviewer's process group is not the runner's
+// to stop, and it is not stopped. What it writes after the interrupted run,
+// to the bundle path it was given, is neither a result of that run nor of the
+// next one, and cannot be posted as either.
+func TestReviewRunEscapedDescendantCannotWriteResults(t *testing.T) {
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Skip("perl leaves the process group in this probe")
+	}
+	for _, public := range []bool{false, true} {
+		t.Run(map[bool]string{false: "private", true: "public"}[public], func(t *testing.T) {
+			f := newReview487Fixture(t, public)
+			review487Cleanup(t, f.ev)
+			t.Setenv("REVIEW487_BLOCK", "concern")
+			t.Setenv("REVIEW487_ESCAPE", "1")
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := f.c.RunReviewBundleContext(ctx, f.bundle, review487Options)
+				done <- err
+			}()
+			review487WaitFor(t, "reviewer and escaped descendant ready", 30*time.Second, func() bool {
+				_, ready := os.Stat(filepath.Join(f.ev, "concern.ready"))
+				_, escaped := os.Stat(filepath.Join(f.ev, "escaped.pid"))
+				return ready == nil && escaped == nil
+			})
+			escaped := review487Pid(t, filepath.Join(f.ev, "escaped.pid"))
+			cancel()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("run error = %v", err)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatal("run did not return after cancellation")
+			}
+			if review487Gone(escaped) {
+				t.Fatal("expected the escaped descendant to outlive the run; the probe did not escape")
+			}
+
+			// The next run completes while the escaped process is alive.
+			t.Setenv("REVIEW487_BLOCK", "")
+			t.Setenv("REVIEW487_ESCAPE", "")
+			next, err := f.c.RunReviewBundle(f.bundle, review487Options)
+			if err != nil || next.Verdict != "pass" {
+				t.Fatalf("next run: %+v %v", next, err)
+			}
+			summary, err := os.ReadFile(filepath.Join(f.bundle, "summary.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(f.ev, "go"), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+			review487WaitFor(t, "escaped descendant wrote", 30*time.Second, func() bool {
+				_, err := os.Stat(filepath.Join(f.ev, "escaped.done"))
+				return err == nil
+			})
+			data, err := os.ReadFile(filepath.Join(f.bundle, "findings", "code.json"))
+			var findings reviewFindingFile
+			if err != nil || json.Unmarshal(data, &findings) != nil || findings.Status != "ok" || len(findings.Findings) != 0 {
+				t.Fatalf("late write reached the next run's findings: %s %v", data, err)
+			}
+			if got, err := os.ReadFile(filepath.Join(f.bundle, "summary.md")); err != nil || string(got) != string(summary) {
+				t.Fatalf("late write reached the next run's summary: %q %v", got, err)
+			}
+			if got, err := os.ReadFile(filepath.Join(f.bundle, "verdict")); err != nil || strings.TrimSpace(string(got)) != "pass" {
+				t.Fatalf("verdict: %q %v", got, err)
+			}
+			// A third run does not read what the escaped process recreated.
+			again, err := f.c.RunReviewBundle(f.bundle, review487Options)
+			if err != nil || again.Verdict != "pass" || again.Blockers != 0 {
+				t.Fatalf("later run picked up the late write: %+v %v", again, err)
+			}
+		})
 	}
 }

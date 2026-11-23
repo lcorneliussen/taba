@@ -212,6 +212,18 @@ func (c *Context) RunReviewBundleContext(ctx context.Context, bundle string, opt
 				err = finishErr
 			}
 		}()
+	} else {
+		var stage *reviewStage
+		stage, err = newReviewStage(bundle)
+		if err != nil {
+			return ReviewRunResult{}, err
+		}
+		dirs.bundle = stage.dir
+		defer func() {
+			if finishErr := stage.finish(callerBundle); finishErr != nil && err == nil {
+				err = finishErr
+			}
+		}()
 	}
 	// From here on bundle is the directory agents use; the caller's bundle
 	// receives the results when an isolated run finishes.
@@ -400,6 +412,108 @@ launch:
 		return ReviewRunResult{}, err
 	}
 	return ReviewRunResult{Bundle: callerBundle, Verdict: verdict, Blockers: blockers, Round: manifest.Round, Concerns: count}, nil
+}
+
+// A private run's reviewers work in a per-run copy of the bundle, a stage
+// inside it, so the collection context they load is unchanged. When every
+// reviewer of the run has stopped, the runner returns the run's own changes
+// to the bundle and removes the stage. A process that outlived the run, such
+// as a descendant that left its reviewer's process group, can then write only
+// into a stage that is gone or no longer read: never a result of this run or
+// a later one. This fences the paths a reviewer is given; it is not a sandbox,
+// and such a process can still write wherever its permissions allow.
+const (
+	reviewStagePrefix = ".taba-run-"
+	reviewStageMaxAge = 24 * time.Hour
+)
+
+type reviewStage struct {
+	dir     string
+	initial map[string]string
+}
+
+func newReviewStage(bundle string) (*reviewStage, error) {
+	sweepReviewStages(bundle)
+	dir, err := os.MkdirTemp(bundle, reviewStagePrefix)
+	if err != nil {
+		return nil, fmt.Errorf("review run stage: %w", err)
+	}
+	stage := &reviewStage{dir: dir}
+	if err := copyReviewStage(bundle, dir); err != nil {
+		_ = removeReviewContext(dir)
+		return nil, fmt.Errorf("review run stage: %w", err)
+	}
+	if stage.initial, err = reviewTreeFiles(dir); err != nil {
+		_ = removeReviewContext(dir)
+		return nil, fmt.Errorf("review run stage: %w", err)
+	}
+	return stage, nil
+}
+
+// finish returns the run's changes, then removes the stage. The stage is
+// removed even when returning fails, so nothing written later is read.
+func (s *reviewStage) finish(bundle string) error {
+	err := returnReviewTree(s.dir, bundle, s.initial, "review run stage")
+	if removeErr := removeReviewContext(s.dir); removeErr != nil {
+		err = errors.Join(err, fmt.Errorf("review run stage: %w", removeErr))
+	}
+	return err
+}
+
+// copyReviewStage copies the bundle into its stage: directories, regular
+// files and links as they are, without runner directories, poster state or
+// other stages. Special files are left out.
+func copyReviewStage(bundle, stage string) error {
+	return filepath.WalkDir(bundle, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(bundle, path)
+		if err != nil || rel == "." {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		top := strings.SplitN(rel, "/", 2)[0]
+		if containsString(reviewRunnerDirs, top) || containsString(reviewPosterFiles, rel) || strings.HasPrefix(top, reviewStagePrefix) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		target := filepath.Join(stage, filepath.FromSlash(rel))
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, info.Mode().Perm()|0700)
+		case d.Type()&fs.ModeSymlink != 0:
+			link, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		case d.Type().IsRegular():
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(target, data, info.Mode().Perm())
+		}
+		return nil
+	})
+}
+
+// sweepReviewStages removes stages an interrupted cleanup left behind, once
+// they are old enough that no run can still be using them.
+func sweepReviewStages(bundle string) {
+	paths, _ := filepath.Glob(filepath.Join(bundle, reviewStagePrefix+"*"))
+	for _, path := range paths {
+		if info, err := os.Lstat(path); err == nil && info.IsDir() && time.Since(info.ModTime()) > reviewStageMaxAge {
+			_ = removeReviewContext(path)
+		}
+	}
 }
 
 // reviewFindingPath reports the concern of a findings/<id>.json or .raw path.
