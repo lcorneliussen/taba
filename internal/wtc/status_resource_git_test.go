@@ -43,8 +43,9 @@ func statusResourceLocalReference(ctx context.Context, t catchUpTarget) (StatusR
 	upstream, aheadRef := t.ref.String(), t.ref.Short()
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
 	if row.BranchKind == "branch" {
-		if found, err := statusGitContext(ctx, t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
-			upstream, aheadRef = found, found
+		// The upstream counts by its full name and shows without refs/remotes/.
+		if found, err := statusGitContext(ctx, t.path, "rev-parse", "--symbolic-full-name", "@{u}"); err == nil {
+			upstream, aheadRef = found, strings.TrimPrefix(strings.TrimPrefix(found, "refs/remotes/"), "refs/heads/")
 			row.AheadBasis, row.UpstreamState = "upstream", "tracking"
 		} else if tracking, err := statusGitContext(ctx, t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
 			row.UpstreamState = "gone"
