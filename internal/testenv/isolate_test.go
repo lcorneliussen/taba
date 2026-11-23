@@ -30,7 +30,7 @@ func (f failingEnv) Unsetenv(name string) error {
 func TestIsolateFailsClosedWhenTheEnvironmentCannotBeSet(t *testing.T) {
 	for _, name := range []string{"GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", marker} {
 		t.Run(name, func(t *testing.T) {
-			before := tempDirs(t)
+			tmp := privateTempDir(t)
 			dir, err := isolate(failingEnv{failSet: name})
 			if err == nil || !strings.Contains(err.Error(), name) {
 				t.Fatalf("isolate() error = %v, want an error naming %s", err, name)
@@ -38,45 +38,36 @@ func TestIsolateFailsClosedWhenTheEnvironmentCannotBeSet(t *testing.T) {
 			if dir != "" {
 				t.Errorf("isolate() dir = %q, want none", dir)
 			}
-			if leaked := newEntries(before, tempDirs(t)); len(leaked) > 0 {
-				t.Errorf("isolate() left %v behind", leaked)
-			}
+			assertEmpty(t, tmp)
 		})
 	}
 }
 
 func TestIsolateFailsClosedWhenTheShellCannotBeScrubbed(t *testing.T) {
 	t.Setenv("TABA_FROM_SHELL", "leak")
-	before := tempDirs(t)
+	tmp := privateTempDir(t)
 	if _, err := isolate(failingEnv{failUnset: "TABA_FROM_SHELL"}); err == nil || !strings.Contains(err.Error(), "TABA_FROM_SHELL") {
 		t.Fatalf("isolate() error = %v, want an error naming TABA_FROM_SHELL", err)
 	}
-	if leaked := newEntries(before, tempDirs(t)); len(leaked) > 0 {
-		t.Errorf("isolate() left %v behind", leaked)
-	}
+	assertEmpty(t, tmp)
 }
 
-func tempDirs(t *testing.T) map[string]bool {
+// privateTempDir gives isolate a temporary directory no other test binary
+// writes to, so whatever it leaves behind is its own.
+func privateTempDir(t *testing.T) string {
 	t.Helper()
-	entries, err := os.ReadDir(os.TempDir())
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	return dir
+}
+
+func assertEmpty(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := map[string]bool{}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), "taba-testenv-") {
-			names[entry.Name()] = true
-		}
+		t.Errorf("isolate() left %s behind", entry.Name())
 	}
-	return names
-}
-
-func newEntries(before, after map[string]bool) []string {
-	var added []string
-	for name := range after {
-		if !before[name] {
-			added = append(added, name)
-		}
-	}
-	return added
 }
