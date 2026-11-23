@@ -86,10 +86,30 @@ func addUpgradeCommand(root *cobra.Command, asJSON *bool) {
 			}
 			fmt.Print(strings.TrimRight(note.Content, "\n") + "\n")
 		}
+		printUpgradeDoctor(result.Doctor)
 		if !result.DryRun {
 			fmt.Println(branding.Text("\nNext: decide what to adapt or adopt from these notes, commit the harness change on a branch, open its PR,\nand after it merges run `{{command}} upgrade --rollout`."))
 		}
 		return nil
 	}
 	root.AddCommand(cmd)
+}
+
+// printUpgradeDoctor reports the target release's diagnostics as advice,
+// after the notes: the upgrade itself has already completed.
+func printUpgradeDoctor(d *wtc.UpgradeDoctor) {
+	if d == nil {
+		return
+	}
+	fmt.Printf("\ndiagnostics (advisory) with wtc %s doctor: %s", d.Version, d.Status)
+	if d.Reason != "" {
+		fmt.Printf(" — %s", d.Reason)
+	}
+	fmt.Println()
+	for _, finding := range d.Findings {
+		fmt.Printf("  %-15s %s\n", finding.Name, finding.Detail)
+	}
+	if d.Truncated > 0 {
+		fmt.Printf("  … %d more; run the doctor in this collection for all of them\n", d.Truncated)
+	}
 }
