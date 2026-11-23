@@ -6,9 +6,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // FetchBaseInterval is how long a clone's base branch counts as fresh. Status
@@ -75,7 +76,7 @@ func FetchBases(paths []string, maxAge time.Duration) {
 			defer cancel()
 			args := append(fetchCredentials(c.origin), "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "origin")
 			for _, b := range c.branches {
-				args = append(args, "+refs/heads/"+b+":refs/remotes/origin/"+b)
+				args = append(args, gitref.RemoteBranch("origin", b).FetchSpec())
 			}
 			cmd, err := gitCommand(ctx, c.dir, args...)
 			if err != nil {
@@ -108,7 +109,7 @@ func RecordBase(dir, name, branch string) error {
 		_, err := git(dir, "config", "--unset", key)
 		return err
 	}
-	_, err := git(dir, "config", key, strings.TrimPrefix(branch, "origin/"))
+	_, err := git(dir, "config", key, branch)
 	return err
 }
 
@@ -147,11 +148,13 @@ func baseBranch(dir string) string {
 }
 
 func defaultBaseBranch(dir string) string {
-	if head, err := git(dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil && head != "" {
-		return strings.TrimPrefix(head, "origin/")
+	if head, err := git(dir, "symbolic-ref", gitref.RemoteBranch("origin", "HEAD").String()); err == nil {
+		if ref, err := gitref.Parse(head); err == nil && ref.Branch() != "" {
+			return ref.Branch()
+		}
 	}
 	for _, b := range []string{"main", "master", "develop"} {
-		if gitOK(dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+b) {
+		if gitOK(dir, "rev-parse", "--verify", "--quiet", gitref.RemoteBranch("origin", b).String()) {
 			return b
 		}
 	}

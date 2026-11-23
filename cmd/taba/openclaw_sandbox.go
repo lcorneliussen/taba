@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/openclaw"
 )
 
@@ -61,9 +62,9 @@ func sandboxCatchUp(gw *openclaw.HTTPGateway, cont, asJSON bool) error {
 	var summary []string
 	switch {
 	case len(r.Conflicts) > 0:
-		summary = append(summary, fmt.Sprintf(branding.Text("merging origin/%s stopped on conflicts in: %s. Resolve them with git as in any merge (git log --merge, git show :1:<file>, :2:, :3:), git add each, then run {{command}} catch-up --continue. Do not rebase"), r.Base, strings.Join(r.Conflicts, ", ")))
+		summary = append(summary, fmt.Sprintf(branding.Text("merging %s stopped on conflicts in: %s. Resolve them with git as in any merge (git log --merge, git show :1:<file>, :2:, :3:), git add each, then run {{command}} catch-up --continue. Do not rebase"), gitref.RemoteBranch("origin", r.Base).Short(), strings.Join(r.Conflicts, ", ")))
 	case r.Merged:
-		summary = append(summary, fmt.Sprintf("merged origin/%s into %s", r.Base, r.Branch))
+		summary = append(summary, fmt.Sprintf("merged %s into %s", gitref.RemoteBranch("origin", r.Base).Short(), r.Branch))
 	case r.Note != "":
 		summary = append(summary, r.Branch+" "+r.Note)
 	}
@@ -89,7 +90,7 @@ func sandboxChecks(gw *openclaw.HTTPGateway, getenv func(string) string, run fun
 		fetch.Detail = err.Error()
 	} else {
 		fetch.OK = true
-		fetch.Detail = fmt.Sprintf("read-only from the gateway (%d repos: %s); %s merges origin/%s", len(s.Repos), strings.Join(s.Repos, ", "), s.Branch, s.Base)
+		fetch.Detail = fmt.Sprintf("read-only from the gateway (%d repos: %s); %s merges %s", len(s.Repos), strings.Join(s.Repos, ", "), s.Branch, gitref.RemoteBranch("origin", s.Base).Short())
 	}
 	push := doctorCheck{Name: "push", Required: true, OK: true, Detail: "none: the gateway publishes"}
 	var found []string

@@ -482,7 +482,7 @@ func TestRecordedBase(t *testing.T) {
 	git("commit", "-qm", "a")
 	git("update-ref", "refs/remotes/origin/develop", "HEAD")
 	git("reset", "-q", "--hard", "origin/main")
-	if err := RecordBase(c.Dir, "72-add-thing", "origin/develop"); err != nil {
+	if err := RecordBase(c.Dir, "72-add-thing", "develop"); err != nil {
 		t.Fatal(err)
 	}
 	got := CheckoutsStatus([]string{c.Dir}, false).Repos[0]
