@@ -10,6 +10,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetches ancestor commits and trees without history blobs; the checker reads only
+      # the head tree and base..head. A missing or unrelated base fails the step.
+      - name: Reject generated Python artifacts in range history
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" = pull_request ]; then base="$PR_BASE" head="$PR_HEAD"; else base="$PUSH_BEFORE" head="$PUSH_AFTER"; fi
+          unshallow=
+          if [ "$(git rev-parse --is-shallow-repository)" = true ]; then unshallow=--unshallow; fi
+          git fetch --quiet --no-tags $unshallow --filter=blob:none origin "$base" "$head"
+          python3 -B tools/ci/check-generated-artifacts.py --base="$base" --head="$head"
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod

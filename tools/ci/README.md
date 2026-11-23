@@ -25,6 +25,13 @@ python3 -B -m unittest discover -s tools/ci -p '*_test.py'
 python3 tools/ci/macos-native.py
 ```
 
+The Linux job also rejects Python bytecode in the head tree and every commit of
+the PR or push range; run the same check before pushing:
+
+```sh
+python3 tools/ci/check-generated-artifacts.py --base origin/main
+```
+
 `macos-full.yml` retains the previous full Mac job: locked helper validation,
 Python timing and upgrade-rehearsal tests, the full Go suite with timing output
 and Node available, then a native build. It runs daily at 03:23 UTC and through

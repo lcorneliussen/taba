@@ -42,6 +42,15 @@ func (c *Context) ResolveReviewBundle(bundle string, opt ReviewResolveOptions) (
 	if err := reviewPublicationAllowed(manifest); err != nil {
 		return ReviewResolveResult{}, err
 	}
+	// Replies are REST writes by repository name. The thread lookup reads by
+	// name through GraphQL, which follows a rename; resolving a thread is a
+	// write by node ID.
+	target := manifest
+	if opt.Reply != "" {
+		if target, err = reviewWriteTarget(manifest); err != nil {
+			return ReviewResolveResult{}, err
+		}
+	}
 	rows := readInlineRecords(bundle)
 	result := ReviewResolveResult{}
 	for i := range rows {
@@ -70,7 +79,7 @@ func (c *Context) ResolveReviewBundle(bundle string, opt ReviewResolveOptions) (
 			}
 		}
 		if opt.Reply != "" {
-			if err := replyReviewInline(manifest, row.ID, opt.Reply); err != nil {
+			if err := replyReviewInline(target, row.ID, opt.Reply); err != nil {
 				return result, err
 			}
 		}
@@ -91,7 +100,7 @@ func replyReviewInline(m ReviewManifest, id, body string) error {
 	if m.Forge == "github" {
 		num, _ := strconv.Atoi(id)
 		payload, _ := json.Marshal(map[string]any{"body": body, "in_reply_to": num})
-		_, err := reviewForgeCommand(m.RepoDir, "gh", []string{"api", "-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
+		_, err := reviewGitHubAPI(m.RepoDir, []string{"-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
 		return err
 	}
 	if _, ok, err := bitbucketReviewCommentAPI(m, "", body, "", 0, id); ok {
@@ -110,7 +119,7 @@ func resolveReviewInline(m ReviewManifest, id, threadID string) error {
 		return err
 	}
 	mutation := `mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}`
-	_, err := reviewForgeCommand(m.RepoDir, "gh", []string{"api", "graphql", "-f", "query=" + mutation, "-f", "id=" + threadID}, nil)
+	_, err := reviewGitHubAPI(m.RepoDir, []string{"graphql", "-f", "query=" + mutation, "-f", "id=" + threadID}, nil)
 	return err
 }
 
@@ -123,11 +132,11 @@ func reviewThreadID(m ReviewManifest, id string) (string, bool, error) {
 	target, _ := strconv.ParseInt(id, 10, 64)
 	cursor := ""
 	for page := 0; page < 100; page++ {
-		args := []string{"api", "graphql", "-f", "query=" + query, "-f", "o=" + parts[0], "-f", "n=" + parts[1], "-F", "num=" + m.PR}
+		args := []string{"graphql", "-f", "query=" + query, "-f", "o=" + parts[0], "-f", "n=" + parts[1], "-F", "num=" + m.PR}
 		if cursor != "" {
 			args = append(args, "-f", "after="+cursor)
 		}
-		out, err := reviewForgeCommand(m.RepoDir, "gh", args, nil)
+		out, err := reviewGitHubAPI(m.RepoDir, args, nil)
 		if err != nil {
 			return "", false, err
 		}

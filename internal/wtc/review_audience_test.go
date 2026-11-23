@@ -40,6 +40,7 @@ case "$*" in
   *'--json headRefOid') printf '{"headRefOid":"%s"}\n' "$REVIEW_HEAD" ;;
   'pr view 7 --json') printf '{"source":{"commit":{"hash":"%s"}}}\n' "$REVIEW_HEAD" ;;
   *'--paginate --slurp'|'pr comments list 7 --all --json') echo '[]' ;;
+  'api graphql '*'nameWithOwner'*) echo '{"data":{"repository":{"id":"R_app","nameWithOwner":"example/app","pullRequest":{"number":7,"baseRepository":{"id":"R_app","nameWithOwner":"example/app"}}}}}' ;;
   'pr comments list 7 --limit 1000 --json') echo '{"count":0,"comments":[]}' ;;
   *)
     printf '%s\n' "$*" >> "$REVIEW_WRITES"

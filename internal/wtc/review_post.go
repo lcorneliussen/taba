@@ -141,6 +141,11 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 	if err := reviewPublicationAllowed(manifest); err != nil {
 		return ReviewPostResult{}, err
 	}
+	// Verify where writes go before any intent marker or write exists.
+	target, err := reviewWriteTarget(manifest)
+	if err != nil {
+		return ReviewPostResult{}, err
+	}
 	mode := opt.Mode
 	if mode == "" {
 		mode = "summary"
@@ -223,7 +228,7 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 			return ReviewPostResult{}, err
 		}
 	}
-	posted, err := postReviewComment(manifest, cid, body)
+	posted, err := postReviewComment(target, cid, body)
 	if err != nil {
 		// A failed update is not evidence that the original comment is absent.
 		// Keep the saved ID and let an explicit retry update the same comment.
@@ -238,11 +243,11 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 		}
 	}
 	if mode == "summary" {
-		posted.InlinePosted, posted.InlineFailed, posted.InlineSkipped = postReviewInline(manifest, bundle)
+		posted.InlinePosted, posted.InlineFailed, posted.InlineSkipped = postReviewInline(target, bundle)
 		if posted.InlineFailed != 0 {
 			return posted, fmt.Errorf("%d inline comments failed to post; review remains pending at %s", posted.InlineFailed, posted.URL)
 		}
-		finalPost, err := postReviewComment(manifest, posted.CommentID, finalBody)
+		finalPost, err := postReviewComment(target, posted.CommentID, finalBody)
 		if err != nil {
 			return posted, err
 		}
@@ -269,7 +274,7 @@ func postReviewComment(m ReviewManifest, cid, body string) (ReviewPostResult, er
 			method = "PATCH"
 			endpoint = fmt.Sprintf("repos/%s/issues/comments/%s", m.Slug, cid)
 		}
-		out, err := reviewForgeCommand(m.RepoDir, "gh", []string{"api", "-X", method, endpoint, "--input", "-"}, payload)
+		out, err := reviewGitHubAPI(m.RepoDir, []string{"-X", method, endpoint, "--input", "-"}, payload)
 		if err != nil {
 			return ReviewPostResult{}, err
 		}
@@ -582,7 +587,7 @@ func postReviewInline(m ReviewManifest, bundle string) (posted, failed, skipped 
 			body += fmt.Sprintf("\nRound %d.\n\n`wtc-review-inline v1 key=%s concern=%s file=%s line=%d`\n", m.Round, key, file.Concern, f.File, f.Line)
 			if m.Forge == "github" {
 				payload, _ := json.Marshal(map[string]any{"body": body, "commit_id": m.HeadSHA, "path": f.File, "line": f.Line, "side": "RIGHT"})
-				out, err := reviewForgeCommand(m.RepoDir, "gh", []string{"api", "-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
+				out, err := reviewGitHubAPI(m.RepoDir, []string{"-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
 				if err == nil {
 					var result struct {
 						ID      int64  `json:"id"`
