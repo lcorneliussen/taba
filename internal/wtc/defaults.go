@@ -7,13 +7,33 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"taba.sh/taba/internal/prompts"
 )
 
-//go:embed defaults/*.md defaults/agent-envrc defaults/browse/*.lua defaults/skills/*/SKILL.md defaults/skills/*/SKILL.*.md defaults/instructions/*.md defaults/review/concerns/*.md defaults/review/prompts/*.md
+//go:embed defaults/*.md defaults/agent-envrc defaults/browse/*.lua defaults/skills/*/SKILL.md defaults/skills/*/SKILL.*.md defaults/instructions/*.md defaults/review/concerns/*.md defaults/review/prompts/*.md defaults/prompts/*/*.md
 var defaults embed.FS
 
 func ReadDefault(path string) ([]byte, error) {
 	return defaults.ReadFile("defaults/" + path)
+}
+
+func PromptDefaults() fs.FS {
+	sub, err := fs.Sub(defaults, "defaults/prompts")
+	if err != nil {
+		panic(err)
+	}
+	return sub
+}
+
+// Prompts resolves agent prompts against this harness. Callers rendering for
+// a public review set Audience on the returned value.
+func (c *Context) Prompts() prompts.Context {
+	return prompts.Context{Harness: c.Harness, Defaults: PromptDefaults(), Audience: prompts.Private}
+}
+
+func writeLaunchNote(collection string, note prompts.Text) error {
+	return os.WriteFile(filepath.Join(collection, "HANDOFF.md"), []byte(note.String()+"\n"), 0644)
 }
 
 func DefaultPaths() ([]string, error) {
@@ -95,6 +115,16 @@ func Eject(harness string, patterns []string) ([]string, error) {
 			return written, err
 		}
 		written = append(written, dst)
+		if rest, ok := strings.CutPrefix(path, "prompts/"); ok {
+			base := filepath.Join(harness, "prompts", prompts.BaseDir, filepath.FromSlash(rest))
+			if err := os.MkdirAll(filepath.Dir(base), 0755); err != nil {
+				return written, err
+			}
+			if err := os.WriteFile(base, data, 0644); err != nil {
+				return written, err
+			}
+			written = append(written, base)
+		}
 	}
 	return written, nil
 }

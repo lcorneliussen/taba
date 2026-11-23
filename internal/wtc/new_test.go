@@ -293,3 +293,16 @@ func TestNewCollectionCanReviewHarnessPR(t *testing.T) {
 		t.Fatalf("review PR was not enlisted: %+v %v", prs, err)
 	}
 }
+
+func TestNewCollectionNamesPartialCollectionWhenLaunchNoteFails(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	source := filepath.Join(filepath.Dir(c.Collection), "source-agent-harness")
+	fixtureFile(t, filepath.Join(source, "prompts", "launch", "handoff.md"), "Broken {{nope}}\n", 0644)
+	fixtureGit(t, "-C", source, "add", "-A")
+	fixtureGit(t, "-C", source, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "broken prompt")
+	fixtureGit(t, "--git-dir="+filepath.Join(filepath.Dir(c.Collection), ".bare", "agent-harness.git"), "fetch", "-q", "origin", "+refs/heads/*:refs/remotes/origin/*")
+	_, err := c.NewCollection(NewOptions{Slug: "broken", Repos: []string{"widget"}})
+	if err == nil || !strings.Contains(err.Error(), "{{nope}}") || !strings.Contains(err.Error(), "partial collection at") || !strings.Contains(err.Error(), "without HANDOFF.md") {
+		t.Fatalf("launch-note failure = %v", err)
+	}
+}

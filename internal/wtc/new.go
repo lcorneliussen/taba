@@ -9,7 +9,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"taba.sh/taba/internal/branding"
+
+	"taba.sh/taba/internal/prompts"
 )
 
 type NewOptions struct {
@@ -345,19 +346,27 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 		target.runRepoLifecycle(path, "init")
 	}
 	_, _ = target.AgentToolchainPath(true) // A bare agent shell can fill this later.
-	var branchNote string
+	ctx := target.Prompts()
+	var branchNote prompts.Text
 	switch {
 	case opt.Review:
-		branchNote = fmt.Sprintf(branding.Text("**Review-only collection.** You review someone else's PR; the result is a verdict and nothing else.\nProduce and post the review only: `{{command}} review bundle`, `{{command}} review run`, `{{command}} review post`.\nNo commits, no pushes, no thread resolution, no `{{command}} review ready`; those belong to the author.\nPushing from `%s` is disabled. When the author pushes again, `{{command}} review bundle` moves to the new head for the next round.\n\nOther siblings start detached at the tip."), primaryDir(primary, harnessRepo))
+		branchNote, err = prompts.Render(ctx, "launch.branch-review", map[string]string{"primary_dir": primaryDir(primary, harnessRepo)})
 	case opt.PR != "":
-		branchNote = fmt.Sprintf("The primary sibling is on a local branch at the exact PR head. Push review work with:\n\n    git -C %s push %s %s\n\nOther siblings start detached at the tip.", shellQuote(primaryDir(primary, harnessRepo)), shellQuote(result.PushRemote), shellQuote("HEAD:refs/heads/"+result.IntendedBranch))
+		push := "git -C " + shellQuote(primaryDir(primary, harnessRepo)) + " push " + shellQuote(result.PushRemote) + " " + shellQuote("HEAD:refs/heads/"+result.IntendedBranch)
+		branchNote, err = prompts.Render(ctx, "launch.branch-pr", map[string]string{"push_command": push})
 	case opt.Branch != "":
-		branchNote = "All siblings are already on the explicitly requested branch. Commit on that branch; do not create it again."
+		branchNote, err = prompts.Render(ctx, "launch.branch-explicit", nil)
 	default:
-		branchNote = fmt.Sprintf("Worktrees start **detached at the development tip** — no branch exists yet.\nCreate one at your first commit:\n\n    git switch -c %s\n\n(that is the expected name; adjust it if the work turns out to be something else).", result.IntendedBranch)
+		branchNote, err = prompts.Render(ctx, "launch.branch-detached", map[string]string{"branch": result.IntendedBranch})
 	}
-	handoff := fmt.Sprintf(branding.Text("# wtc: %s — launch note (EPHEMERAL)\n\n**Goal:** %s\n\nFirst agent on this wtc: read this, turn anything durable into issues /\ncommits / PRs, then **delete this file as your very first action**\n(harness/AGENTS.md → \"State lives in git\").\n\n%s Collection env: `.env.collection` (inherited via `mise.toml`).\nRetire with `{{command}} retire .` from this collection's Herdr workspace, or `{{command}} retire %s` from another collection.\n"), filepath.Base(result.Collection), defaultSource(result.Source), branchNote, filepath.Base(result.Collection))
-	if err := os.WriteFile(filepath.Join(result.Collection, "HANDOFF.md"), []byte(handoff), 0644); err != nil {
+	if err != nil {
+		return result, fmt.Errorf("%w (partial collection at %s without HANDOFF.md)", err, result.Collection)
+	}
+	handoff, err := prompts.Render(ctx, "launch.handoff", map[string]string{"collection": filepath.Base(result.Collection), "goal": defaultSource(result.Source), "branch_note": branchNote.String()})
+	if err != nil {
+		return result, fmt.Errorf("%w (partial collection at %s without HANDOFF.md)", err, result.Collection)
+	}
+	if err := writeLaunchNote(result.Collection, handoff); err != nil {
 		return result, err
 	}
 	if prID != "" {

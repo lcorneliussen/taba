@@ -240,3 +240,31 @@ diff reports `untracked`. `--json` provides the same findings for automation.
 embedded default into the harness for editing; eject refuses to overwrite an
 existing file. Keep repository-specific agent instructions in that
 repository's `AGENTS.md` and hooks in its `.harness/` directory.
+
+## Agent prompts
+
+Prompts that Taba sends to an agent are files too: the launch note
+(`HANDOFF.md`), the first prompt in a new agent pane, next-step handoffs from
+`taba status`, and the instructions added to review bundles. `taba prompts
+list` names each one by ID (`launch.handoff` is `prompts/launch/handoff.md`).
+To change one, eject it:
+
+    taba eject 'prompts/launch/handoff.md'
+
+This writes `harness/prompts/launch/handoff.md` for editing. It also records
+the full default text at `harness/prompts/.base/launch/handoff.md`, which shows
+what your edit was based on. Commit both files. The override wins over the
+embedded default from then on. `taba prompts explain <id>` shows which file is
+used and whether the embedded default changed since it was ejected.
+
+Each file starts with frontmatter: `id`, `version`, `inputs` and `audience`.
+The body uses `{{name}}` placeholders for the declared inputs, plus
+`{{command}}` for the invoked command name. Templates contain no logic. A
+variant is a separate prompt ID; for example, the launch note's branch
+paragraph comes from one of the `launch.branch-*` prompts. Rendering fails on
+a placeholder that is not a declared input, so a typo stops the command
+instead of sending a broken prompt. An override may leave out the frontmatter.
+If it keeps an `id` line, that ID must match its path.
+
+Public review bundles never use project overrides; they always send the
+embedded text, so private project instructions stay out of public artifacts.

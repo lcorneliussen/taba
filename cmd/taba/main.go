@@ -315,6 +315,7 @@ func run() error {
 	root.AddCommand(doctor)
 	addConfigCommands(root, &asJSON)
 	root.AddCommand(conventionsCommand(&asJSON))
+	root.AddCommand(promptsCommand(&asJSON, cwd))
 	eject := &cobra.Command{Use: "eject <glob>...", Short: "Copy embedded defaults into the harness for editing", Args: cobra.MinimumNArgs(1)}
 	eject.RunE = func(cmd *cobra.Command, args []string) error {
 		c, err := cwd()
