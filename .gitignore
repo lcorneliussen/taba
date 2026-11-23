@@ -3,3 +3,5 @@
 # Generated Python bytecode; tools/ci/check-generated-artifacts.py rejects it in history.
 __pycache__/
 *.py[co]
+# Pinned TLA+ tools that tools/formal/*/check.sh downloads.
+/tools/formal/.cache/
