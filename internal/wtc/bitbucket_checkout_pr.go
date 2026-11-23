@@ -2,11 +2,17 @@ package wtc
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"taba.sh/taba/internal/envcompat"
 	"time"
 )
 
@@ -56,18 +62,99 @@ func BitbucketBranchRead(root, slug, branch string) BitbucketBranchReadResult {
 }
 
 // bitbucketReadIdentity names the read context of slug without revealing
-// it: a digest of the entry's authenticated scope when that context is
-// fingerprinted (an unchanged host token, a token from the environment, a
-// bb login), otherwise a digest of the selection only, marked unknown, which
-// never equals a known identity.
+// it. A context that authenticates with a value taba sees (a host token, or
+// TWG_BBC_TOKEN in the environment) is "k:" plus an HMAC of the credential
+// type, repository, user and token under the read identity key: stable while
+// that credential is unchanged, whatever happens to the disposable status
+// cache, and different after rotation, for another principal, repository or
+// control root. Any other context (a TWG profile login, an unavailable
+// credential or key) is "u:" plus a digest of the selection only, which never
+// equals a "k:" identity. The helper answer is the operation's memoized one.
 func bitbucketReadIdentity(ctx context.Context, slug string) string {
-	entry := statusAuthEntry(ctx, "pr", "bitbucket.org", slug)
-	if entry.known {
-		sum := sha256.Sum256([]byte("read-identity-v1\x00" + entry.scope))
-		return "k:" + hex.EncodeToString(sum[:])[:16]
+	read := bitbucketReadFor(ctx)
+	selection := read.selection
+	digest := ""
+	switch {
+	case selection.err != nil:
+	case selection.hostCredential():
+		if workspace, repo, err := splitBitbucketSlug(slug); err == nil {
+			if user, token, err := read.repoCredential(ctx, workspace, repo); err == nil && token != "" {
+				digest = bitbucketReadIdentityDigest("bitbucket-host-read-v1", selection.Credential, strings.ToLower(slug), user, token)
+			}
+		}
+	case selection.Client == bitbucketClientTWG:
+		if token := os.Getenv("TWG_BBC_TOKEN"); token != "" {
+			digest = bitbucketReadIdentityDigest("bitbucket-twg-env-v1", strings.ToLower(slug), os.Getenv("TWG_BBC_USER"), token, os.Getenv("TWG_SITE"))
+		}
 	}
-	sum := sha256.Sum256([]byte("read-identity-v1\x00unknown\x00" + bitbucketReadFor(ctx).selection.fingerprint()))
+	if digest != "" {
+		return "k:" + digest[:16]
+	}
+	sum := sha256.Sum256([]byte("read-identity-v1\x00unknown\x00" + selection.fingerprint()))
 	return "u:" + hex.EncodeToString(sum[:])[:16]
+}
+
+// bitbucketReadIdentityKeyName is the read identity key's file: 32 random
+// bytes, mode 0600, created on first use in the control root, or in the
+// user's configuration directory (taba/) without one. It lives as long as
+// that directory; it is not part of the status cache and is never needed to
+// read anything. Deleting it only makes every refusal news once more.
+const bitbucketReadIdentityKeyName = ".bitbucket-read-identity-key-v1"
+
+func bitbucketReadIdentityKeyPath() string {
+	if root, ok := envcompat.LookupEnv("TABA_CONFIG_ROOT"); ok && root != "" {
+		return filepath.Join(root, bitbucketReadIdentityKeyName)
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil || dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "taba", bitbucketReadIdentityKeyName)
+}
+
+func bitbucketReadIdentityKey() []byte {
+	path := bitbucketReadIdentityKeyPath()
+	if path == "" {
+		return nil
+	}
+	if key := statusAuthReadCacheKey(path); key != nil {
+		return key
+	}
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		return nil // present but not a valid key: never overwritten
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		// Another process created it first: use that one.
+		return statusAuthReadCacheKey(path)
+	}
+	_, err = f.Write(key)
+	if closeErr := f.Close(); err != nil || closeErr != nil {
+		_ = os.Remove(path)
+		return nil
+	}
+	return key
+}
+
+func bitbucketReadIdentityDigest(label string, values ...string) string {
+	key := bitbucketReadIdentityKey()
+	if len(key) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = io.WriteString(mac, label)
+	for _, value := range values {
+		_, _ = mac.Write([]byte{0})
+		_, _ = io.WriteString(mac, value)
+	}
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func bitbucketBranchPullRequest(ctx context.Context, slug, branch string) (*BitbucketCheckoutPR, error) {

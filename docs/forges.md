@@ -356,9 +356,19 @@ The first six are access causes. The gateway checkout status carries
 `pullRequestRefusal {cause, status, message, access, readIdentity,
 observedAt}`; the card shows **⚠ PR read refused** with the message (or **PR
 read failed** for a transient cause). `readIdentity` is a non-secret digest of
-the read context (`k:` when it is fingerprinted, such as an unchanged host
-token; `u:` when it is not, which never equals a `k:` identity) and
-`observedAt` is when the read completed. PR news tells the conversation once
+the read context and `observedAt` is when the read completed. A context whose
+credential taba sees (a host token, or `TWG_BBC_TOKEN` in the environment) is
+`k:` plus an HMAC of the credential type, repository, user and token under a
+**read identity key**: 32 random bytes, mode 0600, created on first use as
+`.bitbucket-read-identity-key-v1` in the control root, or in the user's
+configuration directory (`taba/`) without one. That key is not the
+disposable status cache's key, so clearing the status cache keeps every
+identity; a rotated token, another user, repository or control root gives
+another one. The key is never needed to read anything; deleting it, or an
+invalid key file (never overwritten), only makes each refusal news once more.
+Any other context (a TWG profile login taba cannot see, an unavailable
+credential or key) is `u:` plus a digest of the client selection only, which
+never equals a `k:` identity. PR news tells the conversation once
 per read identity and access cause — not per poll, not again after a restart
 or a transient failure in between — again when another read identity is
 refused (a rotated or switched credential), and once when reads work again. A

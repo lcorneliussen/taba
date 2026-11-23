@@ -926,3 +926,103 @@ func TestBitbucketReadIdentityFollowsTheCredentialWithoutRevealingIt(t *testing.
 		}
 	}
 }
+
+// The read identity is keyed by its own durable key, not the disposable
+// status cache key: clearing the cache keeps it; rotation, another
+// principal, repository or control root changes it (#471).
+func TestBitbucketReadIdentitySurvivesCacheCleanupAndSeparatesContexts(t *testing.T) {
+	newNoBBHost(t)
+	t.Setenv("TMPDIR", t.TempDir()) // the status cache lives under it
+	rootA, rootB := t.TempDir(), t.TempDir()
+	t.Setenv("TABA_CONFIG_ROOT", rootA)
+	tokens := t.TempDir()
+	t.Setenv("FAKE_TOKEN_DIR", tokens)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"values":[]}`)) }))
+	defer server.Close()
+	statusBBAPI = server.URL
+	for _, repo := range []string{"alpha", "beta"} {
+		if err := os.MkdirAll(filepath.Join(tokens, "acme"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(tokens, "acme", repo), []byte("synthetic-stable-token"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	identity := func(slug string) string {
+		bitbucketHostCredentials = sync.Map{}
+		return BitbucketBranchRead("", slug, "feature").Identity
+	}
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	first := identity("acme/alpha")
+	if !strings.HasPrefix(first, "k:") {
+		t.Fatalf("identity = %q", first)
+	}
+	// The disposable status cache, its key included, is cleared.
+	if _, err := os.Stat(filepath.Join(statusForgeCacheDir(), ".auth-context-key-v1")); err != nil {
+		t.Fatalf("the status cache key should exist before cleanup: %v", err)
+	}
+	if err := os.RemoveAll(statusForgeCacheDir()); err != nil {
+		t.Fatal(err)
+	}
+	if again := identity("acme/alpha"); again != first {
+		t.Fatalf("an unchanged credential changed identity after a cache cleanup: %q -> %q", first, again)
+	}
+	if other := identity("acme/beta"); other == first {
+		t.Fatal("another repository must be another identity")
+	}
+	t.Setenv("TABA_CONFIG_ROOT", rootB)
+	if other := identity("acme/alpha"); other == first || !strings.HasPrefix(other, "k:") {
+		t.Fatalf("another control root must be another identity: %q", other)
+	}
+	t.Setenv("TABA_CONFIG_ROOT", rootA)
+	if err := os.WriteFile(filepath.Join(tokens, "acme", "alpha"), []byte("synthetic-rotated-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rotated := identity("acme/alpha"); rotated == first {
+		t.Fatal("a rotated token must be another identity")
+	}
+
+	// TWG with a token in the environment: the principal is part of it.
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "")
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-env-token")
+	t.Setenv("TWG_BBC_USER", "person-one@example.invalid")
+	one := identity("acme/alpha")
+	t.Setenv("TWG_BBC_USER", "person-two@example.invalid")
+	two := identity("acme/alpha")
+	if !strings.HasPrefix(one, "k:") || one == two {
+		t.Fatalf("principals: %q vs %q", one, two)
+	}
+	// A TWG profile login is not seen by taba: unknown, never a known identity.
+	t.Setenv("TWG_BBC_TOKEN", "")
+	if unknown := identity("acme/alpha"); !strings.HasPrefix(unknown, "u:") {
+		t.Fatalf("profile login identity = %q", unknown)
+	}
+
+	// The key is random, private, and holds no credential.
+	path := filepath.Join(rootA, bitbucketReadIdentityKeyName)
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 || info.Size() != 32 {
+		t.Fatalf("read identity key: %v %v", info, err)
+	}
+	data, _ := os.ReadFile(path)
+	for _, secret := range []string{"synthetic-stable-token", "synthetic-rotated-token", "synthetic-env-token"} {
+		if strings.Contains(string(data), secret) || strings.Contains(first, secret) {
+			t.Fatal("credential material in the key or identity")
+		}
+	}
+	// A key file that is not a valid key is never overwritten, and a
+	// credential taba sees then has an unknown identity.
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-env-token")
+	if id := identity("acme/alpha"); id != two {
+		t.Fatalf("an unchanged principal must keep its identity: %q vs %q", id, two)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if id := identity("acme/alpha"); !strings.HasPrefix(id, "u:") {
+		t.Fatalf("an invalid key must give an unknown identity, got %q", id)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "x" {
+		t.Fatal("an invalid key file was overwritten")
+	}
+}
