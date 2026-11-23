@@ -1,2 +1,5 @@
 # GoReleaser-owned outputs; checked before removal and after each build.
 /dist/
+# Generated Python bytecode; tools/ci/check-generated-artifacts.py rejects it in history.
+__pycache__/
+*.py[co]
