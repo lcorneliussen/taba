@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -43,18 +42,28 @@ func installTestNetworkGuard() (check func() error) {
 	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	os.Setenv("GIT_TERMINAL_PROMPT", "0")
 	for _, tool := range []string{"twg", "bb"} {
-		script := "#!/bin/sh\nprintf '%s %s\\n' \"$(basename \"$0\")\" \"$*\" >> '" + log + "'\necho 'network guard: real " + tool + " is not available to tests' >&2\nexit 97\n"
+		// The record names the launch and its parent (a test binary's -test.run
+		// or a taba subcommand), so the test that missed a fake can be found.
+		script := "#!/bin/sh\nprintf '%s %s (from: %s)\\n' \"$(basename \"$0\")\" \"$*\" \"$(ps -o args= -p $PPID 2>/dev/null | cut -c1-160)\" >> '" + log + "'\necho 'network guard: real " + tool + " is not available to tests' >&2\nexit 97\n"
 		if err := os.WriteFile(filepath.Join(dir, tool), []byte(script), 0o755); err != nil {
 			panic(err)
 		}
 	}
 	// Builds that tests start use the local module and build caches, found
-	// before a fixture moves HOME, and never download modules or toolchains.
-	for _, name := range []string{"GOMODCACHE", "GOCACHE"} {
-		if os.Getenv(name) == "" {
-			if out, err := exec.Command("go", "env", name).Output(); err == nil && len(out) > 1 {
-				os.Setenv(name, strings.TrimSpace(string(out)))
-			}
+	// from the environment before a fixture moves HOME (never by running go,
+	// which could itself fetch a toolchain), and never download modules or
+	// toolchains.
+	home := os.Getenv("HOME")
+	if os.Getenv("GOMODCACHE") == "" && home != "" {
+		gopath := os.Getenv("GOPATH")
+		if gopath == "" {
+			gopath = filepath.Join(home, "go")
+		}
+		os.Setenv("GOMODCACHE", filepath.Join(strings.Split(gopath, string(os.PathListSeparator))[0], "pkg", "mod"))
+	}
+	if os.Getenv("GOCACHE") == "" {
+		if cache, err := os.UserCacheDir(); err == nil {
+			os.Setenv("GOCACHE", filepath.Join(cache, "go-build"))
 		}
 	}
 	os.Setenv("GOPROXY", "off")

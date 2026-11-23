@@ -148,6 +148,8 @@ const hostRequest = async (method, params) => {
       return { ok: true, result: bitbucket ? { status: "needs_confirmation", requestId: "bb-1", confirmation: { account: bitbucket.user, name: bitbucket.name, requestDigest: "bd1", branch: "openclaw/test", head: "abcdef0123", dest: "main", uncommitted: 0, title: params.payload?.title, description: bitbucketDropDescription ? undefined : params.payload?.description } } : { status: "not_connected" } };
     }
     if (params.actionId === "publish-confirm") return { ok: true, result: bitbucketConfirmResult ?? { status: "published", created: true, url: "https://bitbucket.org/ws/hooks/pull-requests/3" } };
+    if (params.actionId === "pr-writes") return { ok: true, result: { status: "needs_confirmation", requestId: "w-1", confirmation: { account: bitbucket.user, name: bitbucket.name, requestDigest: "wd1", pr: 7, head: "abcdef0123", operations: [{ op: "comment.create", text: "Summary" }, { op: "comment.create", text: "x", inline: { path: "a.go", to: 3 } }, { op: "pr.ready" }] } } };
+    if (params.actionId === "pr-writes-confirm") return { ok: true, result: { status: "done", receipt: { results: [{ status: "done" }, { status: "done" }, { status: "done" }] } } };
   }
   if (method === "wtc.bitbucket.confirm") {
     calls.push({method,...params});
@@ -3996,4 +3998,26 @@ test("composer restores diagnostic header controls after a suggestion in the sam
     assert.ok(diagnosticControl(host));
     assert.ok(titled(host, "Open Activity in the taba Collection panel"));
   } finally { controlledCollection = undefined; view.dispose(); }
+});
+
+test("a Bitbucket checkout's waiting pull request writes are shown and confirmed through the plugin (#471)", async () => {
+  const before = bitbucket;
+  bitbucket = { user: "ada@example.com", name: "Ada" };
+  const { host, view } = await mount("panel", collection([repo("hooks", { forge: "bitbucket", bitbucketWrites: "pending" }), repo("site", { forge: "bitbucket" })]));
+  try {
+    const options = [...host.all()].filter((n) => n.tagName === "BUTTON" && n.textContent === "Confirm Bitbucket writes…");
+    assert.equal(options.length, 1, "only the checkout with waiting writes offers them");
+    calls.length = 0;
+    await options[0].onclick({ preventDefault() {}, stopPropagation() {} });
+    await settle();
+    assert.deepEqual(calls.map((c) => c.actionId), ["pr-writes"]);
+    assert.match(readable(host), /hooks: confirm to write to pull request #7 \(abcdef0\) as Ada \(ada@example.com\): 2× comment, mark ready for review\./);
+    const confirm = [...host.all()].find((n) => n.tagName === "BUTTON" && n.textContent === "Confirm writes");
+    assert.ok(confirm, "the confirmation offers to confirm");
+    calls.length = 0;
+    await confirm.onclick({ preventDefault() {}, stopPropagation() {} });
+    await settle();
+    assert.deepEqual(calls.map((c) => [c.actionId, c.payload?.requestId, c.payload?.requestDigest]), [["pr-writes-confirm", "w-1", "wd1"]]);
+    assert.match(readable(host), /hooks: 3 of 3 writes made\. Ask the conversation to run its command again to record them\./);
+  } finally { view.dispose(); bitbucket = before; }
 });

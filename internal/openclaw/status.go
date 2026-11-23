@@ -61,6 +61,9 @@ type CheckoutStatus struct {
 	CatchUpRecovery          string              `json:"catchUpRecovery,omitempty"`
 	CatchUpRecoveryError     string              `json:"catchUpRecoveryError,omitempty"`
 	CatchUpRecoveryCompleted *RecoveryCompletion `json:"catchUpRecoveryCompleted,omitempty"`
+	// BitbucketWrites is "pending" while a tool's Bitbucket pull request
+	// writes wait in this checkout for the person to confirm them (#471).
+	BitbucketWrites string `json:"bitbucketWrites,omitempty"`
 }
 
 // BitbucketPullRequest reads a Bitbucket checkout's pull request; the taba
@@ -262,6 +265,13 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 	}
 	if pullRequests && origin.Forge == ForgeBitbucket && s.Branch != "" && BitbucketPullRequest != nil {
 		s.PullRequest = BitbucketPullRequest(top, origin.Owner, origin.Repo, s.Branch)
+	}
+	if origin.Forge == ForgeBitbucket {
+		if gitDir, err := git(top, "rev-parse", "--absolute-git-dir"); err == nil {
+			if info, err := os.Lstat(filepath.Join(gitDir, "bitbucket-pr-writes.json")); err == nil && info.Mode().IsRegular() {
+				s.BitbucketWrites = "pending"
+			}
+		}
 	}
 	checkout := &Checkout{Dir: top}
 	if ref, exists, err := checkout.recoveryMarker(); err != nil {

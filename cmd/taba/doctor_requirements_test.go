@@ -62,7 +62,9 @@ WEB_TEST_TOKEN=replace-me
 		}
 		cleanEnv = append(cleanEnv, entry)
 	}
-	cleanEnv = append(cleanEnv, "TABA_DEV_BUILD=off", "WTC_DEV_BUILD=off", "HOME="+filepath.Join(root, "home"), "XDG_CONFIG_HOME="+filepath.Join(root, "config"), "XDG_DATA_HOME="+filepath.Join(root, "data"), "WEB_TEST_TOKEN=synthetic-inherited-canary")
+	// Not a Bitbucket test: the deprecated bb selection keeps doctor's client
+	// row from checking a twg version (#471).
+	cleanEnv = append(cleanEnv, "TABA_BITBUCKET_TRANSPORT=bb", "TABA_DEV_BUILD=off", "WTC_DEV_BUILD=off", "HOME="+filepath.Join(root, "home"), "XDG_CONFIG_HOME="+filepath.Join(root, "config"), "XDG_DATA_HOME="+filepath.Join(root, "data"), "WEB_TEST_TOKEN=synthetic-inherited-canary")
 	forbidden := []string{"synthetic-secret-canary", "synthetic-inherited-canary", "synthetic-malformed-canary"}
 	run := func(dir string, okay bool, args ...string) []byte {
 		t.Helper()
