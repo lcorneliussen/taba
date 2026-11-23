@@ -6,4 +6,5 @@
   weekday hours by default), so a fresh closure looked like active work. The
   `closed`/`declined` label, links, archive timing and branch warnings are
   unchanged.
-  ([#472](https://github.com/lcorneliussen/taba/issues/472)).
+  ([#472](https://github.com/lcorneliussen/taba/issues/472),
+  [#474](https://github.com/lcorneliussen/taba/pull/474)).
