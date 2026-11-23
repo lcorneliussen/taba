@@ -63,7 +63,7 @@ func statusResourceGitKeyConfig(args []string, provenConfigs []string, provenanc
 		return ""
 	}
 	path := ""
-	command := args
+	var command []string
 	if args[0] == "-C" {
 		path = args[1]
 		command = args[2:]

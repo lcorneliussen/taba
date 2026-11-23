@@ -453,10 +453,6 @@ func (c *Context) legacyTunnel(opt TunnelOptions) (RuntimeResult, error) {
 	if opt.Provider == "" && len(tunnels) != 1 {
 		return RuntimeResult{}, fmt.Errorf("name the provider: tailscale, cloudflare, ngrok or devtunnel")
 	}
-	provider := opt.Provider
-	if provider == "" {
-		provider = tunnels[0].Provider
-	}
 	if len(tunnels) == 0 {
 		return RuntimeResult{}, fmt.Errorf("configure a named receiving-local tunnel with explicit provider inputs before starting it")
 	}

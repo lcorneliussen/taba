@@ -535,9 +535,6 @@ func (p *tunnelProviderRuntime) devHostCapability(ctx context.Context, call tunn
 		}
 		return token, call.Entry.Known.URL, nil
 	}
-	if !strings.HasPrefix(token, "Bearer ") {
-		token = "Bearer " + token
-	}
 	var wire struct {
 		TunnelID     string            `json:"tunnelId"`
 		ClusterID    string            `json:"clusterId"`
