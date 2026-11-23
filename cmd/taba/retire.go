@@ -251,7 +251,7 @@ func runRetireWorker(name string, force, asJSON bool) error {
 }
 
 func waitRetireSource(session, workspaceID, paneID string) error {
-	time.Sleep(time.Second) // Let the initiating CLI return before closing its pane.
+	time.Sleep(time.Second) //nolint:forbidigo // A single delay lets the initiating CLI return before its pane closes.
 	err := retry.Poll(context.Background(), retry.Policy{Every: 2 * time.Second, Within: 2 * time.Hour}, func(context.Context) (bool, error) {
 		panes, err := openPanes(session, workspaceID)
 		if err != nil {

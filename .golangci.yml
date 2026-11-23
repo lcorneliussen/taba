@@ -4,11 +4,19 @@ linters:
   default: none
   enable:
     - errcheck
+    - forbidigo
     - govet
     - ineffassign
     - staticcheck
     - unused
   settings:
+    forbidigo:
+      # A loop that waits and tries again repeats its work through
+      # internal/retry, whose types tell a read from a side effect (#498).
+      analyze-types: true
+      forbid:
+        - pattern: ^time\.(Sleep|After|AfterFunc|Tick|NewTicker|NewTimer)$
+          msg: "repeat work with retry.Poll (an attempt that changes nothing until done) or retry.Intent.Do (a side effect); a wait that repeats nothing needs a nolint reason"
     errcheck:
       # Each entry is a call whose error has no useful handling here. Any other
       # ignored error fails the gate: handle it, or assign it to _ where the
@@ -55,7 +63,13 @@ linters:
     rules:
       # A test that ignores a setup error fails on its next assertion.
       - path: _test\.go
-        linters: [errcheck]
+        linters: [errcheck, forbidigo]
+      - path: ^internal/retry/
+        linters: [forbidigo]
+      # The forge request budget waits for a refill under its own model
+      # (docs/formal/verify-forge-cache-order).
+      - path: ^internal/wtc/status_forge_budget\.go$
+        linters: [forbidigo]
       # Releasing a flock: closing the descriptor releases it too. Taking a
       # lock (LOCK_EX, LOCK_SH) is still checked.
       - linters: [errcheck]

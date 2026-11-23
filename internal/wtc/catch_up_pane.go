@@ -204,7 +204,7 @@ func catchUpReloadOutput(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 				select {
 				case result := <-done:
 					finished = &result
-				case <-time.After(10 * time.Millisecond):
+				case <-time.After(10 * time.Millisecond): //nolint:forbidigo // Drains output; repeats no attempt.
 				}
 			}
 			continue
@@ -239,7 +239,7 @@ func catchUpReloadOutput(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 }
 
 func catchUpReloadWait(ctx context.Context) error {
-	timer := time.NewTimer(time.Second)
+	timer := time.NewTimer(time.Second) //nolint:forbidigo // The pause between retry.Poll attempts, on catch-up's clock.
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
