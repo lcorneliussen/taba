@@ -279,6 +279,12 @@ func (c *Context) AddService(opt ServiceOptions) (RuntimeResult, error) {
 		if !slices.Contains(files, runtimeDeclarationFile{rel: ".harness/dekit.tasks.yaml"}) {
 			return RuntimeResult{}, errors.New("--shared writes .harness/dekit.tasks.yaml, which the configured runtime declarations do not read; add it to [runtime] declarations or enlist the service without --shared")
 		}
+		// A harness file that a dekit.yaml loads is part of the native tree,
+		// which taba neither edits nor removes from (see RemoveService).
+		// Also when the file does not exist yet: the add would create it.
+		if sources, _ := c.runtimeRepoSources(repo.path, repo.dir, false); sources.nativeNames(".harness/dekit.tasks.yaml") {
+			return RuntimeResult{}, fmt.Errorf("%s/dekit.yaml loads .harness/dekit.tasks.yaml, so taba does not write it; add the task there in the repository, or enlist the service without --shared", repo.dir)
+		}
 	}
 	path := runtimeFragmentFor(c, repo, opt.Shared)
 	if err := c.runtimeChange(path, func(tasks *yaml.Node) error { return runtimeAddTask(tasks, name+"/main", task) }); err != nil {

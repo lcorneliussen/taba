@@ -141,7 +141,9 @@ nothing is added to it, so to keep a default file, list it.
   1 MiB. A symlinked file, or a file under a symlinked directory, is refused.
   `.harness/dekit.tasks.yaml` keeps the checks it already had.
 - `taba svc add --shared` writes `.harness/dekit.tasks.yaml`. It refuses when that
-  file is not in the list, because taba would not read it back.
+  file is not in the list, because taba would not read it back, and when a
+  `dekit.yaml` loads it, because that file is then part of the native tree, which
+  `svc rm` does not edit either.
 
 `health_path` is a URL path, such as `/health`, for services whose readiness
 taba makes itself: a task with `x-wtc` `port_env` and no `ready` of its own, or
