@@ -705,7 +705,8 @@ var runtimeRunnerVersion = regexp.MustCompile(`^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,
 // restart. The reported version is the gate: the same-file check only
 // confirms the runner's binary path points at the pinned file now, and
 // cannot show what the runner loaded if that file was replaced. Anything
-// else fails closed, because the restart would succeed and apply nothing.
+// else fails closed: such a restart may succeed and apply nothing, as
+// observed with 0.10.3, and other versions are unverified.
 // Callers say what was or was not written.
 func runtimeLegacyRestartImports(m *runtimeManifest) error {
 	data, err := runtimeCommand(m, false, "runner", "status")

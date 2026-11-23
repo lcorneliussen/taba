@@ -254,8 +254,9 @@ esac
 	}
 }
 
-// A runner started by a newer dekit keeps running after the harness pins the
-// older, reload-less client. Restarting that runner imports nothing, so the
+// A runner started by dekit 0.10.3 keeps running after the harness pins the
+// older, reload-less 0.10.0 client. Restarting that runner imports nothing
+// (observed with 0.10.3), so the
 // render must refuse before it writes, leave the running task untouched, and
 // let down then up take the change.
 //
