@@ -105,7 +105,7 @@ func TestStatusMergedLandingDetailGeometry(t *testing.T) {
 		lines := statusTUIPRLines(snapshot, width, false, false, func(line int, row wtc.StatusPRRow) {
 			positions = append(positions, line)
 		})
-		wantGap := 1 // #426: no explanation lines between PR rows at any width
+		wantGap := 1 // no explanation lines between PR rows at any width
 		if len(positions) != 2 || positions[0] != 3 || positions[1]-positions[0] != wantGap || len(lines) != positions[1]+1 {
 			t.Fatalf("width=%d: positions=%v lines=%d; want row gap %d", width, positions, len(lines), wantGap)
 		}

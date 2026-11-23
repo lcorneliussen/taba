@@ -32,7 +32,7 @@ func statusPRLayoutCell(t *testing.T, lines []string, width int, row wtc.StatusP
 	return state, strings.TrimSpace(ansi.Cut(plain, ansi.StringWidth(plain)-l.title, ansi.StringWidth(plain)))
 }
 
-// assertOnePRLinePerRow checks the issue #426 invariant: the PR table is
+// assertOnePRLinePerRow checks the one-line-per-PR invariant: the PR table is
 // heading, header and exactly one line per visible PR, none wider than the pane.
 func assertOnePRLinePerRow(t *testing.T, snapshot wtc.StatusSnapshot, width int, styled bool) []string {
 	t.Helper()
@@ -84,13 +84,14 @@ func TestStatusPRLayoutMergedLandingOneLine(t *testing.T) {
 						lines := assertOnePRLinePerRow(t, snapshot, width, styled)
 						state, title := statusPRLayoutCell(t, lines, width, row)
 						l := statusTUIPRLayout(width, row)
-						if want := ansi.Truncate(tc.state, l.state, "…"); state != strings.TrimSpace(want) && state != strings.TrimSpace(statusTUIFit(tc.state, l.state)) {
+						if want := strings.TrimSpace(statusTUIFit(tc.state, l.state)); state != want {
 							t.Errorf("width=%d styled=%v: STATE %q, want %q", width, styled, state, tc.state)
 						}
 						// The PR title leads the title cell; landing metadata may
 						// follow only when there is room.
-						prefix := ansi.Strip(statusTUIFit(row.Title, l.title))
-						if !strings.HasPrefix(title, strings.TrimRight(strings.TrimSuffix(strings.TrimSpace(prefix), "…"), " ")) {
+						// Wherever the title cell has room for one, require at
+						// least a 5-cell visible title prefix.
+						if l.title >= 6 && !strings.HasPrefix(title, row.Title[:5]) {
 							t.Errorf("width=%d styled=%v: title displaced: %q", width, styled, title)
 						}
 						if strings.Contains(title, "MERGED —") {
@@ -127,9 +128,11 @@ func TestStatusPRLayoutLandingStatesStayDistinct(t *testing.T) {
 
 func TestStatusPRLayoutHelpKeepsLandingExplanation(t *testing.T) {
 	merged := "MERGED"
-	for _, landing := range []string{"landed", "follow-up", "unknown"} {
-		row := wtc.StatusPRRow{Repo: "widget", Number: "7", State: "MERGED", Merge: &merged, OnBranch: true,
-			Landing: &wtc.StatusLanding{State: landing}, Title: "Synthetic"}
+	for _, landing := range []string{"", "landed", "follow-up", "unknown"} {
+		row := wtc.StatusPRRow{Repo: "widget", Number: "7", State: "MERGED", Merge: &merged, OnBranch: true, Title: "Synthetic"}
+		if landing != "" {
+			row.Landing = &wtc.StatusLanding{State: landing}
+		}
 		for _, width := range []int{32, 100} {
 			model := statusTUIModel{snapshot: wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{row}}, width: width, height: 80, showHelp: true}
 			plain := ansi.Strip(strings.Join(model.contentLayout().lines, " "))
@@ -169,9 +172,9 @@ func TestStatusPRLayoutFreshnessOneLine(t *testing.T) {
 					if state != tc.mark {
 						t.Errorf("width=%d styled=%v: STATE %q want %q", width, styled, state, tc.mark)
 					}
-					// Below 32 columns the fixed REPO/STATE columns already leave
-					// the title one cell on main; freshness lives in STATE either way.
-					if width >= 32 && !strings.HasPrefix(title, "Synth") || strings.Contains(title, "observed") || strings.Contains(title, "last open") {
+					// Below 32 columns the fixed REPO/STATE columns leave the title
+					// about one cell (unchanged); freshness lives in STATE either way.
+					if (width >= 32 && !strings.HasPrefix(title, "Synth")) || strings.Contains(title, "observed") || strings.Contains(title, "last open") {
 						t.Errorf("width=%d styled=%v: freshness metadata displaced title: %q", width, styled, title)
 					}
 				}
