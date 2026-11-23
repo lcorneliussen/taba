@@ -7,10 +7,12 @@ import (
 	"strings"
 )
 
-// StatusUnreadable is one collection a workspace sweep could not read. The
-// reason is a fixed class, never the raw error: an open failure may carry
-// paths, environment values or output that the report must not repeat. Only a
-// repository-owner reason adds the sanitized repository name.
+// StatusUnreadable is one collection a workspace sweep could not read, or,
+// in a local sweep, one whose named repository has no resolvable Git owner
+// while its other repositories were read. The reason is a fixed class, never
+// the raw error: an open failure may carry paths, environment values or output
+// that the report must not repeat. Only the repository-owner reason adds the
+// sanitized repository name.
 type StatusUnreadable struct {
 	Collection string `json:"collection"`
 	Reason     string `json:"reason"`

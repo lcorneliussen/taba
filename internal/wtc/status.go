@@ -36,8 +36,9 @@ type StatusSnapshot struct {
 	PRsEmptyHint bool                   `json:"prs_empty_hint,omitempty"`
 	Runtime      []RuntimeItem          `json:"runtime,omitempty"`
 	Retirement   []RetirementAssessment `json:"retirement,omitempty"`
-	// Unreadable lists collections a workspace sweep could not read, each
-	// with a sanitized reason. A non-empty list is a partial result.
+	// Unreadable lists collections a workspace sweep could not read, and in a
+	// local sweep repositories without a resolvable Git owner, each with a
+	// sanitized reason. A non-empty list is a partial result.
 	Unreadable []StatusUnreadable `json:"unreadable,omitempty"`
 }
 
