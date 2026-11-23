@@ -173,7 +173,7 @@ func newReviewExecContext(collection, bundle string, manifest ReviewManifest) (*
 	}
 	x := &reviewExecContext{root: root, collection: collection, clients: map[string]string{}, custom: envcompat.Getenv("WTC_REVIEW_AGENT_CMD") != ""}
 	if err := x.prepare(bundle, manifest); err != nil {
-		x.remove()
+		_ = x.remove()
 		return nil, err
 	}
 	return x, nil
