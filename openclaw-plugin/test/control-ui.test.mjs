@@ -174,7 +174,7 @@ const hostRequest = async (method, params) => {
   if (method === "plugins.sessionAction" && params.actionId === "svc-logs") return typeof serviceLogsResult === "function" ? serviceLogsResult(params) : serviceLogsResult;
   if (method === "plugins.sessionAction" && params.actionId === "catch-up") return catchUpResult;
   if (method === "plugins.sessionAction" && params.actionId === "next") return typeof nextResult === "function" ? nextResult(params) : nextResult;
-  if (method === "plugins.sessionAction" && params.actionId === "restore-checkout") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
+  if (method === "wtc.checkout.restore") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
   if (method === "sessions.delete" && controlledDelete) return controlledDelete;
   if (method === "sessions.delete") return { ok: true, key: params.key, deleted: true, archived: [], ...(preserved[params.key] ? { worktreePreserved: preserved[params.key] } : {}) };
   if (method === "wtc.github.publish") return typeof githubPublishResult === "function" ? githubPublishResult(params) : githubPublishResult;
@@ -2886,14 +2886,17 @@ for (const kind of ["composer", "panel"]) test(`native checkout recovery from ${
     assert.ok(texts(host).some(t=>t.includes("Evicted")));
     const button=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore"&&n.title.startsWith("Restore api from"));
     assert.ok(button());
-    let finish;restoreResult=new Promise(resolve=>{finish=resolve});
+    let fail;restoreResult=new Promise((resolve,reject)=>{fail=reject});
     button().click();await settle();
     assert.ok(buttons(host).includes("Restoring…"));
-    assert.equal(calls.at(-1).actionId,"restore-checkout");
-    assert.deepEqual(calls.at(-1).payload,{ownerSessionKey:r.sessionKey,key:"recovery-key"});
-    finish({ok:false,error:"missing scope: operator.admin"});await settle();await settle();
-    assert.ok(readable(host).includes("operator.admin"),"permission failure remains accessible in result details");
-    restoreResult=()=>{collections.set(key,collection([repo("api")]));return {ok:true,result:{message:"Checkout restored from its saved snapshot"}}};
+    const sent=calls.at(-1);
+    assert.equal(sent.method,"wtc.checkout.restore","restore is an authenticated gateway method, not a session action");
+    assert.deepEqual({sessionKey:sent.sessionKey,ownerSessionKey:sent.ownerSessionKey,key:sent.key},{sessionKey:key,ownerSessionKey:r.sessionKey,key:"recovery-key"});
+    fail(Object.assign(new Error("missing scope: operator.admin"),{gatewayCode:"FORBIDDEN",details:{code:"MISSING_SCOPE"}}));await settle();await settle();
+    assert.ok(readable(host).includes("requires gateway admin permission"),"permission denial is named as such");
+    {const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
+    try{assert.ok(readable(log.host).includes("operator.admin"),"permission failure remains accessible in result details");}finally{log.view.dispose();}}
+    restoreResult=()=>{collections.set(key,collection([repo("api")]));return {status:"restored",message:"Checkout restored from its saved snapshot",mutation:"applied"}};
     button().click();await settle();await settle();
     assert.ok(!texts(host).some(t=>t==="Evicted"));
     assert.ok(!button(),"the refreshed row no longer offers recovery");
@@ -2920,13 +2923,13 @@ test("collapsed restore-all stays sequential, records partial failure and cancel
     assert.ok(queued?.disabled,"waiting target is visibly queued and disabled");
     await all.onclick();assert.equal(requests.length,1,"stale second click dispatches nothing");
     assert.ok(readable(host).includes("already running"));
-    finish({ok:false,error:"Snapshot unavailable"});await settle();await settle();
+    finish({status:"failed",kind:"snapshot",message:"The saved snapshot is no longer available; the checkout was not restored",mutation:"none"});await settle();await settle();
     assert.equal(requests.length,2,"second target starts only after first result and refresh");
-    assert.equal(requests[1].payload.ownerSessionKey,"agent:main:owner:web");
-    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    assert.equal(requests[1].ownerSessionKey,"agent:main:owner:web");
+    finish({status:"restored",message:"restored",mutation:"applied"});await settle();await settle();
     assert.ok(!readable(host).includes("Restoring…"));
     const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
-    try{assert.ok(readable(log.host).includes("api: restore failed"));assert.ok(readable(log.host).includes("web: restored"));}finally{log.view.dispose();}
+    try{assert.ok(readable(log.host).includes("api: not restored — The saved snapshot is no longer available"));assert.ok(readable(log.host).includes("web: restored"));}finally{log.view.dispose();}
   }finally{view.dispose();restoreResult=undefined;}
   const other=await mount("composer",collection([missing("api"),missing("web")]),undefined,"agent:main:restore-switch");
   requests.length=0;
@@ -2935,10 +2938,41 @@ test("collapsed restore-all stays sequential, records partial failure and cancel
     [...other.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all").click();await settle();
     collections.set("agent:main:replacement",collection([repo("docs")]));
     other.context.props.sessionKey="agent:main:replacement";other.view.update(other.context);await settle();
-    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    finish({status:"restored",message:"restored",mutation:"applied"});await settle();await settle();
     assert.equal(requests.length,1,"switch cancels the second captured target");
     assert.ok(!readable(other.host).includes("api: restored"),"old result cannot appear in new conversation");
   }finally{other.view.dispose();restoreResult=undefined;}
+});
+
+test("a recorded snapshot the gateway cannot restore is not offered as Restore", async () => {
+  const reason="A recovery snapshot is recorded. This gateway cannot restore checkouts from Collection: this OpenClaw has no plugin Gateway methods.";
+  const key="agent:main:restore-snapshot-only";
+  const {host,view}=await mount("panel",collection([repo("api",{error:"checkout unavailable",recovery:{state:"snapshot-only",reason,removedAt:1000}})]),undefined,key);
+  try{
+    for (const b of [...host.all()].filter(n=>n.tagName==="BUTTON"&&/^Restore/.test(n.textContent))) b.click();
+    await settle();
+    assert.ok(![...host.all()].some(n=>n.tagName==="BUTTON"&&!n.disabled&&/^Restore/.test(n.textContent)),"no enabled Restore promises recovery");
+    assert.ok([...host.all()].some(n=>(n.title??"").includes("cannot restore checkouts from Collection")),"the row says why");
+    assert.ok(!calls.some(c=>c.method==="wtc.checkout.restore"&&c.sessionKey===key),"nothing is dispatched");
+  }finally{view.dispose();}
+});
+
+for (const [name,outcome,expect,state] of [
+  ["missing capability",()=>{throw Object.assign(new Error("unknown method: wtc.checkout.restore"),{gatewayCode:"INVALID_REQUEST"});},"cannot restore checkouts from Collection","failed"],
+  ["connection authentication",()=>{throw Object.assign(new Error("unauthorized"),{gatewayCode:"INVALID_REQUEST",details:{code:"AUTH_UNAUTHORIZED"}});},"connection authentication failed","failed"],
+  ["lost reply",()=>{throw new Error("gateway request timed out");},"restore unconfirmed","unknown"],
+  ["ambiguous native result",()=>({status:"failed",kind:"unknown",message:"Restore outcome unknown; inspect the checkout and refresh before retrying",mutation:"unknown"}),"restore unconfirmed","unknown"],
+]) test(`checkout restore reports ${name} distinctly`, async () => {
+  const key=`agent:main:restore-class-${name.replace(/\W+/g,"-")}`;
+  const {host,view}=await mount("panel",collection([repo("api",{error:"checkout unavailable",recovery:{state:"restorable",key:"k"}})]),undefined,key);
+  restoreResult=outcome;
+  try{
+    [...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore").click();await settle();await settle();
+    assert.ok(readable(host).includes(expect),`${name}: ${readable(host).replace(/[^]*\}\s*/,"").slice(-600)}`);
+    const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
+    try{assert.ok(readable(log.host).includes(expect));}finally{log.view.dispose();}
+    assert.equal(calls.filter(c=>c.method==="wtc.checkout.restore"&&c.sessionKey===key).length,1,"never retried automatically");
+  }finally{view.dispose();restoreResult=undefined;}
 });
 
 test("evicted rows do not hide a prepared publication in the header", async () => {

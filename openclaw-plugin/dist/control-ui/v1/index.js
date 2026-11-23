@@ -1182,6 +1182,14 @@ function collectionTables(v) {
   };
   const recoveryQueueBusy = () => recoveryQueues.has(v.collectionKey?.() ?? v.key());
   const recoveryBusy = r => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "restore" && item.repoSessionKey === r.sessionKey && item.inFlight);
+  // Only a request refused before it reached the restore method is known to have changed nothing.
+  const restoreRequestFailure = err => {
+    const t = `${err?.gatewayCode ?? err?.code ?? ""} ${err?.details?.code ?? ""} ${err?.message ?? err}`;
+    if (/unknown method|method not found|METHOD_NOT_FOUND/i.test(t)) return { message: "this gateway cannot restore checkouts from Collection; update OpenClaw and the taba plugin together, or use OpenClaw's Worktrees settings" };
+    if (/MISSING_SCOPE|missing scope|FORBIDDEN/i.test(t)) return { message: "permission denied: restoring a checkout requires gateway admin permission" };
+    if (/unauthori[sz]ed|AUTH_|not connected|ECONNREFUSED/i.test(t)) return { message: "gateway connection authentication failed; reconnect and refresh" };
+    return { unconfirmed: true, message: "the gateway did not answer; refresh to see whether the checkout was restored before retrying" };
+  };
   async function restoreCheckouts(repos) {
     const conversation = v.key(), logKey = v.collectionKey?.() ?? conversation;
     if (repos.some(r => requestUnresolved(r))) { v.say("A repository action is unresolved; inspect its result before restoring the checkout."); return; }
@@ -1201,12 +1209,20 @@ function collectionTables(v) {
       recordActivity(logKey, id, { repo: name, repoSessionKey: r.sessionKey, action: "restore", inFlight: true, state: "running", status: `Restoring ${name}…` });
       say(`Restoring ${name}…`); v.rerender();
       try {
-        const out = await call(v.host, "restore-checkout", conversation, v.agent(), { ownerSessionKey: r.sessionKey, key: r.recovery.key });
-        const status = `${name}: ${out.message ?? "checkout restored"}`;
-        recordActivity(logKey, id, { state: "completed", status }); say(status);
+        // The gateway checks this person's admin permission; nothing runs under another login (#494).
+        const out = await v.host.request("wtc.checkout.restore", { sessionKey: conversation, agentId: v.agent(), ownerSessionKey: r.sessionKey, key: r.recovery.key });
+        if (out?.status === "restored") {
+          const status = `${name}: ${out.message ?? "checkout restored"}`;
+          recordActivity(logKey, id, { state: "completed", status, ...(out.detail ? { detail: `${status}. Details: ${out.detail}` } : {}) }); say(status);
+        } else {
+          const unconfirmed = out?.mutation === "unknown";
+          const status = `${name}: ${unconfirmed ? "restore unconfirmed" : "not restored"} — ${out?.message ?? "native restore did not confirm a result"}`;
+          recordActivity(logKey, id, { state: unconfirmed ? "unknown" : "failed", status, detail: [status, out?.kind && `kind: ${out.kind}`, `changes: ${out?.mutation ?? "unknown"}`, out?.detail && `details: ${out.detail}`].filter(Boolean).join(". ") }); say(status, true);
+        }
       } catch (err) {
-        const status = `${name}: restore failed — ${String(err?.message ?? err)}`;
-        recordActivity(logKey, id, { state: "failed", status }); say(status, true);
+        const failure = restoreRequestFailure(err);
+        const status = `${name}: ${failure.unconfirmed ? "restore unconfirmed" : "not restored"} — ${failure.message}`;
+        recordActivity(logKey, id, { state: failure.unconfirmed ? "unknown" : "failed", status, detail: `${status}. Details: ${String(err?.message ?? err).slice(-600)}` }); say(status, true);
       } finally {
         recordActivity(logKey, id, { inFlight: false });
         queue.targets.delete(r.sessionKey);
@@ -2359,7 +2375,7 @@ function collectionTables(v) {
       : null;
     const review = open ? { approved: toned("✓", TONE.success, "approved"), changes_requested: toned("✗", TONE.failure, "changes requested"), review_required: muted("○", "review required") }[pr.review] ?? null : null;
     const errorLabel = r.error === "checkout unavailable" ? r.recovery?.state === "restorable" ? "Evicted" : r.recovery?.state === "unavailable" ? "Snapshot unavailable" : "No checkout" : r.error === "status unavailable" ? "No status" : r.error;
-    const branch = r.error ? toned(errorLabel, r.recovery?.state === "restorable" ? TONE.pending : TONE.failure, r.recovery?.state === "restorable" ? "OpenClaw evicted this checkout; a recovery snapshot is recorded. Restore to resume." : r.recovery?.reason ?? r.error)
+    const branch = r.error ? toned(errorLabel, r.recovery?.state === "restorable" ? TONE.pending : TONE.failure, r.recovery?.state === "restorable" ? "OpenClaw evicted this checkout; a recovery snapshot is recorded. Restore (gateway admin) to resume; the gateway checks the snapshot again." : r.recovery?.reason ?? r.error)
         : untouched(r)
           ? css(el("code", { textContent: `at ${baseOf(r)}`, title: `Checked out on branch ${r.branch}; no task commits ahead of ${baseOf(r)}` }), "font-size:12px;color:var(--muted, #888)")
           : css(el("code", { textContent: r.branch ?? `at ${baseOf(r)}`, title: r.branch ? `${r.branch}, ${r.ahead ?? 0} ahead of ${baseOf(r)}` : `Detached HEAD at ${baseOf(r)}; no branch is checked out` }), "font-size:12px;color:var(--muted, #888)");
