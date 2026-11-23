@@ -34,16 +34,27 @@ func TestReviewProgressFailurePreservesIndependentRun(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if err := os.MkdirAll(filepath.Join(collection, "app", ".git"), 0755); err != nil {
+			// A public run reads a snapshot of the reviewed head, so the
+			// fixture repository holds a real commit.
+			app := filepath.Join(collection, "app")
+			write(filepath.Join(app, "code.go"), "package app\n", 0644)
+			for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "-m", "fixture"}} {
+				if out, err := exec.Command("git", append([]string{"-C", app}, args...)...).CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %s %v", args, out, err)
+				}
+			}
+			out, err := exec.Command("git", "-C", app, "rev-parse", "HEAD").Output()
+			if err != nil {
 				t.Fatal(err)
 			}
+			head := strings.TrimSpace(string(out))
 			write(filepath.Join(collection, "harness", ".harness-repos.yml"), "repos:\n  - name: app\n    remote: https://github.com/example/app.git\n", 0644)
-			manifest, _ := json.Marshal(map[string]any{"repo": "app", "pr": "7", "forge": "github", "slug": "example/app", "head_sha": "1234567890abcdef1234567890abcdef12345678", "round": 1, "repo_dir": filepath.Join(collection, "app"), "public": true})
+			manifest, _ := json.Marshal(map[string]any{"repo": "app", "pr": "7", "forge": "github", "slug": "example/app", "head_sha": head, "round": 1, "repo_dir": app, "public": true})
 			write(filepath.Join(bundle, "manifest.json"), string(manifest), 0644)
 			write(filepath.Join(bundle, "concerns", "code.md"), "---\nid: code\ntier: fast\n---\nReview code.\n", 0644)
 			write(filepath.Join(bin, "gh"), `#!/bin/sh
 case "$*" in
- *'--json headRefOid'*) echo '{"headRefOid":"1234567890abcdef1234567890abcdef12345678"}';;
+ *'--json headRefOid'*) echo '{"headRefOid":"`+head+`"}';;
  *'api graphql'*'nameWithOwner'*) echo '{"data":{"repository":{"id":"R_app","nameWithOwner":"example/app","pullRequest":{"number":7,"baseRepository":{"id":"R_app","nameWithOwner":"example/app"}}}}}';;
  *'api -X PATCH'*) cat >/dev/null; echo PATCH >> "$FORGE_LOG"; echo synthetic-update-failure >&2; exit 9;;
  *'api -X POST'*) cat >/dev/null; echo POST >> "$FORGE_LOG"; `+tc.response+`;;
@@ -69,6 +80,8 @@ esac
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			t.Setenv("FORGE_LOG", filepath.Join(collection, "forge.log"))
 			t.Setenv("AGENT_LOG", filepath.Join(collection, "agent.log"))
+			// Public reviewers receive only allowlisted variables.
+			t.Setenv("WTC_REVIEW_ENV", "AGENT_LOG")
 			t.Setenv("WTC_REVIEW_AGENT_CMD", filepath.Join(bin, "agent"))
 			args := []string{"wtc", "review", "run", bundle, "--collection", collection, "--post", "--hosted-first=false", "--fast", "test:", "--lead", "test:", "--json"}
 			encoded, _ := json.Marshal(args)
