@@ -63,6 +63,9 @@ type runtimeRepoSources struct {
 	// nativeLoaded maps each repository-relative file a dekit.yaml tree
 	// loads to the mounts it is loaded at.
 	nativeLoaded map[string][]string
+	// nativePatterns are the repository-relative load patterns those trees
+	// name, kept even when one matches nothing yet or loading fails.
+	nativePatterns *[]string
 }
 
 // runtimeNativeDefaults are the task settings dekit.yaml's defaults may set.
@@ -106,6 +109,7 @@ func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (r
 	sets := make([]map[string]runtimeDeclaredTask, len(files))
 	mounts := map[string][]string{}
 	out.nativeLoaded = mounts
+	out.nativePatterns = &[]string{}
 	for i, file := range files {
 		abs := filepath.Join(repoRoot, filepath.FromSlash(file.rel))
 		out.inputs = append(out.inputs, abs)
@@ -117,7 +121,7 @@ func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (r
 		} else if err != nil {
 			return out, fmt.Errorf("%s/%s: %w", dir, file.rel, err)
 		}
-		native := &runtimeDekitLoader{root: repoRoot, project: filepath.Dir(abs), display: repoPath, label: dir, tasks: map[string]runtimeDeclaredTask{}, folders: map[string]string{}, mounts: mounts}
+		native := &runtimeDekitLoader{root: repoRoot, project: filepath.Dir(abs), display: repoPath, label: dir, tasks: map[string]runtimeDeclaredTask{}, folders: map[string]string{}, mounts: mounts, patterns: out.nativePatterns}
 		err := native.load(abs, "", true, 0)
 		out.inputs = append(out.inputs, native.inputs...)
 		if err != nil {
@@ -231,6 +235,8 @@ type runtimeDekitLoader struct {
 	tasks   map[string]runtimeDeclaredTask
 	folders map[string]string
 	mounts  map[string][]string // file -> mounts it was loaded at
+	// patterns collects every load pattern, repository-relative.
+	patterns *[]string
 	stack   []string
 	files   int
 	entries int
@@ -365,7 +371,11 @@ func (l *runtimeDekitLoader) load(abs, mount string, root bool, depth int) error
 		if pattern == "" {
 			return l.errorf(abs, "load entry %d must be a pattern or {file, at}", i)
 		}
-		matches, err := l.glob(filepath.Join(filepath.Dir(abs), filepath.FromSlash(pattern)))
+		target := filepath.Join(filepath.Dir(abs), filepath.FromSlash(pattern))
+		if l.patterns != nil {
+			*l.patterns = append(*l.patterns, l.name(filepath.Clean(target)))
+		}
+		matches, err := l.glob(target)
 		if err != nil {
 			return l.errorf(abs, "load %q: %v", pattern, err)
 		}
@@ -797,4 +807,37 @@ func runtimeInputsSignature(paths []string) string {
 		fmt.Fprintln(hash, path, info.Mode(), info.Size(), info.ModTime().UnixNano(), identity)
 	}
 	return fmt.Sprintf(":%x", hash.Sum(nil))
+}
+
+// nativeNames reports whether a dekit.yaml tree loads the repository-relative
+// file, or names it in a load pattern that would load it once it exists.
+func (s runtimeRepoSources) nativeNames(rel string) bool {
+	if len(s.nativeLoaded[rel]) > 0 {
+		return true
+	}
+	if s.nativePatterns == nil {
+		return false
+	}
+	for _, pattern := range *s.nativePatterns {
+		if runtimePatternMatches(strings.Split(pattern, "/"), strings.Split(rel, "/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// runtimePatternMatches matches path segments as a load glob does: *, ?, [...]
+// within a segment and ** across any number of them.
+func runtimePatternMatches(pattern, name []string) bool {
+	if len(pattern) == 0 {
+		return len(name) == 0
+	}
+	if pattern[0] == "**" {
+		return runtimePatternMatches(pattern[1:], name) || len(name) > 0 && runtimePatternMatches(pattern, name[1:])
+	}
+	if len(name) == 0 {
+		return false
+	}
+	ok, _ := path.Match(pattern[0], name[0])
+	return ok && runtimePatternMatches(pattern[1:], name[1:])
 }

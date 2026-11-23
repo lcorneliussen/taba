@@ -281,7 +281,8 @@ func (c *Context) AddService(opt ServiceOptions) (RuntimeResult, error) {
 		}
 		// A harness file that a dekit.yaml loads is part of the native tree,
 		// which taba neither edits nor removes from (see RemoveService).
-		if sources, err := c.runtimeRepoSources(repo.path, repo.dir, false); err == nil && len(sources.nativeLoaded[".harness/dekit.tasks.yaml"]) > 0 {
+		// Also when the file does not exist yet: the add would create it.
+		if sources, _ := c.runtimeRepoSources(repo.path, repo.dir, false); sources.nativeNames(".harness/dekit.tasks.yaml") {
 			return RuntimeResult{}, fmt.Errorf("%s/dekit.yaml loads .harness/dekit.tasks.yaml, so taba does not write it; add the task there in the repository, or enlist the service without --shared", repo.dir)
 		}
 	}

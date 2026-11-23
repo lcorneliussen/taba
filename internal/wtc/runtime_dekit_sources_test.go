@@ -493,3 +493,44 @@ func TestRootDekitDiscoveryShowsLiteralReadyHTTP(t *testing.T) {
 		}
 	}
 }
+
+func TestRootDekitAddSharedRefusesHarnessThatDekitWouldLoad(t *testing.T) {
+	t.Setenv("TABA_RUNTIME_DECLARATIONS", "")
+	for name, load := range map[string]string{
+		"literal":    "load: [.harness/dekit.tasks.yaml]\n",
+		"glob":       "load: ['.harness/*.yaml']\n",
+		"globstar":   "load: ['**/*.tasks.yaml']\n",
+		"mounted at": "load: [{file: .harness/dekit.tasks.yaml, at: x}]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			// The harness file does not exist yet, so loading fails until the
+			// add would create it.
+			c, repo := rootDekitFixture(t, map[string]string{"dekit.yaml": load})
+			for _, portEnv := range []string{"", "API_PORT"} {
+				if _, err := c.AddService(ServiceOptions{Service: "widget/api", Cmd: []string{"true"}, Shared: true, NoStart: true, PortEnv: portEnv}); err == nil || !strings.Contains(err.Error(), "widget/dekit.yaml loads .harness/dekit.tasks.yaml") {
+					t.Fatalf("port env %q: %v", portEnv, err)
+				}
+				if _, err := os.Stat(filepath.Join(repo, ".harness", "dekit.tasks.yaml")); !os.IsNotExist(err) {
+					t.Fatalf("the harness file was created: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRuntimePatternMatches(t *testing.T) {
+	for pattern, want := range map[string]bool{
+		".harness/dekit.tasks.yaml":    true,
+		".harness/*.yaml":              true,
+		"**/*.tasks.yaml":              true,
+		"**":                           true,
+		".harness/**/dekit.tasks.yaml": true,
+		"svc/*.yaml":                   false,
+		"*.yaml":                       false,
+		".harness/*.yml":               false,
+	} {
+		if got := runtimePatternMatches(strings.Split(pattern, "/"), strings.Split(".harness/dekit.tasks.yaml", "/")); got != want {
+			t.Errorf("%s: %v, want %v", pattern, got, want)
+		}
+	}
+}
