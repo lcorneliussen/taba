@@ -385,7 +385,9 @@ func (x *reviewExecContext) snapshotBundle() error {
 }
 
 // checkPhase compares the agent-visible bundle and the source snapshot with
-// their state before the phase. Only allowed paths may change.
+// their state before the phase. Only allowed paths may change, and only to a
+// regular file: a new or changed link or special file is rejected at any
+// path.
 func (x *reviewExecContext) checkPhase(phase string, allowed func(rel string, existed, removed bool) bool) error {
 	x.record.Audit.Checked = append(x.record.Audit.Checked, phase)
 	// Fail closed: the copy is untrusted until this audit completes cleanly,

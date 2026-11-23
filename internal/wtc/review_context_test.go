@@ -70,6 +70,9 @@ printf '{"concern":"%s","status":"ok","notes":"%s","findings":[]}\n' "$id" "$(ob
 case "${MUTATE:-}" in
   link-finding) place link "$bundle/findings/$id.json" "{\"concern\":\"$id\",\"status\":\"ok\",\"findings\":[]}" ;;
   fifo-finding) place fifo "$bundle/findings/$id.json" ;;
+  # Invalid findings send the runner down its error path, which writes .raw.
+  link-raw) printf '{' > "$bundle/findings/$id.json"; ln -s "${OUTSIDE_RAW:?}" "$bundle/findings/$id.raw" ;;
+  fifo-raw) printf '{' > "$bundle/findings/$id.json"; mkfifo "$bundle/findings/$id.raw" ;;
 esac
 `
 
@@ -286,11 +289,22 @@ func TestPublicReviewRunsOutsideCollectionContext(t *testing.T) {
 }
 
 func TestPublicReviewRefusesUnexpectedWrites(t *testing.T) {
-	for _, mode := range []string{"manifest", "source", "extra", "drop-finding", "link-finding", "fifo-finding", "link-summary", "fifo-summary"} {
+	for _, mode := range []string{"manifest", "source", "extra", "drop-finding", "link-finding", "fifo-finding", "link-summary", "fifo-summary", "link-raw", "fifo-raw"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newReviewSentinelFixture(t)
 			t.Setenv("MUTATE", mode)
-			t.Setenv("WTC_REVIEW_ENV", "MUTATE")
+			// A link target outside the bundle that the runner must not write.
+			outside := filepath.Join(t.TempDir(), "outside.raw")
+			if err := os.WriteFile(outside, []byte("original\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("OUTSIDE_RAW", outside)
+			t.Cleanup(func() {
+				if body, _ := os.ReadFile(outside); string(body) != "original\n" {
+					t.Errorf("runner wrote through a reviewer link: %q", body)
+				}
+			})
+			t.Setenv("WTC_REVIEW_ENV", "MUTATE,OUTSIDE_RAW")
 			bundle := f.bundle(t)
 			manifestBefore, err := os.ReadFile(filepath.Join(bundle.Dir, "manifest.json"))
 			if err != nil {
