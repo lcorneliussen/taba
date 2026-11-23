@@ -77,10 +77,12 @@ func TestStatusTUIVersionLinkPolicyAndRefreshClick(t *testing.T) {
 	}
 	refreshAt := ansi.StringWidth(strings.Split(model.headerLine(), "refreshing")[0])
 	updated, _ := model.Update(tea.MouseClickMsg{X: refreshAt, Y: 0, Button: tea.MouseLeft})
+	updated, _ = updated.Update(tea.MouseReleaseMsg{X: refreshAt, Y: 0, Button: tea.MouseLeft})
 	if !updated.(statusTUIModel).showLog {
 		t.Fatal("version header displaced refresh-log click target")
 	}
-	updated, command := model.Update(tea.MouseClickMsg{X: ansi.StringWidth(model.headerLine()) + 3, Y: 0, Button: tea.MouseLeft})
+	updated, _ = model.Update(tea.MouseClickMsg{X: ansi.StringWidth(model.headerLine()) + 3, Y: 0, Button: tea.MouseLeft})
+	updated, command := updated.Update(tea.MouseReleaseMsg{X: ansi.StringWidth(model.headerLine()) + 3, Y: 0, Button: tea.MouseLeft})
 	if updated.(statusTUIModel).showLog || command != nil {
 		t.Fatal("version suffix click toggled the refresh log")
 	}
