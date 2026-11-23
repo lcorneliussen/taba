@@ -154,6 +154,9 @@ func (c *Context) postReviewBrokered(m ReviewManifest, bundle, cid, finalBody st
 	requestPath := filepath.Join(gitDir, bitbucketWriteRequestFile)
 	if raw, err := os.ReadFile(requestPath); err == nil {
 		var pending brokeredRequest
+		if err := brokeredStarted(gitDir, intent); err != nil {
+			return ReviewPostResult{URL: m.URL}, err
+		}
 		if json.Unmarshal(raw, &pending) == nil && pending.IntentID == intent {
 			return ReviewPostResult{URL: m.URL}, fmt.Errorf("%w: the review of PR #%s is waiting for the person to confirm it in the Control UI; post again afterwards", ErrBitbucketAwaitingConfirmation, m.PR)
 		}
@@ -353,6 +356,9 @@ func brokeredWrites(worktree, slug, number, head, intent string, operations []br
 		return &receipt, nil
 	}
 	requestPath := filepath.Join(gitDir, bitbucketWriteRequestFile)
+	if err := brokeredStarted(gitDir, intent); err != nil {
+		return nil, err
+	}
 	if raw, err := os.ReadFile(requestPath); err == nil {
 		var pending brokeredRequest
 		if json.Unmarshal(raw, &pending) == nil && pending.IntentID == intent {
@@ -372,4 +378,14 @@ var reviewHeadPattern = regexp.MustCompile(`^[0-9a-f]{12,40}$`)
 func brokeredHash(label string, fields ...string) string {
 	sum := sha256.Sum256([]byte(label + "\x00" + strings.Join(fields, "\x00")))
 	return hex.EncodeToString(sum[:])[:24]
+}
+
+// brokeredStarted reports a confirmed run that began writing (the plugin's
+// claim) but left no receipt: its outcome is unknown and is reconciled by
+// reading the pull request, never by asking again.
+func brokeredStarted(gitDir, intent string) error {
+	if _, err := os.Lstat(filepath.Join(gitDir, bitbucketWriteReceiptsDir, intent+".claim")); err == nil {
+		return fmt.Errorf("the confirmed Bitbucket writes (%s) were started but left no receipt; their outcome is unknown: reconcile by reading the pull request", intent)
+	}
+	return nil
 }

@@ -227,3 +227,19 @@ func TestBrokeredResolveAndReadyFollowTheirReceipts(t *testing.T) {
 		t.Fatal("a gateway ready wrote directly")
 	}
 }
+
+func TestBrokeredWritesStartedWithoutReceiptAreReconciledNotAskedAgain(t *testing.T) {
+	f := newBrokeredFixture(t)
+	f.c.postReviewBrokered(f.m, f.bundle, "", brokeredSummary)
+	request := f.request(t)
+	dir := filepath.Join(f.gitDir, bitbucketWriteReceiptsDir)
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, request.IntentID+".claim"), []byte("2026-11-23T00:00:00Z\n"), 0o600)
+	_, err := f.c.postReviewBrokered(f.m, f.bundle, "", brokeredSummary)
+	if err == nil || errors.Is(err, ErrBitbucketAwaitingConfirmation) || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.bundle, "comment.create-pending")); err != nil {
+		t.Fatal("the summary create must stay pending")
+	}
+}
