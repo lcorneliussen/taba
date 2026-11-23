@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,25 +28,7 @@ func openReviewOutput(dir, program string, args ...string) ([]byte, error) {
 	cmd.Dir = dir
 	// A missing partial-clone object must not cause an implicit fetch.
 	cmd.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1")
-	if program != "bb" {
-		return cmd.Output()
-	}
-	// Like the existing forge reader, use a regular file for CLIs that can
-	// exit before a large JSON write to a pipe has drained.
-	file, err := os.CreateTemp("", "wtc-open-review-*.json")
-	if err != nil {
-		return nil, err
-	}
-	defer os.Remove(file.Name())
-	defer file.Close()
-	cmd.Stdout = file
-	if err := cmd.Run(); err != nil {
-		return nil, err
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, err
-	}
-	return io.ReadAll(file)
+	return cmd.Output()
 }
 
 func openReviewGit(dir string, args ...string) (string, error) {
@@ -212,20 +193,18 @@ func openReviewPRRange(c *wtc.Context) (openReviewRange, error) {
 		}
 		fields := "number,state,headRefName,headRefOid,baseRefOid,headRepository"
 		program, args := "gh", []string{"pr", "list", "--repo", slug, "--head", branch, "--state", "open", "--limit", "100", "--json", fields}
-		if forge == "bitbucket" {
-			program, args = "bb", []string{"pr", "list", "--state", "OPEN", "--limit", "100", "--json"}
-		}
 		if len(numbers) == 1 {
 			args = []string{"pr", "view", numbers[0], "--repo", slug, "--json", fields}
-			if forge == "bitbucket" {
-				args = []string{"pr", "view", numbers[0], "--json"}
-			}
 		}
-		if forge == "bitbucket" {
-			owner, name, _ := strings.Cut(slug, "/")
-			args = append(args, "--workspace", owner, "--repo", name)
+		var data []byte
+		switch {
+		case forge == "bitbucket" && len(numbers) == 1:
+			data, err = wtc.BitbucketReadPR(c.ConfigRoot, slug, numbers[0])
+		case forge == "bitbucket":
+			data, err = wtc.BitbucketReadOpenPRs(c.ConfigRoot, slug, branch, 100)
+		default:
+			data, err = openReviewOutput(dir, program, args...)
 		}
-		data, err := openReviewOutput(dir, program, args...)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s: cannot read current PR metadata", repo))
 			continue

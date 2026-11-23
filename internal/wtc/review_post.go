@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -95,7 +96,7 @@ func reviewPRHead(manifest ReviewManifest) (string, error) {
 	if manifest.Forge == "github" {
 		out, err = reviewForgeCommand(manifest.RepoDir, "gh", []string{"pr", "view", manifest.PR, "--repo", manifest.Slug, "--json", "headRefOid"}, nil)
 	} else if manifest.Forge == "bitbucket" {
-		out, err = reviewBitbucketCommand(manifest, []string{"pr", "view", manifest.PR, "--json"}, nil)
+		out, err = bitbucketReadPR(bitbucketReadOperation(context.Background(), ""), manifest.Slug, manifest.PR)
 	} else {
 		return "", fmt.Errorf("unknown forge %q", manifest.Forge)
 	}

@@ -92,6 +92,12 @@ type statusAuthContext struct {
 }
 
 func statusResolveAuthContext(forge string) statusAuthContext {
+	return statusResolveAuthContextWith(forge, selectedBitbucketRead(""))
+}
+
+// statusResolveAuthContextWith resolves forge's context with one Bitbucket
+// read selection, so an operation's frozen reader and its context agree.
+func statusResolveAuthContextWith(forge string, selection bitbucketReadSelection) statusAuthContext {
 	key := statusAuthCacheKey()
 	if len(key) == 0 {
 		return statusAuthContext{}
@@ -182,6 +188,11 @@ func statusResolveAuthContext(forge string) statusAuthContext {
 			user, pass = config.Username, config.Token
 		}
 		known = ok && valid && user != "" && pass != "" && config.OAuth == ""
+		// The selected read client and credential are part of the context
+		// (#471). TWG's profile and a host's per-repository token cannot be
+		// fingerprinted locally, so their observations stay operation-private.
+		add(selection.fingerprint())
+		known = known && selection.accountKnown()
 	default:
 		return statusAuthContext{}
 	}
@@ -235,9 +246,14 @@ func statusAuthOperation(ctx context.Context) context.Context {
 	}
 	var nonce [16]byte
 	_, _ = rand.Read(nonce[:])
+	read := selectedBitbucketRead("")
 	state := &statusAuthOperationState{selection: statusAuthSelection{
-		"github.com": statusResolveAuthContext("github.com"), "bitbucket.org": statusResolveAuthContext("bitbucket.org")}, nonce: hex.EncodeToString(nonce[:]), observations: map[string]statusAuthObservation{}, gates: map[string]chan struct{}{}}
-	return context.WithValue(ctx, statusAuthOperationKey{}, state)
+		"github.com": statusResolveAuthContext("github.com"), "bitbucket.org": statusResolveAuthContextWith("bitbucket.org", read)}, nonce: hex.EncodeToString(nonce[:]), observations: map[string]statusAuthObservation{}, gates: map[string]chan struct{}{}}
+	ctx = context.WithValue(ctx, statusAuthOperationKey{}, state)
+	if _, ok := ctx.Value(bitbucketReadKey{}).(*bitbucketReadState); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, bitbucketReadKey{}, &bitbucketReadState{selection: read, tokens: map[string]*bitbucketRepoToken{}})
 }
 func statusAuthForContext(ctx context.Context, forge string) statusAuthContext {
 	if state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState); ok {

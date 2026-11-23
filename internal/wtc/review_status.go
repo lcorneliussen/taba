@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -285,7 +286,7 @@ func (c *Context) EnlistedReviewPR(repo string) (string, error) {
 }
 
 func (c *Context) GetReviewStatus(repo, number string, trusted bool) (ReviewStatus, error) {
-	worktree, slug, forge, err := c.ReviewRepo(repo)
+	_, slug, forge, err := c.ReviewRepo(repo)
 	if err != nil {
 		return ReviewStatus{}, err
 	}
@@ -306,13 +307,10 @@ func (c *Context) GetReviewStatus(repo, number string, trusted bool) (ReviewStat
 			comments, err = exec.Command("gh", "pr", "view", number, "--repo", slug, "--json", "comments").Output()
 		}
 	} else {
-		view := exec.Command("bb", "pr", "view", number, "--json")
-		view.Dir = worktree
-		head, err = forgeOutput(view)
+		ctx := bitbucketReadOperation(context.Background(), c.ConfigRoot)
+		head, err = bitbucketReadPR(ctx, slug, number)
 		if err == nil {
-			list := exec.Command("bb", "pr", "comments", "list", number, "--all", "--json")
-			list.Dir = worktree
-			comments, err = forgeOutput(list)
+			comments, err = bitbucketReadPRComments(ctx, slug, number, 0)
 		}
 	}
 	if err != nil {

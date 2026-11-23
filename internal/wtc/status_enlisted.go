@@ -45,12 +45,8 @@ func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail
 	if detail.State != "MERGED" || detail.MergedOn != "" {
 		return detail
 	}
-	parts := strings.SplitN(slug, "/", 2)
-	if len(parts) != 2 {
-		return detail
-	}
 	raw, err := statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, detail.Number, func() ([]byte, error) {
-		return statusJSONContext(ctx, "bb", "pr", "activity", detail.Number, "--workspace", parts[0], "--repo", parts[1], "--json")
+		return bitbucketReadPRActivity(ctx, slug, detail.Number)
 	})
 	if err == nil {
 		detail.MergedOn = statusBBMergeEventTime(raw)
@@ -333,11 +329,7 @@ func statusViewPRWithLiveContext(ctx context.Context, record PRRecord, slug, for
 		case "github.com":
 			return statusJSONContext(ctx, "gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,closedAt,baseRefName,mergeCommit,headRefOid")
 		case "bitbucket.org":
-			parts := strings.SplitN(slug, "/", 2)
-			if len(parts) != 2 {
-				return nil, fmt.Errorf("invalid Bitbucket repository slug")
-			}
-			return statusJSONContext(ctx, "bb", "pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json")
+			return bitbucketReadPR(ctx, slug, record.Number)
 		default:
 			return nil, fmt.Errorf("unsupported forge")
 		}

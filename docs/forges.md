@@ -1,6 +1,7 @@
 # Forge operations — Bitbucket client contract
 
-Contract version: **2** (issue [#127](https://github.com/lcorneliussen/taba/issues/127)).
+Contract version: **3** (issues [#127](https://github.com/lcorneliussen/taba/issues/127),
+[#471](https://github.com/lcorneliussen/taba/issues/471)).
 
 This is the single list of every Bitbucket operation taba performs, which
 client performs it, and the rules a client change must keep. Later migration
@@ -10,9 +11,9 @@ steps update this file in the same change that moves an operation.
 
 | Client | Role | Account it acts as |
 |---|---|---|
-| `bb` CLI | existing reads and writes; deprecated compatibility once an operation has a verified replacement | the `bb` CLI's own login |
-| direct REST (`api.bitbucket.org/2.0`) | status lists, check evidence, summary/inline comment writes | credentials from the environment (and, for reads, the `bb` config file); see [status-auth-cache.md](status-auth-cache.md) |
-| TWG CLI (`twg`) | target primary client, one operation at a time, only when selected | the user's own TWG profile and site selection |
+| TWG CLI (`twg`) | default client for every Bitbucket read | the user's own TWG profile, or the host read credential for one repository (see below) |
+| `bb` CLI | deprecated: reads only when selected explicitly; review writes until they migrate | the `bb` CLI's own login |
+| direct REST (`api.bitbucket.org/2.0`) | status lists, check evidence, summary/inline comment writes | the host read credential for one repository, else credentials from the environment or the `bb` config file (read as a file; `bb` is not run); see [status-auth-cache.md](status-auth-cache.md) |
 
 The clients can act as **different accounts**. Taba therefore never treats
 them as interchangeable:
@@ -37,25 +38,63 @@ operation runs, with the same precedence as the TWG site default:
 1. the process environment, when set — even set empty;
 2. the machine defaults file in the control root (`taba.env`, or legacy
    `wtc.env`), which must be a regular file inside the control root;
-3. otherwise the default, `bb`.
+3. otherwise the default, `twg`.
 
 A defaults file that cannot be read safely leaves the selection unknown: the
 operation fails as unavailable instead of falling back to the default.
 
 | Value | Effect |
 |---|---|
-| unset, empty, `bb` | the existing `bb` client — the default, unchanged |
-| `twg` | TWG for migrated operations |
+| unset, empty, `twg` | TWG — the default since #471 |
+| `bb` | the deprecated `bb` client, for one more release |
 | anything else | the operation fails as unavailable with a fixed diagnostic; no client runs |
 
-An installed `twg` alone changes nothing. Because the selection is resolved
-per operation, a changed selection applies to the next operation; nothing
-observed through the previous client is held or reused. Catch-up keeps no
-response cache, so no observation is ever labelled with another client's or
-account's identity. A future cached read must include the client and its
-selection source in its authenticated context, and treat an unknown TWG
-profile as operation-private, before it can migrate. Operations that are not
-migrated ignore the selection. GitHub operations never consult it.
+The default changed from `bb` to `twg` once, at the release that carries
+#471, and is reported by doctor as `twg (default)`; it never changes at run
+time. A failure through the selected client is never retried through the
+other. The selection is resolved once per operation (one status refresh, one
+review command, one catch-up) and frozen for it, so a changed selection
+applies to the next operation and nothing observed through the previous
+client is reused: the selection and the read credential are part of the
+status authenticated context, and because neither a TWG profile nor a host
+token can be fingerprinted locally, observations made through TWG are kept
+only in that operation's memory (see
+[status-auth-cache.md](status-auth-cache.md)). GitHub operations never
+consult the selection.
+
+## Host read credential
+
+A host whose Bitbucket reads must not use a personal login — a gateway with
+one repository access token per repository — opts in with
+`TABA_BITBUCKET_READ_CREDENTIAL=git-credential` (legacy alias
+`WTC_BITBUCKET_READ_CREDENTIAL`; same precedence as the client selection).
+Unset, empty or `personal` keeps the client's own login. Any other value, or
+`git-credential` with `bb` selected, makes every Bitbucket read unavailable
+with a fixed diagnostic; nothing runs.
+
+With `git-credential`, the first read of a repository in an operation runs
+
+```text
+git -c credential.interactive=false -c credential.useHttpPath=true credential fill
+```
+
+with `protocol=https`, `host=bitbucket.org`, `path=<workspace>/<repo>.git`,
+`GIT_TERMINAL_PROMPT=0` and empty askpass programs, bounded to 10 s. Only the
+`password` is used; the helper's `username` is ignored rather than read as an
+authentication mode. No helper is ever asked to store or erase. The answer is
+kept in that operation's memory for that repository and then:
+
+- added to that repository's TWG read child only, as `TWG_BBC_TOKEN` with an
+  empty `TWG_BBC_USER` (bearer authentication, as a repository access token
+  needs; `x-token-auth` as user is rejected by Bitbucket for this);
+- sent as `Authorization: Bearer` on that repository's same-origin REST reads.
+
+It is never set in taba's own environment, an argument list, a file, a cache
+key or path, a diagnostic, a write, or an agent command; TWG and helper
+stderr are discarded. No answer, a failed or timed-out helper, or a denied
+read is reported as unavailable for that repository and never falls back to
+a personal login. A new operation asks again, so a rotated or removed token
+applies to the next refresh.
 
 `taba doctor` in a collection shows a `bitbucket-client` row with the
 selected client and where it came from (environment, `taba.env`/`wtc.env` or
@@ -65,6 +104,23 @@ and it never contacts a forge, reads credentials or probes an account. A
 configured value that is not understood is reported without echoing it.
 
 ## Migrated operations
+
+Every Bitbucket read below goes through one adapter
+(`internal/wtc/bitbucket_read.go`) with explicit `--workspace`/`--repo`,
+`--output json --output-summary none`, the version check described for
+catch-up, a 30 s bounded child, completeness decoded at every level, and a
+failure envelope classified without echoing messages:
+
+| Read | TWG operation | Pinning and completeness |
+|---|---|---|
+| PR detail (status, review gate, review head, bundle metadata, open review) | `pull-requests get <n> --strict` | id and destination repository must match |
+| merge time | `pull-requests activity <n> --strict --limit 200` | entries naming another PR are refused; 200 entries = incomplete |
+| review comments (gate, bundle) | `pull-requests comment query <n> --limit <cap+1>` | more than the cap = incomplete; entries naming another PR are refused |
+| repository visibility | `repo get` | `full_name` must match; anything else is `unknown` |
+| PR discovery by branch | `pull-requests query --scope repo --state OPEN --source <branch>` | a `next` page or more than the limit = error |
+
+Shapes beyond `pull-requests get` follow TWG help and synthetic fixtures
+only, not a live capture.
 
 ### Catch-up: enlisted pull-request state
 
@@ -171,20 +227,20 @@ State of `main` at contract version 1. `bb` = `bb` CLI, REST = direct HTTP.
 
 | Area | Operation | R/W | Client | Bounds and guards |
 |---|---|---|---|---|
-| Audience | repository visibility for review audience | R | `bb repo view` | 15 s; any error = unknown; never cached |
+| Audience | repository visibility for review audience | R | adapter (`twg repo get`) | 15 s; any error = unknown; never cached |
 | Status | open PR list | R | REST, paginated (`next`, ≤10 pages) | budget; auth-scoped cache; truncation marked |
 | Status | PR by source branch (after a truncated list) | R | REST, one page | budget; auth-scoped cache |
-| Status | PR detail, foreground and full refresh | R | `bb pr view` | 30 s; budget; auth-scoped cache |
-| Status | merge time from activity | R | `bb pr activity` | 30 s; auth-scoped cache |
+| Status | PR detail, foreground and full refresh | R | adapter (`twg … get`) | 30 s; budget; auth-scoped cache, operation-private through TWG |
+| Status | merge time from activity | R | adapter (`twg … activity`) | 30 s; auth-scoped cache, operation-private through TWG |
 | Status | commit build statuses and pipelines for a head | R | REST, paginated (≤10 pages) | budget; incomplete evidence never passes |
 | Status | abbreviated head resolution | R | REST | budget; cached |
 | Status | branch pipelines | R | REST, one page | budget; auth-scoped cache |
-| Review | PR head for checks and before posting | R | `bb pr view` | budget for checks; no deadline |
-| Review | PR metadata for a bundle | R | `bb pr view` | no deadline; falls back to local refs |
-| Review | prior review comments | R | `bb pr comments list --limit 1000` | unknown envelope = completeness unknown |
-| Review | review status gate | R | `bb pr view`, `bb pr comments list --all` | no deadline; trusts only exact comment ids and `#comment-<n>` links |
-| Open review | PR discovery by branch | R | `bb pr list --limit 100` / `bb pr view` | 15 s; reaching the limit is an error |
-| **Catch-up** | **enlisted PR state** | R | **`bb pr view` (default) or TWG (selected)** | 30 s; no budget, no cache; strict decoding and identity pinning with TWG only |
+| Review | PR head for checks and before posting | R | adapter | 30 s |
+| Review | PR metadata for a bundle | R | adapter | 30 s; falls back to local refs |
+| Review | prior review comments | R | adapter (cap 1000) | reaching the cap = completeness unknown |
+| Review | review status gate | R | adapter (PR, comments) | 30 s each; trusts only exact comment ids and `#comment-<n>` links |
+| Open review | PR discovery by branch | R | adapter | 15 s; reaching the limit is an error |
+| Catch-up | enlisted PR state | R | `twg` (default) or `bb pr view` (selected) | 30 s; no budget, no cache; strict decoding and identity pinning with TWG only |
 | Review | summary comment create/update | W | REST, else `bb pr comments add/edit` | create-intent file, saved id, receipt; a missing, conflicting or malformed id stays pending |
 | Review | inline comment create | W | REST, else `bb pr comments add` | marker-key de-duplication; fail closed when prior comments are unreadable |
 | Review | inline reply and resolve | W | REST reply / `bb pr comments reply`; `bb pr comments resolve` | no automatic retry |
@@ -203,8 +259,7 @@ summary comment id is read back; neither added a Bitbucket operation.
 
 ## Next steps
 
-Further reads (status detail, review head and comment reads) move one at a
-time, after the in-flight review and status changes land. A persistent
-machine-default selection, `doctor` reporting, an auth-scoped cache identity
-for TWG observations and any default switch need their own design and review
-first. Writes move last, under the write rules above.
+Writes (review post, reply, resolve, ready, PR title/description) move next,
+under the write rules above: locally through the person's own TWG login, on
+a gateway only through brokered methods of the Bitbucket plugin, and never
+through the host read credential. A per-repository doctor read row follows.
