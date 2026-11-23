@@ -2,9 +2,11 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,8 +18,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"taba.sh/taba/internal/branding"
 	"time"
+
+	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/retry"
 )
 
 type ReviewPostOptions struct {
@@ -216,28 +220,41 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 		body = fmt.Sprintf("⏳ **Local review: posting findings**\n\nRound %d, head `%s`.\n\n`wtc-review v1 head=%s verdict=pending blockers=0 round=%d lead=pending`\n", manifest.Round, manifest.HeadSHA[:7], manifest.HeadSHA, manifest.Round)
 	}
 	body = reviewModeBody(body, manifest)
+	var posted ReviewPostResult
 	createPending := filepath.Join(bundle, "comment.create-pending")
 	if cid == "" {
-		// Record intent before sending: a lost response or interrupted process
-		// must not turn the next invocation into another uncertain create.
-		pending, err := os.OpenFile(createPending, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if err != nil {
+		// A lost response or an interrupted process must not turn the next
+		// invocation into another uncertain create.
+		create := retry.Intent{
+			Marker: createPending,
+			Done: func() (bool, error) {
+				id, _ := os.ReadFile(idPath)
+				return strings.TrimSpace(string(id)) != "", nil
+			},
+			Record: func() error { return os.WriteFile(idPath, []byte(posted.CommentID+"\n"), 0644) },
+		}
+		err := create.Do(context.Background(), retry.Policy{Attempts: 1}, func(context.Context) (retry.Outcome, error) {
+			var err error
+			if posted, err = postReviewComment(target, "", body); err != nil {
+				return retry.Unknown, err
+			}
+			return retry.Applied, nil
+		})
+		switch {
+		case errors.Is(err, retry.ErrUnresolved):
 			return ReviewPostResult{}, fmt.Errorf("cannot start review comment create; reconcile any prior uncertain create (comment.create-pending): %w", err)
-		}
-		if err := pending.Close(); err != nil {
-			return ReviewPostResult{}, err
-		}
-	}
-	posted, err := postReviewComment(target, cid, body)
-	if err != nil {
-		// A failed update is not evidence that the original comment is absent.
-		// Keep the saved ID and let an explicit retry update the same comment.
-		return ReviewPostResult{}, err
-	}
-	if posted.CommentID != "" {
-		if err := os.WriteFile(idPath, []byte(posted.CommentID+"\n"), 0644); err != nil {
+		case errors.Is(err, retry.ErrDone):
+			return ReviewPostResult{}, fmt.Errorf("another review post created the comment meanwhile; post again to update it")
+		case err != nil:
 			return posted, err
 		}
+	} else {
+		// A failed update is not evidence that the original comment is absent.
+		// Keep the saved ID and let an explicit retry update the same comment.
+		if posted, err = postReviewComment(target, cid, body); err != nil {
+			return ReviewPostResult{}, err
+		}
+		// The saved ID settles a create whose marker a crash left behind.
 		if err := os.Remove(createPending); err != nil && !os.IsNotExist(err) {
 			return posted, err
 		}
