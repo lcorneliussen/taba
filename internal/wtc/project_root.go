@@ -51,6 +51,8 @@ type RootSelectionSource struct {
 	Commit  string `json:"commit,omitempty"`
 	Pin     string `json:"pin,omitempty"`
 	Version string `json:"version,omitempty"`
+	// names are the harness's registry name and aliases at Commit.
+	names []string
 }
 
 // CollectionSelection is the CLI selection a collection applies inside it.
@@ -159,41 +161,54 @@ func validRootHarness(harness string) error {
 	return nil
 }
 
-// rootSourceProbe is where the declared default ref is looked up: the owner's
-// remote default branch, else origin/main. A ref recorded in the generated
-// file is provenance only and never chooses what is read.
-func rootSourceProbe(owner string) string {
-	if _, err := projectSnapshotGit(owner, "rev-parse", "--verify", "refs/remotes/origin/HEAD^{commit}"); err == nil {
-		return "origin/HEAD"
+// rootSourceProbe is where the declared default ref is looked up: origin/HEAD
+// when the owner records it, else the remote-tracking branch of the branch a
+// bare clone's HEAD names (the forge default at clone time), else origin/main.
+// A ref recorded in the generated file is provenance only and never chooses
+// what is read.
+func rootSourceProbe(owner string) (string, error) {
+	resolves := func(ref string) bool {
+		_, err := projectSnapshotGit(owner, "rev-parse", "--verify", ref+"^{commit}")
+		return err == nil
 	}
-	return "origin/main"
+	candidates := []string{"origin/HEAD"}
+	if head, err := projectSnapshotGit(owner, "symbolic-ref", "--quiet", "HEAD"); err == nil && strings.HasPrefix(head, "refs/heads/") {
+		candidates = append(candidates, "origin/"+strings.TrimPrefix(head, "refs/heads/"))
+	}
+	candidates = append(candidates, "origin/main")
+	for _, ref := range candidates {
+		if resolves(ref) {
+			return ref, nil
+		}
+	}
+	return "", fmt.Errorf("cannot find the harness default branch in %s (tried %s)", owner, strings.Join(candidates, ", "))
 }
 
 // declaredHarnessRef reads the registry at commit and returns the default ref
 // the harness declares for itself. An owner whose registry does not declare
 // it is not a project harness.
-func declaredHarnessRef(p *ProjectContext, harness, origin string) (string, error) {
+func declaredHarnessRef(p *ProjectContext, harness, origin string) (string, []string, error) {
 	data, _, err := p.snapshotFile(".harness-repos.yml", ".harness-repos.yml")
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if data == nil {
-		return "", fmt.Errorf("harness owner %s has no .harness-repos.yml at %s", harness, p.Source.Ref)
+		return "", nil, fmt.Errorf("harness owner %s has no .harness-repos.yml at %s", harness, p.Source.Ref)
 	}
 	registry, err := ParseRegistry(data)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	for _, repo := range registry.Repos {
 		if repo.Answers(harness) || origin != "" && repo.Remote == origin {
 			ref := repositoryBaseFacts(repo, repoBaseStore{}, false).EffectiveRef
 			if !rootRefPattern.MatchString(ref) || strings.Contains(ref, "..") {
-				return "", fmt.Errorf("invalid declared harness ref %q", ref)
+				return "", nil, fmt.Errorf("invalid declared harness ref %q", ref)
 			}
-			return ref, nil
+			return ref, repo.Names(), nil
 		}
 	}
-	return "", fmt.Errorf("the registry in %s does not declare that harness; it is not this project's harness", harness)
+	return "", nil, fmt.Errorf("the registry in %s does not declare that harness; it is not this project's harness", harness)
 }
 
 // resolveRootSource derives the project source from the harness's shared
@@ -228,12 +243,15 @@ func resolveRootSource(root, harness string) (RootSelectionSource, error) {
 		}
 		return &ProjectContext{Source: ProjectSource{Owner: owner, Ref: sha}}, nil
 	}
-	probe := rootSourceProbe(owner)
+	probe, err := rootSourceProbe(owner)
+	if err != nil {
+		return source, err
+	}
 	p, err := resolve(probe)
 	if err != nil {
 		return source, err
 	}
-	ref, err := declaredHarnessRef(p, harness, origin)
+	ref, names, err := declaredHarnessRef(p, harness, origin)
 	if err != nil {
 		return source, err
 	}
@@ -242,12 +260,15 @@ func resolveRootSource(root, harness string) (RootSelectionSource, error) {
 			return source, err
 		}
 		// The declared ref must declare itself, so the source is stable.
-		if again, err := declaredHarnessRef(p, harness, origin); err != nil {
+		again, againNames, err := declaredHarnessRef(p, harness, origin)
+		if err != nil {
 			return source, err
 		} else if again != ref {
 			return source, fmt.Errorf("harness default ref is inconsistent: %s declares %s", ref, again)
 		}
+		names = againNames
 	}
+	source.names = names
 	source.Ref, source.Commit = ref, p.Source.Ref
 	data, name, err := p.snapshotFile(".wtc-cli-version", ".taba-version")
 	if err != nil {
@@ -526,6 +547,9 @@ func NewCollectionAtRoot(root string, opt NewOptions) (NewResult, *Context, erro
 	if _, err := resolveRootSource(root, recorded.Harness); err != nil {
 		return result, nil, fmt.Errorf("root selection source is not usable: %w", err)
 	}
+	if err := validateNewBaseInputs(opt); err != nil {
+		return result, nil, err
+	}
 	name, err := plannedCollectionName(opt)
 	if err != nil {
 		return result, nil, err
@@ -549,11 +573,29 @@ func NewCollectionAtRoot(root string, opt NewOptions) (NewResult, *Context, erro
 	if err != nil {
 		return result, nil, err
 	}
+	// A requested harness base starts the harness there, as it would in a
+	// collection invocation; the receiving base file is still written and
+	// verified by the shared creation flow.
+	start := source.Commit
+	for selector, ref := range opt.RepoBases {
+		if selector != "harness" && !containsName(source.names, selector) {
+			continue
+		}
+		base, err := normalizeRepoBase(ref)
+		if err != nil {
+			return result, nil, err
+		}
+		sha, err := projectSnapshotGit(owner, "rev-parse", "--verify", base+"^{commit}")
+		if err != nil {
+			return result, nil, fmt.Errorf("harness development tip %s is unavailable", base)
+		}
+		start = sha
+	}
 	if err := os.Mkdir(target, 0755); err != nil {
 		return result, nil, err
 	}
 	harness := filepath.Join(target, "harness")
-	args := rootHarnessWorktreeArgs(owner, harness, opt.Branch, source.Commit)
+	args := rootHarnessWorktreeArgs(owner, harness, opt.Branch, start)
 	createdBranch := len(args) > 3 && args[3] == "-b"
 	cleanup := func() {
 		_, _ = gitOutput("--git-dir="+owner, "worktree", "remove", "--force", harness)
@@ -606,4 +648,13 @@ func rootHarnessWorktreeArgs(owner, path, branch, commit string) []string {
 func gitRefExists(owner, ref string) bool {
 	_, err := gitOutput("--git-dir="+owner, "rev-parse", "--verify", "--quiet", ref)
 	return err == nil
+}
+
+func containsName(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
 }

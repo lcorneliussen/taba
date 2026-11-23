@@ -437,3 +437,75 @@ func TestNewCollectionAtRootMatchesCollectionInvocation(t *testing.T) {
 		}
 	}
 }
+
+func TestNewCollectionAtRootHonoursHarnessBase(t *testing.T) {
+	opt := NewOptions{Slug: "based", Repos: []string{"widget"}, RepoBases: map[string]string{"harness": "origin/release"}, BaseReason: "synthetic release line"}
+	setup := func() *Context {
+		c := newWorkspaceFixture(t)
+		commitHarnessFiles(t, c, "release", map[string]string{"RELEASE.md": "release line\n"})
+		return c
+	}
+	fromCollection := setup()
+	want, err := fromCollection.NewCollection(opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromRoot := setup()
+	if _, err := syncFromCollection(t, fromRoot, RootSyncOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := NewCollectionAtRoot(fromRoot.Workspace, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []NewResult{want, got} {
+		if _, err := os.Stat(filepath.Join(r.Collection, "harness", "RELEASE.md")); err != nil {
+			t.Errorf("%s harness is not at the requested base: %v", r.Collection, err)
+		}
+	}
+	if _, _, err := NewCollectionAtRoot(fromRoot.Workspace, NewOptions{Slug: "nobase", RepoBases: map[string]string{"harness": "origin/absent"}, BaseReason: "synthetic"}); err == nil {
+		t.Fatal("unavailable harness base accepted")
+	}
+	if _, err := os.Lstat(filepath.Join(fromRoot.Workspace, "nobase")); !os.IsNotExist(err) {
+		t.Fatalf("unavailable base left a folder: %v", err)
+	}
+}
+
+func TestNewCollectionAtRootRefusesHarnessPR(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if _, err := syncFromCollection(t, c, RootSyncOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := NewCollectionAtRoot(c.Workspace, NewOptions{PR: "agent-harness#5"})
+	if err == nil || !strings.Contains(err.Error(), "created from a collection") {
+		t.Fatalf("harness PR at the root not refused: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(c.Workspace, "agent-harness-pr5")); !os.IsNotExist(err) {
+		t.Fatalf("refused PR left a folder: %v", err)
+	}
+}
+
+func TestRootSelectionFindsANonMainDefaultBranch(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	owner := filepath.Join(c.Workspace, ".bare", "agent-harness.git")
+	// A project whose development line is "develop": the bare owner's HEAD
+	// names it, as a bare clone of such a forge repository does, and there is
+	// no origin/main or origin/HEAD.
+	setHarnessDefaultRef(t, c, "main", "origin/develop")
+	source := fixtureGit(t, "--git-dir="+owner, "remote", "get-url", "origin")
+	fixtureGit(t, "-C", source, "branch", "-m", "main", "develop")
+	fixtureGit(t, "--git-dir="+owner, "fetch", "-q", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*")
+	fixtureGit(t, "--git-dir="+owner, "symbolic-ref", "HEAD", "refs/heads/develop")
+	if _, err := gitOutput("--git-dir="+owner, "rev-parse", "--verify", "origin/main"); err == nil {
+		t.Fatal("fixture still has origin/main")
+	}
+	report, err := syncFromCollection(t, c, RootSyncOptions{Create: true})
+	if err != nil || report.Source.Ref != "origin/develop" {
+		t.Fatalf("non-main default branch not found: %+v %v", report, err)
+	}
+	fixtureGit(t, "--git-dir="+owner, "symbolic-ref", "HEAD", "refs/heads/absent")
+	check, _ := SyncRootSelection(RootSyncOptions{Root: c.Workspace, Check: true})
+	if !strings.Contains(check.SourceError, "cannot find the harness default branch") {
+		t.Fatalf("unhelpful probe error: %+v", check)
+	}
+}

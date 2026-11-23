@@ -81,6 +81,9 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 		if err != nil {
 			return result, err
 		}
+		if c.harnessProvisioned && repo.Name == harnessRepo {
+			return result, fmt.Errorf("a harness PR collection is created from a collection, not from the project root")
+		}
 		url := prURL(repo.Remote, parts[1])
 		if !strings.HasPrefix(url, "https://github.com/") {
 			return result, fmt.Errorf("PR collection requires a GitHub repository remote")
@@ -155,9 +158,6 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	}
 	if !collectionNamePattern.MatchString(result.Collection) {
 		return result, fmt.Errorf("invalid collection name %q", result.Collection)
-	}
-	if c.harnessProvisioned && primary == harnessRepo && prID != "" {
-		return result, fmt.Errorf("a harness PR collection is created from a collection, not from the project root")
 	}
 	result.Repositories = []string{harnessRepo}
 	if primary != "" && primary != harnessRepo {
