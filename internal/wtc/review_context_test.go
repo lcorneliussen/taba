@@ -39,6 +39,7 @@ case "${MUTATE:-}" in
   manifest) printf '{}' > "$bundle/manifest.json" ;;
   source) chmod u+w "$repo" "$repo/feature.go" 2>/dev/null; printf 'changed\n' > "$repo/feature.go" ;;
   extra) printf 'x' > "$bundle/scratch.txt" ;;
+  unreadable) printf '{}' > "$bundle/manifest.json"; chmod 000 "$repo/feature.go" ;;
 esac
 if [ "$id" = lead ] && [ "${MUTATE:-}" = drop-finding ]; then rm -f "$bundle/findings/code.json"; fi
 # Another writer changes the caller's bundle while the run is in progress.
@@ -494,5 +495,37 @@ func TestPublicReviewReportsResultConflict(t *testing.T) {
 	}
 	if body, _ := os.ReadFile(filepath.Join(bundle.Dir, "summary.md")); string(body) != "earlier summary\n" {
 		t.Fatalf("summary changed despite the conflict: %q", body)
+	}
+}
+
+// An audit that cannot read a tree fails closed: nothing the reviewer changed
+// returns to the caller's bundle, including a tampered manifest.
+func TestPublicReviewAuditFailureReturnsNothing(t *testing.T) {
+	f := newReviewSentinelFixture(t)
+	t.Setenv("MUTATE", "unreadable")
+	t.Setenv("WTC_REVIEW_ENV", "MUTATE")
+	bundle := f.bundle(t)
+	manifestBefore, err := os.ReadFile(filepath.Join(bundle.Dir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.c.RunReviewBundle(bundle.Dir, reviewSentinelOptions)
+	if err == nil || !strings.Contains(err.Error(), "audit could not complete") {
+		t.Fatalf("unreadable audit did not fail the run: %v", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(bundle.Dir, "manifest.json")); string(after) != string(manifestBefore) {
+		t.Fatalf("unaudited manifest reached the bundle: %s", after)
+	}
+	for _, name := range []string{"summary.md", "verdict"} {
+		if _, err := os.Stat(filepath.Join(bundle.Dir, name)); err == nil {
+			t.Fatalf("%s survived an incomplete audit", name)
+		}
+	}
+	record, err := os.ReadFile(filepath.Join(bundle.Dir, "execution-context.json"))
+	if err != nil || !strings.Contains(string(record), "concern phase audit incomplete") {
+		t.Fatalf("incomplete audit not recorded: %s %v", record, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(f.tmp, "taba-review-ctx-*")); len(left) != 0 {
+		t.Fatalf("context not removed: %v", left)
 	}
 }

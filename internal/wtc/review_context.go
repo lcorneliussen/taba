@@ -388,9 +388,16 @@ func (x *reviewExecContext) snapshotBundle() error {
 // their state before the phase. Only allowed paths may change.
 func (x *reviewExecContext) checkPhase(phase string, allowed func(rel string, existed, removed bool) bool) error {
 	x.record.Audit.Checked = append(x.record.Audit.Checked, phase)
+	// Fail closed: the copy is untrusted until this audit completes cleanly,
+	// so an audit that cannot read a tree never lets results return.
+	x.untrusted = true
+	incomplete := func(err error) error {
+		x.record.Audit.Unexpected = append(x.record.Audit.Unexpected, phase+" phase audit incomplete")
+		return fmt.Errorf("public review context: %s phase audit could not complete: %w", phase, err)
+	}
 	tree, err := hashReviewTree(x.source)
 	if err != nil {
-		return err
+		return incomplete(err)
 	}
 	x.record.Source.TreeAfter = tree
 	x.record.Source.Unchanged = tree == x.sourceTree
@@ -400,7 +407,7 @@ func (x *reviewExecContext) checkPhase(phase string, allowed func(rel string, ex
 	}
 	now, err := reviewTreeFiles(x.bundle)
 	if err != nil {
-		return err
+		return incomplete(err)
 	}
 	for rel, sum := range now {
 		before, existed := x.baseline[rel]
@@ -415,11 +422,14 @@ func (x *reviewExecContext) checkPhase(phase string, allowed func(rel string, ex
 	}
 	sort.Strings(unexpected)
 	if len(unexpected) > 0 {
-		x.untrusted = true
 		x.record.Audit.Unexpected = append(x.record.Audit.Unexpected, unexpected...)
 		return fmt.Errorf("public review context: %s phase changed files outside its outputs: %s", phase, strings.Join(unexpected, ", "))
 	}
-	return x.snapshotBundle()
+	if err := x.snapshotBundle(); err != nil {
+		return incomplete(err)
+	}
+	x.untrusted = false
+	return nil
 }
 
 // finish copies the run back into the bundle and removes the context. After
