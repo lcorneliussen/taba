@@ -263,6 +263,8 @@ func run() error {
 		}
 		checks = append(checks, requirements)
 		checks = append(checks, bitbucketClientCheck(c))
+		tunnelsRow, tunnels := namedTunnelsCheck(c)
+		checks = append(checks, tunnelsRow)
 		okay := true
 		for _, check := range checks {
 			if check["name"] == "git" || check["name"] == "registry" || check["name"] == "compatibility" || check["name"] == "requirements" {
@@ -290,11 +292,15 @@ func run() error {
 				if check["name"] == "conventions" {
 					state = "migrate"
 				}
+				if check["name"] == "named-tunnels" {
+					state = "problem"
+				}
 			}
 			fmt.Printf("%-15s %-8s %v\n", check["name"], state, check["detail"])
 		}
 		printConventionSection(os.Stdout, findings)
 		printRequirementsRows(inventory)
+		printNamedTunnelSection(os.Stdout, tunnels)
 		if !okay {
 			return fmt.Errorf("required checks failed")
 		}
