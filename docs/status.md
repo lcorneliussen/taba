@@ -262,9 +262,10 @@ recorded by discovery. Resource coverage still requires measurement under the
 actual configuration; isolated fixture settings do not establish that coverage.
 
 No per-view host visibility command or unsupported attached-client API is used.
-Painting, including key feedback and new observations, is capped at one frame
-per second. Input and collector work run independently, so the paint cadence
-does not throttle manual refresh or provider admission.
+Painting, including key feedback and new observations, is capped at 30 frames
+per second, so scrolling shows within a frame. An idle frame with an unchanged
+view writes nothing. Input and collector work run independently, so the paint
+cadence does not throttle manual refresh or provider admission.
 
 If a shared cache or budget lock is unavailable, provider reads fail closed:
 status reports deferred or unavailable observations instead of dispatching

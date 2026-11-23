@@ -1,19 +1,21 @@
 package wtc
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
+
+	"taba.sh/taba/internal/testenv"
 )
 
-func TestMain(m *testing.M) {
-	unsetTabaEnvironment()
-	guard := installTestNetworkGuard()
+// The network guard comes first: it reads HOME before forgeFixtures moves it,
+// and its check (that no real forge client was launched) runs last (#471).
+func TestMain(m *testing.M) { testenv.Main(m, networkGuardFixture, forgeFixtures) }
+
+func forgeFixtures() (cleanup func() error) {
 	statusTurnOffSharedForgeBudgetAndAudit()
 	// Create synthetic selection and isolated stores unless inheriting a parent test fixture.
 	home := os.Getenv("WTC_TEST_AUTH_HOME")
@@ -39,30 +41,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv("GH_CONFIG_DIR") == "" {
 		os.Setenv("GH_CONFIG_DIR", filepath.Join(home, "gh"))
 	}
-	// Fixtures written against bb select it explicitly (the deprecated
-	// compatibility client); no-bb fixtures (newNoBBHost) clear this and run
-	// the twg default (#471).
-	os.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
-	// A closed local port: a test that forgets its own REST server fails.
-	statusBBAPI = "http://127.0.0.1:9/2.0"
-	code := m.Run()
-	if owned {
-		os.RemoveAll(home)
-	}
-	if err := guard(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		code = 1
-	}
-	os.Exit(code)
-}
-
-// A collection shell carries generated TABA_ variables, and readers prefer
-// them; tests that set only a WTC_ name must not read the developer's values.
-func unsetTabaEnvironment() {
-	for _, setting := range os.Environ() {
-		if name, _, _ := strings.Cut(setting, "="); strings.HasPrefix(name, "TABA_") {
-			os.Unsetenv(name)
+	return func() error {
+		if owned {
+			os.RemoveAll(home)
 		}
+		return nil
 	}
 }
 

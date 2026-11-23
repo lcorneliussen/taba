@@ -211,10 +211,6 @@ func statusBBBuildContext(ctx context.Context, slug, branch string) (*StatusBuil
 	return build, nil
 }
 
-func statusBBPipelines(workspace, repo, branch, user, pass string) ([]byte, error) {
-	return statusBBPipelinesContext(context.Background(), workspace, repo, branch, user, pass)
-}
-
 func statusBBPipelinesContext(ctx context.Context, workspace, repo, branch, user, pass string) ([]byte, error) {
 	query := url.Values{"sort": {"-created_on"}, "pagelen": {"30"}}
 	if branch != "" {
@@ -276,10 +272,6 @@ func statusPipelinePageBranches(raw []byte) []string {
 		branches = append(branches, name)
 	}
 	return branches
-}
-
-func statusPageAuditApplies(slug, branch string, pageBuild *StatusBuild) bool {
-	return statusPageAuditAppliesContext(context.Background(), slug, branch, pageBuild)
 }
 
 func statusPageAuditAppliesContext(ctx context.Context, slug, branch string, pageBuild *StatusBuild) bool {

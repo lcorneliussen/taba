@@ -407,12 +407,6 @@ func validCheckHeadPrefix(head string) bool {
 	return true
 }
 
-// Resolve abbreviations through the immutable commit endpoint before caching
-// or filtering pipelines. Never attach prefix-scoped evidence to another head.
-func resolveBBCheckHead(slug, prefix, user, pass string) (string, error) {
-	return resolveBBCheckHeadContext(context.Background(), StatusRefreshBackground, slug, prefix, user, pass)
-}
-
 func resolveBBCheckHeadContext(ctx context.Context, intent StatusRefreshIntent, slug, prefix, user, pass string) (string, error) {
 	ctx = statusAuthOperation(ctx)
 	parts := strings.Split(slug, "/")

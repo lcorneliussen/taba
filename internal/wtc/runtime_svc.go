@@ -385,31 +385,6 @@ func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, err
 
 }
 
-// runtimeTunnelTemplate is the client command for a provider, reading the
-// service's port from its variable.
-func runtimeTunnelTemplate(provider, portEnv string, public bool) (cmd, ready string, err error) {
-	port := `"$` + portEnv + `"`
-	local := `"http://127.0.0.1:$` + portEnv + `"`
-	switch provider {
-	case "tailscale":
-		if public {
-			return "", "", fmt.Errorf("tailscale tunnels are tailnet-only; use cloudflare, ngrok or devtunnel for a public link")
-		}
-		return "exec tailscale serve --https=" + port + " " + local, "Available within your tailnet", nil
-	case "cloudflare":
-		return "exec cloudflared tunnel --no-autoupdate --url " + local, "trycloudflare.com", nil
-	case "ngrok":
-		return "exec ngrok http " + port + " --log stdout", "started tunnel", nil
-	case "devtunnel":
-		cmd := "exec devtunnel host -p " + port
-		if public {
-			cmd += " --allow-anonymous"
-		}
-		return cmd, "Connect via browser", nil
-	}
-	return "", "", fmt.Errorf("unknown tunnel provider %q", provider)
-}
-
 // TunnelOptions opens or closes a tunnel for a service.
 type TunnelOptions struct {
 	Declared           bool
@@ -477,10 +452,6 @@ func (c *Context) legacyTunnel(opt TunnelOptions) (RuntimeResult, error) {
 	}
 	if opt.Provider == "" && len(tunnels) != 1 {
 		return RuntimeResult{}, fmt.Errorf("name the provider: tailscale, cloudflare, ngrok or devtunnel")
-	}
-	provider := opt.Provider
-	if provider == "" {
-		provider = tunnels[0].Provider
 	}
 	if len(tunnels) == 0 {
 		return RuntimeResult{}, fmt.Errorf("configure a named receiving-local tunnel with explicit provider inputs before starting it")

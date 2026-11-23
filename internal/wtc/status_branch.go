@@ -77,10 +77,6 @@ func statusDiscoverBranchContext(ctx context.Context, forge, slug, branch string
 	return "", nil
 }
 
-func statusDiscoverGitHubBranch(slug, branch string) (string, error) {
-	return statusDiscoverGitHubBranchContext(context.Background(), slug, branch)
-}
-
 func statusDiscoverGitHubBranchContext(ctx context.Context, slug, branch string) (string, error) {
 	ctx = statusAuthOperation(ctx)
 	raw, err := statusSingleFlightContext(ctx, "branch", "github.com", slug, branch, func() ([]byte, error) {

@@ -52,7 +52,7 @@ func acceptanceSocket(t *testing.T) (string, *acceptanceDaemon) {
 			io.WriteString(w, d.config)
 		case "POST /localapi/v0/serve-config":
 			if r.Header.Get("If-Match") != `"synthetic-generation"` {
-				http.Error(w, "generation", 412)
+				http.Error(w, "generation", http.StatusPreconditionFailed)
 				return
 			}
 			data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))

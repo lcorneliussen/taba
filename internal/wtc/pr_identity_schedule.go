@@ -248,12 +248,12 @@ func (c *Context) repairPRReferences(records []PRRecord) {
 	if state.Repair {
 		issued, err = c.prIdentityRepair(records, repair, &state)
 		if !issued && err == nil {
-			issued, err = c.prIdentityOrdinary(records, ordinary, &state)
+			issued, _ = c.prIdentityOrdinary(records, ordinary, &state)
 		}
 	} else {
 		issued, err = c.prIdentityOrdinary(records, ordinary, &state)
 		if !issued && err == nil {
-			issued, err = c.prIdentityRepair(records, repair, &state)
+			issued, _ = c.prIdentityRepair(records, repair, &state)
 		}
 	}
 	if issued && state != before {

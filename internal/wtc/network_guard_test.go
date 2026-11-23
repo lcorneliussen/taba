@@ -84,3 +84,15 @@ func installTestNetworkGuard() (check func() error) {
 		return nil
 	}
 }
+
+// networkGuardFixture installs the network guard as a testenv fixture (#471).
+// Fixtures written against bb select it explicitly, the deprecated
+// compatibility client; no-bb fixtures clear this and run the twg default.
+// Its cleanup fails the run when a real forge client was launched.
+func networkGuardFixture() (cleanup func() error) {
+	check := installTestNetworkGuard()
+	os.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
+	// A closed local port: a test that forgets its own REST server fails.
+	statusBBAPI = "http://127.0.0.1:9/2.0"
+	return check
+}
