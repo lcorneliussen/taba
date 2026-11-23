@@ -42,7 +42,7 @@ func TestRetireCollectionRunsTeardownAndKeepsRemoteRefs(t *testing.T) {
 	target := result.Collection
 	fixtureFile(t, filepath.Join(target, "SCOPE.md"), "Disposable task context.\n", 0644)
 	fixtureFile(t, filepath.Join(target, ".wtc-prs.lock"), "", 0600)
-	// Retirement closes the agent pane, which settles an unconfirmed start.
+	// Retirement deletes an unconfirmed start's marker with the generated state.
 	fixtureFile(t, filepath.Join(target, ".wtc-agent-start.pending"), "", 0600)
 	for _, name := range []string{".taba-prs", ".taba-status.json", ".taba-status.md", ".last-taba-status.yml", ".taba-catch-up.json", ".taba-catch-up.json.md"} {
 		fixtureFile(t, filepath.Join(target, name), "", 0644)

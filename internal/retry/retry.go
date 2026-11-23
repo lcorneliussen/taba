@@ -2,7 +2,8 @@
 //
 // Poll repeats an Idempotent attempt. A side effect is an Effect, which Poll
 // does not accept: it runs through an Intent, whose marker file stops a second
-// attempt once an outcome is unknown, in this process or any later one.
+// attempt once an outcome is unknown or an applied result was not recorded,
+// in this process or any later one.
 package retry
 
 import (
@@ -99,8 +100,9 @@ type Intent struct {
 
 var (
 	// ErrUnresolved reports that the marker exists: another run is attempting
-	// the effect, or an earlier attempt's outcome is unknown. A person removes
-	// the marker after confirming what that attempt did.
+	// the effect, an earlier attempt's outcome is unknown, or an applied
+	// effect's result was not recorded. A person removes the marker after
+	// confirming what that attempt did.
 	ErrUnresolved = errors.New("an earlier attempt's outcome is unresolved")
 	// ErrDone reports that Done found the intent already achieved.
 	ErrDone = errors.New("an earlier run already achieved this")
