@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"taba.sh/taba/internal/retry"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -250,28 +252,22 @@ func runRetireWorker(name string, force, asJSON bool) error {
 
 func waitRetireSource(session, workspaceID, paneID string) error {
 	time.Sleep(time.Second) // Let the initiating CLI return before closing its pane.
-	deadline := time.Now().Add(2 * time.Hour)
-	for {
+	err := retry.Poll(context.Background(), retry.Policy{Every: 2 * time.Second, Within: 2 * time.Hour}, func(context.Context) (bool, error) {
 		panes, err := openPanes(session, workspaceID)
 		if err != nil {
-			return fmt.Errorf("cannot verify source pane state: %w", err)
+			return false, fmt.Errorf("cannot verify source pane state: %w", err)
 		}
 		for _, pane := range panes {
-			if pane.ID != paneID {
-				continue
+			if pane.ID == paneID {
+				return pane.Agent == "" || pane.AgentStatus == "idle" || pane.AgentStatus == "done", nil
 			}
-			if pane.Agent == "" || pane.AgentStatus == "idle" || pane.AgentStatus == "done" {
-				return nil
-			}
-			if time.Now().After(deadline) {
-				return errors.New("source agent did not finish; retirement remains pending in cleanup space")
-			}
-			time.Sleep(2 * time.Second)
-			goto retry
 		}
-		return errors.New("source pane disappeared before cleanup could verify it")
-	retry:
+		return false, errors.New("source pane disappeared before cleanup could verify it")
+	})
+	if errors.Is(err, retry.ErrExhausted) {
+		return errors.New("source agent did not finish; retirement remains pending in cleanup space")
 	}
+	return err
 }
 
 func shellQuote(value string) string {
