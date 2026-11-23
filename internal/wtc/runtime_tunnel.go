@@ -1,15 +1,11 @@
 package wtc
 
 import (
-	"context"
 	"encoding/json"
 	"net"
 	"net/url"
-	"os"
-	"os/exec"
 	"regexp"
 	"strings"
-	"time"
 )
 
 // How far a tunnel reaches. Anything wtc cannot establish is unknown, and
@@ -167,29 +163,6 @@ func runtimeTunnelExposure(item *RuntimeItem, tailscale func(string) string) {
 				item.Exposure, item.ExposureBasis = exposure, ExposureDefault
 			}
 		}
-	}
-}
-
-// runtimeTailscaleCheck asks the local Tailscale client once per status pass
-// how each served address is exposed.
-func runtimeTailscaleCheck() func(string) string {
-	var data []byte
-	asked := false
-	return func(raw string) string {
-		if !asked {
-			asked = true
-			binary, err := exec.LookPath("tailscale")
-			if err != nil {
-				if _, statErr := os.Stat(runtimeTailscaleApp); statErr != nil {
-					return ""
-				}
-				binary = runtimeTailscaleApp
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			data, _ = exec.CommandContext(ctx, binary, "serve", "status", "--json").Output()
-		}
-		return runtimeTailscaleExposure(data, raw)
 	}
 }
 

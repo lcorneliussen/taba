@@ -136,8 +136,5 @@ func gitCommand(ctx context.Context, dir string, args ...string) (*exec.Cmd, err
 		return nil, err
 	}
 	full := append(append(append([]string{"-C", dir}, trustedArgs...), pins...), args...)
-	if ctx == nil {
-		return exec.Command("git", full...), nil
-	}
 	return exec.CommandContext(ctx, "git", full...), nil
 }

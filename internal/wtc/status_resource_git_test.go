@@ -702,7 +702,7 @@ func TestStatusResourceIdentityNullConfigDiscardDoesNotInvalidate(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.ModTime() == after.ModTime() {
+	if before.ModTime().Equal(after.ModTime()) {
 		t.Skip("null-device writes do not update metadata on this platform")
 	}
 	got, err := statusResourceGit(c.resourceContext(), args, read)

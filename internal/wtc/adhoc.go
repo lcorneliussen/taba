@@ -105,10 +105,7 @@ func remoteKey(remote string) ([]string, error) {
 		}
 		host, path = m[1], m[2]
 	}
-	parts := []string{host}
-	for _, part := range strings.Split(strings.TrimSuffix(strings.Trim(path, "/"), ".git"), "/") {
-		parts = append(parts, part)
-	}
+	parts := append([]string{host}, strings.Split(strings.TrimSuffix(strings.Trim(path, "/"), ".git"), "/")...)
 	for _, part := range parts {
 		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, "\\\r\n\x00") {
 			return nil, fmt.Errorf("cannot derive an owner location from remote %q", remote)

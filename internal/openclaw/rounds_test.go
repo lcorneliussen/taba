@@ -39,15 +39,14 @@ func TestCatchUpReturnsMergedBranchesToTip(t *testing.T) {
 			git("add", "feature")
 			git("commit", "-qm", "first round")
 			head := git("rev-parse", "HEAD")
-			merge := head
 			if mode == "squash" || mode == "old-catch-up" || mode == "base-advanced-after-old-catch-up" {
 				advanceOrigin(t, bare, "feature", "first round\n")
 			} else {
-				merge = git("commit-tree", "-p", "origin/main", "-p", "HEAD", "-m", "Merge first round", "HEAD^{tree}")
+				merge := git("commit-tree", "-p", "origin/main", "-p", "HEAD", "-m", "Merge first round", "HEAD^{tree}")
 				git("push", "-q", bare, merge+":refs/heads/main")
 			}
 			git("fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
-			merge = git("rev-parse", "origin/main")
+			merge := git("rev-parse", "origin/main")
 			advanceOrigin(t, bare, "later", "base moved\n")
 			git("fetch", "-q", "origin", "+refs/heads/main:refs/remotes/origin/main")
 			if mode == "already-at-tip" || mode == "old-catch-up" || mode == "base-advanced-after-old-catch-up" {

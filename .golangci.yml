@@ -1,0 +1,62 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # Each entry is a call whose error has no useful handling here. Any other
+      # ignored error fails the gate: handle it, or assign it to _ where the
+      # surrounding code says why.
+      exclude-functions:
+        # Writes to a terminal, a tabwriter or a hash.Hash (which never fails).
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        # Closes of read-only files, descriptors, locks, pipes, process
+        # handles and response bodies, and closes on a path that already
+        # returns an error. A close after a write is checked by hand, as the
+        # atomic-write helpers do.
+        - (*os.File).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*os.Process).Release
+        - golang.org/x/sys/unix.Close
+        # Best-effort cleanup of temporary files and directories.
+        - os.Remove
+        - os.RemoveAll
+        - golang.org/x/sys/unix.Unlinkat
+        # Never fails on darwin or linux.
+        - os.Unsetenv
+    staticcheck:
+      # golangci-lint's default set, plus:
+      # ST1005: error strings here start with product names (Bitbucket,
+      #   Cloudflare, Tailscale), which the check reads as capitalisation.
+      # QF1001, QF1002, QF1003: De Morgan and tagged-switch rewrites are
+      #   suggestions, not defects.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -ST1005
+        - -QF1001
+        - -QF1002
+        - -QF1003
+  exclusions:
+    rules:
+      # A test that ignores a setup error fails on its next assertion.
+      - path: _test\.go
+        linters: [errcheck]
+      # Releasing a flock: closing the descriptor releases it too. Taking a
+      # lock (LOCK_EX, LOCK_SH) is still checked.
+      - linters: [errcheck]
+        source: '^\s*defer unix\.Flock\(.*unix\.LOCK_UN\)$'

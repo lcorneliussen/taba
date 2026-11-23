@@ -671,11 +671,12 @@ func runDevCompiler(ctx context.Context, command *exec.Cmd) error {
 	if err := command.Start(); err != nil {
 		return err
 	}
-	done := make(chan error, 1)
-	go func() { done <- command.Wait() }()
+	var waitErr error
+	done := make(chan struct{})
+	go func() { waitErr = command.Wait(); close(done) }()
 	select {
-	case err := <-done:
-		return err
+	case <-done:
+		return waitErr
 	case <-ctx.Done():
 		_ = command.Process.Kill()
 		<-done

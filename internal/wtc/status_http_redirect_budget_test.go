@@ -125,7 +125,8 @@ func TestStatusHTTPRedirectUnsafe(t *testing.T) {
 			if strings.Contains(err.Error(), "sentinel") || strings.Contains(err.Error(), server.URL) || strings.Contains(err.Error(), "secret") {
 				t.Fatalf("sensitive redirect error: %v", err)
 			}
-			if !statusTakeForgeToken("bitbucket.org") || !statusTakeForgeToken("bitbucket.org") {
+			first, second := statusTakeForgeToken("bitbucket.org"), statusTakeForgeToken("bitbucket.org")
+			if !first || !second {
 				t.Fatal("unsafe redirect spent allowance")
 			}
 		})
