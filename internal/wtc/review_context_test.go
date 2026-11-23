@@ -11,7 +11,7 @@ import (
 )
 
 // The sentinel launcher observes its own process boundary and reports it in
-// the only file it may write. It does not echo its arguments as evidence: it
+// the outputs it may write (a concern's findings, the lead's summary). It does not echo its arguments as evidence: it
 // walks its working directory's ancestors, reads its environment and tries to
 // change the source and bundle it was given.
 const reviewSentinelLauncher = `#!/bin/sh
@@ -408,5 +408,60 @@ esac
 	t.Setenv("FAKE_PR_HEAD", strings.Repeat("a", 40))
 	if _, err := f.c.PostReviewBundle(bundle, ReviewPostOptions{}); err == nil || !strings.Contains(err.Error(), "stale bundle") {
 		t.Fatalf("posted after the PR head moved: %v", err)
+	}
+}
+
+// The snapshot is the reviewed tree as stored: export attributes must not
+// drop or rewrite files, and links may not lead out of the snapshot.
+func TestPublicReviewSnapshotIsTheStoredTree(t *testing.T) {
+	repo := t.TempDir()
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(repo, path)), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, path), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".gitattributes", "/tests export-ignore\nversion.txt export-subst\n")
+	write("tests/case_test.go", "package tests\n")
+	write("version.txt", "$Format:%H$\n")
+	write("docs/guide.md", "guide\n")
+	for link, target := range map[string]string{"docs/inside": "guide.md", "docs/up": "../version.txt", "docs/abs": "/etc/hosts"} {
+		if err := os.Symlink(target, filepath.Join(repo, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "-m", "fixture"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s %v", args, out, err)
+		}
+	}
+	head, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "source")
+	if err := snapshotReviewSource(repo, strings.TrimSpace(string(head)), dest); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = removeReviewContext(filepath.Dir(dest)) })
+	if body, err := os.ReadFile(filepath.Join(dest, "tests", "case_test.go")); err != nil || string(body) != "package tests\n" {
+		t.Fatalf("export-ignore path missing from the snapshot: %q %v", body, err)
+	}
+	if body, _ := os.ReadFile(filepath.Join(dest, "version.txt")); string(body) != "$Format:%H$\n" {
+		t.Fatalf("export-subst rewrote a file: %q", body)
+	}
+	if target, err := os.Readlink(filepath.Join(dest, "docs", "inside")); err != nil || target != "guide.md" {
+		t.Fatalf("contained link lost: %q %v", target, err)
+	}
+	for _, link := range []string{"up", "abs"} {
+		if _, err := os.Lstat(filepath.Join(dest, "docs", link)); err == nil {
+			t.Fatalf("escaping link %s kept", link)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dest, "docs", "guide.md"), []byte("x"), 0644); err == nil {
+		t.Fatal("snapshot is writable")
 	}
 }

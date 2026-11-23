@@ -129,7 +129,11 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ Review
 		opt.Timeout = time.Duration(seconds) * time.Second
 	}
 	if manifest.Public {
-		for _, agent := range reviewSpecAgents(opt.Strong, opt.Standard, opt.Fast, opt.Lead) {
+		// Refuse a client that cannot isolate before probing one that can,
+		// so the actionable refusal is not hidden by an unrelated client check.
+		agents := reviewSpecAgents(opt.Strong, opt.Standard, opt.Fast, opt.Lead)
+		sort.SliceStable(agents, func(i, j int) bool { return agents[i] != "claude" && agents[j] == "claude" })
+		for _, agent := range agents {
 			if err := reviewPublicClient(agent); err != nil {
 				return ReviewRunResult{}, err
 			}
@@ -606,9 +610,7 @@ func launchReviewAgent(dirs reviewRunDirs, prompt, agent, model string, timeout 
 			if model != "" {
 				args = append(args, "--model", model)
 			}
-			// "//" anchors the deny rule at the filesystem root; a single
-			// leading slash is project-relative. Edit rules cover Write.
-			args = append(args, "--add-dir", repoDir, "--permission-mode", "acceptEdits", "--disallowedTools", "Edit(/"+repoDir+"/**)", "Bash(git * --ou*)", "--allowedTools", "Read", "Grep", "Glob", "Write", "Edit", "Bash(git log:*)", "Bash(git show:*)", "Bash(ls:*)", "Agent")
+			args = append(args, "--add-dir", repoDir, "--permission-mode", "acceptEdits", "--disallowedTools", claudeDenyEdits(repoDir), "Bash(git * --ou*)", "--allowedTools", "Read", "Grep", "Glob", "Write", "Edit", "Bash(git log:*)", "Bash(git show:*)", "Bash(ls:*)", "Agent")
 			cmd = exec.CommandContext(ctx, "claude", args...)
 		case agent == "codex":
 			args := []string{"exec", "--json"}

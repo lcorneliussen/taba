@@ -38,6 +38,8 @@ func fakeReviewClaude(t *testing.T, help string) (record string) {
 func TestPublicReviewRefusesClientsWithoutContextIsolation(t *testing.T) {
 	f := newReviewSentinelFixture(t)
 	t.Setenv("WTC_REVIEW_AGENT_CMD", "")
+	resetReviewClaudeCapability(t)
+	fakeReviewClaude(t, strings.Join(reviewClaudeContextFlags, " "))
 	bundle := f.bundle(t)
 	for _, agent := range []string{"codex", "grok"} {
 		opt := reviewSentinelOptions
@@ -85,7 +87,7 @@ func TestPublicReviewClaudeLaunchContext(t *testing.T) {
 		t.Fatalf("claude working directory: %s", cwd)
 	}
 	joined := strings.Join(argv, " ")
-	for _, want := range []string{"--safe-mode", "--restricted", "--strict-mcp-config", "--no-session-persistence", "--permission-prompts none", "--tools Read,Grep,Glob,Write,Edit,Agent"} {
+	for _, want := range []string{"--safe-mode", "--restricted", "--strict-mcp-config", "--no-session-persistence", "--permission-prompts none", "--tools Read,Grep,Glob,Write,Edit"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("claude launched without %s: %s", want, joined)
 		}
@@ -99,7 +101,7 @@ func TestPublicReviewClaudeLaunchContext(t *testing.T) {
 	if source == "" || strings.HasPrefix(source, collection) || !strings.Contains(joined, "Edit(/"+source+"/**)") || !strings.HasPrefix("/"+source, "//") {
 		t.Fatalf("source snapshot is not denied with an absolute rule: %s", joined)
 	}
-	if strings.Contains(joined, "Bash") {
+	if strings.Contains(joined, "Bash") || strings.Contains(joined, "Agent") {
 		t.Fatalf("public reviewer received a command tool: %s", joined)
 	}
 	record2, err := os.ReadFile(filepath.Join(bundle.Dir, "execution-context.json"))

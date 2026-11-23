@@ -1,7 +1,7 @@
 package wtc
 
 import (
-	"archive/tar"
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -52,8 +53,9 @@ var reviewContextAuthEnv = map[string][]string{
 	"claude": {"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "ANTHROPIC_VERTEX_PROJECT_ID", "CLOUD_ML_REGION", "AWS_PROFILE", "AWS_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS"},
 }
 
-// Client flags that exclude automatically loaded context. The capability
-// check refuses a client whose help does not offer every one of them.
+// Client options the public launch depends on: the context exclusions plus
+// non-interactive permission handling. The capability check refuses a client
+// whose help does not offer every one of them.
 var reviewClaudeContextFlags = []string{"--safe-mode", "--restricted", "--strict-mcp-config", "--no-session-persistence", "--permission-prompts"}
 
 type reviewExecContext struct {
@@ -227,7 +229,7 @@ func (x *reviewExecContext) prepare(bundle string, manifest ReviewManifest) erro
 		Version: 1, Mode: mode,
 		WorkingDir:  "fresh temporary directory outside the collection; no agent configuration found in its ancestors",
 		Environment: reviewContextEnvRec{Policy: "allowlist"},
-		Source:      reviewSourceRec{Commit: x.sourceSHA, Snapshot: "git archive of the reviewed head, read-only files", TreeBefore: x.sourceTree},
+		Source:      reviewSourceRec{Commit: x.sourceSHA, Snapshot: "reviewed head tree as stored (no export attributes or filters), read-only files", TreeBefore: x.sourceTree},
 		Limits: []string{
 			"client restrictions and file-tool confinement are not an OS sandbox",
 			"unexpected writes are detected after each phase, not prevented",
@@ -253,7 +255,8 @@ var reviewPosterFiles = []string{"comment.id", "comment.create-pending", "inline
 
 // checkReviewContextLocation refuses a temporary directory beneath the
 // collection or beneath a directory carrying agent configuration. The home
-// directory's own configuration is user-level; client options exclude it.
+// directory's own configuration is user-level; for claude, the client options
+// taba passes exclude it. An operator launcher is responsible for its own.
 func checkReviewContextLocation(root, collection string) error {
 	if collection != "" {
 		if real, err := filepath.EvalSymlinks(collection); err == nil {
@@ -353,11 +356,15 @@ func (x *reviewExecContext) claudeArgs(model string) []string {
 		args = append(args, "--model", model)
 	}
 	return append(args, "--safe-mode", "--restricted", "--strict-mcp-config", "--no-session-persistence", "--permission-prompts", "none", "--permission-mode", "acceptEdits",
-		"--add-dir", x.source, "--tools", "Read,Grep,Glob,Write,Edit,Agent",
-		// A single leading slash is project-relative in claude permission
-		// rules; // anchors the rule at the filesystem root. Edit rules cover
-		// every file-editing tool, Write included.
-		"--disallowedTools", "Edit(/"+x.source+"/**)")
+		"--add-dir", x.source, "--tools", "Read,Grep,Glob,Write,Edit",
+		"--disallowedTools", claudeDenyEdits(x.source))
+}
+
+// claudeDenyEdits denies claude edits below dir. A single leading slash is
+// project-relative in claude permission rules; "//" anchors the rule at the
+// filesystem root. Edit rules cover every file-editing tool, Write included.
+func claudeDenyEdits(dir string) string {
+	return "Edit(/" + dir + "/**)"
 }
 
 func (x *reviewExecContext) noteClient(agent string) {
@@ -513,26 +520,107 @@ func sweepReviewContexts() {
 	}
 }
 
+// snapshotReviewSource writes the commit's tree exactly as stored: blob
+// contents straight from the object database. git archive is not used because
+// it applies export-ignore and export-subst, and checkout would run repository
+// filters; neither belongs in what a reviewer reads as the reviewed head.
 func snapshotReviewSource(repo, commit, dest string) error {
-	cmd := exec.Command("git", "-C", repo, "archive", "--format=tar", commit)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	list, err := reviewGit(repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+	if err != nil {
+		return err
+	}
+	type entry struct{ mode, sha, path string }
+	var entries []entry
+	for _, record := range strings.Split(string(list), "\x00") {
+		meta, path, ok := strings.Cut(record, "\t")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(meta)
+		if len(fields) != 3 {
+			return fmt.Errorf("unexpected tree entry %q", record)
+		}
+		clean := filepath.Clean(filepath.FromSlash(path))
+		if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("unsafe tree path %q", path)
+		}
+		if fields[1] == "commit" {
+			// A submodule is recorded by commit; its content is not part of this tree.
+			if err := os.MkdirAll(filepath.Join(dest, clean), 0755); err != nil {
+				return err
+			}
+			continue
+		}
+		entries = append(entries, entry{fields[0], fields[2], clean})
+	}
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "-C", repo, "cat-file", "--batch")
+	var input bytes.Buffer
+	for _, e := range entries {
+		input.WriteString(e.sha + "\n")
+	}
+	cmd.Stdin = &input
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
 	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	extractErr := extractReviewSource(out, dest)
+	writeErr := func() error {
+		r := bufio.NewReader(out)
+		for _, e := range entries {
+			header, err := r.ReadString('\n')
+			if err != nil {
+				return err
+			}
+			fields := strings.Fields(header)
+			if len(fields) != 3 || fields[0] != e.sha || fields[1] != "blob" {
+				return fmt.Errorf("unexpected object for %s: %q", e.path, strings.TrimSpace(header))
+			}
+			size, err := strconv.ParseInt(fields[2], 10, 64)
+			if err != nil {
+				return err
+			}
+			body := make([]byte, size)
+			if _, err := io.ReadFull(r, body); err != nil {
+				return err
+			}
+			if _, err := r.ReadByte(); err != nil {
+				return err
+			}
+			path := filepath.Join(dest, e.path)
+			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				return err
+			}
+			switch e.mode {
+			case "120000":
+				if reviewLinkEscapes(string(body)) {
+					continue
+				}
+				if err := os.Symlink(string(body), path); err != nil {
+					return err
+				}
+			default:
+				if err := os.WriteFile(path, body, 0644); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}()
 	_, _ = io.Copy(io.Discard, out)
 	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("git archive: %v %s", err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("git cat-file: %v %s", err, strings.TrimSpace(stderr.String()))
 	}
-	if extractErr != nil {
-		return extractErr
+	if writeErr != nil {
+		return writeErr
 	}
-	// Read-only after extraction: directories last, so files can be written.
+	// Read-only after writing: directories last, so files can be written.
 	var dirs []string
 	err = filepath.WalkDir(dest, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -553,59 +641,18 @@ func snapshotReviewSource(repo, commit, dest string) error {
 	return err
 }
 
-func extractReviewSource(r io.Reader, dest string) error {
-	if err := os.MkdirAll(dest, 0755); err != nil {
-		return err
+// reviewLinkEscapes keeps only links that cannot leave the snapshot: relative
+// targets without parent steps, so no chain of links resolves outside it.
+func reviewLinkEscapes(target string) bool {
+	if target == "" || filepath.IsAbs(target) {
+		return true
 	}
-	tr := tar.NewReader(r)
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		name := filepath.Clean(header.Name)
-		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("unsafe archive path %q", header.Name)
-		}
-		path := filepath.Join(dest, name)
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(path, 0755); err != nil {
-				return err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				return err
-			}
-			f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
-			if err != nil {
-				return err
-			}
-			_, err = io.Copy(f, tr)
-			if closeErr := f.Close(); err == nil {
-				err = closeErr
-			}
-			if err != nil {
-				return err
-			}
-		case tar.TypeSymlink:
-			// Keep only links that stay inside the snapshot.
-			target := header.Linkname
-			resolved := filepath.Join(filepath.Dir(path), target)
-			if filepath.IsAbs(target) || (resolved != dest && !strings.HasPrefix(resolved, dest+string(filepath.Separator))) {
-				continue
-			}
-			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				return err
-			}
-			if err := os.Symlink(target, path); err != nil {
-				return err
-			}
+	for _, part := range strings.Split(filepath.ToSlash(target), "/") {
+		if part == ".." {
+			return true
 		}
 	}
+	return false
 }
 
 // reviewTreeFiles hashes every regular file below root by relative path.
