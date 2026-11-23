@@ -79,8 +79,8 @@ func foregroundCloudflareFixtureScript(fails, holdAfterReady bool) string {
 	}
 	script += "printf 'https://synthetic.trycloudflare.com\\n'\n"
 	if fails {
-		// Hold the failing child until the test's readiness callback opens
-		// $HOME/ready-gate (foregroundFixtureGate), then exit unconfirmed.
+		// Hold the failing child until the test's readiness callback writes a
+		// line to $HOME/ready-gate (foregroundFixtureGate), then exit unconfirmed.
 		return script + "read ignored < \"$HOME/ready-gate\"\nexit 42\n"
 	}
 	if holdAfterReady {
@@ -163,9 +163,9 @@ func foregroundFixtureGate(t *testing.T, home string) *os.File {
 	return gate
 }
 
-// Startup identity is observed after Start and before stdout is read. Force the
-// ordering seen on CI: the first observation is inconclusive and the next one
-// happens only after the synthetic child has printed its URL. A child that
+// Startup identity is observed after Start and before stdout is read. Force an
+// inconclusive first observation and let later ones happen only after the
+// synthetic child has printed its URL. A child that
 // exits right after its URL must fail closed before ownership; the gated
 // fixture stays observable until readiness and still exits 42.
 func TestTunnelForegroundFixtureStartupOrdering(t *testing.T) {
@@ -229,7 +229,9 @@ func TestTunnelForegroundFixtureStartupOrdering(t *testing.T) {
 				if observeErr == nil || !strings.HasPrefix(observeErr.Error(), "owned child initialization unconfirmed") {
 					t.Fatal("exit before identity did not fail closed", child, observeErr)
 				}
-				if runtime.GOOS == "linux" && observeErr.Error() != "owned child initialization unconfirmed (state absent, observations 2)" {
+				// stdout closes before the child is a zombie; a read in between
+				// is still inconclusive, so only positive absence is required.
+				if runtime.GOOS == "linux" && !strings.HasPrefix(observeErr.Error(), "owned child initialization unconfirmed (state absent, observations ") {
 					t.Fatal("unexpected early-exit observation", observeErr)
 				}
 			}
