@@ -60,6 +60,9 @@ type runtimeRepoSources struct {
 	resources []runtimeResourceFile
 	// inputs are the files and directories read, for cache invalidation.
 	inputs []string
+	// nativeLoaded maps each repository-relative file a dekit.yaml tree
+	// loads to the mounts it is loaded at.
+	nativeLoaded map[string][]string
 }
 
 // runtimeNativeDefaults are the task settings dekit.yaml's defaults may set.
@@ -102,6 +105,7 @@ func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (r
 	// Native projects first: a taba task file one of them loads is read there.
 	sets := make([]map[string]runtimeDeclaredTask, len(files))
 	mounts := map[string][]string{}
+	out.nativeLoaded = mounts
 	for i, file := range files {
 		abs := filepath.Join(repoRoot, filepath.FromSlash(file.rel))
 		out.inputs = append(out.inputs, abs)

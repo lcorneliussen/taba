@@ -445,3 +445,51 @@ func TestRootDekitRemoveRefusesHarnessLoadedFromRoot(t *testing.T) {
 		t.Fatal("the loaded harness file was edited")
 	}
 }
+
+func TestRootDekitAddSharedRefusesNativeLoadedHarness(t *testing.T) {
+	t.Setenv("TABA_RUNTIME_DECLARATIONS", "")
+	c, repo := rootDekitFixture(t, map[string]string{"dekit.yaml": "load: [.harness/dekit.tasks.yaml]\n", ".harness/dekit.tasks.yaml": "tasks: {web/main: {cmd: [sh, -c, ':']}}\n"})
+	harness := filepath.Join(repo, ".harness", "dekit.tasks.yaml")
+	before, err := os.ReadFile(harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// With or without --port-env: the same refusal before anything is written,
+	// matching svc rm, which refuses to edit the natively loaded file.
+	for _, portEnv := range []string{"", "API_PORT"} {
+		if _, err := c.AddService(ServiceOptions{Service: "widget/api", Cmd: []string{"true"}, Shared: true, NoStart: true, PortEnv: portEnv}); err == nil || !strings.Contains(err.Error(), "widget/dekit.yaml loads .harness/dekit.tasks.yaml") {
+			t.Fatalf("add --shared (port env %q) into a natively loaded harness file: %v", portEnv, err)
+		}
+	}
+	if _, err := c.RemoveService("widget/web", true); err == nil || !strings.Contains(err.Error(), "widget/.harness/dekit.tasks.yaml") {
+		t.Fatalf("rm parity: %v", err)
+	}
+	if after, _ := os.ReadFile(harness); string(after) != string(before) {
+		t.Fatal("the natively loaded harness file was written")
+	}
+}
+
+func TestRootDekitDiscoveryShowsLiteralReadyHTTP(t *testing.T) {
+	t.Setenv("TABA_RUNTIME_DECLARATIONS", "")
+	c, _ := rootDekitFixture(t, map[string]string{
+		"dekit.yaml":                "tasks:\n  web: {cmd: [sh, -c, ':'], ready: {http: 'http://127.0.0.1:3000/health'}}\n  secret: {cmd: [sh, -c, ':'], ready: {http: 'http://127.0.0.1:3001/?token=x'}}\n",
+		".harness/dekit.tasks.yaml": "tasks:\n  api: {cmd: [sh, -c, ':'], ready: {http: 'http://127.0.0.1:4000/'}, x-wtc: {port_env: API_PORT}}\n",
+	})
+	want := map[string]string{"widget/web": "http://127.0.0.1:3000/health", "widget/secret": "", "widget/api": ""}
+	// svc list/inventory and svc status both show declarations before render.
+	for name, list := range map[string]func() []RuntimeItem{"enlisted": c.RuntimeEnlisted, "status": c.RuntimeStatus} {
+		urls := map[string]string{}
+		for _, item := range list() {
+			if item.Error != "" {
+				t.Fatalf("%s diagnostic: %+v", name, item)
+			}
+			if item.Answering != "" || item.State != "unconfigured" {
+				t.Fatalf("%s probed or ran a declaration: %+v", name, item)
+			}
+			urls[item.Path] = item.URL
+		}
+		if !reflect.DeepEqual(urls, want) {
+			t.Fatalf("%s URLs %v, want %v (port_env decides at render; a query is never shown)", name, urls, want)
+		}
+	}
+}

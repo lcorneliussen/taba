@@ -138,6 +138,16 @@ func (c *Context) runtimeRepoDeclarationsInputs(repo runtimeRepo) ([]RuntimeItem
 				item.URL = url
 			}
 		}
+		// Rendering shows a literal ready.http when nothing else names the
+		// URL; discovery can tell that only without url_env or port_env.
+		meta, _ := task["x-wtc"].(map[string]any)
+		if item.URL == "" && meta["url_env"] == nil && meta["port_env"] == nil {
+			if ready, ok := task["ready"].(map[string]any); ok {
+				if probe, _ := ready["http"].(string); runtimeURLSafe(probe) == nil {
+					item.URL = probe
+				}
+			}
+		}
 		items = append(items, item)
 	}
 	return items, sources.inputs, nil
