@@ -144,6 +144,13 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 		return nil, nil, err
 	}
 	m := &runtimeManifest{Schema: 1, Root: c.runtimeRoot(), Binary: binary, Tasks: []runtimeTask{}, envResolved: resolveEnv}
+	// The health path only shapes readiness taba makes from a resolved port.
+	healthPath := ""
+	if resolveEnv {
+		if healthPath, err = c.runtimeHealthPath(); err != nil {
+			return nil, nil, err
+		}
+	}
 	native := map[string]any{}
 	// The resolved port of each service, by group, for its tasks' env.
 	ports := map[string][2]string{}
@@ -244,17 +251,30 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 					item.PortEnv = name
 					if resolveEnv {
 						if port, err := runtimeEnvValue(c.Collection, name); err == nil && regexp.MustCompile(`^[0-9]{1,5}$`).MatchString(port) {
-							if item.URL == "" {
+							derived := item.URL == ""
+							if derived {
 								item.URL = "http://127.0.0.1:" + port
 							}
-							// Ready once the port accepts connections. The port is
+							// Ready once the port accepts connections, or once the
+							// configured health path answers there. The port is
 							// resolved here: a runner started before the variable
-							// existed would not see it.
+							// existed would not see it. Explicit readiness is kept.
+							probe := map[string]any{"tcp": "127.0.0.1:" + port}
+							if healthPath != "" {
+								probe = map[string]any{"http": "http://127.0.0.1:" + port + healthPath}
+							}
+							made := true
 							if ready, set := task["ready"].(map[string]any); !set {
-								task["ready"] = map[string]any{"tcp": "127.0.0.1:" + port, "timeout": "60s"}
+								probe["timeout"] = "60s"
+								task["ready"] = probe
 							} else if len(ready) == 1 && ready["timeout"] != nil {
 								// wtc svc add --ready-timeout without --ready-log.
-								ready["tcp"] = "127.0.0.1:" + port
+								maps.Copy(ready, probe)
+							} else {
+								made = false
+							}
+							if made && derived && healthPath != "" {
+								item.HealthURL = probe["http"].(string)
 							}
 							ports[dir+"/"+strings.Split(local, "/")[0]] = [2]string{name, port}
 						}

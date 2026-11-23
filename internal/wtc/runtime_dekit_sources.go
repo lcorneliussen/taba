@@ -81,20 +81,38 @@ type runtimeDekitFragment struct {
 	Load  []any          `yaml:"load"`
 }
 
-// runtimeRepoSources reads a repository's declarations. checkParents refuses
-// symlinked directories above the harness and local files, as discovery always
-// has; the native tree refuses symlinks in every caller.
+// runtimeRepoSources reads a repository's declarations: the configured
+// declaration files (runtime_paths.go) in order, then this collection's own
+// svc/<repo>.yaml. checkParents refuses symlinked directories above the default
+// harness file and the local file, as discovery always has; native trees and
+// any other configured file refuse symlinks in every caller.
 func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (runtimeRepoSources, error) {
 	out := runtimeRepoSources{tasks: map[string]runtimeDeclaredTask{}}
+	files, err := c.runtimeDeclarationFiles()
+	if err != nil {
+		return out, err
+	}
 	repoRoot, err := filepath.EvalSymlinks(repoPath)
 	if err != nil {
 		return out, err
 	}
-	native := &runtimeDekitLoader{root: repoRoot, display: repoPath, label: dir, tasks: map[string]runtimeDeclaredTask{}, folders: map[string]string{}, mounts: map[string][]string{}}
-	rootFile := filepath.Join(repoRoot, "dekit.yaml")
-	out.inputs = append(out.inputs, rootFile)
-	if _, err := os.Lstat(rootFile); err == nil {
-		err := native.load(rootFile, "", true, 0)
+	sharedRel := filepath.ToSlash(filepath.Join(".harness", "dekit.tasks.yaml"))
+	// Native projects first: a taba task file one of them loads is read there.
+	sets := make([]map[string]runtimeDeclaredTask, len(files))
+	mounts := map[string][]string{}
+	for i, file := range files {
+		abs := filepath.Join(repoRoot, filepath.FromSlash(file.rel))
+		out.inputs = append(out.inputs, abs)
+		if !file.native {
+			continue
+		}
+		if _, err := os.Lstat(abs); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return out, fmt.Errorf("%s/%s: %w", dir, file.rel, err)
+		}
+		native := &runtimeDekitLoader{root: repoRoot, project: filepath.Dir(abs), display: repoPath, label: dir, tasks: map[string]runtimeDeclaredTask{}, folders: map[string]string{}, mounts: mounts}
+		err := native.load(abs, "", true, 0)
 		out.inputs = append(out.inputs, native.inputs...)
 		if err != nil {
 			return out, err
@@ -102,54 +120,71 @@ func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (r
 		if err := native.checkTree(); err != nil {
 			return out, err
 		}
-	} else if !os.IsNotExist(err) {
-		return out, fmt.Errorf("%s/dekit.yaml: %w", dir, err)
+		sets[i] = native.tasks
 	}
-	sets := []map[string]runtimeDeclaredTask{native.tasks}
-	sharedRel := filepath.ToSlash(filepath.Join(".harness", "dekit.tasks.yaml"))
 	collectionRoot := c.Collection
 	if resolved, err := filepath.EvalSymlinks(c.Collection); err == nil {
 		collectionRoot = resolved
 	}
-	for _, scope := range []string{"repository", "collection"} {
-		path, root, safe := runtimeSharedFragment(repoPath), repoRoot, runtimeSharedFragment(repoRoot)
-		decl := RuntimeDeclaration{Scope: scope, File: sharedRel}
-		if scope == "collection" {
-			path = c.runtimeLocalFragment(dir)
-			root, safe = collectionRoot, path
-			if rel, err := filepath.Rel(collectionRoot, path); err == nil {
-				decl.File = filepath.ToSlash(rel)
-			}
-		} else if mounts := native.mounts[sharedRel]; len(mounts) > 0 {
-			// dekit.yaml loads the harness file itself: its tasks are already
-			// read, at the same place only once.
-			if len(mounts) == 1 && mounts[0] == "" {
-				continue
-			}
-			return out, fmt.Errorf("%s/dekit.yaml loads %s at %q; taba also reads it at the repository root, so load it without `at` or not at all", dir, sharedRel, strings.Join(mounts, `", "`))
-		}
-		out.inputs = append(out.inputs, path)
-		if checkParents {
+	read := func(path, root, safe string, strict bool, decl RuntimeDeclaration) (map[string]runtimeDeclaredTask, error) {
+		if strict {
 			if err := runtimeSafeParents(root, safe); err != nil {
-				return out, err
+				return nil, err
 			}
 		}
 		if err := runtimeRegular(safe); os.IsNotExist(err) {
-			continue
+			return nil, nil
 		} else if err != nil {
-			return out, err
+			return nil, err
+		}
+		if info, err := os.Lstat(safe); err == nil && strict && info.Size() > runtimeDekitMaxBytes {
+			return nil, fmt.Errorf("%s: larger than %d bytes", path, runtimeDekitMaxBytes)
 		}
 		fragment, err := runtimeReadFragment(safe)
 		if err != nil {
-			return out, err
+			return nil, err
 		}
 		out.resources = append(out.resources, runtimeResourceFile{path: path, fragment: fragment})
 		tasks := map[string]runtimeDeclaredTask{}
 		for name, task := range fragment.Tasks {
 			tasks[name] = runtimeDeclaredTask{spec: task, source: path, decl: decl}
 		}
-		sets = append(sets, tasks)
+		return tasks, nil
 	}
+	for i, file := range files {
+		if file.native {
+			continue
+		}
+		if loaded := mounts[file.rel]; len(loaded) > 0 {
+			// A native dekit.yaml loads this file without `at`, so its tasks
+			// were read through that tree at the repository root; reading it
+			// again would declare each of them twice.
+			if len(loaded) == 1 && loaded[0] == "" {
+				continue
+			}
+			return out, fmt.Errorf("%s: dekit.yaml loads %s at %q; taba also reads it at the repository root, so load it without `at` or not at all", dir, file.rel, strings.Join(loaded, `", "`))
+		}
+		path := filepath.Join(repoPath, filepath.FromSlash(file.rel))
+		safe := filepath.Join(repoRoot, filepath.FromSlash(file.rel))
+		// The default harness file keeps the checks it always had; any other
+		// configured file is held to the native tree's containment.
+		tasks, err := read(path, repoRoot, safe, checkParents || file.rel != sharedRel, RuntimeDeclaration{Scope: "repository", File: file.rel})
+		if err != nil {
+			return out, err
+		}
+		sets[i] = tasks
+	}
+	local := c.runtimeLocalFragment(dir)
+	out.inputs = append(out.inputs, local)
+	decl := RuntimeDeclaration{Scope: "collection", File: local}
+	if rel, err := filepath.Rel(collectionRoot, local); err == nil {
+		decl.File = filepath.ToSlash(rel)
+	}
+	tasks, err := read(local, collectionRoot, local, checkParents, decl)
+	if err != nil {
+		return out, err
+	}
+	sets = append(sets, tasks)
 	for _, tasks := range sets {
 		names := make([]string, 0, len(tasks))
 		for name := range tasks {
@@ -176,6 +211,7 @@ func runtimeDeclarationName(d RuntimeDeclaration) string {
 
 type runtimeDekitLoader struct {
 	root    string // resolved repository root
+	project string // directory of the dekit.yaml: loads stay inside it
 	display string // repository path as the caller names it
 	label   string // repository directory name, for messages
 	tasks   map[string]runtimeDeclaredTask
@@ -197,6 +233,11 @@ func (l *runtimeDekitLoader) name(abs string) string {
 	return filepath.ToSlash(rel)
 }
 
+// projectFile is the repository-relative dekit.yaml of this tree.
+func (l *runtimeDekitLoader) projectFile() string {
+	return l.name(filepath.Join(l.project, "dekit.yaml"))
+}
+
 func (l *runtimeDekitLoader) errorf(abs, format string, args ...any) error {
 	return fmt.Errorf("%s/%s: %s", l.label, l.name(abs), fmt.Sprintf(format, args...))
 }
@@ -207,7 +248,10 @@ func (l *runtimeDekitLoader) errorf(abs, format string, args ...any) error {
 func (l *runtimeDekitLoader) contained(abs string) error {
 	rel, err := filepath.Rel(l.root, abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return fmt.Errorf("%s/dekit.yaml loads %s, outside the repository", l.label, l.name(abs))
+		return fmt.Errorf("%s: a dekit.yaml loads %s, outside the repository", l.label, l.name(abs))
+	}
+	if inProject, err := filepath.Rel(l.project, abs); err != nil || inProject == ".." || strings.HasPrefix(inProject, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s/%s loads %s, outside its project directory", l.label, l.projectFile(), l.name(abs))
 	}
 	current := l.root
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
@@ -240,14 +284,14 @@ func (l *runtimeDekitLoader) load(abs, mount string, root bool, depth int) error
 			for _, file := range append(l.stack[i:], abs) {
 				chain = append(chain, l.name(file))
 			}
-			return fmt.Errorf("%s/dekit.yaml: load cycle: %s", l.label, strings.Join(chain, " -> "))
+			return fmt.Errorf("%s/%s: load cycle: %s", l.label, l.projectFile(), strings.Join(chain, " -> "))
 		}
 	}
 	if depth > runtimeDekitMaxDepth {
 		return l.errorf(abs, "loads are nested deeper than %d files", runtimeDekitMaxDepth)
 	}
 	if l.files++; l.files > runtimeDekitMaxFiles {
-		return fmt.Errorf("%s/dekit.yaml loads more than %d files", l.label, runtimeDekitMaxFiles)
+		return fmt.Errorf("%s/%s loads more than %d files", l.label, l.projectFile(), runtimeDekitMaxFiles)
 	}
 	l.inputs = append(l.inputs, abs)
 	l.mounts[l.name(abs)] = append(l.mounts[l.name(abs)], mount)
@@ -467,6 +511,10 @@ func (l *runtimeDekitLoader) addTasks(abs, mount string, tasks map[string]any) e
 		}
 		task := runtimeRebasePaths(spec, filepath.Dir(abs))
 		runtimeApplyDefaults(task, l.defaults)
+		if _, set := task["cwd"]; !set && l.project != l.root {
+			// dekit runs a task in its project directory by default.
+			task["cwd"] = l.project
+		}
 		if deps, ok := task["deps"].([]any); ok {
 			moved := make([]any, len(deps))
 			for i, value := range deps {

@@ -22,8 +22,8 @@ tasks:
 
 taba follows dekit 0.10's rules for this file and the fragments it loads:
 
-- Only a file named exactly `dekit.yaml` at the repository root is read.
-  Without one, nothing changes.
+- By default, a `dekit.yaml` at the repository root is read. Without one,
+  nothing changes. Other locations are configured (see Configuration below).
 - `load` takes globs, including `**`, relative to the declaring file, as strings
   or `{file, at}`. A fragment holds only `tasks` and `load`. A pattern that
   matches nothing is an error, and so is a fragment named `dekit.yaml`.
@@ -88,6 +88,68 @@ from environment variables.
 `taba svc rm` does not edit `dekit.yaml` or its fragments, even with `--shared`,
 and that includes a `.harness/dekit.tasks.yaml` that `dekit.yaml` loads: change the
 file in the repository.
+
+## Configuration
+
+Two settings in the harness `taba.toml` (or `wtc.toml`) `[runtime]` table can be
+overridden from the environment:
+
+```toml
+[runtime]
+declarations = ["dekit.yaml", ".harness/dekit.tasks.yaml"]  # the default
+health_path  = "/health"                                      # default: none
+```
+
+| Setting | Environment | Default |
+| --- | --- | --- |
+| `declarations` | `TABA_RUNTIME_DECLARATIONS`, comma-separated | `dekit.yaml`, `.harness/dekit.tasks.yaml` |
+| `health_path` | `TABA_RUNTIME_HEALTH_PATH` | none |
+
+The order of precedence is `TABA_` variable, `WTC_` variable, harness file,
+default. An empty variable counts as unset. Only the environment taba runs in is
+read; collection env files are not sourced for these.
+
+`declarations` lists the repository-relative files taba reads as each
+repository's declarations, in order. A configured list **replaces** the default;
+nothing is added to it, so to keep a default file, list it.
+
+- A file named `dekit.yaml` is read as a native dekit project, with the rules on
+  this page. Its directory is the project directory: its loads must stay inside
+  it, and a task without `cwd` runs there. Its tasks are still named under the
+  repository, as `<repo>/<task>`.
+- Any other file is read as a taba task file, in the format of
+  `.harness/dekit.tasks.yaml`, with `x-wtc` and `resources`.
+- The collection's own `svc/<repo>.yaml` is always read as well and is not part
+  of the list.
+- An entry must be a plain, clean, relative file path: no `..` or `.`, no `.git`,
+  no glob or control characters. An empty list, more than 32 entries or the same
+  entry twice is an error.
+- Every configured file must be a regular file inside the repository, at most
+  1 MiB. A symlinked file, or a file under a symlinked directory, is refused.
+  `.harness/dekit.tasks.yaml` keeps the checks it already had.
+- `taba svc add --shared` writes `.harness/dekit.tasks.yaml`. It refuses when that
+  file is not in the list, because taba would not read it back.
+
+`health_path` is a URL path, such as `/health`, for services whose readiness
+taba makes itself: a task with `x-wtc` `port_env` and no `ready` of its own, or
+only a `ready.timeout`.
+
+- Such a task is ready when `http://127.0.0.1:<port><health_path>` answers,
+  instead of when the port accepts connections.
+- `taba svc status` checks that same address for `answering`, and shows it as
+  `health_url` when the task's URL is the port-derived one.
+- An explicit `ready` (`log`, `http`, `tcp` or any other) is never changed, and an
+  explicit `x-wtc` `url` or `url_env` keeps its own answering check.
+- A task declared natively in `dekit.yaml` has no `port_env`, so this setting
+  does not affect it.
+- The value must start with `/` and contain only URL path characters. A scheme,
+  host, `//`, credentials, query, fragment, `.` or `..` segment, or whitespace is
+  refused, and rendering or starting services fails with the reason.
+- The check stays on the service's own local port. Status's existing check runs
+  only for recorded ready tasks; discovery never probes.
+
+Without either setting, behaviour is unchanged: readiness is the port accepting
+connections, and existing definitions keep their digests.
 
 ## Provenance
 

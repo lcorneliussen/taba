@@ -54,7 +54,12 @@ func runtimeAnswering(items []RuntimeItem, probe func(string) (bool, string)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if ok, detail := probe(item.URL); ok {
+			// The health URL is the same address with the configured path.
+			target := item.URL
+			if item.HealthURL != "" {
+				target = item.HealthURL
+			}
+			if ok, detail := probe(target); ok {
 				item.Answering = "yes"
 			} else {
 				item.Answering, item.AnswerDetail = "no", detail

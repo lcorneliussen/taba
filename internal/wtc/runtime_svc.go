@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -270,6 +271,15 @@ func (c *Context) AddService(opt ServiceOptions) (RuntimeResult, error) {
 	} else if opt.PortEnv != "" && timeout != 60*time.Second {
 		task["ready"] = map[string]any{"timeout": runtimeDekitDuration(timeout)}
 	}
+	if opt.Shared {
+		files, err := c.runtimeDeclarationFiles()
+		if err != nil {
+			return RuntimeResult{}, err
+		}
+		if !slices.Contains(files, runtimeDeclarationFile{rel: ".harness/dekit.tasks.yaml"}) {
+			return RuntimeResult{}, errors.New("--shared writes .harness/dekit.tasks.yaml, which the configured runtime declarations do not read; add it to [runtime] declarations or enlist the service without --shared")
+		}
+	}
 	path := runtimeFragmentFor(c, repo, opt.Shared)
 	if err := c.runtimeChange(path, func(tasks *yaml.Node) error { return runtimeAddTask(tasks, name+"/main", task) }); err != nil {
 		return RuntimeResult{}, err
@@ -283,7 +293,8 @@ func (c *Context) AddService(opt ServiceOptions) (RuntimeResult, error) {
 // RemoveService stops a service with its tunnels and removes it from its task
 // file. A service from the repo's committed file needs shared: that is a repo
 // change. A service from the repo's dekit.yaml tree, including a harness file
-// it loads, is never removed here: that file is edited in the repository.
+// it loads, or from another configured declaration file is never removed here:
+// that file is edited in the repository.
 func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, error) {
 	defer c.signalServicesChanged()
 	if err := c.runtimeConflict(); err != nil {
@@ -309,7 +320,7 @@ func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, err
 			if task.Declaration != nil {
 				file = task.Declaration.File
 			}
-			return RuntimeResult{}, fmt.Errorf("%s is declared in %s/%s, the repository's own dekit.yaml declarations; edit that file in the repository", task.Path, repo.dir, file)
+			return RuntimeResult{}, fmt.Errorf("%s is declared in %s/%s, a repository declaration file that svc rm does not edit; edit that file in the repository", task.Path, repo.dir, file)
 		}
 		if task.Source == runtimeSharedFragment(repo.path) && !shared {
 			return RuntimeResult{}, fmt.Errorf("%s comes from %s, which the repository commits; pass --shared to remove it there", task.Path, task.Source)

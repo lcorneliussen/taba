@@ -36,6 +36,9 @@ type RuntimeItem struct {
 	Kind       string `json:"kind"`
 	Label      string `json:"label,omitempty"`
 	URL        string `json:"url,omitempty"`
+	// HealthURL is the configured health path at a service's port-derived
+	// URL; it is what readiness and the answering check look at.
+	HealthURL string `json:"health_url,omitempty"`
 	// Provider is the tunnel client of an endpoint, such as tailscale.
 	Provider string `json:"provider,omitempty"`
 	// Exposure is how far an endpoint reaches (Exposure* constants), and
