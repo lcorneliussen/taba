@@ -481,7 +481,7 @@ func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCa
 			if event.Event == "started" && !started {
 				address, _ = parseTunnelAddress(expected)
 				if err = ready(address.URL); err != nil {
-					cmd.Cancel()
+					_ = cmd.Cancel()
 					break
 				}
 				started = true
@@ -493,14 +493,14 @@ func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCa
 			if expected != "" && bytes.Contains(line, []byte("Registered tunnel connection")) {
 				address, _ = parseTunnelAddress(expected)
 				if err = ready(address.URL); err != nil {
-					cmd.Cancel()
+					_ = cmd.Cancel()
 					break
 				}
 				started = true
 			} else if raw := quickURL.Find(line); raw != nil {
 				address, _ = parseTunnelAddress(string(raw))
 				if err = ready(address.URL); err != nil {
-					cmd.Cancel()
+					_ = cmd.Cancel()
 					break
 				}
 				started = true

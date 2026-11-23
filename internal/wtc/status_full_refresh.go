@@ -370,7 +370,7 @@ func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, sl
 		return nil, fmt.Errorf("unsupported forge")
 	}
 	if err != nil && statusRateLimited(err) {
-		statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
+		_, _ = statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
 	}
 	return raw, err
 }
@@ -452,7 +452,7 @@ func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, inc
 	raw, err := statusBBPipelinesContext(ctx, parts[0], parts[1], branch, user, pass)
 	if err != nil {
 		if statusRateLimited(err) {
-			statusForgeCoolContext(ctx, "bitbucket.org", statusRetryAfter(err))
+			_, _ = statusForgeCoolContext(ctx, "bitbucket.org", statusRetryAfter(err))
 		}
 		return fallback
 	}

@@ -211,7 +211,7 @@ func archiveReviewCommit(owner, sha, dest string) error {
 	}
 	abort := func(err error) error {
 		pipe.Close()
-		cmd.Wait()
+		_ = cmd.Wait()
 		return err
 	}
 	reader := tar.NewReader(pipe)

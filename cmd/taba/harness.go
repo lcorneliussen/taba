@@ -17,8 +17,8 @@ func addHarnessCommands(root *cobra.Command, asJSON *bool) {
 	init.Flags().StringVar(&opt.Remote, "remote", "", "Harness Git remote to record; no network access")
 	init.Flags().StringVar(&opt.CLIVersion, "cli-version", "", "Exact published WTC version to pin, without v")
 	init.Flags().BoolVar(&opt.DryRun, "dry-run", false, "Preview filenames without writing")
-	init.MarkFlagRequired("remote")
-	init.MarkFlagRequired("cli-version")
+	_ = init.MarkFlagRequired("remote")
+	_ = init.MarkFlagRequired("cli-version")
 	init.RunE = func(cmd *cobra.Command, args []string) error {
 		opt.Dir = args[0]
 		result, err := wtc.InitHarness(opt)
