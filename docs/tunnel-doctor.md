@@ -16,11 +16,13 @@ It checks:
 
 - **The service and its local target.** The service must be declared in the
   repository's task declarations. A literal `x-wtc.url` must be a loopback URL,
-  with an explicit port for Tailscale Serve and an IPv4 or `localhost` HTTP
-  port without a path for devtunnel. A target from `x-wtc.port_env` or
-  `x-wtc.url_env` is shown by variable name, for example
-  `http://127.0.0.1:$WIDGET_PORT`. A service with none of these gets
-  "declare `x-wtc.port_env` or `x-wtc.url` on `widget/web`".
+  with a non-default port for Tailscale Serve, and an IPv4 or `localhost`
+  HTTP URL with a port and no path other than `/` for devtunnel. A target
+  from `x-wtc.port_env` or `x-wtc.url_env` is shown by variable name, for
+  example `http://127.0.0.1:$WIDGET_PORT`; doctor assumes the variable holds
+  a usable value. When a `port_env` variable is unset, the action instead
+  uses the next task of the service that has a target. A service with none of these gets "declare `x-wtc.port_env` or
+  `x-wtc.url` on `widget/web`".
 - **The repository identity.** The tunnel's repository must be checked out
   once in the collection under its registered name.
 - **The provider inputs that can be checked without provider I/O.** Each mode

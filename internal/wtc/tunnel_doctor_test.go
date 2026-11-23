@@ -80,8 +80,8 @@ func TestNamedTunnelDiagnosticsNoneConfigured(t *testing.T) {
 	}
 }
 
-// The target doctor shows is the one the tunnel action would use, and a
-// service without one gets a fix.
+// The target doctor shows is the one the tunnel action would use when the
+// declared variables hold usable values, and a service without one gets a fix.
 func TestNamedTunnelDiagnosticsTarget(t *testing.T) {
 	socket := doctorTunnelSocket(t)
 	for _, tc := range []struct {
@@ -95,6 +95,8 @@ func TestNamedTunnelDiagnosticsTarget(t *testing.T) {
 		{"literal url wins over port_env", "{url: 'http://127.0.0.1:3000', port_env: WIDGET_PORT}", "http://127.0.0.1:3000", "", ""},
 		{"not loopback", "{url: 'http://198.51.100.7:3000'}", "", "is not a loopback URL", "point x-wtc.url on widget/web at localhost"},
 		{"no port for tailscale", "{url: 'http://127.0.0.1'}", "http://127.0.0.1", "needs a target with an explicit port", "declare x-wtc.port_env"},
+		{"default port for tailscale", "{url: 'http://127.0.0.1:80'}", "http://127.0.0.1:80", "needs a target with an explicit port", "declare x-wtc.port_env"},
+		{"default https port for tailscale", "{url: 'https://localhost:443'}", "https://localhost:443", "needs a target with an explicit port", "declare x-wtc.port_env"},
 		{"port_env wins over ready probe", "{port_env: WIDGET_PORT}\n  ready: {http: 'http://example.test/health'}", "http://127.0.0.1:$WIDGET_PORT", "", ""},
 		{"ready probe when nothing else", "{mark: w}\n  ready: {http: 'http://127.0.0.1:3000/health'}", "http://127.0.0.1:3000/health", "", ""},
 	} {
@@ -117,9 +119,9 @@ func TestNamedTunnelDiagnosticsTarget(t *testing.T) {
 	}
 }
 
-// Doctor is observational: it never sources the collection env (receiver
-// shell code), the way only the explicit tunnel action does, and changes
-// nothing in the collection.
+// Doctor is observational: unlike the explicit tunnel action, it never
+// sources the collection env (receiver shell code), and it changes nothing in
+// the collection.
 func TestNamedTunnelDiagnosticsDoNotSourceEnvOrWrite(t *testing.T) {
 	socket := doctorTunnelSocket(t)
 	c := doctorTunnelFixture(t, "{port_env: WIDGET_PORT}", tailscaleDoctorPolicy(socket))
@@ -186,7 +188,7 @@ func TestNamedTunnelDiagnosticsServiceAndRepository(t *testing.T) {
 }
 
 func TestNamedTunnelDiagnosticsDisabledAndSelectionOnly(t *testing.T) {
-	c := doctorTunnelFixture(t, "", "[tunnels.widget.web.tailnet]\nenabled = false\n[starts.widget.web]\nother = true\n")
+	c := doctorTunnelFixture(t, "", "[tunnels.widget.web.tailnet]\nenabled = false\n[starts.widget.web]\nother = true\nstopped = false\n")
 	diagnostics, err := c.NamedTunnelDiagnostics()
 	if err != nil || len(diagnostics) != 2 {
 		t.Fatal(diagnostics, err)
@@ -354,5 +356,24 @@ func TestNamedTunnelDiagnosticsNodeInput(t *testing.T) {
 	}
 	if strings.Contains(text, "/synthetic/absent") {
 		t.Fatal(text)
+	}
+}
+
+func TestNamedTunnelDiagnosticsRepositoryAlias(t *testing.T) {
+	socket := doctorTunnelSocket(t)
+	c := doctorTunnelFixture(t, "{port_env: WIDGET_PORT}", strings.ReplaceAll(tailscaleDoctorPolicy(socket), "widget.web.", "gizmo.web."))
+	found := false
+	for i := range c.Registry.Repos {
+		if c.Registry.Repos[i].Name == "widget" {
+			c.Registry.Repos[i].Aliases = append(c.Registry.Repos[i].Aliases, "gizmo")
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("fixture registry lacks widget")
+	}
+	d := doctorTunnelOne(t, c)
+	if d.State != NamedTunnelStateProblem || !strings.Contains(problemText(d), "names repository gizmo by an alias") || !strings.Contains(problemText(d), "registered repository name widget") {
+		t.Fatalf("%+v", d)
 	}
 }

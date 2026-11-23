@@ -9,9 +9,11 @@ import (
 )
 
 // NamedTunnelDiagnostic is how doctor sees one configured named tunnel.
-// Problems never carry credential contents, provider identities or input
-// values and paths; an unreadable task declaration is reported with the
-// planner's own error, which can name the declaration file.
+// Problems name the provider and mode, input fields, services, variables and
+// the policy file. They never carry credential contents, account or node
+// identities, or the values and paths of provider inputs; an unreadable task
+// declaration is reported with the planner's own error, which can name the
+// declaration file.
 type NamedTunnelDiagnostic struct {
 	Tunnel   string               `json:"tunnel"`
 	Scope    string               `json:"scope,omitempty"`
@@ -69,6 +71,11 @@ func (c *Context) NamedTunnelDiagnostics() ([]NamedTunnelDiagnostic, error) {
 	}
 	out := make([]NamedTunnelDiagnostic, 0, len(entries))
 	for _, e := range entries {
+		if e.Policy.Provider == "" && !e.Disabled && (e.Selected == nil || !*e.Selected) {
+			// A start-off selection without a definition, as stop or service
+			// removal can leave behind, starts nothing.
+			continue
+		}
 		out = append(out, c.namedTunnelDiagnostic(e, plan, planErr))
 	}
 	return out, nil
@@ -102,8 +109,9 @@ func (c *Context) namedTunnelPolicyName(e tunnelEffectiveEntry) string {
 	return "the " + e.Scope + " tunnel policy"
 }
 
-// namedTunnelTarget mirrors tunnelDefinitionFor's repository and target rules
-// on an unresolved plan.
+// namedTunnelTarget applies tunnelDefinitionFor's repository and target rules
+// to an unresolved plan, assuming every declared variable holds a usable
+// value.
 func (c *Context) namedTunnelTarget(d *NamedTunnelDiagnostic, e tunnelEffectiveEntry, plan *runtimeManifest) {
 	service := e.Key.Repo + "/" + e.Key.Service
 	identity, err := c.prRepositories(e.Key.Repo).resolve(e.Key.Repo)
@@ -111,11 +119,11 @@ func (c *Context) namedTunnelTarget(d *NamedTunnelDiagnostic, e tunnelEffectiveE
 	case err != nil:
 		d.problem(err.Error(), "")
 		return
+	case identity != nil && identity.name != e.Key.Repo:
+		d.problem("the tunnel names repository "+e.Key.Repo+" by an alias", "rename the entry to the registered repository name "+identity.name+" in "+d.Policy)
+		return
 	case identity == nil || identity.dir() == "":
 		d.problem("repository "+e.Key.Repo+" is not checked out in this collection", "bring it in with `taba add-repo "+e.Key.Repo+"`, or remove the tunnel from "+d.Policy)
-		return
-	case identity.name != e.Key.Repo:
-		d.problem("the tunnel names repository "+e.Key.Repo+" by an alias", "rename the entry to the registered repository name "+identity.name+" in "+d.Policy)
 		return
 	}
 	dir := identity.dir()
@@ -126,7 +134,8 @@ func (c *Context) namedTunnelTarget(d *NamedTunnelDiagnostic, e tunnelEffectiveE
 	// The action takes the first service task, in path order, with a target;
 	// per task url_env wins over x-wtc.url, then port_env, then a plain
 	// ready.http probe URL. This plan has not read the env, so a port_env or
-	// url_env target is shown by name.
+	// url_env target is shown by name. When a port_env variable is unset or
+	// not a port, the action skips that task instead; doctor cannot tell.
 	declared := c.namedTunnelDeclaredURLs(dir)
 	literal := ""
 	for _, task := range plan.Tasks {
@@ -164,11 +173,22 @@ func (c *Context) namedTunnelTarget(d *NamedTunnelDiagnostic, e tunnelEffectiveE
 	port, err := strconv.Atoi(local.Port())
 	explicitPort := err == nil && port >= 1 && port <= 65535
 	if e.Policy.Provider == "devtunnel" && (!explicitPort || local.Scheme != "http" || local.Path != "" && local.Path != "/" || local.Hostname() == "::1") {
-		d.problem("devtunnel needs an IPv4 or localhost HTTP target with a port and no path", "set x-wtc.url on "+service+" to http://127.0.0.1:<port>, or declare x-wtc.port_env")
+		d.problem("devtunnel needs an IPv4 or localhost HTTP target with a port and no path other than /", "set x-wtc.url on "+service+" to http://127.0.0.1:<port>, or declare x-wtc.port_env")
 	}
-	if e.Policy.Provider == "tailscale" && !explicitPort {
+	if e.Policy.Provider == "tailscale" && !tailscaleExplicitPort(literal) {
 		d.problem("Tailscale Serve needs a target with an explicit port", "add the port to x-wtc.url on "+service+", or declare x-wtc.port_env")
 	}
+}
+
+// tailscaleExplicitPort applies the Tailscale serve target's port rule: like
+// the action, a scheme's default port does not count.
+func tailscaleExplicitPort(target string) bool {
+	address, err := parseTunnelAddress(target)
+	if err != nil {
+		return false
+	}
+	u, err := url.Parse(address.URL)
+	return err == nil && u.Port() != ""
 }
 
 type namedTunnelURLs struct{ env, literal string }
