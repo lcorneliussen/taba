@@ -288,6 +288,16 @@ func postReviewComment(m ReviewManifest, cid, body string) (ReviewPostResult, er
 		}
 		return ReviewPostResult{CommentID: strconv.FormatInt(result.ID, 10), URL: result.HTMLURL}, nil
 	}
+	switch route, err := selectedBitbucketWrite("", true); {
+	case err != nil:
+		return ReviewPostResult{}, err
+	case route == bitbucketWriteBroker:
+		return ReviewPostResult{}, errBitbucketBrokered
+	case route == bitbucketWriteTWG && cid == "":
+		return twgCommentCreate(m, body, "", 0, "")
+	case route == bitbucketWriteTWG:
+		return twgCommentUpdate(m, cid, body)
+	}
 	if result, ok, err := bitbucketReviewCommentAPI(m, cid, body, "", 0, ""); ok {
 		return result, err
 	}
@@ -609,6 +619,21 @@ func postReviewInline(m ReviewManifest, bundle string) (posted, failed, skipped 
 							row.Error += ": " + strings.TrimSpace(string(out))
 						}
 					}
+				}
+			} else if route, routeErr := selectedBitbucketWrite("", true); routeErr != nil || route == bitbucketWriteBroker || route == bitbucketWriteTWG {
+				var result ReviewPostResult
+				err := routeErr
+				switch {
+				case err != nil:
+				case route == bitbucketWriteBroker:
+					err = errBitbucketBrokered
+				default:
+					result, err = twgCommentCreate(m, body, f.File, f.Line, "")
+				}
+				if err == nil {
+					row.ID, row.URL = result.CommentID, result.URL
+				} else {
+					row.Error = err.Error()
 				}
 			} else {
 				if result, ok, err := bitbucketReviewCommentAPI(m, "", body, f.File, f.Line, ""); ok {

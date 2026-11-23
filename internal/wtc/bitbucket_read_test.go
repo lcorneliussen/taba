@@ -60,6 +60,11 @@ case "$*" in
 *"comment query"*) echo '{"values":[{"id":1,"content":{"raw":"hello"},"created_on":"2026-11-20T10:00:00Z"}]}';;
 *"repo get"*) echo '{"full_name":"acme/'"$repo"'","is_private":true}';;
 *"pull-requests query"*) echo '{"values":[{"id":7,"source":{"branch":{"name":"feature"}}}]}';;
+*"comment create"*) [ "$FAKE_TWG_MODE" = write-denied ] && { echo '{"ok":false,"error":{"code":"FORBIDDEN","statusCode":403}}'; exit 1; }
+  echo '{"id":555,"links":{"html":{"href":"https://bitbucket.org/acme/'"$repo"'/pull-requests/7#comment-555"}}}';;
+*"comment update"*) echo '{"id":41}';;
+*"comment resolve"*) echo '{}';;
+*"pull-requests update"*) echo '{"id":7,"draft":false}';;
 *) echo '{"ok":false,"error":{"code":"UNKNOWN_COMMAND"}}'; exit 2;;
 esac
 `
@@ -544,4 +549,91 @@ func TestBitbucketCacheContextsFollowTheReadCredential(t *testing.T) {
 		}
 	}
 	_ = h
+}
+
+func TestBitbucketWritesUseThePersonsTWGLogin(t *testing.T) {
+	h := newNoBBHost(t)
+	// Reads use the host credential; writes must never see it.
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	unsetEnv(t, "BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "BITBUCKET_PUBLISH")
+	m := ReviewManifest{Forge: "bitbucket", Slug: "acme/alpha", PR: "7", URL: "https://bitbucket.org/acme/alpha/pull-requests/7"}
+	created, err := postReviewComment(m, "", "-- looks like a flag\nsummary")
+	if err != nil || created.CommentID != "555" {
+		t.Fatalf("create = %+v, %v", created, err)
+	}
+	if updated, err := postReviewComment(m, "41", "updated"); err != nil || updated.CommentID != "41" {
+		t.Fatalf("update = %+v, %v", updated, err)
+	}
+	if err := replyReviewInline(m, "41", "reply"); err != nil {
+		t.Fatal(err)
+	}
+	if err := resolveReviewInline(m, "41", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := BitbucketMarkReady("", t.TempDir(), "acme/alpha", "7"); err != nil {
+		t.Fatal(err)
+	}
+	log := h.read(t, h.log)
+	for _, want := range []string{
+		"argv:bitbucket pull-requests comment create --pull-request 7 --text=-- looks like a flag",
+		"argv:bitbucket pull-requests comment update --pull-request 7 --comment 41 --text=updated --workspace acme --repo alpha",
+		"argv:bitbucket pull-requests comment create --pull-request 7 --text=reply --reply-to 41",
+		"argv:bitbucket pull-requests comment resolve --pull-request 7 --comment 41 --workspace acme --repo alpha",
+		"argv:bitbucket pull-requests update --pull-request 7 --ready --workspace acme --repo alpha",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("missing %q in:\n%s", want, log)
+		}
+	}
+	if strings.Contains(log, "token:poison") || strings.Contains(log, "user-set:yes") || h.read(t, h.helperLog) != "" {
+		t.Fatalf("a write saw or asked for the host read credential:\n%s", log)
+	}
+}
+
+func TestBitbucketWriteRoutesAreExplicit(t *testing.T) {
+	h := newNoBBHost(t)
+	unsetEnv(t, "BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "BITBUCKET_PUBLISH")
+	m := ReviewManifest{Forge: "bitbucket", Slug: "acme/alpha", PR: "7"}
+	// A gateway: no direct write at all, not even through a login at hand.
+	t.Setenv("BITBUCKET_PUBLISH", "gateway")
+	t.Setenv("BB_USERNAME", "synthetic-user")
+	t.Setenv("BB_API_TOKEN", "synthetic-token")
+	for name, err := range map[string]error{
+		"create":  func() error { _, err := postReviewComment(m, "", "x"); return err }(),
+		"reply":   replyReviewInline(m, "41", "x"),
+		"resolve": resolveReviewInline(m, "41", ""),
+		"ready":   BitbucketMarkReady("", t.TempDir(), "acme/alpha", "7"),
+	} {
+		if !errors.Is(err, errBitbucketBrokered) {
+			t.Fatalf("%s on a gateway = %v", name, err)
+		}
+	}
+	if strings.Contains(h.read(t, h.log), "argv:") {
+		t.Fatal("a gateway write ran a client")
+	}
+	// A refused TWG write is an error and is not retried anywhere.
+	t.Setenv("BITBUCKET_PUBLISH", "")
+	unsetEnv(t, "BB_USERNAME", "BB_API_TOKEN")
+	t.Setenv("FAKE_TWG_MODE", "write-denied")
+	if _, err := postReviewComment(m, "", "x"); err == nil {
+		t.Fatal("a refused create succeeded")
+	}
+	if got := strings.Count(h.read(t, h.log), "comment create"); got != 1 {
+		t.Fatalf("refused create ran %d times", got)
+	}
+	// Explicit REST credentials keep the REST comment route; bb only when
+	// selected.
+	t.Setenv("BB_USERNAME", "synthetic-user")
+	t.Setenv("BB_API_TOKEN", "synthetic-token")
+	if route, _ := selectedBitbucketWrite("", true); route != bitbucketWriteREST {
+		t.Fatalf("route = %s", route)
+	}
+	if route, _ := selectedBitbucketWrite("", false); route != bitbucketWriteTWG {
+		t.Fatalf("non-comment route = %s", route)
+	}
+	t.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
+	unsetEnv(t, "BB_USERNAME", "BB_API_TOKEN")
+	if route, _ := selectedBitbucketWrite("", true); route != bitbucketWriteBB {
+		t.Fatalf("bb route = %s", route)
+	}
 }

@@ -103,6 +103,15 @@ func replyReviewInline(m ReviewManifest, id, body string) error {
 		_, err := reviewGitHubAPI(m.RepoDir, []string{"-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
 		return err
 	}
+	switch route, err := selectedBitbucketWrite("", true); {
+	case err != nil:
+		return err
+	case route == bitbucketWriteBroker:
+		return errBitbucketBrokered
+	case route == bitbucketWriteTWG:
+		_, err := twgCommentCreate(m, body, "", 0, id)
+		return err
+	}
 	if _, ok, err := bitbucketReviewCommentAPI(m, "", body, "", 0, id); ok {
 		return err
 	}
@@ -115,6 +124,14 @@ func replyReviewInline(m ReviewManifest, id, body string) error {
 
 func resolveReviewInline(m ReviewManifest, id, threadID string) error {
 	if m.Forge == "bitbucket" {
+		switch route, err := selectedBitbucketWrite("", false); {
+		case err != nil:
+			return err
+		case route == bitbucketWriteBroker:
+			return errBitbucketBrokered
+		case route == bitbucketWriteTWG:
+			return twgCommentResolve(m, id)
+		}
 		_, err := reviewBitbucketCommand(m, []string{"pr", "comments", "resolve", m.PR, id}, nil)
 		return err
 	}
