@@ -2344,10 +2344,11 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	previous := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(previous)
 	// Every paint, including scroll and key feedback, waits for the next
-	// renderer frame, so the frame rate bounds input-to-screen latency. A
-	// frame with an unchanged view writes nothing, and View runs per message
-	// rather than per frame, so idle cost stays with the refresh and freshness
-	// ticks rather than this cadence. Input and collector work run independently.
+	// renderer frame, so the frame rate bounds input-to-screen latency. View
+	// runs per message rather than per frame, and a frame with an unchanged
+	// view writes nothing; an idle frame costs only a timer wakeup and a view
+	// comparison, which is why this stays below the renderer's default sixty.
+	// Input and collector work run independently of this cadence.
 	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(statusFrameRate)).Run()
 	interrupted := ctx.Err() != nil
 	if start, ok := final.(statusStartupModel); ok && start.err != nil {
