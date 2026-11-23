@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 func TestRepositoryBaseStoreAndIdentity(t *testing.T) {
@@ -192,8 +194,8 @@ func TestRepositoryBaseActualPRTargetIsSeparate(t *testing.T) {
 			}
 		}
 	}
-	ref, err := catchUpRefForPR(receiver.WorktreeDir("widget"), "origin/beta", catchUpPR{state: "OPEN", base: "main"})
-	if err != nil || ref != "origin/main" {
+	ref, err := catchUpRefForPR(receiver.WorktreeDir("widget"), gitref.RemoteBranch("origin", "beta"), catchUpPR{state: "OPEN", base: "main"})
+	if err != nil || ref != gitref.RemoteBranch("origin", "main") {
 		t.Fatalf("actual PR target protection lost: %s %v", ref, err)
 	}
 	base, err := receiver.RepositoryBase("widget")
@@ -303,7 +305,7 @@ func TestRepositoryBaseMergedReturnToBetaPreservesDirtyWork(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			tip := fixtureGit(t, "-C", path, "rev-parse", ref)
+			tip := fixtureGit(t, "-C", path, "rev-parse", ref.String())
 			outcome, reason := receiver.catchUpReconcile(target, ref, tip, catchUpPR{state: "MERGED", head: head, mergeCommit: tip, base: "beta", branch: "topic"}, CatchUpOptions{})
 			if outcome != "updated" {
 				t.Fatalf("return to beta: %s %s", outcome, reason)
@@ -876,7 +878,7 @@ func TestRepositoryBaseInventoryValidationIsLinearAndFresh(t *testing.T) {
 			t.Fatalf("fixture targets: %d", len(targets))
 		}
 		for _, target := range targets {
-			if target.ref != "origin/"+ref {
+			if target.ref != gitref.RemoteBranch("origin", ref) {
 				t.Errorf("new operation hid receiving edits: %s", target.ref)
 			}
 		}

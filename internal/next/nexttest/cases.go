@@ -24,7 +24,7 @@ func Cases() []Case {
 	for _, host := range []string{next.HostLocal, next.HostOpenClaw} {
 		base := func() next.Facts {
 			return next.Facts{Collection: "sample", Repo: "api", Host: host,
-				Base: "origin/main", Head: "head-1", BaseHead: "base-1"}
+				Base: "main", Head: "head-1", BaseHead: "base-1"}
 		}
 		add := func(id string, f next.Facts) {
 			if f.Branch == "" && f.Ahead == 0 && f.Behind == 0 && f.InProgress == "" {

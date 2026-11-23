@@ -68,7 +68,7 @@ type Facts struct {
 	Repo       string
 	Host       string
 	Branch     string // empty when detached
-	Base       string // the ref Behind counts against, e.g. origin/main
+	Base       string // the branch Behind counts against, e.g. main
 	Head       string // the commit checked out
 	// BaseHead is the commit Base is at.
 	BaseHead   string
@@ -220,7 +220,7 @@ func baseName(base string) string {
 	if base == "" {
 		return "the base"
 	}
-	return strings.TrimPrefix(base, "origin/")
+	return base
 }
 
 // PredictMerge says which files merging ref into dir's HEAD would conflict

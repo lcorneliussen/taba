@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 type catchUpPR struct {
@@ -32,19 +34,20 @@ func catchUpGitOK(path string, args ...string) bool {
 	return err == nil
 }
 
-func (c *Context) catchUpDefaultRef(t catchUpTarget) (string, error) {
+func (c *Context) catchUpDefaultRef(t catchUpTarget) (gitref.Ref, error) {
 	target, err := OpenCollection(filepath.Join(c.Workspace, t.collection))
 	if err != nil {
-		return "", err
+		return gitref.Ref{}, err
 	}
 	if _, err := target.Repository(t.repo); err != nil {
-		return catchUpLocalRef(t, "origin/main"), nil
+		return catchUpLocalRef(t, gitref.RemoteBranch("origin", "main")), nil
 	}
 	base, err := target.RepositoryBase(t.repo)
 	if err != nil {
-		return "", err
+		return gitref.Ref{}, err
 	}
-	return catchUpLocalRef(t, base.EffectiveRef), nil
+	ref, err := gitref.Parse(base.EffectiveRef)
+	return catchUpLocalRef(t, ref), err
 }
 
 // catchUpOriginRepo is the registry entry whose remote a shared owner should
@@ -129,14 +132,14 @@ func catchUpValidPRState(state string) bool {
 	return false
 }
 
-func catchUpRefForPR(worktree, defaultRef string, pr catchUpPR) (string, error) {
+func catchUpRefForPR(worktree string, defaultRef gitref.Ref, pr catchUpPR) (gitref.Ref, error) {
 	if pr.state != "OPEN" && pr.state != "DRAFT" {
 		return defaultRef, nil
 	}
 	if pr.base == "" || !catchUpGitOK(worktree, "check-ref-format", "--branch", pr.base) {
-		return "", fmt.Errorf("open PR merge target unavailable or invalid")
+		return gitref.Ref{}, fmt.Errorf("open PR merge target unavailable or invalid")
 	}
-	return "origin/" + pr.base, nil
+	return gitref.RemoteBranch("origin", pr.base), nil
 }
 
 var catchUpLookupAuthStatus = regexp.MustCompile(`(?i)\b(?:HTTP(?:/[0-9.]+)?[ \t]+|status(?: code)?[ :=\t]+)(?:401|403)\b`)
@@ -478,7 +481,7 @@ func catchUpRestoreStash(t catchUpTarget, stash string) (string, bool) {
 	return "", true
 }
 
-func (c *Context) catchUpReconcile(t catchUpTarget, ref, target string, pr catchUpPR, opt CatchUpOptions) (string, string) {
+func (c *Context) catchUpReconcile(t catchUpTarget, ref gitref.Ref, target string, pr catchUpPR, opt CatchUpOptions) (string, string) {
 	if marker := catchUpOperation(t); marker != "" {
 		reason := "in-progress " + marker + "; untouched"
 		if marker == "MERGE_HEAD" {
@@ -520,7 +523,7 @@ func (c *Context) catchUpReconcile(t catchUpTarget, ref, target string, pr catch
 		}
 	default:
 		if branch != "" && catchUpGitOK(t.path, "merge-base", "--is-ancestor", target, "HEAD") {
-			return "current", "already contains " + ref
+			return "current", "already contains " + ref.Short()
 		}
 	}
 	if branch == "" {
@@ -529,7 +532,7 @@ func (c *Context) catchUpReconcile(t catchUpTarget, ref, target string, pr catch
 		}
 	}
 	if opt.DryRun {
-		return "planned", "would update against local " + ref + " (remote not fetched)"
+		return "planned", "would update against local " + ref.Short() + " (remote not fetched)"
 	}
 	stash := ""
 	if status != "" {
@@ -558,7 +561,7 @@ func (c *Context) catchUpReconcile(t catchUpTarget, ref, target string, pr catch
 				reason += "; local branch retained because safe pruning refused"
 			}
 		}
-	} else if branch == catchUpBranchName(ref) {
+	} else if branch == ref.Branch() {
 		if catchUpGitOK(t.path, "merge", "--ff-only", target) {
 			reason = "fast-forwarded default branch"
 		} else {
@@ -578,7 +581,7 @@ func (c *Context) catchUpReconcile(t catchUpTarget, ref, target string, pr catch
 			}
 		}
 	} else {
-		reason = "merged " + ref + " into " + branch
+		reason = "merged " + ref.Short() + " into " + branch
 		if (pr.state == "OPEN" || pr.state == "DRAFT") && !catchUpGitOK(t.path, "push") {
 			outcome, reason = "needs-owner", "merge succeeded but push refused"
 		}
@@ -680,7 +683,7 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 			// change the outcome. Repo-scoped hooks never needed the remote;
 			// collection-level renders wait for a harness known to be current.
 			report.add("repo", t.collection, t.repo, "failed", "owner fetch failed; stale refs not used", source, "", source)
-			report.Outcomes[len(report.Outcomes)-1].TargetRef = t.ref
+			report.Outcomes[len(report.Outcomes)-1].TargetRef = t.ref.Short()
 			c.catchUpHooks(&report, t, opt, true)
 			if t.harness && opt.ReloadStatus {
 				report.add("pane", t.collection, "status", "skipped", "harness update needs attention; pane left running", "", "", "")
@@ -699,7 +702,7 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 		pr := catchUpPR{state: "NONE"}
 		branch, _ := catchUpGit(t.path, "symbolic-ref", "-q", "--short", "HEAD")
 		// An owner without a remote has no forge, so no PR to consult.
-		if branch != "" && branch != catchUpBranchName(ref) && !t.noRemote && catchUpOperation(t) == "" {
+		if branch != "" && branch != ref.Branch() && !t.noRemote && catchUpOperation(t) == "" {
 			pr = c.catchUpPRState(t, branch)
 		}
 		ref, refErr = catchUpRefForPR(t.path, ref, pr)
@@ -707,10 +710,10 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 			report.add("repo", t.collection, t.repo, "needs-owner", refErr.Error()+"; branch left untouched", source, "", source)
 			continue
 		}
-		target, targetErr := catchUpGit(t.path, "rev-parse", "--verify", ref+"^{commit}")
-		outcome, reason := "failed", ref+" unavailable"
+		target, targetErr := catchUpGit(t.path, "rev-parse", "--verify", ref.String()+"^{commit}")
+		outcome, reason := "failed", ref.Short()+" unavailable"
 		if targetErr != nil && (pr.state == "OPEN" || pr.state == "DRAFT") {
-			outcome, reason = "needs-owner", "open PR merge target "+ref+" is unavailable; branch left untouched"
+			outcome, reason = "needs-owner", "open PR merge target "+ref.Short()+" is unavailable; branch left untouched"
 		} else if targetErr == nil {
 			outcome, reason = c.catchUpReconcile(t, ref, target, pr, opt)
 		}
@@ -720,9 +723,9 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 		}
 		report.add("repo", t.collection, t.repo, outcome, reason, source, target, result)
 		row := &report.Outcomes[len(report.Outcomes)-1]
-		row.TargetRef = ref
+		row.TargetRef = ref.Short()
 		if strings.HasPrefix(reason, "merge conflict;") {
-			row.NextAction = strings.Replace(row.NextAction, "merge the target ref", "merge "+ref, 1)
+			row.NextAction = strings.Replace(row.NextAction, "merge the target ref", "merge "+ref.Short(), 1)
 		}
 		if outcome == "updated" || outcome == "current" || outcome == "planned" {
 			c.catchUpHooks(&report, t, opt, false)

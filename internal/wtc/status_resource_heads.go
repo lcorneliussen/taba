@@ -41,8 +41,8 @@ func statusReadPublicationHeads(ctx context.Context, row StatusRepo) (statusPubl
 		}
 		return value, err
 	}
-	if row.baseRef != "" {
-		raw, err := read("rev-parse", "HEAD", row.baseRef, "--short", "HEAD")
+	if !row.baseRef.IsZero() {
+		raw, err := read("rev-parse", "HEAD", row.baseRef.String(), "--short", "HEAD")
 		if ctx.Err() != nil {
 			return statusPublicationHeads{}, ctx.Err()
 		}
@@ -51,8 +51,8 @@ func statusReadPublicationHeads(ctx context.Context, row StatusRepo) (statusPubl
 		}
 	}
 	var heads statusPublicationHeads
-	if row.baseRef != "" {
-		raw, err := read("rev-parse", "HEAD", row.baseRef)
+	if !row.baseRef.IsZero() {
+		raw, err := read("rev-parse", "HEAD", row.baseRef.String())
 		if ctx.Err() != nil {
 			return heads, ctx.Err()
 		}
@@ -66,8 +66,8 @@ func statusReadPublicationHeads(ctx context.Context, row StatusRepo) (statusPubl
 		if ctx.Err() != nil {
 			return heads, ctx.Err()
 		}
-		if row.baseRef != "" {
-			heads.base, _ = read("rev-parse", row.baseRef)
+		if !row.baseRef.IsZero() {
+			heads.base, _ = read("rev-parse", row.baseRef.String())
 		}
 	}
 	if ctx.Err() != nil {
@@ -80,7 +80,7 @@ func statusReadPublicationHeads(ctx context.Context, row StatusRepo) (statusPubl
 type statusPublicationRepo struct{ collection, repo, dir, worktree, branch, kind, base string }
 
 func statusPublicationKey(row StatusRepo) statusPublicationRepo {
-	return statusPublicationRepo{row.Collection, row.Repo, row.Dir, row.Worktree, row.Branch, row.BranchKind, row.baseRef}
+	return statusPublicationRepo{row.Collection, row.Repo, row.Dir, row.Worktree, row.Branch, row.BranchKind, row.baseRef.String()}
 }
 
 // Selected collectors finalize and publish on this stack. Neither observations

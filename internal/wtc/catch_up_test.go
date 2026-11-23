@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 func TestCatchUpInventoryUsesTargetIdentityAndRejectsUnknownSelector(t *testing.T) {
@@ -54,15 +56,15 @@ func TestCatchUpUsesOpenPRMergeTarget(t *testing.T) {
 		want string
 		err  bool
 	}{
-		{catchUpPR{state: "NONE"}, "origin/main", false},
-		{catchUpPR{state: "MERGED"}, "origin/main", false},
-		{catchUpPR{state: "OPEN", base: "release/next"}, "origin/release/next", false},
-		{catchUpPR{state: "DRAFT", base: "develop"}, "origin/develop", false},
+		{catchUpPR{state: "NONE"}, "refs/remotes/origin/main", false},
+		{catchUpPR{state: "MERGED"}, "refs/remotes/origin/main", false},
+		{catchUpPR{state: "OPEN", base: "release/next"}, "refs/remotes/origin/release/next", false},
+		{catchUpPR{state: "DRAFT", base: "develop"}, "refs/remotes/origin/develop", false},
 		{catchUpPR{state: "OPEN"}, "", true},
 		{catchUpPR{state: "OPEN", base: "../../bad"}, "", true},
 	} {
-		got, err := catchUpRefForPR(c.Harness, "origin/main", tc.pr)
-		if got != tc.want || (err != nil) != tc.err {
+		got, err := catchUpRefForPR(c.Harness, gitref.RemoteBranch("origin", "main"), tc.pr)
+		if got.String() != tc.want || (err != nil) != tc.err {
 			t.Fatalf("PR %+v: ref %q, error %v", tc.pr, got, err)
 		}
 	}
@@ -607,7 +609,7 @@ func TestCatchUpReconcilesRemotelessOwnerAgainstLocalBranches(t *testing.T) {
 				t.Fatalf("remote-less fetch row: %+v", row)
 			}
 		case row.Kind == "repo":
-			if row.Outcome != "updated" || row.TargetRef != "refs/heads/main" {
+			if row.Outcome != "updated" || row.TargetRef != "main" {
 				t.Fatalf("remote-less repo row: %+v", row)
 			}
 		}
@@ -711,17 +713,18 @@ func TestCatchUpLinksSecretsWhenFetchFailsBeforePRPreflight(t *testing.T) {
 	}
 }
 
-func TestCatchUpLocalRefAcceptsEveryDevelopmentRefForm(t *testing.T) {
+func TestCatchUpLocalRefMapsEveryDevelopmentRefForm(t *testing.T) {
 	local := catchUpTarget{noRemote: true}
-	for _, ref := range []string{"origin/main", "main", "refs/heads/main", "refs/remotes/origin/main"} {
-		if got := catchUpLocalRef(local, ref); got != "refs/heads/main" {
-			t.Errorf("%s resolved to %s", ref, got)
+	for _, in := range []string{"origin/main", "refs/heads/main", "refs/remotes/origin/main"} {
+		ref, err := gitref.Parse(in)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if got := catchUpBranchName(ref); got != "main" {
-			t.Errorf("%s names branch %s", ref, got)
+		if got := catchUpLocalRef(local, ref); got.String() != "refs/heads/main" {
+			t.Errorf("%s resolved to %s", in, got)
 		}
 	}
-	if got := catchUpLocalRef(catchUpTarget{}, "origin/main"); got != "origin/main" {
+	if got := catchUpLocalRef(catchUpTarget{}, gitref.RemoteBranch("origin", "main")); got.String() != "refs/remotes/origin/main" {
 		t.Errorf("owner with a remote rewrote its ref: %s", got)
 	}
 }

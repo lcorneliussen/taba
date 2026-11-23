@@ -12,12 +12,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 func publicationSnapshot(t *testing.T, c *Context) StatusSnapshot {
 	t.Helper()
 	row, err := statusResourceLocalReference(context.Background(), catchUpTarget{
-		path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: "origin/main",
+		path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: gitref.RemoteBranch("origin", "main"),
 	})
 	if err != nil {
 		// An unborn HEAD has no counts. Keep the partial unknown input used by
@@ -26,7 +28,7 @@ func publicationSnapshot(t *testing.T, c *Context) StatusSnapshot {
 			t.Fatal(err)
 		}
 		row = StatusRepo{Collection: filepath.Base(c.Collection), Dir: "harness", Repo: "agent-harness",
-			Worktree: c.Harness, BranchKind: "branch", Branch: "unborn", BranchDisplay: "unborn", Tree: "clean", baseRef: "origin/main"}
+			Worktree: c.Harness, BranchKind: "branch", Branch: "unborn", BranchDisplay: "unborn", Tree: "clean", baseRef: gitref.RemoteBranch("origin", "main")}
 	}
 	return StatusSnapshot{Schema: 1, Collection: filepath.Base(c.Collection), GeneratedAt: "2000-01-01T00:00:00Z", Repos: []StatusRepo{row}}
 }
@@ -109,7 +111,7 @@ func TestStatusResourcePublicationWholeFormats(t *testing.T) {
 					git("config", "core.abbrev", abbrev)
 					input := publicationSnapshot(t, c)
 					comparePublication(t, c, input)
-					input.Repos[0].baseRef = "origin/missing"
+					input.Repos[0].baseRef = gitref.RemoteBranch("origin", "missing")
 					comparePublication(t, c, input)
 				})
 			}
@@ -333,7 +335,7 @@ func TestStatusResourcePublicationAssociationAndGuards(t *testing.T) {
 					case "worktree":
 						input.Repos[0].Worktree = t.TempDir()
 					case "base":
-						input.Repos[0].baseRef = "origin/different"
+						input.Repos[0].baseRef = gitref.RemoteBranch("origin", "different")
 					case "repo":
 						input.Repos[0].Repo = "different"
 					case "collection":

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/next"
 )
 
@@ -218,18 +219,27 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 		}
 	}
 
-	head, _ := git(top, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	var candidates []gitref.Ref
 	if b := checkedOutBase(top); b != "" {
-		head = "origin/" + b
+		candidates = append(candidates, gitref.RemoteBranch("origin", b))
+	} else if head, err := git(top, "symbolic-ref", gitref.RemoteBranch("origin", "HEAD").String()); err == nil {
+		if ref, err := gitref.Parse(head); err == nil {
+			candidates = append(candidates, ref)
+		}
 	}
-	for _, candidate := range []string{head, "origin/main", "origin/master", "origin/develop"} {
-		if candidate != "" && gitOK(top, "rev-parse", "--verify", "--quiet", candidate+"^{commit}") {
-			s.Base = candidate
+	for _, b := range []string{"main", "master", "develop"} {
+		candidates = append(candidates, gitref.RemoteBranch("origin", b))
+	}
+	var base gitref.Ref
+	for _, candidate := range candidates {
+		if gitOK(top, "rev-parse", "--verify", "--quiet", candidate.String()+"^{commit}") {
+			base = candidate
 			break
 		}
 	}
-	if s.Base != "" {
-		if counts, err := git(top, "rev-list", "--left-right", "--count", s.Base+"...HEAD"); err == nil {
+	s.Base = base.Short()
+	if !base.IsZero() {
+		if counts, err := git(top, "rev-list", "--left-right", "--count", base.String()+"...HEAD"); err == nil {
 			if f := strings.Fields(counts); len(f) == 2 {
 				s.Behind, _ = strconv.Atoi(f[0])
 				s.Ahead, _ = strconv.Atoi(f[1])
@@ -243,8 +253,8 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 			// Commits that came from the base, such as the pull request's
 			// merge after a fast-forward catch-up, are not new work.
 			args := []string{"rev-list", "--count", "HEAD", "^" + published}
-			if s.Base != "" {
-				args = append(args, "^"+s.Base)
+			if !base.IsZero() {
+				args = append(args, "^"+base.String())
 			}
 			if n, err := git(top, args...); err == nil {
 				s.Unpublished, _ = strconv.Atoi(n)
@@ -273,7 +283,8 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 // facts is what the next step is read from: the status, the commits it is
 // about, and whether merging the base would conflict.
 func (s CheckoutStatus) facts(top string) next.Facts {
-	f := next.Facts{Repo: s.Repo, Host: next.HostOpenClaw, Branch: s.Branch, Base: s.Base,
+	base, _ := gitref.Parse(s.Base)
+	f := next.Facts{Repo: s.Repo, Host: next.HostOpenClaw, Branch: s.Branch, Base: base.Branch(),
 		Ahead: s.Ahead, Behind: s.Behind, Dirty: s.Dirty, Conflicted: s.Conflicted,
 		InProgress: s.InProgress}
 	if s.CatchUpRecoveryError != "" {
@@ -285,8 +296,8 @@ func (s CheckoutStatus) facts(top string) next.Facts {
 		f.Repo = filepath.Base(top)
 	}
 	f.Head, _ = git(top, "rev-parse", "HEAD")
-	if s.Base != "" {
-		f.BaseHead, _ = git(top, "rev-parse", s.Base)
+	if !base.IsZero() {
+		f.BaseHead, _ = git(top, "rev-parse", base.String())
 	}
 	// What ↑ would send: the commits since the gateway's last publication,
 	// or before its first one everything ahead of the base. A detached
@@ -294,20 +305,20 @@ func (s CheckoutStatus) facts(top string) next.Facts {
 	if s.Branch != "" {
 		f.ToPush = s.Unpublished
 	}
-	if s.Behind > 0 && s.Base != "" && f.InProgress == "" {
+	if s.Behind > 0 && !base.IsZero() && f.InProgress == "" {
 		var ok bool
-		f.MergeConflicts, ok = next.PredictMerge(top, s.Base)
+		f.MergeConflicts, ok = next.PredictMerge(top, base.String())
 		f.MergeUnknown = !ok
 	}
 	// Work after a merged pull request: commits neither in it nor in the
 	// base, leaving out merges (a catch-up's merge of the base is no work).
 	// Unknown without the pull request's head, so then none is claimed.
-	if pr := s.PullRequest; pr != nil && pr.State == "merged" && pr.Head != "" && s.Base != "" {
-		if n, err := git(top, "rev-list", "--count", "--no-merges", "HEAD", "^"+pr.Head, "^"+s.Base); err == nil {
+	if pr := s.PullRequest; pr != nil && pr.State == "merged" && pr.Head != "" && !base.IsZero() {
+		if n, err := git(top, "rev-list", "--count", "--no-merges", "HEAD", "^"+pr.Head, "^"+base.String()); err == nil {
 			f.AfterMerge, _ = strconv.Atoi(n)
 		}
 		if f.AfterMerge == 0 {
-			f.NeedsBranch, _ = (&Checkout{Dir: top}).hasFollowUpWork(pr, s.Base)
+			f.NeedsBranch, _ = (&Checkout{Dir: top}).hasFollowUpWork(pr, base)
 		}
 	}
 	if pr := s.PullRequest; pr != nil {
