@@ -220,13 +220,15 @@ func (p *tunnelProviderRuntime) reserveTailscale(ctx context.Context, call tunne
 }
 
 // tunnelReservationJournal reads one workspace collection's tunnel journal for
-// the machine-wide reservation inventory. It verifies the collection boundary
-// and project membership as OpenCollection does, but does not load that
-// collection's registry, environment or secrets policy: the journal location
-// depends only on the collection directory, and an unrelated configuration
-// problem there must not block every other collection (#482). An absent journal
-// is empty unless the collection's runtime manifest says one is managed; any
-// other read, ownership or schema failure refuses and names the collection.
+// the machine-wide reservation inventory. It checks the collection boundary
+// with DiscoverLocationContext, as OpenCollection does, and skips collections
+// outside the receiving project; WorkspaceCollections has already excluded
+// retired folders. It does not load that collection's registry, environment or
+// secrets policy: the journal location depends only on the collection
+// directory, and an unrelated configuration problem there must not block every
+// other collection (#482). An absent journal is empty unless the collection's
+// runtime manifest says one is managed; any other read, ownership or schema
+// failure refuses and names the collection.
 func tunnelReservationJournal(ctx context.Context, receiver ReceivingContext, collection string) (tunnelState, bool, error) {
 	refuse := func(reason string, err error) (tunnelState, bool, error) {
 		detail := err.Error()
