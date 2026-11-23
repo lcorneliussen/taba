@@ -54,13 +54,14 @@ file:
 - a load that leaves the repository or enters `.git`;
 - a load cycle;
 - an unreadable or malformed file;
-- more than 256 files, nesting deeper than 16 loads, or a file over 1 MiB.
+- more than 256 files, nesting deeper than 16 loads, a file over 1 MiB, or glob
+  patterns visiting more than 10000 directory entries.
 
 A symlinked `dekit.yaml`, fragment or directory on the way to one is refused.
 dekit itself follows links that stay inside the project, but taba does not read
 symlinked declaration files, as for `.harness/dekit.tasks.yaml`. Replace the link
-with the file or directory. A `**` walk refuses any link to a directory, and skips
-links to files that the pattern does not match.
+with the file or directory. A pattern that would descend through a link to a
+directory is refused; a link to a file it would not load is skipped.
 
 ## With .harness/dekit.tasks.yaml and collection additions
 

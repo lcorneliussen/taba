@@ -349,7 +349,7 @@ func TestRootDekitReadBounds(t *testing.T) {
 			}
 		})
 	}
-	// One file fewer than each bound still loads.
+	// The files bound itself still loads: dekit.yaml and 255 fragments.
 	delete(many, "many/000.yaml")
 	c, _ := rootDekitFixture(t, many)
 	if _, _, err := c.runtimePlan("dekit"); err == nil || !strings.Contains(err.Error(), "no opted-in") {
@@ -393,5 +393,28 @@ func TestRootDekitCacheSeesCreatedLiteralLoad(t *testing.T) {
 	fixtureFile(t, filepath.Join(repo, "later.yaml"), "tasks: {web: {cmd: [sh, -c, ':']}}\n", 0644)
 	if got := c.RuntimeEnlisted(); len(got) != 1 || got[0].Path != "widget/web" {
 		t.Fatalf("created literal load not seen: %+v", got)
+	}
+}
+
+func TestRootDekitWildcardSkipsFileLinksOnTheWay(t *testing.T) {
+	c, repo := rootDekitFixture(t, map[string]string{"dekit.yaml": "load: ['services/*/tasks.yaml']\n", "services/web/tasks.yaml": "tasks: {web: {cmd: [sh, -c, ':']}}\n", "docs/README.md": "x\n"})
+	if err := os.Symlink("../docs/README.md", filepath.Join(repo, "services", "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RuntimeEnlisted(); len(got) != 1 || got[0].Path != "widget/web" {
+		t.Fatalf("a link to a file in a middle segment must be skipped: %+v", got)
+	}
+	if err := os.Symlink("web", filepath.Join(repo, "services", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RuntimeEnlisted(); len(got) != 1 || !strings.Contains(got[0].Error, "services/linked is a symlink to a directory") {
+		t.Fatalf("a link to a directory in a middle segment must be refused: %+v", got)
+	}
+}
+
+func TestRootDekitHarnessWithXWTCLoadedFromRoot(t *testing.T) {
+	c, _ := rootDekitFixture(t, map[string]string{"dekit.yaml": "load: [.harness/dekit.tasks.yaml]\n", ".harness/dekit.tasks.yaml": "tasks: {web: {cmd: [sh], x-wtc: {port_env: PORT}}}\n"})
+	if got := c.RuntimeEnlisted(); len(got) != 1 || !strings.Contains(got[0].Error, "must not be loaded from dekit.yaml") {
+		t.Fatalf("diagnostic: %+v", got)
 	}
 }

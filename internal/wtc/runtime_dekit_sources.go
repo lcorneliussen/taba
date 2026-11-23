@@ -458,7 +458,7 @@ func (l *runtimeDekitLoader) addTasks(abs, mount string, tasks map[string]any) e
 			return l.errorf(abs, "invalid task %q", name)
 		}
 		if _, set := spec["x-wtc"]; set {
-			return l.errorf(abs, "task %s: x-wtc is not a dekit task field and dekit refuses it here; keep taba metadata in .harness/dekit.tasks.yaml tasks", name)
+			return l.errorf(abs, "task %s: x-wtc is not a dekit task field and dekit refuses it in dekit.yaml and every file it loads; a .harness/dekit.tasks.yaml that carries x-wtc must not be loaded from dekit.yaml", name)
 		}
 		if old, dup := l.tasks[full]; dup {
 			return l.errorf(abs, "task %s is also declared in %s", full, old.decl.File)
@@ -591,7 +591,7 @@ func (l *runtimeDekitLoader) checkTree() error {
 }
 
 // glob matches a load pattern inside the repository: *, ?, [...] within a
-// name and ** across directories. It never follows a symlink.
+// name and ** across directories. It never traverses a symlink.
 func (l *runtimeDekitLoader) glob(pattern string) ([]string, error) {
 	pattern = filepath.Clean(pattern)
 	rel, err := filepath.Rel(l.root, pattern)
@@ -616,6 +616,17 @@ func (l *runtimeDekitLoader) glob(pattern string) ([]string, error) {
 	return out, nil
 }
 
+// linkOnTheWay refuses a symlink a pattern would descend through when it
+// names a directory, which may hold files dekit would load. A link to
+// anything else holds no further path, so it is skipped. Only the link's
+// metadata is read.
+func (l *runtimeDekitLoader) linkOnTheWay(link string) error {
+	if info, err := os.Stat(link); err == nil && info.IsDir() {
+		return fmt.Errorf("%s is a symlink to a directory; taba does not read symlinked declaration files or directories", l.name(link))
+	}
+	return nil
+}
+
 func runtimeGlobMeta(part string) bool { return strings.ContainsAny(part, `*?[\`) }
 
 func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]bool) error {
@@ -638,7 +649,7 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 			return err
 		}
 		if len(parts) > 1 && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink; taba does not read symlinked declaration files or directories", l.name(next))
+			return l.linkOnTheWay(next)
 		}
 		return l.match(next, parts[1:], found)
 	}
@@ -668,12 +679,10 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 					return err
 				}
 			} else if symlink {
-				// A link matching the last name was found above and is refused
-				// when loaded. A link to a directory may hold files dekit would
-				// load, so it is refused too; only its metadata is looked at.
-				// A link to anything else cannot match and is skipped.
-				if info, err := os.Stat(next); err == nil && info.IsDir() {
-					return fmt.Errorf("%s is a symlink to a directory; taba does not read symlinked declaration files or directories", l.name(next))
+				// A link matching the last name was found above and is
+				// refused when loaded.
+				if err := l.linkOnTheWay(next); err != nil {
+					return err
 				}
 			}
 			continue
@@ -689,7 +698,10 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 			continue
 		}
 		if symlink {
-			return fmt.Errorf("%s is a symlink; taba does not read symlinked declaration files or directories", l.name(next))
+			if err := l.linkOnTheWay(next); err != nil {
+				return err
+			}
+			continue
 		}
 		if entry.IsDir() {
 			if err := l.match(next, parts[1:], found); err != nil {
