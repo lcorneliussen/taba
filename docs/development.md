@@ -154,6 +154,14 @@ CI verifies the dekit archive checksum and uses a pinned Postgres image digest.
 Actual Azure provisioning and connectivity across machines remain onboarding
 checks for the project using them.
 
+## Formal models
+
+`tools/formal/forge-cache-order/check.sh` model-checks the order in which status
+writers publish a forge cache entry. It needs Java 11 or later and runs in the
+`formal` CI job. Before you change a writer of a pr or build cache entry, read
+[the verify skill](formal/verify-forge-cache-order/SKILL.md): it says when the
+check applies, how to read a counterexample, and how to update the model.
+
 [Release notes](release-notes.md) are committed and embedded separately from
 generated harness guidance. A change that affects behaviour adds its own
 fragment, `internal/wtc/release-notes/unreleased/<issue>-<slug>.md`; it never

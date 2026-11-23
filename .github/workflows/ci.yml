@@ -70,6 +70,17 @@ jobs:
         run: node --test openclaw-plugin/test/decisions-live.test.mjs
         env:
           WTC_DECISIONS_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+  # main.cfg must hold; each replay and finding config must fail as its first line states.
+  formal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Model-check forge cache write ordering
+        run: tools/formal/forge-cache-order/check.sh
   # Full native regression coverage runs in macos-full.yml nightly/manual.
   test-macos:
     runs-on: macos-latest
