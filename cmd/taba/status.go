@@ -204,16 +204,20 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 			return err
 		}
 		if *asJSON {
-			return json.NewEncoder(os.Stdout).Encode(snapshot)
-		}
-		if ansi || (!md && term.IsTerminal(os.Stdout.Fd())) {
+			if err := json.NewEncoder(os.Stdout).Encode(snapshot); err != nil {
+				return err
+			}
+		} else if ansi || (!md && term.IsTerminal(os.Stdout.Fd())) {
 			fmt.Print(statusTable(snapshot, reposOnly, statusTerminalWidth()))
-			return nil
-		}
-		if reposOnly {
+		} else if reposOnly {
 			fmt.Print(snapshot.ReposMarkdown())
 		} else {
 			fmt.Print(snapshot.Markdown())
+		}
+		// A workspace sweep that could not read every collection is a partial
+		// result: the report above stands, and the exit status says so.
+		if len(snapshot.Unreadable) != 0 {
+			return fmt.Errorf("partial status: %d collection(s) unreadable", len(snapshot.Unreadable))
 		}
 		return nil
 	}

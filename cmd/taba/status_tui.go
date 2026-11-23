@@ -2176,6 +2176,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			})...)
 		}
 		lines = append(lines, statusTUIRetiredLines(m.snapshot, width, true)...)
+		lines = append(lines, statusUnreadableLines(m.snapshot, width)...)
 		if repos := statusNextRepos(m.snapshot); len(repos) > 0 {
 			var hints []string
 			for _, r := range repos {

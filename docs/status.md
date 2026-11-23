@@ -286,6 +286,15 @@ taba status --cached --json # completed snapshot; no Git or forge calls
 taba status --local --json  # local preview; no forge calls
 ```
 
+`taba status --all` sweeps every collection in the workspace. A collection whose
+context cannot be opened, for example because its generated environment names a
+control root the receiving policy rejects, is listed under unreadable collections
+with a fixed reason; the other collections are still read and their shared owners
+refreshed. Nothing in a rejected collection is run, fetched or written. Such a
+partial sweep still prints its report, adds an `unreadable` list to `--json`, and
+exits nonzero. Dirty worktrees are observed as usual. `taba catch-up` keeps its
+own refusals and exit status.
+
 `--forge` previews Git and forge facts without writing a completed snapshot. It
 does not record merges, repair PR references or move any worktree; with
 `--no-fetch` it changes no Git state at all. The status view's check before it
