@@ -492,14 +492,15 @@ func runtimeApplyDefaults(task, defaults map[string]any) {
 		own, set := task[key]
 		switch {
 		case !set:
-			task[key] = value
+			// A copy: rendering adds to a task's env in place.
+			task[key] = runtimeCopyValue(value)
 		case key == "log":
 			base, ok1 := value.(map[string]any)
 			mine, ok2 := own.(map[string]any)
 			if ok1 && ok2 {
 				merged := map[string]any{}
 				for k, v := range base {
-					merged[k] = v
+					merged[k] = runtimeCopyValue(v)
 				}
 				for k, v := range mine {
 					merged[k] = v
@@ -510,6 +511,26 @@ func runtimeApplyDefaults(task, defaults map[string]any) {
 			task[key] = runtimeMergeStop(value, own)
 		}
 	}
+}
+
+// runtimeCopyValue copies decoded YAML maps and lists, so tasks that take
+// the same default never share one.
+func runtimeCopyValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			out[key] = runtimeCopyValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = runtimeCopyValue(item)
+		}
+		return out
+	}
+	return value
 }
 
 func runtimeStopParts(value any) map[string]any {
@@ -536,11 +557,11 @@ func runtimeMergeStop(defaults, own any) any {
 	}
 	for key, value := range base {
 		if key == "timeout" || !how {
-			merged[key] = value
+			merged[key] = runtimeCopyValue(value)
 		}
 	}
 	for key, value := range mine {
-		merged[key] = value
+		merged[key] = runtimeCopyValue(value)
 	}
 	return merged
 }
@@ -610,6 +631,8 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 		next := filepath.Join(dir, part)
 		info, err := os.Lstat(next)
 		if os.IsNotExist(err) {
+			// Creating it later changes what the load matches.
+			l.inputs = append(l.inputs, next)
 			return nil
 		} else if err != nil {
 			return err
@@ -621,6 +644,7 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 	}
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
+		l.inputs = append(l.inputs, dir)
 		return nil
 	} else if err != nil {
 		return err
@@ -645,9 +669,11 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 				}
 			} else if symlink {
 				// A link matching the last name was found above and is refused
-				// when loaded; any other may be a directory dekit would search.
-				if ok, _ := path.Match(parts[len(parts)-1], name); !ok || len(parts) > 2 {
-					return fmt.Errorf("%s is a symlink; taba does not read symlinked declaration files or directories", l.name(next))
+				// when loaded. A link to a directory may hold files dekit would
+				// load, so it is refused too; only its metadata is looked at.
+				// A link to anything else cannot match and is skipped.
+				if info, err := os.Stat(next); err == nil && info.IsDir() {
+					return fmt.Errorf("%s is a symlink to a directory; taba does not read symlinked declaration files or directories", l.name(next))
 				}
 			}
 			continue

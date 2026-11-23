@@ -40,8 +40,9 @@ type RuntimeItem struct {
 	// ExposureBasis how wtc knows it.
 	Exposure      string `json:"exposure,omitempty"`
 	ExposureBasis string `json:"exposure_basis,omitempty"`
-	// Source is the task file the task comes from: the repo's committed one or
-	// this collection's local one.
+	// Source is the absolute file the task comes from: the repository's
+	// dekit.yaml or a fragment it loads, its committed .harness/dekit.tasks.yaml,
+	// this collection's svc/<repo>.yaml or, for a managed tunnel, its policy.
 	Source string `json:"source,omitempty"`
 	// Declaration is the declaring file, relative to its repository or
 	// collection; unlike Source, it never names a tunnel policy.

@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -313,5 +314,84 @@ func TestRootDekitCacheSeesLoadedFragments(t *testing.T) {
 	fixtureFile(t, filepath.Join(repo, "svc", "c.yaml"), "tasks: {c: {cmd: [sh, -c, ':']}}\n", 0644)
 	if got := c.RuntimeEnlisted(); len(got) != 3 {
 		t.Fatalf("new glob match not seen: %+v", got)
+	}
+}
+
+func TestRootDekitReadBounds(t *testing.T) {
+	task := "{cmd: [sh, -c, ':']}"
+	chain := map[string]string{"dekit.yaml": "load: [f/0.yaml]\n"}
+	for i := 0; i <= runtimeDekitMaxDepth; i++ {
+		chain[fmt.Sprintf("f/%d.yaml", i)] = fmt.Sprintf("load: [%d.yaml]\n", i+1)
+	}
+	chain[fmt.Sprintf("f/%d.yaml", runtimeDekitMaxDepth+1)] = "tasks: {deep: " + task + "}\n"
+	many := map[string]string{"dekit.yaml": "load: ['many/*.yaml']\n"}
+	for i := 0; i < runtimeDekitMaxFiles; i++ {
+		many[fmt.Sprintf("many/%03d.yaml", i)] = "tasks: {}\n"
+	}
+	wide := map[string]string{"dekit.yaml": "load: ['wide/*.yaml']\n", "wide/a.yaml": "tasks: {}\n"}
+	for i := 0; i < runtimeDekitMaxEntries; i++ {
+		wide[fmt.Sprintf("wide/%05d.txt", i)] = ""
+	}
+	for name, scenario := range map[string]struct {
+		files map[string]string
+		want  string
+	}{
+		"depth":   {chain, "loads are nested deeper than 16 files"},
+		"files":   {many, "loads more than 256 files"},
+		"size":    {map[string]string{"dekit.yaml": "load: [big.yaml]\n", "big.yaml": "tasks: {}\n#" + strings.Repeat("x", runtimeDekitMaxBytes) + "\n"}, "widget/big.yaml: larger than 1048576 bytes"},
+		"entries": {wide, "visits more than 10000 directory entries"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, _ := rootDekitFixture(t, scenario.files)
+			items := c.RuntimeEnlisted()
+			if len(items) != 1 || items[0].Kind != "configuration" || !strings.Contains(items[0].Error, scenario.want) {
+				t.Fatalf("discovery %+v, want %q", items, scenario.want)
+			}
+		})
+	}
+	// One file fewer than each bound still loads.
+	delete(many, "many/000.yaml")
+	c, _ := rootDekitFixture(t, many)
+	if _, _, err := c.runtimePlan("dekit"); err == nil || !strings.Contains(err.Error(), "no opted-in") {
+		t.Fatalf("255 empty fragments: %v", err)
+	}
+}
+
+func TestRootDekitDefaultsAreCopiedPerTask(t *testing.T) {
+	defaults := map[string]any{"env": map[string]any{"A": "1"}, "add_path": []any{"/bin"}, "log": map[string]any{"mode": "append"}, "stop": map[string]any{"signal": "SIGINT", "timeout": "5s"}}
+	one, two := map[string]any{"log": map[string]any{"dir": "x"}, "stop": map[string]any{"timeout": "1s"}}, map[string]any{}
+	runtimeApplyDefaults(one, defaults)
+	runtimeApplyDefaults(two, defaults)
+	one["env"].(map[string]any)["PORT"] = "43100"
+	one["add_path"].([]any)[0] = "/changed"
+	one["log"].(map[string]any)["mode"] = "truncate"
+	one["stop"].(map[string]any)["signal"] = "SIGKILL"
+	if !reflect.DeepEqual(two["env"], map[string]any{"A": "1"}) || two["add_path"].([]any)[0] != "/bin" || two["log"].(map[string]any)["mode"] != "append" || two["stop"].(map[string]any)["signal"] != "SIGINT" {
+		t.Fatalf("a task's change reached another task: %+v", two)
+	}
+	if !reflect.DeepEqual(defaults["env"], map[string]any{"A": "1"}) || defaults["stop"].(map[string]any)["signal"] != "SIGINT" {
+		t.Fatalf("defaults changed: %+v", defaults)
+	}
+}
+
+func TestRootDekitGlobstarSkipsUnmatchedFileLinks(t *testing.T) {
+	c, repo := rootDekitFixture(t, map[string]string{"dekit.yaml": "load: ['**/*.tasks.yaml']\n", "svc/web.tasks.yaml": "tasks: {web: {cmd: [sh, -c, ':']}}\n", "bin/real": "#!/bin/sh\n"})
+	if err := os.Symlink("real", filepath.Join(repo, "bin", "tool")); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.RuntimeEnlisted(); len(got) != 1 || got[0].Path != "widget/web" {
+		t.Fatalf("a link to an unmatched file must not fail the load: %+v", got)
+	}
+}
+
+func TestRootDekitCacheSeesCreatedLiteralLoad(t *testing.T) {
+	c, repo := rootDekitFixture(t, map[string]string{"dekit.yaml": "load: [later.yaml]\n"})
+	c.runtimeDeclarationsCache = newRuntimeDeclarationCache()
+	if got := c.RuntimeEnlisted(); len(got) != 1 || !strings.Contains(got[0].Error, "matched no files") {
+		t.Fatalf("missing literal load: %+v", got)
+	}
+	fixtureFile(t, filepath.Join(repo, "later.yaml"), "tasks: {web: {cmd: [sh, -c, ':']}}\n", 0644)
+	if got := c.RuntimeEnlisted(); len(got) != 1 || got[0].Path != "widget/web" {
+		t.Fatalf("created literal load not seen: %+v", got)
 	}
 }

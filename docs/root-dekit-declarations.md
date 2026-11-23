@@ -59,7 +59,8 @@ file:
 A symlinked `dekit.yaml`, fragment or directory on the way to one is refused.
 dekit itself follows links that stay inside the project, but taba does not read
 symlinked declaration files, as for `.harness/dekit.tasks.yaml`. Replace the link
-with the file or directory.
+with the file or directory. A `**` walk refuses any link to a directory, and skips
+links to files that the pattern does not match.
 
 ## With .harness/dekit.tasks.yaml and collection additions
 
