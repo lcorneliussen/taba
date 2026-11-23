@@ -204,8 +204,9 @@ func twgCommentResolve(m ReviewManifest, id string) error {
 }
 
 // BitbucketMarkReady un-drafts a pull request through the selected write
-// route. root is the control root.
-func BitbucketMarkReady(root, worktree, slug, number string) error {
+// route. root is the control root; head is the reviewed PR head, which a
+// gateway's confirmed write pins.
+func BitbucketMarkReady(root, worktree, slug, number, head string) error {
 	route, err := selectedBitbucketWrite(root, false)
 	if err != nil {
 		return err
@@ -216,7 +217,14 @@ func BitbucketMarkReady(root, worktree, slug, number string) error {
 	}
 	switch route {
 	case bitbucketWriteBroker:
-		return errBitbucketBrokered
+		receipt, err := brokeredWrites(worktree, slug, number, head, "taba-ready-"+brokeredHash("ready-v1", slug, number, head), []brokeredOperation{{Op: "pr.ready"}})
+		if err != nil {
+			return err
+		}
+		if receipt.Results[0].Status != "done" {
+			return fmt.Errorf("the confirmed un-draft of PR #%s ended %s; check the pull request", number, receipt.Results[0].Status)
+		}
+		return nil
 	case bitbucketWriteBB:
 		cmd := exec.Command("bb", "pr", "ready", number)
 		cmd.Dir = worktree

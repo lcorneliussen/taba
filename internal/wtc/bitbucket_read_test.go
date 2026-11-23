@@ -570,7 +570,7 @@ func TestBitbucketWritesUseThePersonsTWGLogin(t *testing.T) {
 	if err := resolveReviewInline(m, "41", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := BitbucketMarkReady("", t.TempDir(), "acme/alpha", "7"); err != nil {
+	if err := BitbucketMarkReady("", t.TempDir(), "acme/alpha", "7", "aaaaaaaaaaaa"); err != nil {
 		t.Fatal(err)
 	}
 	log := h.read(t, h.log)
@@ -602,11 +602,21 @@ func TestBitbucketWriteRoutesAreExplicit(t *testing.T) {
 		"create":  func() error { _, err := postReviewComment(m, "", "x"); return err }(),
 		"reply":   replyReviewInline(m, "41", "x"),
 		"resolve": resolveReviewInline(m, "41", ""),
-		"ready":   BitbucketMarkReady("", t.TempDir(), "acme/alpha", "7"),
 	} {
 		if !errors.Is(err, errBitbucketBrokered) {
 			t.Fatalf("%s on a gateway = %v", name, err)
 		}
+	}
+	// Ready on a gateway asks for the person's confirmation instead.
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", repo).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if err := BitbucketMarkReady("", repo, "acme/alpha", "7", "aaaaaaaaaaaa"); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("ready on a gateway = %v", err)
+	}
+	if err := BitbucketMarkReady("", repo, "acme/alpha", "7", ""); err == nil {
+		t.Fatal("a brokered ready without a head was asked for")
 	}
 	if strings.Contains(h.read(t, h.log), "argv:") {
 		t.Fatal("a gateway write ran a client")

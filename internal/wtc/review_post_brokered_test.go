@@ -175,3 +175,43 @@ func TestBrokeredReviewPostKeepsUnknownOutcomesPending(t *testing.T) {
 		t.Fatalf("foreign receipt = %v", err)
 	}
 }
+
+func TestBrokeredResolveAndReadyFollowTheirReceipts(t *testing.T) {
+	f := newBrokeredFixture(t)
+	rows := []ReviewInlineRecord{{Key: "k1", Concern: "correctness", File: "a.go", Line: 3, ID: "901"}, {Key: "k2", File: "b.go", Line: 1, ID: "902", Resolved: true}}
+	if err := writeInlineRecords(f.bundle, rows); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.c.resolveReviewBrokered(f.m, f.bundle, rows, ReviewResolveOptions{Reply: "Fixed in the next commit."})
+	if !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("err = %v", err)
+	}
+	request := f.request(t)
+	if len(request.Operations) != 2 || request.Operations[0].Parent != 901 || request.Operations[1].Op != "comment.resolve" || request.Operations[1].Comment != 901 {
+		t.Fatalf("request = %+v", request)
+	}
+	f.receipt(t, request.IntentID, true, "done:950", "done:901")
+	result, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), ReviewResolveOptions{Reply: "Fixed in the next commit."})
+	if err != nil || result.Resolved != 1 || !readInlineRecords(f.bundle)[0].Resolved {
+		t.Fatalf("resolve = %+v, %v", result, err)
+	}
+	if strings.Contains(f.h.read(t, f.h.log), "comment resolve") {
+		t.Fatal("a gateway resolve wrote directly")
+	}
+
+	// Ready: asked once, done from its receipt.
+	if err := BitbucketMarkReady("", f.m.RepoDir, "acme/alpha", "7", "aaaaaaaaaaaa"); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("ready = %v", err)
+	}
+	ready := f.request(t)
+	if len(ready.Operations) != 1 || ready.Operations[0].Op != "pr.ready" || ready.Head != "aaaaaaaaaaaa" {
+		t.Fatalf("ready request = %+v", ready)
+	}
+	f.receipt(t, ready.IntentID, true, "done")
+	if err := BitbucketMarkReady("", f.m.RepoDir, "acme/alpha", "7", "aaaaaaaaaaaa"); err != nil {
+		t.Fatalf("ready after confirmation = %v", err)
+	}
+	if strings.Contains(f.h.read(t, f.h.log), "pull-requests update") {
+		t.Fatal("a gateway ready wrote directly")
+	}
+}

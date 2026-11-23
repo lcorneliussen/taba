@@ -306,7 +306,7 @@ func addReviewCommands(root *cobra.Command, asJSON *bool) {
 			}
 		}
 		if forge != "github" {
-			if err := wtc.BitbucketMarkReady(c.ConfigRoot, worktree, slug, args[0]); err != nil {
+			if err := wtc.BitbucketMarkReady(c.ConfigRoot, worktree, slug, args[0], state.PRHead); err != nil {
 				return err
 			}
 			if *asJSON {

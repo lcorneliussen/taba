@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -60,6 +61,7 @@ type brokeredOperation struct {
 	Text    string          `json:"text,omitempty"`
 	Comment int64           `json:"comment,omitempty"`
 	Inline  *brokeredInline `json:"inline,omitempty"`
+	Parent  int64           `json:"parent,omitempty"`
 }
 
 type brokeredInline struct {
@@ -314,4 +316,54 @@ func writePrivateJSON(path string, value any) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// brokeredWrites asks once for a short, self-contained set of writes (ready,
+// resolve) under intent, and returns their receipt once the person has
+// confirmed them. Until then it reports that they await confirmation.
+func brokeredWrites(worktree, slug, number, head, intent string, operations []brokeredOperation) (*brokeredReceipt, error) {
+	if !reviewHeadPattern.MatchString(head) {
+		return nil, fmt.Errorf("cannot ask for Bitbucket writes on PR #%s without its current head", number)
+	}
+	gitDir, err := worktreeGitDir(worktree)
+	if err != nil {
+		return nil, err
+	}
+	workspace, repo, err := splitBitbucketSlug(slug)
+	if err != nil {
+		return nil, err
+	}
+	pr, err := strconv.Atoi(number)
+	if err != nil {
+		return nil, fmt.Errorf("invalid PR number")
+	}
+	if raw, err := os.ReadFile(filepath.Join(gitDir, bitbucketWriteReceiptsDir, intent+".receipt.json")); err == nil {
+		var receipt brokeredReceipt
+		if json.Unmarshal(raw, &receipt) != nil || receipt.Version != 1 || receipt.IntentID != intent ||
+			!strings.EqualFold(receipt.Owner, workspace) || !strings.EqualFold(receipt.Repo, repo) || receipt.PR != pr || len(receipt.Results) != len(operations) {
+			return nil, fmt.Errorf("the Bitbucket write receipt does not match this request; inspect it")
+		}
+		_ = os.Remove(filepath.Join(gitDir, bitbucketWriteRequestFile))
+		return &receipt, nil
+	}
+	requestPath := filepath.Join(gitDir, bitbucketWriteRequestFile)
+	if raw, err := os.ReadFile(requestPath); err == nil {
+		var pending brokeredRequest
+		if json.Unmarshal(raw, &pending) == nil && pending.IntentID == intent {
+			return nil, fmt.Errorf("%w: PR #%s writes wait for the person to confirm them in the Control UI; run this again afterwards", ErrBitbucketAwaitingConfirmation, number)
+		}
+		return nil, fmt.Errorf("another Bitbucket write request in this worktree awaits confirmation; let the person confirm or discard it first")
+	}
+	request := brokeredRequest{Version: 1, IntentID: intent, Owner: workspace, Repo: repo, PR: pr, Head: head, Operations: operations}
+	if err := writePrivateJSON(requestPath, request); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("%w: %d Bitbucket writes for PR #%s wait for the person to confirm them in the Control UI; run this again afterwards", ErrBitbucketAwaitingConfirmation, len(operations), number)
+}
+
+var reviewHeadPattern = regexp.MustCompile(`^[0-9a-f]{12,40}$`)
+
+func brokeredHash(label string, fields ...string) string {
+	sum := sha256.Sum256([]byte(label + "\x00" + strings.Join(fields, "\x00")))
+	return hex.EncodeToString(sum[:])[:24]
 }

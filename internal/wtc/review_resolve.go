@@ -53,6 +53,9 @@ func (c *Context) ResolveReviewBundle(bundle string, opt ReviewResolveOptions) (
 	}
 	rows := readInlineRecords(bundle)
 	result := ReviewResolveResult{}
+	if forge == "bitbucket" && bitbucketGateway() {
+		return c.resolveReviewBrokered(manifest, bundle, rows, opt)
+	}
 	for i := range rows {
 		row := &rows[i]
 		if row.ID == "" || row.Resolved || opt.Key != "" && row.Key != opt.Key || opt.Concern != "" && row.Concern != opt.Concern || opt.File != "" && row.File != opt.File || opt.Line != 0 && row.Line != opt.Line {
@@ -206,4 +209,56 @@ func splitReviewSlug(slug string) []string {
 		}
 	}
 	return nil
+}
+
+// resolveReviewBrokered asks the person to confirm the replies and resolves
+// on a gateway (#471), then records the threads whose resolve was done.
+func (c *Context) resolveReviewBrokered(m ReviewManifest, bundle string, rows []ReviewInlineRecord, opt ReviewResolveOptions) (ReviewResolveResult, error) {
+	result := ReviewResolveResult{}
+	var operations []brokeredOperation
+	var keys []string
+	resolveOf := map[int]int{} // operation index -> row index
+	for i, row := range rows {
+		if row.ID == "" || row.Resolved || opt.Key != "" && row.Key != opt.Key || opt.Concern != "" && row.Concern != opt.Concern || opt.File != "" && row.File != opt.File || opt.Line != 0 && row.Line != opt.Line {
+			continue
+		}
+		id, err := strconv.ParseInt(row.ID, 10, 64)
+		if err != nil || !prNumber.MatchString(row.ID) {
+			return result, fmt.Errorf("invalid inline comment id for %s", row.Key)
+		}
+		if opt.Reply != "" {
+			operations = append(operations, brokeredOperation{Op: "comment.create", Text: opt.Reply, Parent: id})
+		}
+		resolveOf[len(operations)] = i
+		operations = append(operations, brokeredOperation{Op: "comment.resolve", Comment: id})
+		keys = append(keys, row.Key)
+	}
+	if len(operations) == 0 {
+		return result, nil
+	}
+	head, err := reviewPRHead(m)
+	if err != nil {
+		return result, fmt.Errorf("cannot verify PR head: %w", err)
+	}
+	intent := "taba-resolve-" + brokeredHash("resolve-v1", bundle, m.PR, head, opt.Reply, strings.Join(keys, "\x00"))
+	receipt, err := brokeredWrites(m.RepoDir, m.Slug, m.PR, head, intent, operations)
+	if err != nil {
+		return result, err
+	}
+	for index, entry := range receipt.Results {
+		row, ok := resolveOf[index]
+		if !ok || entry.Status != "done" {
+			continue
+		}
+		rows[row].Resolved = true
+		rows[row].Error = ""
+		result.Resolved++
+	}
+	if err := writeInlineRecords(bundle, rows); err != nil {
+		return result, err
+	}
+	if !receipt.Completed {
+		return result, fmt.Errorf("the confirmed Bitbucket resolves stopped early; %d threads resolved", result.Resolved)
+	}
+	return result, nil
 }
