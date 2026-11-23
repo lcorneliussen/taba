@@ -37,7 +37,7 @@ func statusFullRefreshDueContext(ctx context.Context, forge, slug, key string) b
 	// Incremental audits protect reuse of persistent observations. Unknown
 	// selection has only live operation-private observations, so there is no
 	// persistent fingerprint to audit. Explicit/by-number reads still run.
-	if !statusAuthForContext(ctx, forge).known {
+	if !statusEntryKnown(ctx, "full", forge, slug, key) {
 		return false
 	}
 	every := statusFullRefreshEvery()
@@ -309,11 +309,17 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	case "github.com":
 		name, args = "gh", []string{"pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,closedAt,baseRefName,mergeCommit,headRefOid"}
 	case "bitbucket.org":
-		parts := strings.SplitN(slug, "/", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid Bitbucket repository slug")
+		if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
+			return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
 		}
-		name, args = "bb", []string{"pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json"}
+		raw, err := bitbucketReadPR(ctx, slug, record.Number)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("Bitbucket PR observation: %w", err)
+		}
+		return raw, nil
 	default:
 		return nil, fmt.Errorf("unsupported forge")
 	}
@@ -358,14 +364,10 @@ func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, sl
 		}
 		raw, err = statusJSONContext(ctx, "gh", "pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,closedAt,baseRefName,mergeCommit,headRefOid")
 	case "bitbucket.org":
-		parts := strings.SplitN(slug, "/", 2)
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid Bitbucket repository slug")
-		}
 		if onRequest != nil {
 			onRequest()
 		}
-		raw, err = statusJSONContext(ctx, "bb", "pr", "view", record.Number, "--workspace", parts[0], "--repo", parts[1], "--json")
+		raw, err = bitbucketReadPR(ctx, slug, record.Number)
 	default:
 		return nil, fmt.Errorf("unsupported forge")
 	}

@@ -74,7 +74,7 @@ func TestBitbucketClientSelection(t *testing.T) {
 		want      bitbucketClient
 		err       bool
 	}{
-		{"", "", bitbucketClientBB, false},
+		{"", "", bitbucketClientTWG, false}, // the default since #471
 		{"bb", "", bitbucketClientBB, false},
 		{"TWG", "", bitbucketClientTWG, false},
 		{" twg ", "", bitbucketClientTWG, false},

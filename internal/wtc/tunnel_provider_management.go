@@ -179,16 +179,12 @@ func (p *tunnelProviderRuntime) reserveTailscale(ctx context.Context, call tunne
 		candidate.Kind = "reservation"
 		candidate.Lifetime = "registration"
 		for _, collection := range collections {
-			other, err := OpenCollection(collection)
+			state, member, err := tunnelReservationJournal(ctx, receiver, collection)
 			if err != nil {
-				return fmt.Errorf("cannot verify local tunnel reservation owner")
+				return err
 			}
-			if receiver.Project != nil && (other.Project == nil || !sameCanonicalPath(other.Project.Root, receiver.Project.Root)) {
+			if !member {
 				continue
-			}
-			state, err := other.readTunnelJournal()
-			if err != nil {
-				return fmt.Errorf("local tunnel reservation journal needs reconciliation")
 			}
 			for _, entry := range state.Entries {
 				if sameCanonicalPath(collection, p.c.Collection) && entry.Key == call.Entry.Key {
@@ -221,6 +217,46 @@ func (p *tunnelProviderRuntime) reserveTailscale(ctx context.Context, call tunne
 		}
 		return runtimeWrite(p.c.tunnelJournalPath(), data)
 	})
+}
+
+// tunnelReservationJournal reads one workspace collection's tunnel journal for
+// the machine-wide reservation inventory. It checks the collection boundary
+// with DiscoverLocationContext, as OpenCollection does, and skips collections
+// outside the receiving project; WorkspaceCollections has already excluded
+// retired folders. It does not load that collection's registry, environment or
+// secrets policy: the journal location depends only on the collection
+// directory, and an unrelated configuration problem there must not block every
+// other collection (#482). An absent journal is empty unless the collection's
+// runtime manifest says one is managed; any other read, ownership or schema
+// failure refuses and names the collection.
+func tunnelReservationJournal(ctx context.Context, receiver ReceivingContext, collection string) (tunnelState, bool, error) {
+	refuse := func(reason string, err error) (tunnelState, bool, error) {
+		detail := err.Error()
+		if len(detail) > 240 {
+			detail = detail[:240] + "..."
+		}
+		return tunnelState{}, false, fmt.Errorf("%s in collection %q: %q", reason, filepath.Base(collection), detail)
+	}
+	abs, err := filepath.Abs(collection)
+	if err != nil {
+		return refuse("cannot verify local tunnel reservation owner", err)
+	}
+	location, err := DiscoverLocationContext(ctx, abs)
+	if err == nil && (location.Collection == "" || !sameCanonicalPath(location.Collection, abs)) {
+		err = fmt.Errorf("not a collection")
+	}
+	if err != nil {
+		return refuse("cannot verify local tunnel reservation owner", err)
+	}
+	if receiver.Project != nil && (location.Project == nil || !sameCanonicalPath(location.Project.Root, receiver.Project.Root)) {
+		return tunnelState{}, false, nil
+	}
+	other := &Context{readCtx: ctx, Collection: abs, Workspace: filepath.Dir(abs), Project: location.Project}
+	state, err := other.readTunnelJournal()
+	if err != nil {
+		return refuse("local tunnel reservation journal needs reconciliation", err)
+	}
+	return state, true, nil
 }
 
 func tailscaleReservationOverlap(a, b string) bool {

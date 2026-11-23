@@ -314,6 +314,13 @@ func statusSnapshotKnownAuth(ctx context.Context, snapshot StatusSnapshot) bool 
 		if !statusAuthCurrent(ctx, forge) {
 			return false
 		}
+		// The snapshot file is keyed by the forge context only. Bitbucket PR
+		// detail read through TWG or a host credential has a per-entry
+		// context (statusAuthEntry) that this key cannot follow, so such a
+		// snapshot is never persisted; its entries are still shared (#471).
+		if forge == "bitbucket.org" && bitbucketReadFor(ctx).selection.Client != bitbucketClientBB {
+			return false
+		}
 	}
 	return true
 }

@@ -14,17 +14,18 @@ import (
 func reviewRepositoryAudience(worktree, forge, slug string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	var cmd *exec.Cmd
+	var raw []byte
+	var err error
 	switch forge {
 	case "github":
-		cmd = exec.CommandContext(ctx, "gh", "repo", "view", slug, "--json", "visibility")
+		cmd := exec.CommandContext(ctx, "gh", "repo", "view", slug, "--json", "visibility")
+		cmd.Dir = worktree
+		raw, err = forgeOutput(cmd)
 	case "bitbucket":
-		cmd = exec.CommandContext(ctx, "bb", "repo", "view", slug, "--json")
+		raw, err = bitbucketReadRepo(bitbucketReadOperation(ctx, ""), slug)
 	default:
 		return "unknown"
 	}
-	cmd.Dir = worktree
-	raw, err := forgeOutput(cmd)
 	if err != nil {
 		return "unknown"
 	}

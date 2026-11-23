@@ -910,17 +910,27 @@ When OpenClaw evicts an idle managed worktree but retains its snapshot, the
 Collection card and sidebar show **Evicted** and **Restore**. The header offers
 **Restore all** for the recoverable repositories, including while the card is
 collapsed. Restoration needs the person's gateway `operator.admin` permission.
-It runs sequentially through OpenClaw's native restore command, rechecks the
-recorded owner, destination, branch and snapshot, then refreshes status. Each
-repository's success or error appears in the Action log. If the conversation
+The Control UI calls the plugin's `wtc.checkout.restore` Gateway method, which
+rechecks the collection, recorded owner, destination, branch, snapshot and
+active runs, then dispatches OpenClaw's native `worktrees.restore` through the
+plugin SDK under the person's own authenticated request. The gateway checks
+that person's scopes again; no command runs under the gateway host's own login.
+Repositories are restored one after another and status is refreshed after
+each. Each repository's result appears in the Action log. If the conversation
 changes, queued repositories are left alone.
 
 Restore keeps the existing native record and session binding, including saved
 uncommitted changes. It does not fetch a newer branch, clone a replacement,
-start services or overwrite an occupied destination. A stale record, missing
-snapshot, changed branch or native permission failure is reported for inspection.
+start services or overwrite an occupied destination. A failure names its
+cause: the gateway cannot restore from Collection (missing capability),
+permission denied, connection authentication failed, or the snapshot is no
+longer available. A changed record or branch is refused before anything runs.
+When a reply is unclear, the plugin reads the native record again and reports
+what it finds: restored, still evicted, or unknown. It never retries by itself.
 A directory that is merely missing, with no verified recovery record, does not
-get a Restore action. Older hosts without recovery commands still show its
+get a Restore action. A host that records the snapshot but cannot restore it
+from Collection shows the snapshot without offering Restore; use OpenClaw's
+Worktrees settings there. Older hosts without recovery commands still show its
 repository identity and **No checkout**.
 
 Status refreshes never restore or extend activity. Recovery metadata uses a

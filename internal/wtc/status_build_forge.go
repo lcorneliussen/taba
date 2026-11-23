@@ -96,8 +96,34 @@ func statusParseGHBuild(raw []byte, slug, branch string) (*StatusBuild, error) {
 // statusBBAPI is the Bitbucket REST root; tests point it at a local server.
 var statusBBAPI = "https://api.bitbucket.org/2.0"
 
+// bitbucketRESTCredentials returns the credential for one repository's REST
+// reads in this operation. With a host read credential (#471) it is that
+// repository's token as a bearer token: user is empty and pass holds it, for
+// that request only. Otherwise it is bitbucketCredentials. err explains a
+// missing credential without naming any value.
+func bitbucketRESTCredentials(ctx context.Context, slug string) (user, pass string, err error) {
+	workspace, repo, err := splitBitbucketSlug(slug)
+	if err != nil {
+		return "", "", err
+	}
+	hostUser, token, host, err := bitbucketReadFor(ctx).restCredential(ctx, workspace, repo)
+	if err != nil {
+		return "", "", err
+	}
+	if host {
+		// An empty user sends token as a bearer token.
+		return hostUser, token, nil
+	}
+	user, pass = bitbucketCredentials()
+	if user == "" || pass == "" {
+		return "", "", fmt.Errorf("no Bitbucket API credentials (set BB_USERNAME and BB_API_TOKEN, or opt this host into %s=git-credential)", bitbucketReadCredentialVariable)
+	}
+	return user, pass, nil
+}
+
 // bitbucketCredentials reads the API user and token from the environment
-// first, then from the bb CLI's own login, so a working `bb` is enough.
+// first, then from the bb CLI's config file (read as a file; bb itself is not
+// run or required).
 func bitbucketCredentials() (string, string) {
 	for _, pair := range [][2]string{{"BB_API_USER", "BB_API_PASS"}, {"BB_USERNAME", "BB_API_TOKEN"}, {"ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN"}} {
 		if user, pass := os.Getenv(pair[0]), os.Getenv(pair[1]); user != "" && pass != "" {
@@ -132,9 +158,9 @@ func statusBBBuildContext(ctx context.Context, slug, branch string) (*StatusBuil
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid Bitbucket repository slug")
 	}
-	user, pass := bitbucketCredentials()
-	if user == "" || pass == "" {
-		return nil, fmt.Errorf("no Bitbucket API credentials (log in with bb, or set BB_USERNAME and BB_API_TOKEN)")
+	user, pass, err := bitbucketRESTCredentials(ctx, slug)
+	if err != nil {
+		return nil, err
 	}
 	var started time.Time
 	raw, live, err := statusFetchSharedContext(ctx, "pipelines", "bitbucket.org", slug, "recent", func() ([]byte, error) {
