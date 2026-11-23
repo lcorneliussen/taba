@@ -2431,7 +2431,7 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 			return final, updated.lifecycleErr
 		}
 		if err == nil && updated.devAutoExit && updated.devRestart != nil && updated.devIdle() {
-			return final, restartStatusDev(updated.devRestart.collection, updated.devRestart.binary, updated.devRestart.generation, updated.devPresentation())
+			return final, statusDevHandover(updated)
 		}
 	}
 	if interrupted {
@@ -2439,6 +2439,16 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	}
 	return final, err
 }
+
+// statusDevHandover replaces this process with the rebuilt CLI. The exec
+// skips deferred calls, so an owned alternate-scroll mode is reset first; the
+// new process queries the terminal again.
+func statusDevHandover(m statusTUIModel) error {
+	statusAltScrollRestore()
+	return statusRestartDev(m.devRestart.collection, m.devRestart.binary, m.devRestart.generation, m.devPresentation())
+}
+
+var statusRestartDev = restartStatusDev
 
 // Focus reporting is a bounded positive hint, not an attached-client contract.
 // Unknown/no-event views keep a safety refresh; focus hints do not gate explicit Refresh.

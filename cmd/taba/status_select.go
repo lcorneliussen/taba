@@ -50,9 +50,10 @@ func (v *statusSelectionView) SetStdin(r io.Reader)  { v.stdin = r }
 func (v *statusSelectionView) SetStdout(w io.Writer) { v.stdout = w }
 func (v *statusSelectionView) SetStderr(io.Writer)   {}
 
-// Run writes the captured text while the terminal is still in its ordinary
-// line mode, then waits for an explicit return key. Escape sequences (arrows,
-// Page keys a terminal forwards) are ignored so scrolling never exits.
+// Run writes the captured text before taking raw input, then waits for
+// Enter, q or v (return) or Ctrl+C (quit). A read that starts with an escape
+// sequence (arrow or Page keys a terminal forwards) is ignored, so scrolling
+// never exits.
 func (v *statusSelectionView) Run() error {
 	if v.stdout == nil {
 		v.stdout = os.Stdout

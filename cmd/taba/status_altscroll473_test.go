@@ -20,9 +20,10 @@ import (
 func status473ResetAltScroll(t *testing.T) {
 	t.Helper()
 	statusAltScrollOwned.Store(false)
+	output, options := statusTerminalOutput, statusProgramOptions
 	t.Cleanup(func() {
 		statusAltScrollOwned.Store(false)
-		statusTerminalOutput, statusProgramOptions = io.Writer(nil), nil
+		statusTerminalOutput, statusProgramOptions = output, options
 	})
 }
 
@@ -190,5 +191,26 @@ func TestStatus473SelectionViewSuspendsOwnedAltScroll(t *testing.T) {
 		if owned != hasReset || owned != hasSet {
 			t.Fatalf("owned=%v: selection view reset-first=%v set-last=%v", owned, hasReset, hasSet)
 		}
+	}
+}
+
+func TestStatus473DevHandoverResetsOwnedAltScrollBeforeExec(t *testing.T) {
+	status473ResetAltScroll(t)
+	out := &status473Buffer{}
+	statusTerminalOutput = out
+	statusAltScrollOwned.Store(true)
+	restart := statusRestartDev
+	t.Cleanup(func() { statusRestartDev = restart })
+	called := false
+	statusRestartDev = func(collection, binary, generation string, _ statusTUIPresentation) error {
+		called = true
+		if statusAltScrollOwned.Load() || out.String() != statusAltScrollReset {
+			t.Fatalf("exec handover ran with alternate scroll still owned (written %q)", out.String())
+		}
+		return nil
+	}
+	m := statusTUIModel{devRestart: &statusDevRestart{collection: "synthetic", binary: "/synthetic/taba", generation: "g1"}}
+	if err := statusDevHandover(m); err != nil || !called {
+		t.Fatalf("handover did not reach the restart (called=%v err=%v)", called, err)
 	}
 }
