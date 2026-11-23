@@ -201,6 +201,8 @@ const (
 	bitbucketCauseAuth         = "authentication or authorization failed; check CLI login and repository access, then retry"
 	bitbucketCauseMissingField = "required field missing from response; check forge CLI compatibility and retry"
 	bitbucketCauseMalformed    = "malformed or conflicting completeness metadata in response; check forge CLI compatibility and retry"
+	bitbucketCauseTLS          = "TLS verification with Bitbucket failed; check the host's certificates and retry"
+	bitbucketCauseNetwork      = "Bitbucket could not be reached; check the network and retry"
 )
 
 // bitbucketRunner runs one owned client process with a bounded deadline. env
@@ -476,12 +478,27 @@ func classifyTWGError(e *twgError) *bitbucketReadError {
 	if envelope.Error.StatusCode == 401 || envelope.Error.StatusCode == 403 {
 		return &bitbucketReadError{cause: bitbucketCauseAuth, status: envelope.Error.StatusCode}
 	}
+	if envelope.Error.StatusCode >= 500 && envelope.Error.StatusCode < 600 {
+		return &bitbucketReadError{cause: "Bitbucket reported a provider-side failure; retry later", status: envelope.Error.StatusCode}
+	}
 	if envelope.Error.StatusCode == 404 {
 		return &bitbucketReadError{cause: "not found: the credential cannot see the repository or pull request", status: 404}
 	}
 	for _, marker := range []string{"auth", "unauthori", "forbidden", "permission", "denied", "login", "credential", "scope"} {
 		if strings.Contains(text, marker) {
 			return &bitbucketReadError{cause: bitbucketCauseAuth}
+		}
+	}
+	// A TWG code or kind naming TLS or the network (never its message) keeps
+	// that class distinct from a refusal.
+	for _, marker := range []string{"tls", "cert", "x509", "ssl"} {
+		if strings.Contains(text, marker) {
+			return &bitbucketReadError{cause: bitbucketCauseTLS}
+		}
+	}
+	for _, marker := range []string{"network", "econn", "enotfound", "eai_again", "dns", "socket"} {
+		if strings.Contains(text, marker) {
+			return &bitbucketReadError{cause: bitbucketCauseNetwork}
 		}
 	}
 	code := envelope.Error.Code

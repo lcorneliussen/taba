@@ -3,6 +3,7 @@ package wtc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -724,7 +725,7 @@ func TestBitbucketDoctorReadRowProbesOnlyWhenAsked(t *testing.T) {
 	t.Setenv("FAKE_TWG_MODE", "denied")
 	bitbucketHostCredentials = sync.Map{}
 	d = BitbucketReadDiagnose("", "alpha", "acme/alpha", true)
-	if d.OK || d.Cause != RefusalUnauthorized || d.Status != 401 || !strings.Contains(d.Detail, "invalid or expired") {
+	if d.OK || d.Cause != RefusalUnauthorized || d.Status != 401 || !strings.Contains(d.Detail, "HTTP 401") {
 		t.Fatalf("denied = %+v", d)
 	}
 	assertNoPoison(t, "doctor row", d.Detail+d.Client+d.Credential)
@@ -739,7 +740,7 @@ func TestBitbucketRefusalsNameTheirCause(t *testing.T) {
 		t.Setenv("FAKE_TWG_STATUS", status)
 		_, err := BitbucketBranchPullRequest("", "acme/alpha", "feature")
 		refusal := ClassifyBitbucketRefusal(err, label)
-		if refusal.Cause != cause || !refusal.Access() || !strings.Contains(refusal.Message, "("+status+")") || !strings.Contains(refusal.Message, "repository access token") {
+		if refusal.Cause != cause || !refusal.Access() || !strings.Contains(refusal.Message, "HTTP "+status) || !strings.Contains(refusal.Message, "repository access token") {
 			t.Fatalf("%s: %+v (%v)", status, refusal, err)
 		}
 		assertNoPoison(t, "refusal", refusal.Message)
@@ -822,5 +823,59 @@ func TestStatusRowNamesARefusedBitbucketRead(t *testing.T) {
 	}
 	if got := statusObservationFailure(errors.New("Bitbucket API request failed")); got.Reason != "refresh-failed" {
 		t.Fatalf("a network failure must not read as a refusal: %+v", got)
+	}
+}
+
+// Causes say what was observed and offer explanations; they never assert an
+// expiry or a missing scope, and transport classes stay distinct.
+func TestBitbucketRefusalWordingAndTransportClasses(t *testing.T) {
+	for _, status := range []int{401, 403, 404} {
+		r := ClassifyBitbucketRefusal(&bitbucketHTTPError{status, "x"}, "the host's API token")
+		if !strings.Contains(r.Message, fmt.Sprintf("HTTP %d", status)) {
+			t.Fatalf("%d: %q does not name the observed status", status, r.Message)
+		}
+		for _, claim := range []string{"is expired", "has expired", "is invalid", "lacks", "missing scope"} {
+			if strings.Contains(r.Message, claim) {
+				t.Fatalf("%d: %q asserts %q without evidence", status, r.Message, claim)
+			}
+		}
+	}
+	if r := ClassifyBitbucketRefusal(&bitbucketHTTPError{503, "x"}, ""); r.Cause != RefusalProvider || r.Access() {
+		t.Fatalf("5xx = %+v", r)
+	}
+	if r := ClassifyBitbucketRefusal(classifyTWGError(&twgError{Code: "UPSTREAM", StatusCode: 502}), ""); r.Cause != RefusalProvider {
+		t.Fatalf("TWG 5xx = %+v", r)
+	}
+	if r := ClassifyBitbucketRefusal(classifyTWGError(&twgError{Code: "TLS_CERT_INVALID"}), ""); r.Cause != RefusalTLS {
+		t.Fatalf("TWG TLS = %+v", r)
+	}
+	if r := ClassifyBitbucketRefusal(classifyTWGError(&twgError{Code: "ECONNREFUSED", Kind: "network"}), ""); r.Cause != RefusalNetwork || r.Access() {
+		t.Fatalf("TWG network = %+v", r)
+	}
+
+	// Real local servers: an untrusted TLS certificate, a closed port, and an
+	// error body carrying a marker that must not be echoed.
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer tlsServer.Close()
+	ctx := statusAuthOperation(context.Background())
+	_, err := statusBBGETWithOptionsContext(ctx, StatusRefreshBackground, tlsServer.URL+"/2.0/x", "", "synthetic-token", false)
+	if r := ClassifyBitbucketRefusal(err, ""); r.Cause != RefusalTLS || strings.Contains(err.Error(), tlsServer.URL) {
+		t.Fatalf("untrusted certificate: %v -> %+v", err, r)
+	}
+	closed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	closedURL := closed.URL
+	closed.Close()
+	_, err = statusBBGETWithOptionsContext(ctx, StatusRefreshBackground, closedURL+"/2.0/x", "", "synthetic-token", false)
+	if r := ClassifyBitbucketRefusal(err, ""); r.Cause != RefusalNetwork || strings.Contains(err.Error(), closedURL) {
+		t.Fatalf("closed port: %v -> %+v", err, r)
+	}
+	body := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		w.Write([]byte(`{"error":{"message":"poison-body-marker-5c1"}}`))
+	}))
+	defer body.Close()
+	_, err = statusBBGETWithOptionsContext(ctx, StatusRefreshBackground, body.URL+"/2.0/x", "", "synthetic-token", false)
+	if r := ClassifyBitbucketRefusal(err, ""); r.Cause != RefusalProvider || r.Status != 502 || strings.Contains(err.Error(), "poison-body-marker") {
+		t.Fatalf("5xx body: %v -> %+v", err, r)
 	}
 }

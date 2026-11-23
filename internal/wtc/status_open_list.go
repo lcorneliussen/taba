@@ -422,8 +422,9 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 				return nil, ctx.Err()
 			}
 			// net/http errors can include a credential-bearing URL or Location. Never
-			// expose those values through status diagnostics.
-			return nil, fmt.Errorf("Bitbucket API request failed")
+			// expose those values through status diagnostics: only the class of
+			// failure (TLS, timeout, network) is kept, as fixed text.
+			return nil, bitbucketTransportFailure(err)
 		}
 		switch response.StatusCode {
 		case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
@@ -464,19 +465,16 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 			return []byte(`{"values":[]}`), nil
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			body := strings.TrimSpace(string(raw))
-			if len(body) > 200 {
-				body = body[:200]
-			}
+			// The response body is not echoed: only the status line is kept.
 			if intent == StatusRefreshForeground && response.StatusCode == http.StatusTooManyRequests {
 				if retry, err := strconv.Atoi(response.Header.Get("Retry-After")); err == nil && retry > 0 {
 					return nil, fmt.Errorf("Bitbucket API returned 429; Retry-After: %d", retry)
 				}
 			}
 			if empty404 {
-				return nil, &bitbucketHTTPError{response.StatusCode, fmt.Sprintf("Bitbucket pipelines API returned %s: %s", response.Status, body)}
+				return nil, &bitbucketHTTPError{response.StatusCode, fmt.Sprintf("Bitbucket pipelines API returned %s", response.Status)}
 			}
-			return nil, &bitbucketHTTPError{response.StatusCode, fmt.Sprintf("Bitbucket pull request list API returned %s: %s", response.Status, body)}
+			return nil, &bitbucketHTTPError{response.StatusCode, fmt.Sprintf("Bitbucket pull request list API returned %s", response.Status)}
 		}
 		return raw, nil
 	}
