@@ -857,11 +857,15 @@ func (c *Context) runtimeLocalFragment(dir string) string {
 }
 
 func runtimeReadFragment(path string) (runtimeFragment, error) {
-	var fragment runtimeFragment
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fragment, err
+		return runtimeFragment{}, err
 	}
+	return runtimeDecodeFragment(path, data)
+}
+
+func runtimeDecodeFragment(path string, data []byte) (runtimeFragment, error) {
+	var fragment runtimeFragment
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&fragment); err != nil && err != io.EOF {

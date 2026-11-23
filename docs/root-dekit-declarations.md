@@ -45,6 +45,16 @@ Reading the file runs nothing: no hook, kernel, task command or environment file
 For that reason a `!js` value, which dekit evaluates when its runner loads the
 config, is reported as unsupported, not evaluated or skipped.
 
+## Trust
+
+A repository's `dekit.yaml`, like its `.harness/dekit.tasks.yaml`, is code the
+collection runs. Its tasks' commands, scripts, `add_path` and environment run in
+the collection's runner when the services start. Reading the file to list them
+runs nothing. Every checked-out repository with a root `dekit.yaml` is opted in
+by default. A collection checked out to review an untrusted change should start
+only the services it means to, or leave `dekit.yaml` out of `[runtime]
+declarations`.
+
 ## Containment
 
 taba reads only regular files inside the repository. These are errors for the
@@ -60,8 +70,11 @@ file:
 A symlinked `dekit.yaml`, fragment or directory on the way to one is refused.
 dekit itself follows links that stay inside the project, but taba does not read
 symlinked declaration files, as for `.harness/dekit.tasks.yaml`. Replace the link
-with the file or directory. A pattern that would descend through a link to a
-directory is refused; a link to a file it would not load is skipped.
+with the file or directory. Link targets are never looked at. A pattern that
+names a link as a directory to descend through is refused, `**` does not descend
+into links, and a link that a pattern matches as a file is refused when loaded.
+A file is opened without following a final link or blocking on a special file,
+and only if it is still the file that was checked.
 
 ## With .harness/dekit.tasks.yaml and collection additions
 

@@ -66,6 +66,7 @@ func TestRuntimeDeclarationsRefused(t *testing.T) {
 		"./dekit.yaml":     "clean path",
 		"svc/":             "clean path",
 		".git/dekit.yaml":  "inside .git",
+		".GIT/dekit.yaml":  "inside .git",
 		"svc/*.yaml":       "without glob",
 		"a\\b.yaml":        "without glob",
 		"svc/tasks\n.yaml": "control characters",

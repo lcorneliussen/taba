@@ -11,14 +11,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
 
-// A repository declares its tasks natively in a root dekit.yaml, which a bare
-// `dekit up` runs, and for taba in .harness/dekit.tasks.yaml; a collection adds
-// its own in svc/<repo>.yaml. One loader reads all three for discovery, the
-// declaration cache and rendering. It parses files only: no hook, kernel, !js
+// A repository declares its tasks in the files [runtime] declarations names
+// (runtime_paths.go): by default natively in a root dekit.yaml, which a bare
+// `dekit up` runs, and for taba in .harness/dekit.tasks.yaml. A collection adds
+// its own in svc/<repo>.yaml. One loader reads them all for discovery, the
+// declaration cache, named tunnels and rendering. It parses files only: no hook, kernel, !js
 // value or task command runs, and no environment file is sourced.
 
 // Bounds for the native tree a repository's dekit.yaml loads.
@@ -126,7 +128,9 @@ func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (r
 	if resolved, err := filepath.EvalSymlinks(c.Collection); err == nil {
 		collectionRoot = resolved
 	}
-	read := func(path, root, safe string, strict bool, decl RuntimeDeclaration) (map[string]runtimeDeclaredTask, error) {
+	// strict holds a file to the native tree's checks; fenced also reads it
+	// the native way, refusing a swapped link or FIFO.
+	read := func(path, root, safe string, strict, fenced bool, decl RuntimeDeclaration) (map[string]runtimeDeclaredTask, error) {
 		if strict {
 			if err := runtimeSafeParents(root, safe); err != nil {
 				return nil, err
@@ -137,11 +141,16 @@ func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (r
 		} else if err != nil {
 			return nil, err
 		}
-		if info, err := os.Lstat(safe); err == nil && strict && info.Size() > runtimeDekitMaxBytes {
-			return nil, fmt.Errorf("%s: larger than %d bytes", path, runtimeDekitMaxBytes)
-		}
-		fragment, err := runtimeReadFragment(safe)
-		if err != nil {
+		var fragment runtimeFragment
+		if fenced {
+			data, err := runtimeDekitRead(safe)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", path, err)
+			}
+			if fragment, err = runtimeDecodeFragment(path, data); err != nil {
+				return nil, err
+			}
+		} else if fragment, err = runtimeReadFragment(safe); err != nil {
 			return nil, err
 		}
 		out.resources = append(out.resources, runtimeResourceFile{path: path, fragment: fragment})
@@ -168,7 +177,8 @@ func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (r
 		safe := filepath.Join(repoRoot, filepath.FromSlash(file.rel))
 		// The default harness file keeps the checks it always had; any other
 		// configured file is held to the native tree's containment.
-		tasks, err := read(path, repoRoot, safe, checkParents || file.rel != sharedRel, RuntimeDeclaration{Scope: "repository", File: file.rel})
+		configured := file.rel != sharedRel
+		tasks, err := read(path, repoRoot, safe, checkParents || configured, configured, RuntimeDeclaration{Scope: "repository", File: file.rel})
 		if err != nil {
 			return out, err
 		}
@@ -180,7 +190,7 @@ func (c *Context) runtimeRepoSources(repoPath, dir string, checkParents bool) (r
 	if rel, err := filepath.Rel(collectionRoot, local); err == nil {
 		decl.File = filepath.ToSlash(rel)
 	}
-	tasks, err := read(local, collectionRoot, local, checkParents, decl)
+	tasks, err := read(local, collectionRoot, local, checkParents, false, decl)
 	if err != nil {
 		return out, err
 	}
@@ -255,7 +265,7 @@ func (l *runtimeDekitLoader) contained(abs string) error {
 	}
 	current := l.root
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
-		if part == ".git" {
+		if runtimeGitDir(part) {
 			return fmt.Errorf("%s/%s: declarations are not read from .git", l.label, filepath.ToSlash(rel))
 		}
 		current = filepath.Join(current, part)
@@ -389,11 +399,20 @@ func runtimeDekitRead(abs string) ([]byte, error) {
 	if info.Size() > runtimeDekitMaxBytes {
 		return nil, fmt.Errorf("larger than %d bytes", runtimeDekitMaxBytes)
 	}
-	f, err := os.Open(abs)
+	// Open without following a final link or blocking on a FIFO, and read only
+	// the file Lstat saw: a swap between the two is refused, not read.
+	f, err := os.OpenFile(abs, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	opened, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return nil, errors.New("changed while being read")
+	}
 	data, err := io.ReadAll(io.LimitReader(f, runtimeDekitMaxBytes+1))
 	if err != nil {
 		return nil, err
@@ -666,16 +685,15 @@ func (l *runtimeDekitLoader) glob(pattern string) ([]string, error) {
 	return out, nil
 }
 
-// linkOnTheWay refuses a symlink a pattern would descend through when it
-// names a directory, which may hold files dekit would load. A link to
-// anything else holds no further path, so it is skipped. Only the target's
-// metadata is read (os.Stat), never its content.
+// linkOnTheWay refuses a symlink that a pattern names as a directory to
+// descend through. Its target is never looked at, not even its metadata: it
+// may be outside the repository or on a slow or remote mount.
 func (l *runtimeDekitLoader) linkOnTheWay(link string) error {
-	if info, err := os.Stat(link); err == nil && info.IsDir() {
-		return fmt.Errorf("%s is a symlink to a directory; taba does not read symlinked declaration files or directories", l.name(link))
-	}
-	return nil
+	return fmt.Errorf("%s is a symlink; a load pattern does not descend through symlinks, and taba does not read symlinked declaration files or directories", l.name(link))
 }
+
+// runtimeGitDir matches .git in any case: macOS volumes ignore case.
+func runtimeGitDir(name string) bool { return strings.EqualFold(name, ".git") }
 
 func runtimeGlobMeta(part string) bool { return strings.ContainsAny(part, `*?[\`) }
 
@@ -724,20 +742,17 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 		next := filepath.Join(dir, name)
 		symlink := entry.Type()&os.ModeSymlink != 0
 		if part == "**" {
-			if entry.IsDir() && name != ".git" {
+			// ** does not descend into symlinks: their targets are never
+			// looked at. A link matching the last name was found above and
+			// is refused when loaded.
+			if entry.IsDir() && !symlink && !runtimeGitDir(name) {
 				if err := l.match(next, parts, found); err != nil {
-					return err
-				}
-			} else if symlink {
-				// A link matching the last name was found above and is
-				// refused when loaded.
-				if err := l.linkOnTheWay(next); err != nil {
 					return err
 				}
 			}
 			continue
 		}
-		if ok, _ := path.Match(part, name); !ok || name == ".git" {
+		if ok, _ := path.Match(part, name); !ok || runtimeGitDir(name) {
 			continue
 		}
 		if len(parts) == 1 {
@@ -748,10 +763,7 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 			continue
 		}
 		if symlink {
-			if err := l.linkOnTheWay(next); err != nil {
-				return err
-			}
-			continue
+			return l.linkOnTheWay(next)
 		}
 		if entry.IsDir() {
 			if err := l.match(next, parts[1:], found); err != nil {
@@ -762,8 +774,10 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 	return nil
 }
 
-// runtimeInputsSignature fingerprints files and directories a declaration read
-// by path, mode, size, modification time and, for regular files, content.
+// runtimeInputsSignature fingerprints the files and directories a declaration
+// read by metadata alone: path, mode, size, modification time and file
+// identity. It opens nothing, so a swapped link or FIFO cannot be read or
+// block, and it stays cheap however many fragments a tree loads.
 func runtimeInputsSignature(paths []string) string {
 	hash := sha256.New()
 	for _, path := range paths {
@@ -772,12 +786,11 @@ func runtimeInputsSignature(paths []string) string {
 			fmt.Fprintln(hash, path, err)
 			continue
 		}
-		fmt.Fprintln(hash, path, info.Mode(), info.Size(), info.ModTime().UnixNano())
-		if info.Mode().IsRegular() && info.Size() <= runtimeDekitMaxBytes {
-			if data, err := os.ReadFile(path); err == nil {
-				hash.Write(data)
-			}
+		identity := ""
+		if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			identity = fmt.Sprintf("%d:%d", stat.Dev, stat.Ino)
 		}
+		fmt.Fprintln(hash, path, info.Mode(), info.Size(), info.ModTime().UnixNano(), identity)
 	}
 	return fmt.Sprintf(":%x", hash.Sum(nil))
 }

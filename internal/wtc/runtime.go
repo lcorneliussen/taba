@@ -37,7 +37,8 @@ type RuntimeItem struct {
 	Label      string `json:"label,omitempty"`
 	URL        string `json:"url,omitempty"`
 	// HealthURL is the configured health path at a service's port-derived
-	// URL; it is what readiness and the answering check look at.
+	// URL. Status's answering check looks at it; readiness uses the same URL
+	// through the rendered ready.http.
 	HealthURL string `json:"health_url,omitempty"`
 	// Provider is the tunnel client of an endpoint, such as tailscale.
 	Provider string `json:"provider,omitempty"`
@@ -45,8 +46,8 @@ type RuntimeItem struct {
 	// ExposureBasis how wtc knows it.
 	Exposure      string `json:"exposure,omitempty"`
 	ExposureBasis string `json:"exposure_basis,omitempty"`
-	// Source is the absolute file the task comes from: the repository's
-	// dekit.yaml or a fragment it loads, its committed .harness/dekit.tasks.yaml,
+	// Source is the absolute file the task comes from: a repository
+	// declaration file (a configured one, a dekit.yaml or a fragment it loads),
 	// this collection's svc/<repo>.yaml or, for a managed tunnel, its policy.
 	Source string `json:"source,omitempty"`
 	// Declaration is the declaring file, relative to its repository or

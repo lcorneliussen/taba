@@ -109,7 +109,7 @@ func runtimeDeclarationPathValid(entry string) error {
 		if part == "." || part == ".." {
 			return fmt.Errorf("must stay inside the repository")
 		}
-		if part == ".git" {
+		if runtimeGitDir(part) {
 			return fmt.Errorf("must not be inside .git")
 		}
 	}

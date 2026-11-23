@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -242,11 +243,18 @@ func TestRootDekitRefusesWhatTabaWillNotRead(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, want: "widget/l.yaml is a symlink"},
-		"symlinked directory under globstar": {files: map[string]string{"dekit.yaml": "load: ['**/*.yaml']\n", "real/x.yaml": "tasks: {web: " + task + "}\n"}, setup: func(t *testing.T, repo string) {
-			if err := os.Symlink(t.TempDir(), filepath.Join(repo, "linked")); err != nil {
+		"symlinked directory in a pattern": {files: map[string]string{"dekit.yaml": "load: ['svc/*/x.yaml']\n", "svc/real/x.yaml": "tasks: {web: " + task + "}\n"}, setup: func(t *testing.T, repo string) {
+			outside := t.TempDir()
+			fixtureFile(t, filepath.Join(outside, "x.yaml"), "tasks: {leak: "+task+"}\n", 0644)
+			if err := os.Symlink(outside, filepath.Join(repo, "svc", "linked")); err != nil {
 				t.Fatal(err)
 			}
-		}, want: "linked is a symlink"},
+		}, want: "svc/linked is a symlink; a load pattern does not descend through symlinks"},
+		"fifo fragment": {files: map[string]string{"dekit.yaml": "load: [f.yaml]\n"}, setup: func(t *testing.T, repo string) {
+			if err := syscall.Mkfifo(filepath.Join(repo, "f.yaml"), 0600); err != nil {
+				t.Skip(err)
+			}
+		}, want: "widget/f.yaml: expected a regular file"},
 		"unreadable fragment": {files: map[string]string{"dekit.yaml": "load: [f.yaml]\n", "f.yaml": "tasks: {}\n"}, setup: func(t *testing.T, repo string) {
 			if os.Geteuid() == 0 {
 				t.Skip("root reads unreadable files")
@@ -396,19 +404,24 @@ func TestRootDekitCacheSeesCreatedLiteralLoad(t *testing.T) {
 	}
 }
 
-func TestRootDekitWildcardSkipsFileLinksOnTheWay(t *testing.T) {
-	c, repo := rootDekitFixture(t, map[string]string{"dekit.yaml": "load: ['services/*/tasks.yaml']\n", "services/web/tasks.yaml": "tasks: {web: {cmd: [sh, -c, ':']}}\n", "docs/README.md": "x\n"})
-	if err := os.Symlink("../docs/README.md", filepath.Join(repo, "services", "README.md")); err != nil {
+func TestRootDekitPatternsNeverFollowLinks(t *testing.T) {
+	c, repo := rootDekitFixture(t, map[string]string{"dekit.yaml": "load: ['svc/**/*.yaml']\n", "svc/web/tasks.yaml": "tasks: {web: {cmd: [sh, -c, ':']}}\n"})
+	outside := t.TempDir()
+	fixtureFile(t, filepath.Join(outside, "deep", "x.yaml"), "tasks: {leak: {cmd: [sh]}}\n", 0644)
+	if err := os.Symlink(outside, filepath.Join(repo, "svc", "linked")); err != nil {
 		t.Fatal(err)
 	}
 	if got := c.RuntimeEnlisted(); len(got) != 1 || got[0].Path != "widget/web" {
-		t.Fatalf("a link to a file in a middle segment must be skipped: %+v", got)
+		t.Fatalf("** must not descend into a link: %+v", got)
 	}
-	if err := os.Symlink("web", filepath.Join(repo, "services", "linked")); err != nil {
+	// A dangling link named as a directory is refused too: its target is
+	// never looked at.
+	fixtureFile(t, filepath.Join(repo, "dekit.yaml"), "load: ['svc/*/tasks.yaml']\n", 0644)
+	if err := os.Symlink(filepath.Join(outside, "missing"), filepath.Join(repo, "svc", "dangling")); err != nil {
 		t.Fatal(err)
 	}
-	if got := c.RuntimeEnlisted(); len(got) != 1 || !strings.Contains(got[0].Error, "services/linked is a symlink to a directory") {
-		t.Fatalf("a link to a directory in a middle segment must be refused: %+v", got)
+	if got := c.RuntimeEnlisted(); len(got) != 1 || !strings.Contains(got[0].Error, "is a symlink; a load pattern does not descend") {
+		t.Fatalf("a link in a pattern's middle must be refused: %+v", got)
 	}
 }
 
