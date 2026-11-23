@@ -4,9 +4,10 @@
 checked-out repositories before their first render or start. Workspace-wide
 status uses the same declaration merge for each collection, including when its
 manifest is absent/invalid or the trusted runtime binary is unavailable. It keeps
-the sweep's trusted-binary rule and existing diagnostics. Discovery reads
-`.harness/dekit.tasks.yaml` and the collection's `svc/<repo>.yaml` additions in its
-runtime home.
+the sweep's trusted-binary rule and existing diagnostics. Discovery reads a
+repository's root `dekit.yaml` with the fragments it loads (see
+`docs/root-dekit-declarations.md`), `.harness/dekit.tasks.yaml` and the
+collection's `svc/<repo>.yaml` additions in its runtime home.
 A repository must be a Git worktree in the collection, as for runtime planning.
 
 A task absent from the runtime manifest has state `unconfigured`: it is declared,
@@ -24,7 +25,7 @@ Existing observations take precedence over declarations with the same path,
 including failure details, live URLs, resource states and tunnel choices. A new
 sibling's tasks appear beside these observations without replacing them.
 
-Malformed YAML, invalid task names, duplicate shared/local task names, and
+Malformed YAML, invalid task names, a task path declared in more than one file, and
 symlinked definition files or directories inside a checkout produce an `unknown`
 configuration diagnostic for that repository. Repository links used by gateway
 collections are supported: shared files are checked within the resolved checkout
