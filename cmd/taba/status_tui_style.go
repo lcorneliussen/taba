@@ -59,10 +59,6 @@ func statusTUIURL(raw string) string {
 	return raw
 }
 
-func statusTUILink(label, rawURL string) string {
-	return statusTUILinkTone(label, rawURL, statusToneLink)
-}
-
 func statusTUILinkTone(label, rawURL, tone string) string {
 	if os.Getenv("TERM") == "dumb" {
 		return label

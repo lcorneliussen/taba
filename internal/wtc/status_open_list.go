@@ -179,10 +179,6 @@ func (p statusGHListItem) fingerprint() string {
 	}, "|")
 }
 
-func statusFetchGHOpenList(slug string) ([]byte, error) {
-	return statusFetchGHOpenListContext(context.Background(), slug)
-}
-
 func statusFetchGHOpenListContext(ctx context.Context, slug string) ([]byte, error) {
 	started := time.Now()
 	raw, err := statusJSONContext(ctx, "gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", strconv.Itoa(statusOpenListLimit), "--json", statusGHOpenFields)
@@ -342,10 +338,6 @@ func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, err
 		})
 	}
 	return statusEncodeOpenPRs(prs, truncated, started)
-}
-
-func statusFetchBBBranch(slug, branch string) ([]byte, error) {
-	return statusFetchBBBranchContext(context.Background(), slug, branch)
 }
 
 func statusFetchBBBranchContext(ctx context.Context, slug, branch string) ([]byte, error) {

@@ -58,10 +58,6 @@ func statusResourceOperation(ctx context.Context) context.Context {
 	return context.WithValue(ctx, statusGitMemoKey{}, memo)
 }
 
-// Only repository identity reads are reusable. Mutable local facts are collected
-// anew, and all other Git commands (including writes) bypass this memo.
-func statusResourceGitKey(args []string) string { return statusResourceGitKeyConfig(args, nil, "") }
-
 func statusResourceGitKeyConfig(args []string, provenConfigs []string, provenance string) string {
 	if len(args) < 2 {
 		return ""

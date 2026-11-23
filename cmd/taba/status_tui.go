@@ -385,10 +385,6 @@ func (m *statusTUIModel) startForegroundRefresh() tea.Cmd {
 	}
 }
 
-func statusTUIWait(events <-chan tea.Msg) tea.Cmd {
-	return func() tea.Msg { return <-events }
-}
-
 func statusCheckDev(collection string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
