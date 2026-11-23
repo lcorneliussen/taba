@@ -152,11 +152,13 @@ func (c *Context) postReviewBrokered(m ReviewManifest, bundle, cid, finalBody st
 		return ReviewPostResult{}, fmt.Errorf("too many incomplete Bitbucket write attempts for this review; inspect the pull request")
 	}
 	requestPath := filepath.Join(gitDir, bitbucketWriteRequestFile)
+	// A claimed intent without a receipt has an unknown outcome, whether or
+	// not its request file is still there.
+	if err := brokeredStarted(gitDir, intent); err != nil {
+		return ReviewPostResult{URL: m.URL}, err
+	}
 	if raw, err := os.ReadFile(requestPath); err == nil {
 		var pending brokeredRequest
-		if err := brokeredStarted(gitDir, intent); err != nil {
-			return ReviewPostResult{URL: m.URL}, err
-		}
 		if json.Unmarshal(raw, &pending) == nil && pending.IntentID == intent {
 			return ReviewPostResult{URL: m.URL}, fmt.Errorf("%w: the review of PR #%s is waiting for the person to confirm it in the Control UI; post again afterwards", ErrBitbucketAwaitingConfirmation, m.PR)
 		}
@@ -281,7 +283,7 @@ func (c *Context) reconcileBrokeredReview(m ReviewManifest, bundle, gitDir, inte
 		return result, fmt.Errorf("%d confirmed Bitbucket writes have an unknown outcome; the review remains pending until they are reconciled by reading the pull request", unknown)
 	}
 	// The request has been carried out; asking again would refuse its intent.
-	_ = os.Remove(filepath.Join(gitDir, bitbucketWriteRequestFile))
+	removeBrokeredRequest(gitDir, intent)
 	if result.CommentID == "" {
 		// An earlier attempt may have recorded the summary.
 		if saved, err := os.ReadFile(filepath.Join(bundle, "comment.id")); err == nil {

@@ -18,7 +18,10 @@ import (
 
 // Bitbucket reads without bb (issue #471).
 //
-// Every Bitbucket read taba makes goes through this adapter. It resolves the
+// The pull request, activity, comment, repository and branch-lookup reads of
+// status, review, audience, open review and the gateway card go through this
+// adapter; catch-up and the REST list, check and build reads are described in
+// docs/forges.md. The adapter resolves the
 // client (twg by default, bb when selected) and the read credential once per
 // operation, and keeps both for that operation, so a selection or credential
 // that changes mid-operation applies to the next one and never mixes into the
@@ -277,12 +280,11 @@ const (
 
 // gitCredentialFill asks git's configured helpers for one repository's
 // credential, noninteractively. useHttpPath is forced so helpers see the
-// repository path and can answer per repository. Only the password is used; the helper's
-// username is ignored rather than interpreted as an authentication mode. The
-// helper's stderr and stdout are never echoed. The username is returned; the
-// caller uses it only for the API-token type, never to infer an
-// authentication mode. git is never asked to approve
-// or reject, so no credential store is written.
+// repository path and can answer per repository. It returns the username and
+// the password; the caller uses the username only for the API-token type,
+// never to infer an authentication mode. The helper's stderr and stdout are
+// never echoed, and git is never asked to approve or reject, so no
+// credential store is written.
 func gitCredentialFill(parent context.Context, workspace, repo string) (string, string, error) {
 	if !bitbucketSlugPart(workspace) || !bitbucketSlugPart(repo) {
 		return "", "", &bitbucketReadError{cause: "invalid Bitbucket repository slug"}
