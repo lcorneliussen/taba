@@ -96,7 +96,8 @@ func addUpgradeCommand(root *cobra.Command, asJSON *bool) {
 }
 
 // printUpgradeDoctor reports the target release's diagnostics as advice,
-// after the notes: the upgrade itself has already completed.
+// after the notes. After a real upgrade the transition has completed and the
+// findings cannot change it; on a dry run it only says what would run.
 func printUpgradeDoctor(d *wtc.UpgradeDoctor) {
 	if d == nil {
 		return

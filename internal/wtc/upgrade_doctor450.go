@@ -28,7 +28,8 @@ import (
 //   - unavailable: diagnostics did not run (target not installed, executable
 //     reports another version, or the release has no doctor) — not a pass
 //   - planned: a dry run; nothing was executed
-//   - skipped: no applied transition to diagnose
+//   - skipped: no applied transition to diagnose, or the receiving
+//     collection could not be opened
 type UpgradeDoctor struct {
 	Status     string                 `json:"status"`
 	Version    string                 `json:"version,omitempty"`
@@ -154,7 +155,8 @@ func (c *Context) upgradeDoctor(receiver *Context, version string) UpgradeDoctor
 // upgradeDoctorEnv is the receiver's environment for the target binary: the
 // caller's process environment without any variable the initiating or the
 // receiving collection generates or overrides, then the receiver's generated
-// values. mise adds the receiver's env files itself when it runs there.
+// values. mise also loads the receiver's env files when it runs there; the
+// generated identity is set directly so it never depends on that.
 func (c *Context) upgradeDoctorEnv(receiver *Context) []string {
 	drop := map[string]bool{"PWD": true}
 	for _, name := range collectionIdentityEnv {
