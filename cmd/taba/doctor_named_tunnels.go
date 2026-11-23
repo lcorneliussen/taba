@@ -9,7 +9,8 @@ import (
 
 // namedTunnelsCheck reports whether the configured named tunnels resolve. It
 // is advisory: doctor's result does not depend on it. It reads local tunnel
-// policy and task declarations only; see wtc.NamedTunnelDiagnostics.
+// policy and task declarations and stats provider inputs, never reading
+// credential contents; see wtc.NamedTunnelDiagnostics.
 func namedTunnelsCheck(c *wtc.Context) (map[string]any, []wtc.NamedTunnelDiagnostic) {
 	diagnostics, err := c.NamedTunnelDiagnostics()
 	if err != nil {

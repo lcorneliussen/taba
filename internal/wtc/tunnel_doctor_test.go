@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net"
 	"os"
@@ -79,8 +80,8 @@ func TestNamedTunnelDiagnosticsNoneConfigured(t *testing.T) {
 	}
 }
 
-// The reported gap: a tunnel whose service declares no URL or port was only
-// discovered when someone tried to share it.
+// The target doctor shows is the one the tunnel action would use, and a
+// service without one gets a fix.
 func TestNamedTunnelDiagnosticsTarget(t *testing.T) {
 	socket := doctorTunnelSocket(t)
 	for _, tc := range []struct {
@@ -94,6 +95,8 @@ func TestNamedTunnelDiagnosticsTarget(t *testing.T) {
 		{"literal url wins over port_env", "{url: 'http://127.0.0.1:3000', port_env: WIDGET_PORT}", "http://127.0.0.1:3000", "", ""},
 		{"not loopback", "{url: 'http://198.51.100.7:3000'}", "", "is not a loopback URL", "point x-wtc.url on widget/web at localhost"},
 		{"no port for tailscale", "{url: 'http://127.0.0.1'}", "http://127.0.0.1", "needs a target with an explicit port", "declare x-wtc.port_env"},
+		{"port_env wins over ready probe", "{port_env: WIDGET_PORT}\n  ready: {http: 'http://example.test/health'}", "http://127.0.0.1:$WIDGET_PORT", "", ""},
+		{"ready probe when nothing else", "{mark: w}\n  ready: {http: 'http://127.0.0.1:3000/health'}", "http://127.0.0.1:3000/health", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := doctorTunnelFixture(t, tc.metadata, tailscaleDoctorPolicy(socket))
@@ -277,5 +280,79 @@ func TestNamedTunnelDiagnosticsUnreadablePolicyIsSanitized(t *testing.T) {
 	_, err := c.NamedTunnelDiagnostics()
 	if err == nil || strings.Contains(err.Error(), "synthetic-secret-literal") {
 		t.Fatal(err)
+	}
+}
+
+func TestNamedTunnelDiagnosticsDevtunnelTarget(t *testing.T) {
+	node := filepath.Join(t.TempDir(), "node")
+	fixtureFile(t, node, "#!/bin/sh\nexit 0\n", 0755)
+	policy := "[tunnels.widget.web.dev]\nprovider = \"devtunnel\"\nmode = \"temporary\"\naccess = \"account\"\n[tunnels.widget.web.dev.inputs]\nnode = \"" + node + "\"\nmanagement_file = \"tunnels/m.token\"\ncleanup_file = \"tunnels/c.token\"\n"
+	for _, tc := range []struct {
+		name, metadata string
+		ok             bool
+	}{
+		{"http with port", "{url: 'http://127.0.0.1:3000'}", true},
+		{"root path", "{url: 'http://localhost:3000/'}", true},
+		{"port_env", "{port_env: WIDGET_PORT}", true},
+		{"https", "{url: 'https://127.0.0.1:3000'}", false},
+		{"path", "{url: 'http://127.0.0.1:3000/app'}", false},
+		{"ipv6 loopback", "{url: 'http://[::1]:3000'}", false},
+		{"no port", "{url: 'http://127.0.0.1'}", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := doctorTunnelFixture(t, tc.metadata, policy)
+			scope, err := c.ValidateControlRoot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixtureFile(t, filepath.Join(scope.Root, "tunnels/m.token"), "synthetic\n", 0600)
+			fixtureFile(t, filepath.Join(scope.Root, "tunnels/c.token"), "synthetic\n", 0600)
+			d := doctorTunnelOne(t, c)
+			if tc.ok && d.State != NamedTunnelStateOK || !tc.ok && (d.State != NamedTunnelStateProblem || !strings.Contains(problemText(d), "devtunnel needs an IPv4 or localhost HTTP target")) {
+				t.Fatalf("%+v", d)
+			}
+		})
+	}
+}
+
+func TestNamedTunnelDiagnosticsCredentialFiles(t *testing.T) {
+	policy := "[tunnels.widget.web.share]\nprovider = \"ngrok\"\nmode = \"domain\"\naccess = \"public\"\n[tunnels.widget.web.share.options]\ndomain = \"preview.example.test\"\n[tunnels.widget.web.share.inputs]\nhosting_file = \"%s\"\n"
+	outside := filepath.Join(t.TempDir(), "outside.token")
+	fixtureFile(t, outside, "synthetic\n", 0600)
+	for _, tc := range []struct {
+		name, ref, body, problem string
+	}{
+		{"empty", "tunnels/h.token", "", "names no usable credential file"},
+		{"oversized", "tunnels/h.token", strings.Repeat("x", 16385), "names no usable credential file"},
+		{"outside the control root", outside, "", "is outside the control root"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := doctorTunnelFixture(t, "{port_env: WIDGET_PORT}", fmt.Sprintf(policy, tc.ref))
+			scope, err := c.ValidateControlRoot()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !filepath.IsAbs(tc.ref) {
+				fixtureFile(t, filepath.Join(scope.Root, tc.ref), tc.body, 0600)
+			}
+			d := doctorTunnelOne(t, c)
+			if d.State != NamedTunnelStateProblem || !strings.Contains(problemText(d), "inputs.hosting_file "+tc.problem) || strings.Contains(problemText(d), tc.ref) {
+				t.Fatalf("%+v", d)
+			}
+		})
+	}
+}
+
+func TestNamedTunnelDiagnosticsNodeInput(t *testing.T) {
+	policy := "[tunnels.widget.web.dev]\nprovider = \"devtunnel\"\nmode = \"temporary\"\naccess = \"account\"\n[tunnels.widget.web.dev.inputs]\nnode = \"/synthetic/absent/node\"\n"
+	d := doctorTunnelOne(t, doctorTunnelFixture(t, "{port_env: WIDGET_PORT}", policy))
+	text := problemText(d)
+	for _, want := range []string{"inputs.node is not an executable file", "inputs.management_file is required for devtunnel/temporary", "inputs.cleanup_file is required for devtunnel/temporary"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("lacks %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "/synthetic/absent") {
+		t.Fatal(text)
 	}
 }

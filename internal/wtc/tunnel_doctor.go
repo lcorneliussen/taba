@@ -5,14 +5,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
-	"strings"
 )
 
 // NamedTunnelDiagnostic is how doctor sees one configured named tunnel.
-// Problems and fixes name fields, services and variables; they never carry
-// credential contents, provider identities or input paths.
+// Problems never carry credential contents, provider identities or input
+// values and paths; an unreadable task declaration is reported with the
+// planner's own error, which can name the declaration file.
 type NamedTunnelDiagnostic struct {
 	Tunnel   string               `json:"tunnel"`
 	Scope    string               `json:"scope,omitempty"`
@@ -124,32 +123,38 @@ func (c *Context) namedTunnelTarget(d *NamedTunnelDiagnostic, e tunnelEffectiveE
 		d.problem("service "+service+" is not declared", "declare "+e.Key.Service+" in "+dir+"/.harness/dekit.tasks.yaml or with `taba svc add`, or remove the tunnel from "+d.Policy)
 		return
 	}
-	literal, portEnv := "", ""
+	// The action takes the first service task, in path order, with a target;
+	// per task url_env wins over x-wtc.url, then port_env, then a plain
+	// ready.http probe URL. This plan has not read the env, so a port_env or
+	// url_env target is shown by name.
+	declared := c.namedTunnelDeclaredURLs(dir)
+	literal := ""
 	for _, task := range plan.Tasks {
 		if task.Repo != e.Key.Repo || task.Dir != dir || task.Group != dir+"/"+e.Key.Service || task.Kind != "service" {
 			continue
 		}
-		if literal == "" {
+		urls := declared[task.Path]
+		switch {
+		case urls.env != "":
+			d.Target = "$" + urls.env
+			return
+		case urls.literal != "":
+			literal = urls.literal
+		case task.PortEnv != "":
+			d.Target = "http://127.0.0.1:$" + task.PortEnv
+			return
+		case task.URL != "":
 			literal = task.URL
+		default:
+			continue
 		}
-		if portEnv == "" {
-			portEnv = task.PortEnv
-		}
+		break
 	}
-	urlEnv := c.namedTunnelURLEnv(dir, e.Key.Service)
-	switch {
-	case urlEnv != "":
-		d.Target = "$" + urlEnv
-		return
-	case literal != "":
-		d.Target = literal
-	case portEnv != "":
-		d.Target = "http://127.0.0.1:$" + portEnv
-		return
-	default:
+	if literal == "" {
 		d.problem("service "+service+" declares no local URL or port", "declare x-wtc.port_env or x-wtc.url on "+service)
 		return
 	}
+	d.Target = literal
 	local, err := url.Parse(literal)
 	if err != nil || local.Hostname() != "localhost" && local.Hostname() != "127.0.0.1" && local.Hostname() != "::1" {
 		d.Target = ""
@@ -166,10 +171,14 @@ func (c *Context) namedTunnelTarget(d *NamedTunnelDiagnostic, e tunnelEffectiveE
 	}
 }
 
-// namedTunnelURLEnv returns the url_env a service's tasks declare. The
-// unresolved plan drops x-wtc after reading it, so read the same fragments.
-func (c *Context) namedTunnelURLEnv(dir, service string) string {
-	found := []string{}
+type namedTunnelURLs struct{ env, literal string }
+
+// namedTunnelDeclaredURLs returns the x-wtc url_env and url of each task in
+// a repository, by task path. The plan drops x-wtc after reading it and
+// cannot tell a literal url from a ready.http probe, so read the same
+// fragments again.
+func (c *Context) namedTunnelDeclaredURLs(dir string) map[string]namedTunnelURLs {
+	out := map[string]namedTunnelURLs{}
 	for _, path := range []string{runtimeSharedFragment(filepath.Join(c.Collection, dir)), c.runtimeLocalFragment(dir)} {
 		if runtimeRegular(path) != nil {
 			continue
@@ -179,36 +188,14 @@ func (c *Context) namedTunnelURLEnv(dir, service string) string {
 			continue
 		}
 		for name, task := range fragment.Tasks {
-			if strings.Split(name, "/")[0] != service || task == nil {
-				continue
-			}
-			if kind, _ := task["type"].(string); kind == "job" {
-				continue
-			}
-			if tags, ok := task["tags"].([]any); ok && (containsAny(tags, "endpoint") || containsAny(tags, "accessory")) {
-				continue
-			}
 			if metadata, ok := task["x-wtc"].(map[string]any); ok {
-				if variable, _ := metadata["url_env"].(string); variable != "" {
-					found = append(found, variable)
-				}
+				env, _ := metadata["url_env"].(string)
+				literal, _ := metadata["url"].(string)
+				out[dir+"/"+name] = namedTunnelURLs{env, literal}
 			}
 		}
 	}
-	sort.Strings(found)
-	if len(found) == 0 {
-		return ""
-	}
-	return found[0]
-}
-
-func containsAny(values []any, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
+	return out
 }
 
 // The inputs each documented mode reads before or during hosting; see
