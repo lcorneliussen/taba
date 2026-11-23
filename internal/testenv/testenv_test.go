@@ -1,6 +1,10 @@
 package testenv_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +16,76 @@ import (
 )
 
 func TestMain(m *testing.M) { testenv.Main(m) }
+
+// A package whose tests skip testenv.Main inherits the developer's shell.
+func TestEveryTestPackageCallsMain(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		t.Fatalf("module root: %v", err)
+	}
+	var checked []string
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || !entry.IsDir() {
+			return err
+		}
+		name := entry.Name()
+		if path != root && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || name == "testdata") {
+			return filepath.SkipDir
+		}
+		tests, err := filepath.Glob(filepath.Join(path, "*_test.go"))
+		if err != nil || len(tests) == 0 {
+			return err
+		}
+		dir, _ := filepath.Rel(root, path)
+		checked = append(checked, dir)
+		if !callsMain(t, tests) {
+			t.Errorf("%s has tests but no TestMain calling testenv.Main; use:\n\n"+
+				"import \"taba.sh/taba/internal/testenv\"\n\n"+
+				"func TestMain(m *testing.M) { testenv.Main(m) }", dir)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(checked, filepath.Join("internal", "testenv")) {
+		t.Fatalf("walk missed this package: %v", checked)
+	}
+}
+
+func callsMain(t *testing.T, files []string) bool {
+	t.Helper()
+	for _, file := range files {
+		parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name.Name != "TestMain" || fn.Body == nil {
+				continue
+			}
+			found := false
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Main" {
+					if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "testenv" {
+						found = true
+					}
+				}
+				return !found
+			})
+			return found
+		}
+	}
+	return false
+}
 
 // A test binary started from a collection shell sees what CI gives it; one
 // started by a test keeps the environment that test gave it.

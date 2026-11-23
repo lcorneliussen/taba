@@ -8,6 +8,13 @@ go test ./...
 go vet ./...
 ```
 
+Tests see the environment CI gives them, also from a collection shell. Every
+test package's `TestMain` calls `testenv.Main` from `internal/testenv`. It
+removes your shell's `WTC_*`, `TABA_*` and `GIT_*` variables, except test
+settings and `GIT_TRACE*`. Git then reads no system configuration, and a
+global configuration that holds only a fixture identity. Name a new test
+setting `WTC_TEST_*` or `TABA_TEST_*` so that it reaches the tests.
+
 ## Running a development build in a collection
 
 When a collection has the wtc-cli repository checked out beside the harness,
