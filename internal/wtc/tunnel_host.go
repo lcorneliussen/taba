@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"taba.sh/taba/internal/retry"
 )
 
 type tunnelHostReady struct {
@@ -118,21 +121,17 @@ func (p *tunnelProviderRuntime) startHostTask(ctx context.Context, call tunnelEf
 	if _, err = runtimeCommand(m, false, "up", task.Path); err != nil {
 		return result, fmt.Errorf("owned host launch unconfirmed; reconcile operation")
 	}
-	deadline := time.Now().Add(60 * time.Second)
-	for {
+	err = retry.Poll(ctx, retry.Policy{Every: 100 * time.Millisecond, Within: 60 * time.Second}, func(context.Context) (bool, error) {
 		ready, _, readErr := p.readHostReady(call)
 		if readErr == nil {
 			result.Address = &ready.Address
-			return result, nil
 		}
-		if err = ctx.Err(); err != nil {
-			return result, err
-		}
-		if time.Now().After(deadline) {
-			return result, fmt.Errorf("owned host readiness pending; reconcile operation")
-		}
-		time.Sleep(100 * time.Millisecond)
+		return readErr == nil, nil
+	})
+	if errors.Is(err, retry.ErrExhausted) {
+		return result, fmt.Errorf("owned host readiness pending; reconcile operation")
 	}
+	return result, err
 }
 
 func (p *tunnelProviderRuntime) confirmHostStopped(call tunnelEffectCall) error {

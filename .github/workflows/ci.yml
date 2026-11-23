@@ -93,6 +93,8 @@ jobs:
           java-version: '17'
       - name: Model-check forge cache write ordering
         run: tools/formal/forge-cache-order/check.sh
+      - name: Model-check the intent marker protocol
+        run: tools/formal/intent-marker/check.sh
   # Full native regression coverage runs in macos-full.yml nightly/manual.
   test-macos:
     runs-on: macos-latest

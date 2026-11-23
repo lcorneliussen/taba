@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"taba.sh/taba/internal/retry"
 )
 
 type openWorkspaceInfo struct {
@@ -155,13 +157,12 @@ func openEnsureSession(session string) error {
 		return err
 	}
 	_ = cmd.Process.Release()
-	for i := 0; i < 60; i++ {
-		if openSessionRunning(session) {
-			return nil
-		}
-		time.Sleep(250 * time.Millisecond)
+	if err := retry.Poll(context.Background(), retry.Policy{Every: 250 * time.Millisecond, Attempts: 60}, func(context.Context) (bool, error) {
+		return openSessionRunning(session), nil
+	}); err != nil {
+		return fmt.Errorf("herdr session %q did not start", session)
 	}
-	return fmt.Errorf("herdr session %q did not start", session)
+	return nil
 }
 
 func openWorkspaces(session string) ([]openWorkspaceInfo, error) {
@@ -310,50 +311,44 @@ func openShellCommand(argv []string) bool {
 	return false
 }
 
-// openSettleSleep paces settle sampling; tests count it instead of sleeping.
-var openSettleSleep = time.Sleep
+// openSettlePause, when set, replaces the second between settle samples;
+// tests count it instead of sleeping.
+var openSettlePause func(context.Context) error
 
-func openWaitIdle(session, pane string, budget time.Duration) bool {
-	deadline := time.Now().Add(budget)
+func openPaneIdle(session, pane string) bool {
+	argv, err := openPaneCommand(session, pane)
+	return err == nil && openShellCommand(argv)
+}
+
+// openSettled reports whether idle held for three samples in a row, a second
+// apart, within ten seconds.
+func openSettled(idle func() bool) bool {
 	steady := 0
-	for {
-		argv, err := openPaneCommand(session, pane)
-		if err == nil && openShellCommand(argv) {
+	return retry.Poll(context.Background(), retry.Policy{Every: time.Second, Within: 10 * time.Second, Pause: openSettlePause}, func(context.Context) (bool, error) {
+		if idle() {
 			steady++
-			if budget == 0 || steady >= 3 {
-				return true
-			}
 		} else {
 			steady = 0
 		}
-		if !time.Now().Before(deadline) {
-			return false
-		}
-		openSettleSleep(time.Second)
-	}
+		return steady >= 3, nil
+	}) == nil
+}
+
+func openWaitIdle(session, pane string) bool {
+	return openSettled(func() bool { return openPaneIdle(session, pane) })
 }
 
 func openWaitWorkspaceIdle(session, workspace string) {
-	deadline := time.Now().Add(10 * time.Second)
-	steady := 0
-	for time.Now().Before(deadline) {
+	openSettled(func() bool {
 		panes, err := openPanes(session, workspace)
-		all := err == nil && len(panes) > 0
+		if err != nil || len(panes) == 0 {
+			return false
+		}
 		for _, pane := range panes {
-			argv, err := openPaneCommand(session, pane.ID)
-			if err != nil || !openShellCommand(argv) {
-				all = false
-				break
+			if !openPaneIdle(session, pane.ID) {
+				return false
 			}
 		}
-		if all {
-			steady++
-		} else {
-			steady = 0
-		}
-		if steady >= 3 {
-			return
-		}
-		openSettleSleep(time.Second)
-	}
+		return true
+	})
 }
