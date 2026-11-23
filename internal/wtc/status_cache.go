@@ -234,13 +234,17 @@ func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge,
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	// The receipt goes first. If it fails, the old data stays. If the data
+	// rename is lost after it, the receipt is ahead of the data and rejects
+	// only responses from requests that started before this one.
+	if !statusWriteForgeEntryObservedContext(ctx, "since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)), time.Time{}) {
+		return result, errors.New("forge observation receipt failed")
+	}
+	// Cancellation that arrived during the receipt does not stop the data.
 	if !statusWriteForgeEntryObservedContext(ctx, kind, forge, slug, key, data, observed) {
 		return result, errors.New("forge observation publication failed")
 	}
 	result.Written = true
-	// Complete the existing ordering receipt after a successful publication,
-	// even if cancellation arrived during the filesystem operation.
-	statusWriteForgeEntryObservedContext(ctx, "since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)), time.Time{})
 	return result, ctx.Err()
 }
 
@@ -317,10 +321,7 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)
 	}
-	// A completed data publication must finish its ordering receipt in the
-	// pinned namespace even if local selection changed in between. A receipt
-	// contains only request order and cannot lend provider authority elsewhere.
-	if !statusAuthSharedKind(kind) && kind != "since" && !statusAuthSelectionMatches(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return false
 	}
 
@@ -354,7 +355,7 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 	if tmp.Close() != nil {
 		return false
 	}
-	if !statusAuthSharedKind(kind) && kind != "since" && !statusAuthSelectionMatches(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return false
 	}
 	return os.Rename(tmp.Name(), path) == nil
