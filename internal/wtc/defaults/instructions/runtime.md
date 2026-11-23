@@ -402,8 +402,9 @@ the runner reloads its config, and running tasks whose definition changed
 restart; the others keep running. An existing runner keeps its launch
 environment apart from `port_env` values; use a full `down`/`up` after
 changing other variables or credentials. If the pinned dekit has no `reload`
-command and the running runner is a different dekit binary, the change is
-refused before anything is written: a runner restart would not import it. Use
+command, the change is applied by restarting the runner only when the runner
+reports dekit 0.10.0 running that same binary; otherwise it is refused before
+anything is written, because a newer runner's restart imports nothing. Use
 `down`/`up` to apply it.
 
 `taba retire` verifies the target runner stopped, clears its saved definitions,

@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,15 +12,15 @@ import (
 )
 
 // runtimeReloadFake is a dekit stand-in that records its calls. A legacy
-// client has no reload command; runner status names the runner's binary.
-func runtimeReloadFake(t *testing.T, root string, legacy bool, runner, reloadError string) string {
+// client has no reload command; runner status prints status verbatim.
+func runtimeReloadFake(t *testing.T, root string, legacy bool, status, reloadError string) string {
 	t.Helper()
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
 	binary := filepath.Join(root, "dekit")
 	t.Setenv("RUNTIME_TEST_LEGACY", map[bool]string{true: "1"}[legacy])
-	t.Setenv("RUNTIME_TEST_RUNNER", runner)
+	t.Setenv("RUNTIME_TEST_STATUS", status)
 	t.Setenv("RUNTIME_TEST_RELOAD_ERROR", reloadError)
 	fixtureFile(t, binary, `#!/bin/sh
 root=$2
@@ -36,12 +37,35 @@ reload*)
   exit 1
  fi ;;
 'runner status')
- printf '{"status":"running","version":"0.10.3","binary":"%s"}\n' "$RUNTIME_TEST_RUNNER"
+ printf '%s\n' "$RUNTIME_TEST_STATUS"
  exit 0 ;;
 esac
 echo '{}'
 `, 0755)
 	return binary
+}
+
+// runtimeReloadStatus is runner status JSON. binary "" names the pinned
+// client; "other" another file. raw, when set, replaces the whole output.
+type runtimeReloadStatus struct {
+	binary, version, raw string
+}
+
+func (s runtimeReloadStatus) json(t *testing.T, pinned string) string {
+	t.Helper()
+	if s.raw != "" {
+		return s.raw
+	}
+	binary := pinned
+	if s.binary == "other" {
+		binary = filepath.Join(t.TempDir(), "dekit")
+		fixtureFile(t, binary, "#!/bin/sh\n", 0755)
+	}
+	data, err := json.Marshal(map[string]string{"status": "running", "binary": binary, "version": s.version})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func runtimeReloadCalls(t *testing.T, root string) string {
@@ -53,27 +77,37 @@ func runtimeReloadCalls(t *testing.T, root string) string {
 	return string(calls)
 }
 
+var (
+	runtimeReloadLegacyRunner = runtimeReloadStatus{version: "0.10.0"}
+	runtimeReloadNewerRunner  = runtimeReloadStatus{binary: "other", version: "0.10.3"}
+)
+
 func TestRuntimeReloadConfigLegacyFallback(t *testing.T) {
 	for _, tc := range []struct {
-		name, reloadError string
-		legacy, other     bool
-		fails, restart    bool
+		name, reloadError, diagnosis string
+		status                       runtimeReloadStatus
+		legacy, fails, restart       bool
 	}{
-		{name: "native reload"},
-		{name: "native reload against another runner binary", other: true},
-		{name: "legacy client and its own runner", legacy: true, restart: true},
-		{name: "legacy client and another runner binary", legacy: true, other: true, fails: true},
-		{name: "invalid configuration", reloadError: "invalid task configuration", fails: true},
+		{name: "native reload", status: runtimeReloadNewerRunner},
+		{name: "invalid configuration", status: runtimeReloadNewerRunner, reloadError: "invalid task configuration", fails: true},
+		{name: "legacy client and verified legacy runner", status: runtimeReloadLegacyRunner, legacy: true, restart: true},
+		{name: "legacy client and newer runner binary", status: runtimeReloadNewerRunner, legacy: true, fails: true, diagnosis: "(version 0.10.3)"},
+		// The pinned file may have been replaced after the runner loaded it.
+		{name: "pinned path reporting a newer runner", status: runtimeReloadStatus{version: "0.10.3"}, legacy: true, fails: true, diagnosis: "(version 0.10.3)"},
+		{name: "legacy version from another binary", status: runtimeReloadStatus{binary: "other", version: "0.10.0"}, legacy: true, fails: true, diagnosis: "(version 0.10.0)"},
+		{name: "unverified 0.10 patch", status: runtimeReloadStatus{version: "0.10.1"}, legacy: true, fails: true, diagnosis: "(version 0.10.1)"},
+		{name: "missing version", status: runtimeReloadStatus{}, legacy: true, fails: true, diagnosis: "(unrecognized version)"},
+		{name: "control bytes in version", status: runtimeReloadStatus{version: "0.10.0\x1b[2J\nforged"}, legacy: true, fails: true, diagnosis: "(unrecognized version)"},
+		{name: "malformed status", status: runtimeReloadStatus{raw: "not json \x1b[2J"}, legacy: true, fails: true, diagnosis: "unreadable runner status"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := fixture(t)
 			root := c.runtimeRoot()
-			runner := filepath.Join(root, "dekit")
-			if tc.other {
-				runner = filepath.Join(t.TempDir(), "dekit")
-				fixtureFile(t, runner, "#!/bin/sh\n", 0755)
+			binary := filepath.Join(root, "dekit")
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
 			}
-			binary := runtimeReloadFake(t, root, tc.legacy, runner, tc.reloadError)
+			runtimeReloadFake(t, root, tc.legacy, tc.status.json(t, binary), tc.reloadError)
 			err := runtimeReloadConfig(&runtimeManifest{Root: root, Binary: binary})
 			if (err != nil) != tc.fails {
 				t.Fatalf("reload error = %v", err)
@@ -82,9 +116,13 @@ func TestRuntimeReloadConfigLegacyFallback(t *testing.T) {
 			if strings.Contains(calls, "runner restart") != tc.restart {
 				t.Fatalf("unexpected legacy restart: %s", calls)
 			}
-			if tc.legacy && tc.other {
-				if !strings.Contains(err.Error(), "not applied") || !strings.Contains(err.Error(), "0.10.3") || strings.Contains(err.Error(), root) {
-					t.Fatalf("diagnosis is not actionable or leaks a path: %v", err)
+			if tc.diagnosis != "" {
+				message := err.Error()
+				if !strings.Contains(message, "not applied") && !strings.Contains(message, "runner status") {
+					t.Fatalf("diagnosis is not actionable: %v", err)
+				}
+				if !strings.Contains(message, tc.diagnosis) || strings.Contains(message, root) || strings.ContainsAny(message, "\x1b\n") || strings.Contains(message, "forged") {
+					t.Fatalf("diagnosis %q missing, or it echoes a path or control bytes: %q", tc.diagnosis, message)
 				}
 			}
 		})
@@ -96,22 +134,22 @@ func TestRuntimeReloadConfigLegacyFallback(t *testing.T) {
 func TestRuntimeReloadPreflight(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
-		legacy, other bool
-		fails         bool
+		status        runtimeReloadStatus
+		legacy, fails bool
 	}{
-		{name: "native reload"},
-		{name: "legacy client and its own runner", legacy: true},
-		{name: "legacy client and another runner binary", legacy: true, other: true, fails: true},
+		{name: "native reload", status: runtimeReloadNewerRunner},
+		{name: "legacy client and verified legacy runner", status: runtimeReloadLegacyRunner, legacy: true},
+		{name: "legacy client and newer runner binary", status: runtimeReloadNewerRunner, legacy: true, fails: true},
+		{name: "pinned path reporting a newer runner", status: runtimeReloadStatus{version: "0.10.3"}, legacy: true, fails: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := fixture(t)
 			root := c.runtimeRoot()
-			runner := filepath.Join(root, "dekit")
-			if tc.other {
-				runner = filepath.Join(t.TempDir(), "dekit")
-				fixtureFile(t, runner, "#!/bin/sh\n", 0755)
+			binary := filepath.Join(root, "dekit")
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
 			}
-			binary := runtimeReloadFake(t, root, tc.legacy, runner, "")
+			runtimeReloadFake(t, root, tc.legacy, tc.status.json(t, binary), "")
 			err := runtimeReloadPreflight(&runtimeManifest{Root: root, Binary: binary})
 			if (err != nil) != tc.fails {
 				t.Fatalf("preflight error = %v", err)
