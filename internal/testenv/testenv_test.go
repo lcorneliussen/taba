@@ -124,8 +124,8 @@ func callsMain(t *testing.T, files []string) bool {
 	return false
 }
 
-// A test binary started from a collection shell sees what CI gives it; one
-// started by a test keeps the environment that test gave it.
+// A test binary started from a collection shell sees what CI gives it. One
+// started by a test keeps what that test and its package's fixtures set.
 func TestMainIsolatesTheCallersShell(t *testing.T) {
 	if report := os.Getenv("TABA_TEST_REPORT"); report != "" {
 		writeReport(t, report)
@@ -136,11 +136,12 @@ func TestMainIsolatesTheCallersShell(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(hostConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	shell := []string{"HOME=" + home, "WTC_CONFIG_ROOT=" + home, "TABA_COLLECTION=shell", "GIT_EDITOR=vi",
-		"GIT_DIR=" + home, "GIT_TRACE2_EVENT=" + filepath.Join(home, "trace"), "WTC_TEST_KNOB=kept", "WTC_RECORDING_OUTPUT=kept"}
+	shell := []string{"HOME=" + home, "WTC_CONFIG_ROOT=" + home, "TABA_COLLECTION=shell", "TABA_BITBUCKET_TRANSPORT=bb",
+		"GIT_EDITOR=vi", "GIT_DIR=" + home, "GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"),
+		"GIT_TRACE2_EVENT=" + filepath.Join(home, "trace"), "WTC_TEST_KNOB=kept", "WTC_RECORDING_OUTPUT=kept"}
 
 	outside := child(t, append(withoutMarker(os.Environ()), shell...))
-	for _, gone := range []string{"WTC_CONFIG_ROOT", "TABA_COLLECTION", "GIT_EDITOR", "GIT_DIR"} {
+	for _, gone := range []string{"WTC_CONFIG_ROOT", "TABA_COLLECTION", "TABA_BITBUCKET_TRANSPORT", "GIT_EDITOR", "GIT_DIR"} {
 		if value, ok := outside.env[gone]; ok {
 			t.Errorf("%s=%s reached the tests", gone, value)
 		}
@@ -157,13 +158,22 @@ func TestMainIsolatesTheCallersShell(t *testing.T) {
 		t.Errorf("isolated directory %s left behind: %v", outside.env["TABA_TEST_ENV"], err)
 	}
 
-	inside := child(t, append(os.Environ(), "WTC_CONFIG_ROOT="+home, "GIT_EDITOR=vi"))
-	if inside.env["WTC_CONFIG_ROOT"] != home || inside.env["GIT_EDITOR"] != "vi" {
-		t.Errorf("child lost the environment its test gave it: WTC_CONFIG_ROOT=%q GIT_EDITOR=%q",
-			inside.env["WTC_CONFIG_ROOT"], inside.env["GIT_EDITOR"])
+	parentConfig := filepath.Join(home, "parent-gitconfig")
+	if err := os.WriteFile(parentConfig, []byte("[user]\n\tname = parent\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if inside.env["TABA_TEST_ENV"] != os.Getenv("TABA_TEST_ENV") {
-		t.Errorf("child isolated again: %s", inside.env["TABA_TEST_ENV"])
+	t.Setenv("GIT_CONFIG_GLOBAL", parentConfig)
+	t.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
+	t.Setenv("WTC_CONFIG_ROOT", home)
+	t.Setenv("GIT_EDITOR", "vi")
+	inside := child(t, os.Environ())
+	for _, name := range []string{"GIT_CONFIG_GLOBAL", "TABA_BITBUCKET_TRANSPORT", "WTC_CONFIG_ROOT", "GIT_EDITOR", "TABA_TEST_ENV"} {
+		if inside.env[name] != os.Getenv(name) {
+			t.Errorf("child changed %s to %q, want %q", name, inside.env[name], os.Getenv(name))
+		}
+	}
+	if want := "global\tuser.name=parent"; inside.git != want {
+		t.Errorf("child git config = %q, want %q", inside.git, want)
 	}
 }
 
