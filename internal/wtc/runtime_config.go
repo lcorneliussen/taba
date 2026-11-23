@@ -552,7 +552,11 @@ func (c *Context) renderRuntime() (*runtimeManifest, error) {
 		if state == "running" {
 			// Apply the change live: a reload adds and redefines tasks but
 			// keeps removed ones, so remove those first, and restart a
-			// running task whose definition changed.
+			// running task whose definition changed. Refuse before writing
+			// or removing anything when the runner cannot take the change.
+			if err := runtimeReloadPreflight(m); err != nil {
+				return nil, err
+			}
 			kept := map[string]string{}
 			for _, task := range m.Tasks {
 				kept[task.Path] = task.Spec
@@ -659,11 +663,58 @@ func (c *Context) renderRuntime() (*runtimeManifest, error) {
 
 func runtimeReloadConfig(m *runtimeManifest) error {
 	_, err := runtimeCommand(m, false, "reload", "--yes")
-	if err != nil && strings.Contains(err.Error(), "unknown command or unsupported file: `reload`") {
+	if err != nil && runtimeReloadUnsupported(err) {
 		// Dekit 0.10.0 imports configuration by restarting its runner.
+		if err := runtimeLegacyRestartImports(m); err != nil {
+			return err
+		}
 		_, err = runtimeCommand(m, false, "runner", "restart")
 	}
 	return err
+}
+
+func runtimeReloadUnsupported(err error) bool {
+	return strings.Contains(err.Error(), "unknown command or unsupported file: `reload`")
+}
+
+// runtimeReloadPreflight checks, read-only, that a changed config can reach
+// the running runner. A reload without --yes only shows the plan.
+func runtimeReloadPreflight(m *runtimeManifest) error {
+	if _, err := runtimeCommand(m, false, "reload"); err == nil || !runtimeReloadUnsupported(err) {
+		// Supported, or failing for another reason the reload will report.
+		return nil
+	}
+	return runtimeLegacyRestartImports(m)
+}
+
+// runtimeLegacyRestartImports allows the reload-less client's runner restart
+// only for a runner running that same binary. A newer runner restarts with
+// its tasks as they were and reads nothing from dekit.yaml, so the restart
+// would succeed and apply nothing.
+func runtimeLegacyRestartImports(m *runtimeManifest) error {
+	data, err := runtimeCommand(m, false, "runner", "status")
+	if err != nil {
+		return fmt.Errorf("check the runner before applying changed runtime config: %w", err)
+	}
+	var runner struct {
+		Binary  string `json:"binary"`
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &runner); err != nil {
+		return fmt.Errorf("check the runner before applying changed runtime config: %w", err)
+	}
+	if runner.Binary != "" {
+		running, runErr := os.Stat(runner.Binary)
+		pinned, pinErr := os.Stat(m.Binary)
+		if runErr == nil && pinErr == nil && os.SameFile(running, pinned) {
+			return nil
+		}
+	}
+	version := runner.Version
+	if version == "" {
+		version = "unknown"
+	}
+	return fmt.Errorf(branding.Text("changed runtime config was not applied: the running dekit runner (version %s) is not the pinned dekit, which has no reload command, and restarting that runner would not import the change; nothing was changed. Run {{command}} down, then start the services again"), version)
 }
 
 func runtimeSaveManifest(m *runtimeManifest) error {

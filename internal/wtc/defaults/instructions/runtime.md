@@ -401,7 +401,10 @@ the next `taba svc up` without stopping the runner: removed tasks are removed,
 the runner reloads its config, and running tasks whose definition changed
 restart; the others keep running. An existing runner keeps its launch
 environment apart from `port_env` values; use a full `down`/`up` after
-changing other variables or credentials.
+changing other variables or credentials. If the pinned dekit has no `reload`
+command and the running runner is a different dekit binary, the change is
+refused before anything is written: a runner restart would not import it. Use
+`down`/`up` to apply it.
 
 `taba retire` verifies the target runner stopped, clears its saved definitions,
 and runs strict resource teardown **before removing any worktree**. An
