@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { accessSync, constants, lstatSync, statSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { registerPublicationBridge } from "./publication.js";
+import { registerCheckoutRestore } from "./restore.js";
 import { startSandboxGit } from "./sandbox-git.js";
 
 const PLUGIN_ID = "wtc";
@@ -261,15 +262,36 @@ export function pullRequestWatch(file, now = Date.now) {
       const c = (seen[key] ??= { agentId, sessionKey, repos: {} });
       c.at = now();
       const lines = [];
+      c.refusals ??= {};
       for (const r of repos) {
         if (!r.path || r.error) continue;
+        const name = r.repo ?? r.project ?? path.basename(r.path);
+        // A refused read is news once per cause (#471): the conversation can
+        // explain it instead of taking the pull request for unenlisted. A
+        // transient failure (network, timeout, rate limit) is no news and
+        // does not reset that; a successful read after a refusal is news once.
+        const refusal = r.pullRequestRefusal;
+        if (refusal) {
+          if (refusal.access && c.refusals[r.path] !== refusal.cause) {
+            c.refusals[r.path] = refusal.cause;
+            lines.push(`${name}: its pull request cannot be read — ${refusal.message}. Its state is unknown until that is fixed.`);
+          }
+          continue;
+        }
+        if (c.refusals[r.path]) {
+          delete c.refusals[r.path];
+          lines.push(`${name}: its pull request can be read again.`);
+        }
         const prev = c.repos[r.path];
         const cur = prFacts(r.pullRequest);
+        // Checks that could not be read this time are not a change: keep
+        // what was seen, so a later read does not announce it again.
+        if (cur && cur.checks === "unknown") cur.checks = prev?.number === cur.number ? prev.checks : "none";
         // A pull request does not go away: none after one was seen means
         // the forge could not be asked this time. (wtc status reports both
         // that and no pull request yet as none.)
         if (!cur && prev) continue;
-        lines.push(...pullRequestChanges(r.repo ?? r.project ?? path.basename(r.path), prev, cur));
+        lines.push(...pullRequestChanges(name, prev, cur));
         c.repos[r.path] = cur;
       }
       save();
@@ -503,37 +525,18 @@ export default {
       }
       return recoveryCache.value;
     };
-    const restoring = new Set();
+    // Restoration runs as an authenticated Gateway method (restore.js). A tab
+    // loaded before that still calls this action: it explains instead of
+    // starting a native CLI under the gateway host's own credentials.
     api.session.controls.registerSessionAction({
       id: "restore-checkout",
-      description: "Restore one evicted collection checkout from its native snapshot, preserving its recorded owner and destination.",
+      description: "Superseded by the wtc.checkout.restore Gateway method; reload the Collection view.",
       requiredScopes: ["operator.admin"],
-      async handler(action) {
-        const { ownerSessionKey, key } = action.payload ?? {};
-        if (!action.agentId || !action.sessionKey || typeof ownerSessionKey !== "string" || typeof key !== "string") return { ok: false, error: "A collection checkout and recovery key are required" };
-        const { children } = await collectionOf(action.agentId, action.sessionKey);
-        const { collectionName, task } = collectionIdentity(children);
-        const child = children.find(c => c.sessionKey === ownerSessionKey && collectionName(c.entry) === task);
-        if (!child?.entry.worktree?.id) return { ok: false, error: "The checkout is no longer in this collection" };
-        const entry = child.entry, id = entry.worktree.id;
-        if (restoring.has(id)) return { ok: false, error: "This checkout is already being restored" };
-        restoring.add(id);
-        try {
-          if (existsSync(path.join(worktreeOf(entry), ".git"))) return { ok: false, error: "The checkout is already present; refresh the collection" };
-          const current = worktreeRecovery(entry, ownerSessionKey, await recoveryRecords(true));
-          if (current.state !== "restorable" || current.key !== key) return { ok: false, error: "Recovery changed; refresh the collection before restoring" };
-          const fresh = await getSessionEntry({ agentId: action.agentId, sessionKey: ownerSessionKey });
-          if (!fresh || fresh.parentSessionKey !== entry.parentSessionKey || fresh.worktree?.id !== id || worktreeOf(fresh) !== worktreeOf(entry) || fresh.worktree?.repoRoot !== entry.worktree.repoRoot || fresh.worktree?.branch !== entry.worktree.branch) return { ok: false, error: "The checkout owner changed; refresh before restoring" };
-          if (fresh.hasActiveRun || fresh.hasActiveSubagentRun || fresh.activeRunIds?.length) return { ok: false, error: "Wait for this checkout's active run to finish before restoring" };
-          const result = await run(["openclaw", "worktrees", "restore", id, "--json"], { timeoutMs: 300000 });
-          if (result.code !== 0) return { ok: false, error: (result.stderr || result.stdout).trim().slice(-600) || "Native restore failed; refresh and inspect the saved snapshot" };
-          const restored = JSON.parse(result.stdout);
-          if (restored.id !== id || restored.path !== worktreeOf(entry) || restored.ownerId !== ownerSessionKey || restored.branch !== entry.worktree.branch || restored.removedAt != null || !existsSync(path.join(worktreeOf(entry), ".git"))) return { ok: false, error: "Native restore returned an unexpected result; inspect the checkout before retrying" };
-          return { ok: true, result: { message: "Checkout restored from its saved snapshot" } };
-        } catch (err) { return { ok: false, error: String(err?.message ?? err) }; }
-        finally { restoring.delete(id); recoveryCache = null; }
+      async handler() {
+        return { ok: false, error: "Reload the Collection view: checkout restore now runs as an authenticated gateway request" };
       },
     });
+    const checkoutRestore = registerCheckoutRestore(api, { collectionOf, collectionIdentity, getSessionEntry, worktreeOf, worktreeRecovery, run, onSettled: () => { recoveryCache = null; } });
 
     const stateDir = api.runtime.state.resolveStateDir(process.env);
     const publications = registerPublicationBridge(api,{run,getSessionEntry,stateDir});
@@ -758,7 +761,13 @@ export default {
       if (missing.length) {
         try {
           const records = await recoveryRecords();
-          for (const row of missing) row.recovery = worktreeRecovery(children.find(c => c.sessionKey === row.sessionKey).entry, row.sessionKey, records);
+          // A recorded snapshot is not a promise that this gateway can restore it.
+          const execution = checkoutRestore.capability();
+          for (const row of missing) {
+            const recovery = worktreeRecovery(children.find(c => c.sessionKey === row.sessionKey).entry, row.sessionKey, records);
+            row.recovery = recovery.state === "restorable" && execution.state === "unavailable"
+              ? { state: "snapshot-only", reason: `A recovery snapshot is recorded. ${execution.reason}.`, removedAt: recovery.removedAt } : recovery;
+          }
         } catch { for (const row of missing) row.recovery = { state: "unknown", reason: "Native recovery status unavailable" }; }
       }
       // Each sub-session with its checkouts, and per checkout how it stands

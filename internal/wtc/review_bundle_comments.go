@@ -2,13 +2,13 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"taba.sh/taba/internal/branding"
 )
@@ -134,7 +134,7 @@ const bitbucketReviewCommentLimit = 1000
 
 // Both supported community CLI versions collect pages into a comments/count envelope.
 func readBitbucketReviewComments(m ReviewManifest) ([]bundleComment, error) {
-	raw, err := reviewBitbucketCommand(m, []string{"pr", "comments", "list", m.PR, "--limit", strconv.Itoa(bitbucketReviewCommentLimit), "--json"}, nil)
+	raw, err := bitbucketReadPRComments(bitbucketReadOperation(context.Background(), ""), m.Slug, m.PR, bitbucketReviewCommentLimit)
 	if err != nil {
 		return nil, err
 	}

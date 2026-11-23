@@ -50,7 +50,9 @@ func TestDoctorReportsNamedTunnelsAsAdvisory(t *testing.T) {
 				env = append(env, kv)
 			}
 		}
-		cmd.Env = append(env, "TABA_DEV_BUILD=off", "WTC_DEV_BUILD=off", "XDG_CONFIG_HOME="+filepath.Join(root, "xdg-config"), "XDG_DATA_HOME="+filepath.Join(root, "xdg-data"), "WTC_CONFIG_ROOT="+filepath.Join(workspace, ".config"), "TABA_CONFIG_ROOT="+filepath.Join(workspace, ".config"))
+		// Not a Bitbucket test: the deprecated bb selection keeps doctor's
+		// client row from checking a twg version (#471).
+		cmd.Env = append(env, "TABA_BITBUCKET_TRANSPORT=bb", "TABA_DEV_BUILD=off", "WTC_DEV_BUILD=off", "XDG_CONFIG_HOME="+filepath.Join(root, "xdg-config"), "XDG_DATA_HOME="+filepath.Join(root, "xdg-data"), "WTC_CONFIG_ROOT="+filepath.Join(workspace, ".config"), "TABA_CONFIG_ROOT="+filepath.Join(workspace, ".config"))
 		out, err := cmd.CombinedOutput()
 		return string(out), err
 	}

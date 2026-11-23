@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -92,6 +93,12 @@ type statusAuthContext struct {
 }
 
 func statusResolveAuthContext(forge string) statusAuthContext {
+	return statusResolveAuthContextWith(forge, selectedBitbucketRead(""))
+}
+
+// statusResolveAuthContextWith resolves forge's context with one Bitbucket
+// read selection, so an operation's frozen reader and its context agree.
+func statusResolveAuthContextWith(forge string, selection bitbucketReadSelection) statusAuthContext {
 	key := statusAuthCacheKey()
 	if len(key) == 0 {
 		return statusAuthContext{}
@@ -182,6 +189,12 @@ func statusResolveAuthContext(forge string) statusAuthContext {
 			user, pass = config.Username, config.Token
 		}
 		known = ok && valid && user != "" && pass != "" && config.OAuth == ""
+		// The selected read client and credential are part of the context
+		// (#471). This forge-level context covers the REST credential; reads
+		// through TWG or a host credential get a per-entry context from
+		// statusAuthEntry.
+		add(selection.fingerprint())
+		known = known && selection.err == nil && selection.Credential == bitbucketCredentialPersonal
 	default:
 		return statusAuthContext{}
 	}
@@ -235,9 +248,19 @@ func statusAuthOperation(ctx context.Context) context.Context {
 	}
 	var nonce [16]byte
 	_, _ = rand.Read(nonce[:])
+	// An operation that already chose its Bitbucket reader (for a given
+	// control root) is fingerprinted with that same selection.
+	read := selectedBitbucketRead("")
+	if attached, ok := ctx.Value(bitbucketReadKey{}).(*bitbucketReadState); ok {
+		read = attached.selection
+	}
 	state := &statusAuthOperationState{selection: statusAuthSelection{
-		"github.com": statusResolveAuthContext("github.com"), "bitbucket.org": statusResolveAuthContext("bitbucket.org")}, nonce: hex.EncodeToString(nonce[:]), observations: map[string]statusAuthObservation{}, gates: map[string]chan struct{}{}}
-	return context.WithValue(ctx, statusAuthOperationKey{}, state)
+		"github.com": statusResolveAuthContext("github.com"), "bitbucket.org": statusResolveAuthContextWith("bitbucket.org", read)}, nonce: hex.EncodeToString(nonce[:]), observations: map[string]statusAuthObservation{}, gates: map[string]chan struct{}{}}
+	ctx = context.WithValue(ctx, statusAuthOperationKey{}, state)
+	if _, ok := ctx.Value(bitbucketReadKey{}).(*bitbucketReadState); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, bitbucketReadKey{}, &bitbucketReadState{selection: read, tokens: map[string]*bitbucketRepoToken{}})
 }
 func statusAuthForContext(ctx context.Context, forge string) statusAuthContext {
 	if state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState); ok {
@@ -319,4 +342,83 @@ func statusAuthMemoryLock(ctx context.Context, path string) (func(), bool, error
 		}
 		return func() { gate <- struct{}{} }, true, nil
 	}
+}
+
+// statusAuthEntry is the authenticated context of one cached observation.
+// GitHub and shared kinds use the forge context. Bitbucket entries depend on
+// which credential produced them (#471):
+//
+//   - host read credential: the forge context plus a keyed digest of that
+//     repository's token. An unchanged token shares cached observations and
+//     in-flight reads across refreshes and panes; a rotated token, another
+//     repository, or no answer from the helper is a different (or
+//     operation-private) context.
+//   - personal TWG: PR detail and activity come from TWG's own profile. When
+//     TWG takes its token from the environment, that token is fingerprinted;
+//     a profile kept in TWG's own store cannot be fingerprinted locally, so
+//     those observations stay operation-private. REST lists, checks and
+//     builds keep the forge context of their own credential.
+//   - bb (deprecated): the forge context, as before.
+func statusAuthEntry(ctx context.Context, kind, forge, slug string) statusAuthContext {
+	base := statusAuthForContext(ctx, forge)
+	if forge != "bitbucket.org" || statusAuthSharedKind(kind) {
+		return base
+	}
+	read := bitbucketReadFor(ctx)
+	selection := read.selection
+	if selection.err != nil {
+		return statusAuthContext{scope: base.scope}
+	}
+	if selection.hostCredential() {
+		workspace, repo, err := splitBitbucketSlug(slug)
+		if err != nil {
+			return statusAuthContext{scope: base.scope}
+		}
+		user, token, err := read.repoCredential(ctx, workspace, repo)
+		if err != nil || token == "" {
+			return statusAuthContext{scope: base.scope + ":host-unknown"}
+		}
+		// The exact identity: credential type, user and token.
+		digest := statusAuthKeyedDigest("bitbucket-host-read-v2", selection.Credential, strings.ToLower(slug), user, token)
+		if digest == "" {
+			return statusAuthContext{scope: base.scope + ":host-unknown"}
+		}
+		return statusAuthContext{scope: base.scope + ":host:" + digest, known: true}
+	}
+	if selection.Client == bitbucketClientTWG && statusKindReadByClient(kind) {
+		if token := os.Getenv("TWG_BBC_TOKEN"); token != "" {
+			digest := statusAuthKeyedDigest("bitbucket-twg-env-v1", os.Getenv("TWG_BBC_USER"), token, os.Getenv("TWG_SITE"))
+			if digest != "" {
+				return statusAuthContext{scope: base.scope + ":twg-env:" + digest, known: true}
+			}
+		}
+		return statusAuthContext{scope: base.scope + ":twg-profile"}
+	}
+	return base
+}
+
+// statusKindReadByClient reports the cache kinds whose data the selected
+// Bitbucket client (rather than REST) reads.
+func statusKindReadByClient(kind string) bool {
+	switch kind {
+	case "pr", "activity", "merge":
+		return true
+	}
+	return false
+}
+
+// statusAuthKeyedDigest digests values with the cache's random key; empty
+// when the key is unavailable. Values never leave this function.
+func statusAuthKeyedDigest(label string, values ...string) string {
+	key := statusAuthCacheKey()
+	if len(key) == 0 {
+		return ""
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = io.WriteString(mac, label)
+	for _, value := range values {
+		_, _ = mac.Write([]byte{0})
+		_, _ = io.WriteString(mac, value)
+	}
+	return hex.EncodeToString(mac.Sum(nil))
 }

@@ -20,7 +20,7 @@ func TestStatus424NativeChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runStatusTUI(c, false, false, false, true, true, time.Hour, time.Hour, time.Hour); err != nil {
+	if err := runStatusTUI(c, false, false, false, true, true, false, time.Hour, time.Hour, time.Hour); err != nil {
 		t.Fatal(err)
 	}
 }

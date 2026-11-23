@@ -129,6 +129,17 @@ type statusTUIModel struct {
 	startedAt         time.Time
 	errorText         string
 	hover             string
+	press             statusTUIPress
+	mouseCapture      bool // --mouse: in-app wheel, click targets and hover text
+}
+
+// statusTUIPress is a left-button press waiting for its release. Targets act
+// on release at the press cell with the same target, so a drag that starts on
+// a link selects text instead of opening it (issue 473).
+type statusTUIPress struct {
+	active, moved bool
+	x, y          int
+	row, target   string
 }
 
 // Row locations come from the renderers, including conditional detail lines.
@@ -507,10 +518,11 @@ func (m *statusTUIModel) focusLogTail() {
 }
 
 func (m statusTUIModel) Init() tea.Cmd {
+	query := m.altScrollQuery()
 	if m.watcherPending {
-		return tea.Batch(m.resourceTick(), statusRegisterWatcher(m.context, m.uiContext, m.uiCancel))
+		return tea.Batch(query, m.resourceTick(), statusRegisterWatcher(m.context, m.uiContext, m.uiCancel))
 	}
-	cmds := []tea.Cmd{m.resourceTick(), statusTUIRefreshContext(m.uiContext, m.context, m.all, m.procs, m.noFetch, m.fetchAge)}
+	cmds := []tea.Cmd{query, m.resourceTick(), statusTUIRefreshContext(m.uiContext, m.context, m.all, m.procs, m.noFetch, m.fetchAge)}
 	if m.context != nil && !m.all && !m.procs {
 		cmds = append(cmds, m.runtimeTick())
 	}
@@ -823,11 +835,15 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.resourceTick()
 	case tea.MouseMotionMsg:
+		if m.press.active && msg.Button != tea.MouseNone && (msg.X != m.press.x || msg.Y != m.press.y) {
+			m.press.moved = true
+		}
 		m.hover = ""
 		if item, ok := m.runtimeItemAt(msg.X, msg.Y); ok {
 			m.hover = statusRuntimeHover(item)
 		}
 	case tea.MouseWheelMsg:
+		m.press = statusTUIPress{}
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			m.scrollBy(-3)
@@ -835,15 +851,22 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollBy(3)
 		}
 	case tea.MouseClickMsg:
-		header := m.headerLine()
-		refreshIndex := strings.Index(header, "refreshing")
-		headerWidth := m.width
-		if headerWidth <= 0 {
-			headerWidth = 80
+		m.press = statusTUIPress{}
+		if msg.Button == tea.MouseLeft {
+			row, target := m.pointerTarget(msg.X, msg.Y)
+			m.press = statusTUIPress{active: true, x: msg.X, y: msg.Y, row: row, target: target}
 		}
-		if msg.Y == 0 && m.refreshing && refreshIndex >= 0 &&
-			msg.X >= runewidth.StringWidth(header[:refreshIndex]) &&
-			msg.X < min(headerWidth, runewidth.StringWidth(header)) {
+	case tea.MouseReleaseMsg:
+		press := m.press
+		m.press = statusTUIPress{}
+		if !press.active || press.moved || msg.X != press.x || msg.Y != press.y || press.target == "" {
+			break
+		}
+		// A redraw under a held press must not open another row's target.
+		if row, target := m.pointerTarget(msg.X, msg.Y); row != press.row || target != press.target {
+			break
+		}
+		if press.target == statusTUIRefreshTarget {
 			m.showLog = !m.showLog
 			m.scroll = 0
 			m.focusLogTail()
@@ -852,10 +875,17 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if !m.noClick && !m.procs && !m.showNext {
-			if target := m.buildClickTarget(msg.X, msg.Y); target != "" {
-				return m, statusOpenURL(target)
-			}
+		return m, statusOpenURL(press.target)
+	case tea.ModeReportMsg:
+		if msg.Mode == statusAltScrollMode {
+			return m, statusAltScrollReport(msg.Value)
+		}
+	case statusSelectionDoneMsg:
+		if msg.err != nil {
+			m.errorText = "selection view: " + msg.err.Error()
+		}
+		if msg.quit {
+			return m.quit()
 		}
 	case statusOpenedMsg:
 		if msg.err != nil {
@@ -890,6 +920,10 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.watcherPending && (msg.String() == "enter" || msg.String() == "n" || msg.String() == "r") {
 			return m, nil
+		}
+		if msg.String() == "v" {
+			m.press, m.hover = statusTUIPress{}, ""
+			return m, statusSelectionCommand(m.selectionView(time.Now()))
 		}
 		if m.interval > 0 && !m.resourceObserved(time.Now()) {
 			m.nextRefresh = time.Now().Add(m.interval)
@@ -1016,17 +1050,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
-			if m.uiCancel != nil {
-				m.uiCancel()
-			}
-			if m.refreshCancel != nil {
-				m.refreshCancel()
-			}
-			m.devAutoExit, m.devRestart = false, nil
-			if m.nextCancel != nil {
-				m.nextCancel()
-			}
-			return m, tea.Quit
+			return m.quit()
 		case "esc":
 			m.showHelp = false
 		case "?":
@@ -1079,6 +1103,46 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m.finishDevUpdate()
+}
+
+func (m statusTUIModel) quit() (tea.Model, tea.Cmd) {
+	if m.uiCancel != nil {
+		m.uiCancel()
+	}
+	if m.refreshCancel != nil {
+		m.refreshCancel()
+	}
+	m.devAutoExit, m.devRestart = false, nil
+	if m.nextCancel != nil {
+		m.nextCancel()
+	}
+	return m, tea.Quit
+}
+
+const statusTUIRefreshTarget = "\x00refresh-log"
+
+// pointerTarget is what a completed click at a cell would act on: the
+// refresh-log marker, an ordinary TUI link, or nothing, with the logical row
+// that owns it.
+func (m statusTUIModel) pointerTarget(x, y int) (string, string) {
+	header := m.headerLine()
+	refreshIndex := strings.Index(header, "refreshing")
+	headerWidth := m.width
+	if headerWidth <= 0 {
+		headerWidth = 80
+	}
+	if y == 0 && m.refreshing && refreshIndex >= 0 &&
+		x >= runewidth.StringWidth(header[:refreshIndex]) &&
+		x < min(headerWidth, runewidth.StringWidth(header)) {
+		return "header", statusTUIRefreshTarget
+	}
+	if !m.noClick && !m.procs && !m.showNext {
+		if target := m.buildClickTarget(x, y); target != "" {
+			row, _ := m.visibleRow(x, y)
+			return row.key, target
+		}
+	}
+	return "", ""
 }
 
 func statusTUIFit(value string, width int) string {
@@ -2092,9 +2156,9 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 		lines[1] = statusTUIStyle(statusTUIProgressLine(m.progressStep, elapsed, width), statusToneWarning)
 	}
 	if m.showHelp {
-		keys := "n next actions   r refresh   l log   a archived PRs   ? help   q quit"
+		keys := "n next actions   r refresh   l log   a archived PRs   v select/copy   ? help   q quit"
 		if m.procs {
-			keys = "r refresh   l log   ? help   q quit"
+			keys = "r refresh   l log   v select/copy   ? help   q quit"
 		}
 		mode := "Recently observed view; normal refresh cadence."
 		if !m.resourceObserved(time.Now()) {
@@ -2104,7 +2168,8 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			mode = "Waiting for status watcher; cached actions unavailable."
 		}
 		help := []string{keys, mode,
-			"↗ link: modifier-click; PR/TEST/PROD: click; ↑/↓ or wheel scroll; PgUp/PgDn page; Home/End",
+			"Mouse: drag selects and copies the visible rows with the terminal or multiplexer. ↗ links open with the terminal's modifier-click. The wheel scrolls where the terminal turns it into ↑/↓; otherwise use ↑/↓, PgUp/PgDn, Home/End. --mouse captures the mouse for in-app wheel, click-release targets and runtime hover text (then use the terminal's selection modifier).",
+			"v select/copy: shows the full output, including rows outside the view, on the terminal's normal screen; select, scroll and copy there, then Enter, q or v returns. Refresh continues meanwhile.",
 			"PR signals, left to right: C checks · M mergeability · R reviews. ? toggles this help.",
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
@@ -2216,16 +2281,16 @@ func (m statusTUIModel) View() tea.View {
 	}
 	content := m.contentLayout()
 	v := m.viewport(content)
-	footer := "n next actions · r refresh · l log · a archived · ↗ link · ? help · q quit"
+	footer := "n next actions · r refresh · l log · a archived · ↗ link · v select · ? help · q quit"
 	if m.procs {
-		footer = "r refresh · l log · ? help · q quit"
+		footer = "r refresh · l log · v select · ? help · q quit"
 	}
 	if m.showNext && !m.showLog {
-		footer = "↑/↓ choose · PgUp/PgDn scroll · Home/End · Enter run · Esc back"
+		footer = "↑/↓ choose · PgUp/PgDn scroll · Home/End · Enter run · v select · Esc back"
 	} else if v.limit > 0 {
-		footer = "↑/↓ wheel · PgUp/PgDn · Home/End · n next · r refresh · ? help · q quit"
+		footer = "↑/↓ wheel · PgUp/PgDn · Home/End · n next · r refresh · v select · ? help · q quit"
 		if m.procs || m.showLog {
-			footer = "↑/↓ wheel · PgUp/PgDn · Home/End · l log · r refresh · ? help · q quit"
+			footer = "↑/↓ wheel · PgUp/PgDn · Home/End · l log · r refresh · v select · ? help · q quit"
 		}
 	}
 	if !m.nextRefresh.IsZero() && !m.refreshing {
@@ -2266,11 +2331,13 @@ func (m statusTUIModel) View() tea.View {
 	view := tea.NewView(strings.Join(visible, "\n"))
 	view.AltScreen = true
 	view.ReportFocus = os.Getenv("TERM") != "dumb"
-	if os.Getenv("TERM") != "dumb" && (m.refreshing || v.limit > 0 || visibleLink && !m.noClick) {
+	// Without --mouse the view requests no mouse reporting: drag selection
+	// stays with the terminal or multiplexer, and links stay OSC 8 hyperlinks.
+	if m.mouseCapture && os.Getenv("TERM") != "dumb" && (m.refreshing || v.limit > 0 || visibleLink && !m.noClick) {
 		view.MouseMode = tea.MouseModeCellMotion
 	}
 	// Hover text for the LOCAL marks needs motion without a pressed button.
-	if os.Getenv("TERM") != "dumb" && !m.procs && !m.showLog && !m.showNext && statusTUIRepoLayout(m.snapshot, width).showRuntime {
+	if m.mouseCapture && os.Getenv("TERM") != "dumb" && !m.procs && !m.showLog && !m.showNext && statusTUIRepoLayout(m.snapshot, width).showRuntime {
 		view.MouseMode = tea.MouseModeAllMotion
 	}
 	return view
@@ -2294,9 +2361,9 @@ func statusRegisterWatcher(c *wtc.Context, ctx context.Context, cancel context.C
 	}
 }
 
-func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, interval, background, fetchAge time.Duration, ctx context.Context, cancel context.CancelFunc) statusTUIModel {
+func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick, mouse bool, interval, background, fetchAge time.Duration, ctx context.Context, cancel context.CancelFunc) statusTUIModel {
 	c = c.WithStatusContext(ctx)
-	model := statusTUIModel{context: c, uiContext: ctx, uiCancel: cancel, watcherPending: true, all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, fetchAge: fetchAge, interval: interval, background: background, refreshing: true}
+	model := statusTUIModel{context: c, uiContext: ctx, uiCancel: cancel, watcherPending: true, all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, mouseCapture: mouse, fetchAge: fetchAge, interval: interval, background: background, refreshing: true}
 	model.startedAt = time.Now()
 	model.progressStep = "Registering status watcher"
 	if !all && !procs {
@@ -2319,12 +2386,12 @@ func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick b
 	return model
 }
 
-func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, interval, background, fetchAge time.Duration) error {
+func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick, mouse bool, interval, background, fetchAge time.Duration) error {
 	if !term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(os.Stdout.Fd()) {
 		return fmt.Errorf("status TUI requires a terminal")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := runStatusProgram(newStatusTUIModel(c, all, procs, reposOnly, noFetch, noClick, interval, background, fetchAge, ctx, cancel), ctx, cancel)
+	_, err := runStatusProgram(newStatusTUIModel(c, all, procs, reposOnly, noFetch, noClick, mouse, interval, background, fetchAge, ctx, cancel), ctx, cancel)
 	return err
 }
 
@@ -2346,7 +2413,11 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	// re-measures the cached view before skipping the write, so this stays
 	// below the renderer's default sixty.
 	// Input and collector work run independently of this cadence.
-	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(statusFrameRate)).Run()
+	// Alternate scroll is set only after the terminal reported it reset; this
+	// returns it to that state on every return, including Bubble Tea's
+	// recovered panics, SIGINT/SIGTERM and cancellation.
+	defer statusAltScrollRestore()
+	final, err := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithContext(ctx), tea.WithFPS(statusFrameRate)}, statusProgramOptions...)...).Run()
 	interrupted := ctx.Err() != nil
 	if start, ok := final.(statusStartupModel); ok && start.err != nil {
 		return final, start.err
@@ -2360,7 +2431,7 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 			return final, updated.lifecycleErr
 		}
 		if err == nil && updated.devAutoExit && updated.devRestart != nil && updated.devIdle() {
-			return final, restartStatusDev(updated.devRestart.collection, updated.devRestart.binary, updated.devRestart.generation, updated.devPresentation())
+			return final, statusDevHandover(updated)
 		}
 	}
 	if interrupted {
@@ -2368,6 +2439,16 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	}
 	return final, err
 }
+
+// statusDevHandover replaces this process with the rebuilt CLI. The exec
+// skips deferred calls, so an owned alternate-scroll mode is reset first; the
+// new process queries the terminal again.
+func statusDevHandover(m statusTUIModel) error {
+	statusAltScrollRestore()
+	return statusRestartDev(m.devRestart.collection, m.devRestart.binary, m.devRestart.generation, m.devPresentation())
+}
+
+var statusRestartDev = restartStatusDev
 
 // Focus reporting is a bounded positive hint, not an attached-client contract.
 // Unknown/no-event views keep a safety refresh; focus hints do not gate explicit Refresh.

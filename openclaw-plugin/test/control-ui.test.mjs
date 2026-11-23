@@ -148,6 +148,8 @@ const hostRequest = async (method, params) => {
       return { ok: true, result: bitbucket ? { status: "needs_confirmation", requestId: "bb-1", confirmation: { account: bitbucket.user, name: bitbucket.name, requestDigest: "bd1", branch: "openclaw/test", head: "abcdef0123", dest: "main", uncommitted: 0, title: params.payload?.title, description: bitbucketDropDescription ? undefined : params.payload?.description } } : { status: "not_connected" } };
     }
     if (params.actionId === "publish-confirm") return { ok: true, result: bitbucketConfirmResult ?? { status: "published", created: true, url: "https://bitbucket.org/ws/hooks/pull-requests/3" } };
+    if (params.actionId === "pr-writes") return { ok: true, result: { status: "needs_confirmation", requestId: "w-1", confirmation: { account: bitbucket.user, name: bitbucket.name, requestDigest: "wd1", pr: 7, head: "abcdef0123", operations: [{ op: "comment.create", text: "Summary" }, { op: "comment.create", text: "x", inline: { path: "a.go", to: 3 } }, { op: "pr.ready" }] } } };
+    if (params.actionId === "pr-writes-confirm") return { ok: true, result: { status: "done", receipt: { results: [{ status: "done" }, { status: "done" }, { status: "done" }] } } };
   }
   if (method === "wtc.bitbucket.confirm") {
     calls.push({method,...params});
@@ -174,7 +176,7 @@ const hostRequest = async (method, params) => {
   if (method === "plugins.sessionAction" && params.actionId === "svc-logs") return typeof serviceLogsResult === "function" ? serviceLogsResult(params) : serviceLogsResult;
   if (method === "plugins.sessionAction" && params.actionId === "catch-up") return catchUpResult;
   if (method === "plugins.sessionAction" && params.actionId === "next") return typeof nextResult === "function" ? nextResult(params) : nextResult;
-  if (method === "plugins.sessionAction" && params.actionId === "restore-checkout") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
+  if (method === "wtc.checkout.restore") return typeof restoreResult === "function" ? restoreResult(params) : restoreResult;
   if (method === "sessions.delete" && controlledDelete) return controlledDelete;
   if (method === "sessions.delete") return { ok: true, key: params.key, deleted: true, archived: [], ...(preserved[params.key] ? { worktreePreserved: preserved[params.key] } : {}) };
   if (method === "wtc.github.publish") return typeof githubPublishResult === "function" ? githubPublishResult(params) : githubPublishResult;
@@ -2886,14 +2888,17 @@ for (const kind of ["composer", "panel"]) test(`native checkout recovery from ${
     assert.ok(texts(host).some(t=>t.includes("Evicted")));
     const button=()=>[...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore"&&n.title.startsWith("Restore api from"));
     assert.ok(button());
-    let finish;restoreResult=new Promise(resolve=>{finish=resolve});
+    let fail;restoreResult=new Promise((resolve,reject)=>{fail=reject});
     button().click();await settle();
     assert.ok(buttons(host).includes("Restoring…"));
-    assert.equal(calls.at(-1).actionId,"restore-checkout");
-    assert.deepEqual(calls.at(-1).payload,{ownerSessionKey:r.sessionKey,key:"recovery-key"});
-    finish({ok:false,error:"missing scope: operator.admin"});await settle();await settle();
-    assert.ok(readable(host).includes("operator.admin"),"permission failure remains accessible in result details");
-    restoreResult=()=>{collections.set(key,collection([repo("api")]));return {ok:true,result:{message:"Checkout restored from its saved snapshot"}}};
+    const sent=calls.at(-1);
+    assert.equal(sent.method,"wtc.checkout.restore","restore is an authenticated gateway method, not a session action");
+    assert.deepEqual({sessionKey:sent.sessionKey,ownerSessionKey:sent.ownerSessionKey,key:sent.key},{sessionKey:key,ownerSessionKey:r.sessionKey,key:"recovery-key"});
+    fail(Object.assign(new Error("missing scope: operator.admin"),{gatewayCode:"FORBIDDEN",details:{code:"MISSING_SCOPE"}}));await settle();await settle();
+    assert.ok(readable(host).includes("requires gateway admin permission"),"permission denial is named as such");
+    {const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
+    try{assert.ok(readable(log.host).includes("operator.admin"),"permission failure remains accessible in result details");}finally{log.view.dispose();}}
+    restoreResult=()=>{collections.set(key,collection([repo("api")]));return {status:"restored",message:"Checkout restored from its saved snapshot",mutation:"applied"}};
     button().click();await settle();await settle();
     assert.ok(!texts(host).some(t=>t==="Evicted"));
     assert.ok(!button(),"the refreshed row no longer offers recovery");
@@ -2920,13 +2925,13 @@ test("collapsed restore-all stays sequential, records partial failure and cancel
     assert.ok(queued?.disabled,"waiting target is visibly queued and disabled");
     await all.onclick();assert.equal(requests.length,1,"stale second click dispatches nothing");
     assert.ok(readable(host).includes("already running"));
-    finish({ok:false,error:"Snapshot unavailable"});await settle();await settle();
+    finish({status:"failed",kind:"snapshot",message:"The saved snapshot is no longer available; the checkout was not restored",mutation:"none"});await settle();await settle();
     assert.equal(requests.length,2,"second target starts only after first result and refresh");
-    assert.equal(requests[1].payload.ownerSessionKey,"agent:main:owner:web");
-    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    assert.equal(requests[1].ownerSessionKey,"agent:main:owner:web");
+    finish({status:"restored",message:"restored",mutation:"applied"});await settle();await settle();
     assert.ok(!readable(host).includes("Restoring…"));
     const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
-    try{assert.ok(readable(log.host).includes("api: restore failed"));assert.ok(readable(log.host).includes("web: restored"));}finally{log.view.dispose();}
+    try{assert.ok(readable(log.host).includes("api: not restored — The saved snapshot is no longer available"));assert.ok(readable(log.host).includes("web: restored"));}finally{log.view.dispose();}
   }finally{view.dispose();restoreResult=undefined;}
   const other=await mount("composer",collection([missing("api"),missing("web")]),undefined,"agent:main:restore-switch");
   requests.length=0;
@@ -2935,10 +2940,43 @@ test("collapsed restore-all stays sequential, records partial failure and cancel
     [...other.host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore all").click();await settle();
     collections.set("agent:main:replacement",collection([repo("docs")]));
     other.context.props.sessionKey="agent:main:replacement";other.view.update(other.context);await settle();
-    finish({ok:true,result:{message:"restored"}});await settle();await settle();
+    finish({status:"restored",message:"restored",mutation:"applied"});await settle();await settle();
     assert.equal(requests.length,1,"switch cancels the second captured target");
     assert.ok(!readable(other.host).includes("api: restored"),"old result cannot appear in new conversation");
   }finally{other.view.dispose();restoreResult=undefined;}
+});
+
+test("a recorded snapshot the gateway cannot restore is not offered as Restore", async () => {
+  const reason="A recovery snapshot is recorded. This gateway cannot restore checkouts from Collection: this OpenClaw has no plugin Gateway methods.";
+  const key="agent:main:restore-snapshot-only";
+  const {host,view}=await mount("panel",collection([repo("api",{error:"checkout unavailable",recovery:{state:"snapshot-only",reason,removedAt:1000}})]),undefined,key);
+  try{
+    for (const b of [...host.all()].filter(n=>n.tagName==="BUTTON"&&/^Restore/.test(n.textContent))) b.click();
+    await settle();
+    assert.ok(![...host.all()].some(n=>n.tagName==="BUTTON"&&!n.disabled&&/^Restore/.test(n.textContent)),"no enabled Restore promises recovery");
+    assert.ok([...host.all()].some(n=>(n.title??"").includes("cannot restore checkouts from Collection")),"the row says why");
+    assert.ok(texts(host).some(t=>t.includes("Snapshot saved")),"a saved snapshot is not labelled as a missing checkout");
+    assert.ok(!texts(host).some(t=>t==="No checkout"));
+    assert.ok(!calls.some(c=>c.method==="wtc.checkout.restore"&&c.sessionKey===key),"nothing is dispatched");
+  }finally{view.dispose();}
+});
+
+for (const [name,outcome,expect,state] of [
+  ["missing capability",()=>{throw Object.assign(new Error("unknown method: wtc.checkout.restore"),{gatewayCode:"INVALID_REQUEST"});},"cannot restore checkouts from Collection","failed"],
+  ["connection authentication",()=>{throw Object.assign(new Error("unauthorized"),{gatewayCode:"INVALID_REQUEST",details:{code:"AUTH_UNAUTHORIZED"}});},"connection authentication failed","failed"],
+  ["lost reply",()=>{throw new Error("gateway request timed out");},"restore unconfirmed","unknown"],
+  ["ambiguous native result",()=>({status:"failed",kind:"unknown",message:"Restore outcome unknown; inspect the checkout and refresh before retrying",mutation:"unknown"}),"restore unconfirmed","unknown"],
+]) test(`checkout restore reports ${name} distinctly`, async () => {
+  const key=`agent:main:restore-class-${name.replace(/\W+/g,"-")}`;
+  const {host,view}=await mount("panel",collection([repo("api",{error:"checkout unavailable",recovery:{state:"restorable",key:"k"}})]),undefined,key);
+  restoreResult=outcome;
+  try{
+    [...host.all()].find(n=>n.tagName==="BUTTON"&&n.textContent==="Restore").click();await settle();await settle();
+    assert.ok(readable(host).includes(expect),`${name}: ${readable(host).replace(/[^]*\}\s*/,"").slice(-600)}`);
+    const log=await mount("panel",collections.get(key),undefined,key,{focus:"activity"});
+    try{assert.ok(readable(log.host).includes(expect));}finally{log.view.dispose();}
+    assert.equal(calls.filter(c=>c.method==="wtc.checkout.restore"&&c.sessionKey===key).length,1,"never retried automatically");
+  }finally{view.dispose();restoreResult=undefined;}
 });
 
 test("evicted rows do not hide a prepared publication in the header", async () => {
@@ -3996,4 +4034,36 @@ test("composer restores diagnostic header controls after a suggestion in the sam
     assert.ok(diagnosticControl(host));
     assert.ok(titled(host, "Open Activity in the taba Collection panel"));
   } finally { controlledCollection = undefined; view.dispose(); }
+});
+
+test("a Bitbucket checkout's waiting pull request writes are shown and confirmed through the plugin (#471)", async () => {
+  const before = bitbucket;
+  bitbucket = { user: "ada@example.com", name: "Ada" };
+  const { host, view } = await mount("panel", collection([repo("hooks", { forge: "bitbucket", bitbucketWrites: "pending" }), repo("site", { forge: "bitbucket" })]));
+  try {
+    const options = [...host.all()].filter((n) => n.tagName === "BUTTON" && n.textContent === "Confirm Bitbucket writes…");
+    assert.equal(options.length, 1, "only the checkout with waiting writes offers them");
+    calls.length = 0;
+    await options[0].onclick({ preventDefault() {}, stopPropagation() {} });
+    await settle();
+    assert.deepEqual(calls.map((c) => c.actionId), ["pr-writes"]);
+    assert.match(readable(host), /hooks: confirm to write to pull request #7 \(abcdef0\) as Ada \(ada@example.com\): 2× comment, mark ready for review\./);
+    const confirm = [...host.all()].find((n) => n.tagName === "BUTTON" && n.textContent === "Confirm writes");
+    assert.ok(confirm, "the confirmation offers to confirm");
+    calls.length = 0;
+    await confirm.onclick({ preventDefault() {}, stopPropagation() {} });
+    await settle();
+    assert.deepEqual(calls.map((c) => [c.actionId, c.payload?.requestId, c.payload?.requestDigest]), [["pr-writes-confirm", "w-1", "wd1"]]);
+    assert.match(readable(host), /hooks: 3 of 3 writes made\. Ask the conversation to run its command again to record them\./);
+  } finally { view.dispose(); bitbucket = before; }
+});
+
+test("a refused Bitbucket pull request read is shown on the row, not as no pull request (#471)", async () => {
+  const refusal = { cause: "not-visible", status: 404, access: true, message: "Bitbucket read refused (404): the host's API token cannot see this repository; grant it read access" };
+  const { host, view } = await mount("panel", collection([repo("hooks", { forge: "bitbucket", pullRequestRefusal: refusal }), repo("site", { forge: "bitbucket", pullRequestRefusal: { cause: "network", access: false, message: "Bitbucket could not be reached" } })]));
+  try {
+    const nodes = [...host.all()];
+    assert.ok(nodes.some((n) => n.textContent === "⚠ PR read refused" && n.title === refusal.message), "the access refusal is visible with its cause");
+    assert.ok(nodes.some((n) => n.textContent === "PR read failed" && n.title === "Bitbucket could not be reached"), "a transient failure is shown as such");
+  } finally { view.dispose(); }
 });

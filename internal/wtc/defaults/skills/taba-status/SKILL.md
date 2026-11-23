@@ -58,8 +58,8 @@ often when unfocused. Captured output prints one pass and exits, so use a
 one-shot command to answer a question rather than leaving a watch loop open.
 Colored repository names, branches, PR numbers, and build references are
 terminal hyperlinks without a permanent underline. Use the terminal's
-modifier-click gesture when mouse reporting is active;
-ordinary clicks open those targets unless `--no-click` is set. `NO_COLOR`
+modifier-click gesture. Ordinary drag selects text by default; with
+`--mouse`, ordinary clicks open those targets unless `--no-click` is set. `NO_COLOR`
 suppresses styling while retaining the links.
 `WTC_STATUS_WATCH`, `WTC_STATUS_WATCH_BG`, and `WTC_STATUS_NO_CLICK` can be set
 in `$WTC_CONFIG_ROOT/wtc.env`.
@@ -94,7 +94,7 @@ in `$WTC_CONFIG_ROOT/wtc.env`.
   Pipelines by default, or from a harness `hooks/wtc/status.build.sh`. A
   column appears only when some repository has a build in that tier. `○`
   means the row's HEAD is not in that build. The cells are terminal links,
-  and also ordinary mouse targets unless `--no-click` is set.
+  and, with `--mouse`, also ordinary mouse targets unless `--no-click` is set.
 - A merged PR's state shows the build tier it is still waiting on: `→ test`
   (no build with the merge yet), `● prod` (running), `✗ test` (failed), `?`
   (cannot be attributed), then `✓ built`. Until it reads `✓ built`, the merge
