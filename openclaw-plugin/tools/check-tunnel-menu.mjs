@@ -77,7 +77,9 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
  await trigger.click();await menu.waitFor();await menu.evaluate(n=>window.openMenu=n);await page.evaluate(v=>window[v==='card'?'cardView':'panelView'].update(window.demoCtx),view);assert(await menu.evaluate(n=>n===window.openMenu),'unchanged context preserves the open menu');await page.evaluate(v=>window[v==='card'?'cardView':'panelView'].update({...window.demoCtx,props:{...window.demoCtx.props,sessionKey:'demo:other'}}),view);await page.locator('.wtc-tunnel-menu:popover-open').waitFor({state:'hidden'});await page.evaluate(v=>window[v==='card'?'cardView':'panelView'].update(window.demoCtx),view);await trigger.waitFor();
  await trigger.click();await menu.waitFor();await page.setViewportSize({width:width+1,height});await page.locator('.wtc-tunnel-menu:popover-open').waitFor({state:'hidden'});
  await trigger.click();await menu.waitFor();await menu.getByRole('menuitem',{name:topology!=='empty'?/^Dev Tunnel/:/^Cloudflare/}).focus();await page.keyboard.press('Enter');
- await page.waitForTimeout(100);const calls=await page.evaluate(()=>window.calls);assert.deepEqual(calls,[{op:'tunnel',group:'web/preview',provider:topology!=='empty'?'devtunnel':'cloudflare',public:topology==='empty',add:true}]);
+ await page.waitForTimeout(100);const calls=await page.evaluate(()=>window.calls);
+ // Adding only prepares the chosen provider; public exposure is approved later, at start or register.
+ assert.deepEqual(calls,[{op:'tunnel',group:'web/preview',provider:topology!=='empty'?'devtunnel':'cloudflare',add:true}],'add names the chosen provider without approving exposure');
  if(topology==='loose') {
   const repair=root.getByTitle('Ask the conversation to open it with wtc svc tunnel instead');
   const repairBox=await repair.boundingBox(),closeBox=await page.getByRole('button',{name:'Close the cloudflare tunnel',exact:true}).boundingBox();
@@ -85,7 +87,7 @@ for(const topology of ['empty','existing','loose'])for(const theme of ['dark','l
   assert(repairBox.x+repairBox.width<=closeBox.x||closeBox.x+closeBox.width<=repairBox.x||repairBox.y+repairBox.height<=closeBox.y||closeBox.y+closeBox.height<=repairBox.y,'Consolidate must not cover close');
  }
  assert.equal(await page.locator('.wtc-tunnel-menu:popover-open').count(),0);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
- results.push({topology,theme,width,view,menu:box,padding:gap,colors:colorsActual,checks:{theme:true,viewport:true,stableLayout:true,paddedTrigger:true,toggle:true,arrowKeys:true,escapeFocus:true,tabDismiss:true,outsideDismiss:true,unchangedUpdateStable:true,sessionSwitchDismiss:true,resizeDismiss:true,explicitProvider:true,noOverflow:true,noErrors:true,accessGlyphs:topology!=='empty'?true:null,neutralHealthyLinks:topology!=='empty'?true:null,accessAlignment:topology!=='empty'?true:null,looseControl:topology==='loose'?true:null},errors});await page.close();
+ results.push({topology,theme,width,view,menu:box,padding:gap,colors:colorsActual,checks:{theme:true,viewport:true,stableLayout:true,paddedTrigger:true,toggle:true,arrowKeys:true,escapeFocus:true,tabDismiss:true,outsideDismiss:true,unchangedUpdateStable:true,sessionSwitchDismiss:true,resizeDismiss:true,explicitProvider:true,addWithoutExposure:true,noOverflow:true,noErrors:true,accessGlyphs:topology!=='empty'?true:null,neutralHealthyLinks:topology!=='empty'?true:null,accessAlignment:topology!=='empty'?true:null,looseControl:topology==='loose'?true:null},errors});await page.close();
 }
 await writeFile(new URL('browser-results.json',out),JSON.stringify(results,null,2));console.log(`${results.length} browser menu cases passed.`);
 }finally{await browser.close()}
