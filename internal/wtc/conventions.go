@@ -211,7 +211,7 @@ var (
 
 // ConventionCommands are the subcommands and flags `taba doctor` looks for
 // after `wtc`.
-var ConventionCommands = []string{"add-repo", "agent-env", "browse", "catch-up", "checkouts", "commands", "config", "conventions", "customize", "dev", "docs", "doctor", "down", "eject", "env", "harness", "host", "init", "logs", "mcp", "new", "open", "openclaw", "pr", "projects", "publish", "registry", "release-notes", "repo", "restart", "retire", "review", "secrets", "skills", "status", "svc", "up", "upgrade", "version", "--version", "--help", "help"}
+var ConventionCommands = []string{"add-repo", "agent-env", "browse", "catch-up", "checkouts", "commands", "config", "conventions", "customize", "dev", "docs", "doctor", "down", "eject", "env", "harness", "host", "init", "logs", "mcp", "new", "open", "openclaw", "pr", "projects", "prompts", "publish", "registry", "release-notes", "repo", "restart", "retire", "review", "secrets", "skills", "status", "svc", "up", "upgrade", "version", "--version", "--help", "help"}
 
 // The reference scan reads the harness's top-level *.md, *.sh, taba.toml,
 // wtc.toml and mise.toml, and every file under referenceRoots. It skips
