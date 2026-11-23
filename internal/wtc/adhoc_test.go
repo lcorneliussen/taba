@@ -460,7 +460,7 @@ func TestAdHocNewCreatesSiblingWithSameRegistrations(t *testing.T) {
 	if got := fixtureGit(t, "-C", worktree, "rev-parse", "HEAD"); got != want {
 		t.Fatalf("sibling worktree at %s, want %s", got, want)
 	}
-	for path, want := range map[string]string{"HANDOFF.md": "git switch -c proj-9-next", ".env.collection": "WIDGET_PORT="} {
+	for path, want := range map[string]string{"HANDOFF.md": "git switch -c proj-9-next\n\n(that is the expected name", ".env.collection": "WIDGET_PORT="} {
 		data, err := os.ReadFile(filepath.Join(result.Collection, path))
 		if err != nil || !strings.Contains(string(data), want) {
 			t.Fatalf("%s lacks %q: %v\n%s", path, want, err, data)
