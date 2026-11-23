@@ -120,8 +120,8 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" || !validCheckHeadPrefix(head) {
 		return evidence, nil
 	}
-	user, pass := bitbucketCredentials()
-	if user == "" || pass == "" {
+	user, pass, credentialErr := bitbucketRESTCredentials(ctx, slug)
+	if credentialErr != nil {
 		if intent == StatusRefreshForeground {
 			if raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
 				var saved headCheckEvidence

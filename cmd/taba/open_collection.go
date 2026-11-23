@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,8 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/prompts"
+	"taba.sh/taba/internal/retry"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -137,7 +139,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		openWaitWorkspaceIdle(opt.Session, item.Workspace)
 	} else {
 		for _, pane := range added {
-			openWaitIdle(opt.Session, pane, 10*time.Second)
+			openWaitIdle(opt.Session, pane)
 		}
 	}
 	if len(added) > 0 {
@@ -363,7 +365,7 @@ func openStartPanes(item *openItem, target *wtc.Context, panes []openPaneInfo, o
 				}
 				item.Actions = append(item.Actions, detail)
 			}
-			if !openWaitIdle(opt.Session, pane.ID, 0) {
+			if !openPaneIdle(opt.Session, pane.ID) {
 				item.Actions = append(item.Actions, label+" busy — left alone")
 				continue
 			}
@@ -417,27 +419,41 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 		command = append(command, "--")
 		command = append(command, strings.Fields(args)...)
 	}
-	for attempt := 0; ; attempt++ {
+	start := func(context.Context) (retry.Outcome, error) {
 		_, err := openHerdr(opt.Session, command...)
-		if err == nil {
-			break
-		}
 		var failure *openHerdrError
-		if !errors.As(err, &failure) {
-			return err
+		switch {
+		case err == nil:
+			return retry.Applied, nil
+		case !errors.As(err, &failure):
+			return retry.Unknown, err
+		case failure.Code == "agent_not_ready":
+			err = openReconcileStartedAgent(target, opt.Session, command[2], kind, pane, err)
+			var started *openAgentStartedError
+			if errors.As(err, &started) {
+				return retry.Applied, err
+			}
+			return retry.Unknown, err
+		case failure.Code == "agent_pane_busy" && openPaneIdle(opt.Session, pane):
+			return retry.Busy, err // A busy shell can settle during cold startup.
+		case failure.Code == "agent_pane_busy", failure.Code == "agent_name_taken", failure.Code == "agent_start_failed":
+			return retry.Refused, err
 		}
-		if failure.Code == "agent_not_ready" {
-			return openReconcileStartedAgent(target, opt.Session, command[2], kind, pane, err)
-		}
-		// A busy shell can settle during cold startup. No other failure is
-		// proof that retrying will not launch a second process.
-		if failure.Code != "agent_pane_busy" || attempt >= 14 {
-			return err
-		}
-		if !openWaitIdle(opt.Session, pane, 0) {
-			return err
-		}
-		time.Sleep(time.Second)
+		return retry.Unknown, err
+	}
+	marker := filepath.Join(target.Collection, ".wtc-agent-start.pending")
+	occupied := func() (bool, error) {
+		argv, err := openPaneCommand(opt.Session, pane)
+		return err == nil && !openShellCommand(argv), err
+	}
+	err := retry.Intent{Marker: marker, Done: occupied}.Do(context.Background(), retry.Policy{Every: time.Second, Attempts: 15}, start)
+	switch {
+	case errors.Is(err, retry.ErrUnresolved):
+		return fmt.Errorf("an agent start in this collection is in progress or has no confirmed outcome; when no taba open is running, inspect pane %s, then remove %s to allow another start", pane, marker)
+	case errors.Is(err, retry.ErrDone):
+		return fmt.Errorf("another open started a process in pane %s meanwhile; no agent start sent", pane)
+	case err != nil:
+		return err
 	}
 	if opt.NoFirstPrompt {
 		return nil
@@ -445,16 +461,23 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	if _, err := os.Stat(filepath.Join(target.Collection, "HANDOFF.md")); err != nil {
 		return nil
 	}
-	prompt := firstAgentPrompt(target.Collection, kind)
-	if _, err := openHerdr(opt.Session, "agent", "prompt", pane, prompt, "--wait", "--until", "working", "--timeout", "20000"); err == nil {
+	prompt, err := firstAgentPrompt(target.Prompts(), target.Collection, kind)
+	if err != nil {
+		return fmt.Errorf("agent started, but first prompt was not rendered: %w", err)
+	}
+	return openPromptAgent(opt.Session, pane, prompt)
+}
+
+func openPromptAgent(session, pane string, prompt prompts.Text) error {
+	if _, err := openHerdr(session, "agent", "prompt", pane, prompt.String(), "--wait", "--until", "working", "--timeout", "20000"); err == nil {
 		return nil
 	} else if !strings.Contains(err.Error(), "agent_prompt_stalled") {
 		return fmt.Errorf("agent started, but first prompt was not taken: %w", err)
 	}
-	if _, err := openHerdr(opt.Session, "agent", "send-keys", pane, "enter"); err != nil {
+	if _, err := openHerdr(session, "agent", "send-keys", pane, "enter"); err != nil {
 		return fmt.Errorf("first prompt was not taken: %w", err)
 	}
-	if _, err := openHerdr(opt.Session, "agent", "wait", pane, "--until", "working", "--timeout", "10000"); err != nil {
+	if _, err := openHerdr(session, "agent", "wait", pane, "--until", "working", "--timeout", "10000"); err != nil {
 		return fmt.Errorf("first prompt was not taken: %w", err)
 	}
 	return nil
@@ -544,14 +567,17 @@ func renderedSkill(collection, name string) string {
 
 // firstAgentPrompt starts the agent of a new collection on its launch note,
 // and says so up front when the collection only reviews someone else's PR.
-func firstAgentPrompt(collection, kind string) string {
-	skill := startSkill(collection)
-	prompt := "Run the " + skill + " skill (.agents/skills/" + skill + "/SKILL.md): read HANDOFF.md at the collection root, then start."
+func firstAgentPrompt(ctx prompts.Context, collection, kind string) (prompts.Text, error) {
+	skill := map[string]string{"skill": startSkill(collection)}
+	prompt, err := prompts.Render(ctx, "launch.first-agent", skill)
 	if kind == "claude" {
-		prompt = "/" + skill
+		prompt, err = prompts.Render(ctx, "launch.first-agent-slash", skill)
+	}
+	if err != nil {
+		return prompt, err
 	}
 	if _, ok := wtc.ReadReviewMode(collection); ok {
-		prompt += branding.Text(" This collection is review-only: produce and post the review, nothing else. No commits, pushes, thread resolution or `{{command}} review ready`.")
+		return prompts.Render(ctx, "launch.first-agent-review", map[string]string{"start": prompt.String()})
 	}
-	return prompt
+	return prompt, nil
 }

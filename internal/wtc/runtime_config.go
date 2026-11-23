@@ -144,6 +144,13 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 		return nil, nil, err
 	}
 	m := &runtimeManifest{Schema: 1, Root: c.runtimeRoot(), Binary: binary, Tasks: []runtimeTask{}, envResolved: resolveEnv}
+	// The health path only shapes readiness taba makes from a resolved port.
+	healthPath := ""
+	if resolveEnv {
+		if healthPath, err = c.runtimeHealthPath(); err != nil {
+			return nil, nil, err
+		}
+	}
 	native := map[string]any{}
 	// The resolved port of each service, by group, for its tasks' env.
 	ports := map[string][2]string{}
@@ -158,28 +165,23 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 		if identity != nil {
 			canonicalRepo = identity.name
 		}
-		// The repo's committed tasks, then this collection's own additions.
+		// The repo's native dekit.yaml tree and committed tasks, then this
+		// collection's own additions; a path in two of them is an error.
+		sources, err := c.runtimeRepoSources(repo.path, dir, false)
+		if err != nil {
+			return nil, nil, err
+		}
 		tasks := map[string]map[string]any{}
 		source := map[string]string{}
-		for _, path := range []string{runtimeSharedFragment(repo.path), c.runtimeLocalFragment(dir)} {
-			if err := runtimeRegular(path); os.IsNotExist(err) {
-				continue
-			} else if err != nil {
-				return nil, nil, err
-			}
-			fragment, err := runtimeReadFragment(path)
-			if err != nil {
-				return nil, nil, err
-			}
-			for name, task := range fragment.Tasks {
-				if _, dup := tasks[name]; dup {
-					return nil, nil, fmt.Errorf("%s/%s is defined in both %s and %s", dir, name, source[name], path)
-				}
-				tasks[name], source[name] = task, path
-			}
-			for name, resource := range fragment.Resources {
+		declaration := map[string]RuntimeDeclaration{}
+		nativeTask := map[string]bool{}
+		for name, task := range sources.tasks {
+			tasks[name], source[name], declaration[name], nativeTask[name] = task.spec, task.source, task.decl, task.native
+		}
+		for _, file := range sources.resources {
+			for name, resource := range file.fragment.Resources {
 				if !runtimeResourceName.MatchString(name) || resource.Mark != "" && !regexp.MustCompile(`^[A-Za-z0-9]$`).MatchString(resource.Mark) {
-					return nil, nil, fmt.Errorf("%s: invalid resource %q", path, name)
+					return nil, nil, fmt.Errorf("%s: invalid resource %q", file.path, name)
 				}
 				m.Declared = append(m.Declared, runtimeDeclaredResource{Dir: dir, Repo: canonicalRepo, Name: name, Type: resource.Type, Mark: resource.Mark, Label: resource.Label})
 			}
@@ -195,6 +197,10 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 			}
 			item.Label, _ = task["label"].(string)
 			item.Source = source[local]
+			if decl, ok := declaration[local]; ok {
+				item.Declaration = &decl
+			}
+			item.nativeDeclaration = nativeTask[local]
 			if metadata, ok := task["x-wtc"].(map[string]any); ok {
 				for key := range metadata {
 					if key != "url" && key != "url_env" && key != "url_log" && key != "public" && key != "mark" && key != "tunnel" && key != "port_env" {
@@ -245,17 +251,30 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 					item.PortEnv = name
 					if resolveEnv {
 						if port, err := runtimeEnvValue(c.Collection, name); err == nil && regexp.MustCompile(`^[0-9]{1,5}$`).MatchString(port) {
-							if item.URL == "" {
+							derived := item.URL == ""
+							if derived {
 								item.URL = "http://127.0.0.1:" + port
 							}
-							// Ready once the port accepts connections. The port is
+							// Ready once the port accepts connections, or once the
+							// configured health path answers there. The port is
 							// resolved here: a runner started before the variable
-							// existed would not see it.
+							// existed would not see it. Explicit readiness is kept.
+							probe := map[string]any{"tcp": "127.0.0.1:" + port}
+							if healthPath != "" {
+								probe = map[string]any{"http": "http://127.0.0.1:" + port + healthPath}
+							}
+							made := true
 							if ready, set := task["ready"].(map[string]any); !set {
-								task["ready"] = map[string]any{"tcp": "127.0.0.1:" + port, "timeout": "60s"}
+								probe["timeout"] = "60s"
+								task["ready"] = probe
 							} else if len(ready) == 1 && ready["timeout"] != nil {
 								// wtc svc add --ready-timeout without --ready-log.
-								ready["tcp"] = "127.0.0.1:" + port
+								maps.Copy(ready, probe)
+							} else {
+								made = false
+							}
+							if made && derived && healthPath != "" {
+								item.HealthURL = probe["http"].(string)
 							}
 							ports[dir+"/"+strings.Split(local, "/")[0]] = [2]string{name, port}
 						}
@@ -375,7 +394,7 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 		}
 	}
 	if len(m.Tasks) == 0 {
-		return nil, nil, fmt.Errorf("no opted-in repositories (.harness/dekit.tasks.yaml)")
+		return nil, nil, fmt.Errorf("no opted-in repositories (dekit.yaml or .harness/dekit.tasks.yaml)")
 	}
 	for _, task := range m.Tasks {
 		for _, dep := range task.Deps {
@@ -838,11 +857,15 @@ func (c *Context) runtimeLocalFragment(dir string) string {
 }
 
 func runtimeReadFragment(path string) (runtimeFragment, error) {
-	var fragment runtimeFragment
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fragment, err
+		return runtimeFragment{}, err
 	}
+	return runtimeDecodeFragment(path, data)
+}
+
+func runtimeDecodeFragment(path string, data []byte) (runtimeFragment, error) {
+	var fragment runtimeFragment
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&fragment); err != nil && err != io.EOF {

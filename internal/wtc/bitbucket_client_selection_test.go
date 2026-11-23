@@ -18,7 +18,7 @@ func clearBitbucketClientEnv(t *testing.T) {
 
 // TestBitbucketClientMachineDefaults follows the machine defaults precedence
 // of the TWG site default: the environment wins even when empty, then
-// taba.env (or legacy wtc.env) in the control root, then the bb default.
+// taba.env (or legacy wtc.env) in the control root, then the twg default (#471).
 func TestBitbucketClientMachineDefaults(t *testing.T) {
 	for _, tc := range []struct {
 		name, file, body, env string
@@ -27,14 +27,14 @@ func TestBitbucketClientMachineDefaults(t *testing.T) {
 		source                string
 		err                   error
 	}{
-		{name: "no file", want: bitbucketClientBB, source: "default"},
+		{name: "no file", want: bitbucketClientTWG, source: "default"},
 		{name: "taba.env twg", file: "taba.env", body: "TABA_BITBUCKET_TRANSPORT=twg\n", want: bitbucketClientTWG, source: "taba.env"},
 		{name: "taba.env quoted export", file: "taba.env", body: "export TABA_BITBUCKET_TRANSPORT='twg'\n", want: bitbucketClientTWG, source: "taba.env"},
 		{name: "legacy wtc.env", file: "wtc.env", body: "WTC_BITBUCKET_TRANSPORT=twg\n", want: bitbucketClientTWG, source: "wtc.env"},
 		{name: "file bb", file: "taba.env", body: "TABA_BITBUCKET_TRANSPORT=bb\n", want: bitbucketClientBB, source: "taba.env"},
-		{name: "file without key", file: "taba.env", body: "TABA_TWG_SITE=example\n", want: bitbucketClientBB, source: "default"},
+		{name: "file without key", file: "taba.env", body: "TABA_TWG_SITE=example\n", want: bitbucketClientTWG, source: "default"},
 		{name: "environment wins", file: "taba.env", body: "TABA_BITBUCKET_TRANSPORT=twg\n", env: "bb", envSet: true, want: bitbucketClientBB, source: "environment"},
-		{name: "explicit empty environment wins", file: "taba.env", body: "TABA_BITBUCKET_TRANSPORT=twg\n", env: "", envSet: true, want: bitbucketClientBB, source: "environment"},
+		{name: "explicit empty environment wins", file: "taba.env", body: "TABA_BITBUCKET_TRANSPORT=bb\n", env: "", envSet: true, want: bitbucketClientTWG, source: "environment"},
 		{name: "invalid in file", file: "taba.env", body: "TABA_BITBUCKET_TRANSPORT=secret-value\n", source: "taba.env", err: errBitbucketClientSelection},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -87,8 +87,9 @@ func TestBitbucketClientReport(t *testing.T) {
 		ok                 bool
 		want               string
 	}{
-		{name: "default", ok: true, want: "bb (default)"},
-		{name: "bb", env: "bb", ok: true, want: "bb from environment"},
+		{name: "default", version: "1.4.4", install: true, ok: true, want: "twg (default); version supported"},
+		{name: "default without twg", want: "twg (default), but twg is not installed"},
+		{name: "bb", env: "bb", ok: true, want: "bb from environment (deprecated"},
 		{name: "twg supported", env: "twg", version: "1.4.4", install: true, ok: true, want: "twg from environment; version supported"},
 		{name: "twg old", env: "twg", version: "1.4.3", install: true, want: "version is unsupported"},
 		{name: "twg missing", env: "twg", want: "twg is not installed"},

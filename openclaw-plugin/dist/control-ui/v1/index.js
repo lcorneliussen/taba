@@ -164,6 +164,48 @@ async function publishBitbucket(host, agentId, r, say, dest, mayDispatch = () =>
   say(`${name}: confirm to push ${c.branch} (${String(c.head).slice(0, 7)}) to ${c.dest} as ${bitbucketAccount(c)}${left}.`);
   return { forge: BITBUCKET, requestId: out.requestId, confirmation: c };
 }
+// Pull request writes a tool asked for in this checkout (review comments,
+// resolve, ready): the Bitbucket plugin shows exactly what it would write and
+// with whose login, and writes only once the person confirms (#471).
+const writeLine = (op) => op.op === "comment.create" ? (op.inline ? `comment on ${op.inline.path}:${op.inline.to ?? op.inline.from}` : op.parent ? `reply to comment ${op.parent}` : "comment")
+  : op.op === "comment.update" ? `update comment ${op.comment}` : op.op === "comment.resolve" ? `resolve comment ${op.comment}`
+  : op.op === "pr.ready" ? "mark ready for review" : op.op === "pr.update" ? "update title or description" : op.op;
+export function describeBitbucketWrites(c) {
+  const counts = new Map();
+  for (const op of c.operations ?? []) counts.set(writeLine(op).replace(/ on .*| \d+$/, ""), (counts.get(writeLine(op).replace(/ on .*| \d+$/, "")) ?? 0) + 1);
+  const what = [...counts].map(([line, n]) => n > 1 ? `${n}× ${line}` : line).join(", ");
+  return `confirm to write to pull request #${c.pr} (${String(c.head).slice(0, 7)}) as ${bitbucketAccount(c)}: ${what}.`;
+}
+async function bitbucketWrites(host, agentId, r, say, refresh) {
+  const name = r.repo ?? r.project;
+  say(`${name}: reading the pull request writes that wait…`);
+  let out;
+  try {
+    out = await bitbucketAction(host, agentId, r, "pr-writes", {});
+  } catch (err) {
+    if (/unknown plugin session action|no Bitbucket publish/.test(String(err?.message ?? err))) throw new Error("this gateway's Bitbucket plugin cannot carry out pull request writes yet: it needs a version with pr-writes");
+    throw err;
+  }
+  if (out?.status === "not_connected") { say(`${name}: ${CONNECT.bitbucket}.`); return; }
+  const c = out?.confirmation;
+  if (out?.status !== "needs_confirmation" || !c) { say(`${name}: ${out?.status ?? "no answer"}`, true); return; }
+  say(`${name}: ${describeBitbucketWrites(c)}`, false, {
+    label: "Confirm writes",
+    title: (c.operations ?? []).map(writeLine).join("\n"),
+    run: async () => {
+      say(`${name}: writing to pull request #${c.pr}…`);
+      try {
+        const done = await bitbucketAction(host, agentId, r, "pr-writes-confirm", { requestId: out.requestId, requestDigest: c.requestDigest });
+        const results = done?.receipt?.results ?? [];
+        const ok = results.filter((x) => x.status === "done").length;
+        const unknown = results.filter((x) => x.status === "unknown").length;
+        say(`${name}: ${ok} of ${results.length} writes made${unknown ? `; ${unknown} with an unknown outcome` : ""}${done?.status === "stopped" ? "; stopped at the first refusal" : ""}. Ask the conversation to run its command again to record them.`, done?.status !== "done");
+      } catch (err) {
+        say(`${name}: ${String(err?.message ?? err)}`, true);
+      } finally { await refresh?.(); }
+    },
+  });
+}
 async function confirmBitbucket(host, agentId, r, pending, say, review, mayDispatch = () => true) {
   if (!mayDispatch()) return { cancelled: true };
   const name = r.repo ?? r.project;
@@ -1182,6 +1224,14 @@ function collectionTables(v) {
   };
   const recoveryQueueBusy = () => recoveryQueues.has(v.collectionKey?.() ?? v.key());
   const recoveryBusy = r => [...(activityStore.get(v.collectionKey?.() ?? v.key())?.values() ?? [])].some(item => item.action === "restore" && item.repoSessionKey === r.sessionKey && item.inFlight);
+  // Only a request refused before it reached the restore method is known to have changed nothing.
+  const restoreRequestFailure = err => {
+    const t = `${err?.gatewayCode ?? err?.code ?? ""} ${err?.details?.code ?? ""} ${err?.message ?? err}`;
+    if (/unknown method|method not found|METHOD_NOT_FOUND/i.test(t)) return { message: "this gateway cannot restore checkouts from Collection; update OpenClaw and the taba plugin together, or use OpenClaw's Worktrees settings" };
+    if (/MISSING_SCOPE|missing scope|FORBIDDEN/i.test(t)) return { message: "permission denied: restoring a checkout requires gateway admin permission" };
+    if (/unauthori[sz]ed|AUTH_|not connected|ECONNREFUSED/i.test(t)) return { message: "gateway connection authentication failed; reconnect and refresh" };
+    return { unconfirmed: true, message: "the gateway did not answer; refresh to see whether the checkout was restored before retrying" };
+  };
   async function restoreCheckouts(repos) {
     const conversation = v.key(), logKey = v.collectionKey?.() ?? conversation;
     if (repos.some(r => requestUnresolved(r))) { v.say("A repository action is unresolved; inspect its result before restoring the checkout."); return; }
@@ -1201,12 +1251,20 @@ function collectionTables(v) {
       recordActivity(logKey, id, { repo: name, repoSessionKey: r.sessionKey, action: "restore", inFlight: true, state: "running", status: `Restoring ${name}…` });
       say(`Restoring ${name}…`); v.rerender();
       try {
-        const out = await call(v.host, "restore-checkout", conversation, v.agent(), { ownerSessionKey: r.sessionKey, key: r.recovery.key });
-        const status = `${name}: ${out.message ?? "checkout restored"}`;
-        recordActivity(logKey, id, { state: "completed", status }); say(status);
+        // The gateway checks this person's admin permission; nothing runs under another login (#494).
+        const out = await v.host.request("wtc.checkout.restore", { sessionKey: conversation, agentId: v.agent(), ownerSessionKey: r.sessionKey, key: r.recovery.key });
+        if (out?.status === "restored") {
+          const status = `${name}: ${out.message ?? "checkout restored"}`;
+          recordActivity(logKey, id, { state: "completed", status, ...(out.detail ? { detail: `${status}. Details: ${out.detail}` } : {}) }); say(status);
+        } else {
+          const unconfirmed = out?.mutation === "unknown";
+          const status = `${name}: ${unconfirmed ? "restore unconfirmed" : "not restored"} — ${out?.message ?? "native restore did not confirm a result"}`;
+          recordActivity(logKey, id, { state: unconfirmed ? "unknown" : "failed", status, detail: [status, out?.kind && `kind: ${out.kind}`, `changes: ${out?.mutation ?? "unknown"}`, out?.detail && `details: ${out.detail}`].filter(Boolean).join(". ") }); say(status, true);
+        }
       } catch (err) {
-        const status = `${name}: restore failed — ${String(err?.message ?? err)}`;
-        recordActivity(logKey, id, { state: "failed", status }); say(status, true);
+        const failure = restoreRequestFailure(err);
+        const status = `${name}: ${failure.unconfirmed ? "restore unconfirmed" : "not restored"} — ${failure.message}`;
+        recordActivity(logKey, id, { state: failure.unconfirmed ? "unknown" : "failed", status, detail: `${status}. Details: ${String(err?.message ?? err).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(-600)}` }); say(status, true);
       } finally {
         recordActivity(logKey, id, { inFlight: false });
         queue.targets.delete(r.sessionKey);
@@ -1571,6 +1629,12 @@ function collectionTables(v) {
     return css(el("div", { className: "wtc-next-step" }, menu, ...[...extras].reverse().map(o => {const button=optionButton(o);button.className+=" wtc-inline-action";return button;}), main), "display:flex;align-items:baseline;gap:4px;min-width:0;max-width:100%;white-space:nowrap");
   };
   function nextCell(r) {
+    // Pull request writes a tool asked for wait on the person: they come first.
+    if (!r.error && r.forge === BITBUCKET && r.bitbucketWrites === "pending") {
+      return actionSlot(r, nextButton("Confirm Bitbucket writes…", "Review comments, resolves or ready that a tool asked for; see exactly what would be written before confirming",
+        () => bitbucketWrites(v.host, v.agent(), r, (text, failed, action) => v.say(text, failed, action), () => v.refresh()).catch((err) => v.say(`${nameOf(r)}: ${String(err?.message ?? err)}`, true)),
+        reserved(r) || batchIsRunning()));
+    }
     if (r.error === "checkout unavailable" && r.recovery?.state === "restorable") return actionSlot(r, recoveryButton(recoveryBusy(r) ? "Restoring…" : recoveryQueued(r) ? "Queued" : "Restore", `Restore ${nameOf(r)} from its saved snapshot; requires gateway admin permission`, () => restoreCheckouts([r]), recoveryQueueBusy()));
     if (!actionable(r)) {
       // Keep the completed recovery row's geometry; its result lives in the Action log.
@@ -2358,8 +2422,8 @@ function collectionTables(v) {
         () => withRepoRequests([r],"resolve",({send}) => send(`${nameOf(r)}: pull request #${pr.number} conflicts with ${baseOf(r)}.`)))
       : null;
     const review = open ? { approved: toned("✓", TONE.success, "approved"), changes_requested: toned("✗", TONE.failure, "changes requested"), review_required: muted("○", "review required") }[pr.review] ?? null : null;
-    const errorLabel = r.error === "checkout unavailable" ? r.recovery?.state === "restorable" ? "Evicted" : r.recovery?.state === "unavailable" ? "Snapshot unavailable" : "No checkout" : r.error === "status unavailable" ? "No status" : r.error;
-    const branch = r.error ? toned(errorLabel, r.recovery?.state === "restorable" ? TONE.pending : TONE.failure, r.recovery?.state === "restorable" ? "OpenClaw evicted this checkout; a recovery snapshot is recorded. Restore to resume." : r.recovery?.reason ?? r.error)
+    const errorLabel = r.error === "checkout unavailable" ? r.recovery?.state === "restorable" ? "Evicted" : r.recovery?.state === "unavailable" ? "Snapshot unavailable" : r.recovery?.state === "snapshot-only" ? "Snapshot saved" : "No checkout" : r.error === "status unavailable" ? "No status" : r.error;
+    const branch = r.error ? toned(errorLabel, r.recovery?.state === "restorable" ? TONE.pending : TONE.failure, r.recovery?.state === "restorable" ? "OpenClaw evicted this checkout; a recovery snapshot is recorded. Restore (gateway admin) to resume; the gateway checks the snapshot again." : r.recovery?.reason ?? r.error)
         : untouched(r)
           ? css(el("code", { textContent: `at ${baseOf(r)}`, title: `Checked out on branch ${r.branch}; no task commits ahead of ${baseOf(r)}` }), "font-size:12px;color:var(--muted, #888)")
           : css(el("code", { textContent: r.branch ?? `at ${baseOf(r)}`, title: r.branch ? `${r.branch}, ${r.ahead ?? 0} ahead of ${baseOf(r)}` : `Detached HEAD at ${baseOf(r)}; no branch is checked out` }), "font-size:12px;color:var(--muted, #888)");
@@ -2380,7 +2444,9 @@ function collectionTables(v) {
       localChanges(r),
       busy.has(r.sessionKey) || sharedPushBusy(r) ? pendingPushCount(n) : pushCell(r, n),
       catchUpRunning(r) ? working() : toCatchUp(r) ? catchUpCell(r) : caughtUp ? toned("✓", TONE.success, "Caught up; no base changes remain in this snapshot") : null,
-      pr ? css(el("span", { title: `${pr.draft && open ? "Draft PR. " : ""}${pr.title ?? ""}` }, link(`#${pr.number}`, pr.url), pr.draft && open && !otherPRs(r).length ? muted("draft") : pr.state !== "open" ? muted(pr.state) : null), "display:inline-flex;gap:4px") : null,
+      pr ? css(el("span", { title: `${pr.draft && open ? "Draft PR. " : ""}${pr.title ?? ""}` }, link(`#${pr.number}`, pr.url), pr.draft && open && !otherPRs(r).length ? muted("draft") : pr.state !== "open" ? muted(pr.state) : null), "display:inline-flex;gap:4px")
+        // A read that was refused is not "no pull request" (#471).
+        : r.pullRequestRefusal ? toned(r.pullRequestRefusal.access ? "⚠ PR read refused" : "PR read failed", r.pullRequestRefusal.access ? TONE.failure : TONE.pending, r.pullRequestRefusal.message) : null,
       ci, conflict, review, nextCell(r), prHints(r),
     ];
   }
@@ -2579,7 +2645,7 @@ function collectionTables(v) {
       // Retain observed columns so refresh/progress cannot make facts jump sideways.
       repoFacts.ahead ||= repos.some(r => r.dirty > 0 || toPush(r) > 0) || (workers ?? []).some(w => w.repos.some(r => r.toMerge > 0 || r.mergeError));
       repoFacts.behind ||= repos.some(r => toCatchUp(r)) || (workers ?? []).some(w => w.repos.some(r => r.behind > 0));
-      repoFacts.pr ||= repos.some(r => r.pullRequest || otherPRs(r).length);
+      repoFacts.pr ||= repos.some(r => r.pullRequest || r.pullRequestRefusal || otherPRs(r).length);
       actionColumns = Math.max(actionColumns, choosing ? 1 : 0, ...repos.map(r => repoActionOptions(r).filter(o => !o.disabled && o.label !== "Commit changes").length));
       const availableWidth = v.repoWidth?.() ?? v.width?.() ?? 0;
       narrow = repositoryCompact(availableWidth);

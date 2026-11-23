@@ -62,6 +62,31 @@ type CheckoutStatus struct {
 	CatchUpRecovery          string              `json:"catchUpRecovery,omitempty"`
 	CatchUpRecoveryError     string              `json:"catchUpRecoveryError,omitempty"`
 	CatchUpRecoveryCompleted *RecoveryCompletion `json:"catchUpRecoveryCompleted,omitempty"`
+	// BitbucketWrites is "pending" while a tool's Bitbucket pull request
+	// writes wait in this checkout for the person to confirm them (#471).
+	BitbucketWrites string `json:"bitbucketWrites,omitempty"`
+	// PullRequestRefusal says why the branch's pull request could not be
+	// read this time (#471); PullRequest is then unknown, not absent.
+	PullRequestRefusal *ReadRefusal `json:"pullRequestRefusal,omitempty"`
+}
+
+// BitbucketPullRequest reads a Bitbucket checkout's pull request; the taba
+// command sets it to its Bitbucket reader (#471). A nil pull request with a
+// nil refusal means the branch has none; a refusal says why it could not be
+// read, which is never shown as "no pull request".
+var BitbucketPullRequest func(dir, owner, repo, branch string) (*PullRequest, *ReadRefusal)
+
+// ReadRefusal is a pull request read that failed, with its classified cause
+// (no-credential, unsupported-credential, unauthorized, forbidden,
+// not-visible, client-unavailable, rate-limited, timeout, network,
+// incomplete, other) and a fixed message for people.
+type ReadRefusal struct {
+	Cause   string `json:"cause"`
+	Status  int    `json:"status,omitempty"`
+	Message string `json:"message"`
+	// Access is true when a person must change access or credentials;
+	// transient causes clear on their own.
+	Access bool `json:"access"`
 }
 
 // PullRequest is the pull request of a checkout's branch.
@@ -264,6 +289,16 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 	s.Proposal = ReadProposal(top, s.Branch)
 	if pullRequests && origin.Forge == ForgeGitHub && s.Branch != "" {
 		s.PullRequest = gitHubPullRequest(top, origin, s.Branch)
+	}
+	if pullRequests && origin.Forge == ForgeBitbucket && s.Branch != "" && BitbucketPullRequest != nil {
+		s.PullRequest, s.PullRequestRefusal = BitbucketPullRequest(top, origin.Owner, origin.Repo, s.Branch)
+	}
+	if origin.Forge == ForgeBitbucket {
+		if gitDir, err := git(top, "rev-parse", "--absolute-git-dir"); err == nil {
+			if info, err := os.Lstat(filepath.Join(gitDir, "bitbucket-pr-writes.json")); err == nil && info.Mode().IsRegular() {
+				s.BitbucketWrites = "pending"
+			}
+		}
 	}
 	checkout := &Checkout{Dir: top}
 	if ref, exists, err := checkout.recoveryMarker(); err != nil {

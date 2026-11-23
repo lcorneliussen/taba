@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/prompts"
 )
 
 type HostedReviewReport struct {
@@ -308,17 +310,29 @@ func parseReviewActivity(meta, reviews, threads, checkRuns []byte) (ReviewActivi
 	return activity, nil
 }
 
-func saveHostedReviewActivity(bundle string, activity ReviewActivity) error {
+func saveHostedReviewActivity(ctx prompts.Context, bundle string, activity ReviewActivity) error {
 	if err := os.MkdirAll(filepath.Join(bundle, "prior"), 0755); err != nil {
 		return err
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "# Hosted review evidence\n\nSnapshot for head `%s`. Reported means a review was submitted, not approval. An independent local review is still required.\n", activity.Head)
+	header, err := prompts.Render(ctx, "review.prior-hosted", map[string]string{"head": activity.Head})
+	if err != nil {
+		return err
+	}
+	out.WriteString(header.String() + "\n")
 	for _, report := range activity.Reports {
-		fmt.Fprintf(&out, "\n## %s: %s\n\n%s\n\n%s\n", report.Provider, report.State, report.URL, report.Body)
+		text, err := prompts.Render(ctx, "review.prior-hosted-report", map[string]string{"provider": report.Provider, "state": report.State, "url": report.URL, "body": report.Body})
+		if err != nil {
+			return err
+		}
+		out.WriteString("\n" + text.String() + "\n")
 	}
 	for _, finding := range activity.Findings {
-		fmt.Fprintf(&out, "\n## Open %s thread: %s\n\n%s\n\nOriginal head `%s`; outdated: %t. Read replies on the forge before treating this as unresolved work.\n\n%s\n", finding.Provider, finding.File, finding.URL, finding.Head, finding.Outdated, finding.Body)
+		text, err := prompts.Render(ctx, "review.prior-hosted-finding", map[string]string{"provider": finding.Provider, "file": finding.File, "url": finding.URL, "head": finding.Head, "outdated": strconv.FormatBool(finding.Outdated), "body": finding.Body})
+		if err != nil {
+			return err
+		}
+		out.WriteString("\n" + text.String() + "\n")
 	}
 	return os.WriteFile(filepath.Join(bundle, "prior", "hosted-reviews.md"), []byte(out.String()), 0644)
 }
@@ -354,7 +368,7 @@ func (c *Context) PrepareHostedReviewBundle(bundle string) error {
 	if activity.Head != manifest.HeadSHA {
 		return fmt.Errorf("stale bundle: hosted activity is on another PR head")
 	}
-	if err := saveHostedReviewActivity(bundle, activity); err != nil {
+	if err := saveHostedReviewActivity(c.reviewPrompts(manifest), bundle, activity); err != nil {
 		return err
 	}
 	if len(activity.Waiting) > 0 {

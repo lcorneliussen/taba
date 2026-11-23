@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/retry"
 	"time"
 )
 
@@ -52,16 +53,12 @@ func (c *Context) withRuntimeLock(fn func() error) error {
 		return err
 	}
 	defer f.Close()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
-		if err == nil {
-			break
-		}
-		if err != unix.EWOULDBLOCK || time.Now().After(deadline) {
-			return fmt.Errorf("runtime is busy: %w", err)
-		}
-		time.Sleep(50 * time.Millisecond)
+	err = retry.Poll(context.Background(), retry.Policy{Every: 50 * time.Millisecond, Within: 10 * time.Second}, flockAttempt(int(f.Fd())))
+	if errors.Is(err, retry.ErrExhausted) {
+		err = unix.EWOULDBLOCK
+	}
+	if err != nil {
+		return fmt.Errorf("runtime is busy: %w", err)
 	}
 	defer unix.Flock(int(f.Fd()), unix.LOCK_UN)
 	return fn()
@@ -533,19 +530,8 @@ func (c *Context) runtimeAction(action, target string, wait time.Duration, choic
 			tasks = append(tasks, restored...)
 		}
 		if action == "down" && target == "" {
-			deadline := time.Now().Add(30 * time.Second)
-			for {
-				state, err := runtimeRunnerState(m)
-				if err != nil {
-					return err
-				}
-				if state == "absent" {
-					break
-				}
-				if time.Now().After(deadline) {
-					return fmt.Errorf("runtime shutdown not confirmed: %s", state)
-				}
-				time.Sleep(100 * time.Millisecond)
+			if err := runtimeWaitAbsent(m); err != nil {
+				return err
 			}
 		}
 		if action == "down" && target != "" {
@@ -599,9 +585,11 @@ func (c *Context) runtimeAction(action, target string, wait time.Duration, choic
 			}
 			deadline := time.Now().Add(wait)
 			reachable := map[string]bool{}
-			for {
+			var pending string
+			err := retry.Poll(context.Background(), retry.Policy{Every: 100 * time.Millisecond, Within: wait}, func(context.Context) (bool, error) {
 				items := c.runtimeStatusOnly()
-				ready, pending := true, ""
+				ready := true
+				pending = ""
 				observed := map[string]bool{}
 				for _, item := range items {
 					if !wanted[item.Path] {
@@ -625,26 +613,26 @@ func (c *Context) runtimeAction(action, target string, wait time.Duration, choic
 							}
 						}
 					case "exited", "unknown", "missing", "failed", "absent":
-						return fmt.Errorf("%s: %s %s %s", item.Path, item.State, item.Reason, item.Error)
+						return false, fmt.Errorf("%s: %s %s %s", item.Path, item.State, item.Reason, item.Error)
 					default:
 						ready = false
 					}
 				}
 				for path := range wanted {
 					if !observed[path] {
-						return fmt.Errorf("%s: runtime state unavailable", path)
+						return false, fmt.Errorf("%s: runtime state unavailable", path)
 					}
 				}
-				if ready {
-					break
-				}
-				if time.Now().After(deadline) {
-					if pending != "" {
-						return fmt.Errorf(branding.Text("%s after %s; inspect {{command}} status and {{command}} logs"), pending, wait)
-					}
-					return fmt.Errorf(branding.Text("runtime readiness timed out after %s; inspect {{command}} status and {{command}} logs"), wait)
-				}
-				time.Sleep(100 * time.Millisecond)
+				return ready, nil
+			})
+			if errors.Is(err, retry.ErrExhausted) && pending != "" {
+				return fmt.Errorf(branding.Text("%s after %s; inspect {{command}} status and {{command}} logs"), pending, wait)
+			}
+			if errors.Is(err, retry.ErrExhausted) {
+				return fmt.Errorf(branding.Text("runtime readiness timed out after %s; inspect {{command}} status and {{command}} logs"), wait)
+			}
+			if err != nil {
+				return err
 			}
 		}
 		return nil
@@ -754,19 +742,8 @@ func (c *Context) retireRuntime() error {
 	if stopErr != nil && !(state == "absent" && strings.Contains(stopErr.Error(), "Runner is not running.")) {
 		return stopErr
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		state, err = runtimeRunnerState(m)
-		if err != nil {
-			return err
-		}
-		if state == "absent" {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("runtime shutdown not confirmed: %s", state)
-		}
-		time.Sleep(100 * time.Millisecond)
+	if err := runtimeWaitAbsent(m); err != nil {
+		return err
 	}
 	tasks := append([]runtimeTask(nil), m.Tasks...)
 	for _, resource := range m.Resources {
@@ -775,11 +752,23 @@ func (c *Context) retireRuntime() error {
 	return c.runtimeHooks(m, tasks, "teardown")
 }
 
+func runtimeWaitAbsent(m *runtimeManifest) error {
+	var state string
+	err := retry.Poll(context.Background(), retry.Policy{Every: 100 * time.Millisecond, Within: 30 * time.Second}, func(context.Context) (bool, error) {
+		var err error
+		state, err = runtimeRunnerState(m)
+		return state == "absent", err
+	})
+	if errors.Is(err, retry.ErrExhausted) {
+		return fmt.Errorf("runtime shutdown not confirmed: %s", state)
+	}
+	return err
+}
+
 // runtimeWaitStopped confirms veto completion before config changes can
 // replace a tunnel command or restart one of its dependencies.
 func (c *Context) runtimeWaitStopped(m *runtimeManifest, stopped map[string]bool) error {
-	deadline := time.Now().Add(30 * time.Second)
-	for {
+	err := retry.Poll(context.Background(), retry.Policy{Every: 100 * time.Millisecond, Within: 30 * time.Second}, func(context.Context) (bool, error) {
 		complete := true
 		for _, item := range c.runtimeStatus(m) {
 			if !stopped[item.Path] {
@@ -788,18 +777,15 @@ func (c *Context) runtimeWaitStopped(m *runtimeManifest, stopped map[string]bool
 			switch item.State {
 			case "idle", "exited", "done", "absent":
 			case "unknown", "missing":
-				return fmt.Errorf("%s: shutdown not confirmed: %s", item.Path, item.State)
+				return false, fmt.Errorf("%s: shutdown not confirmed: %s", item.Path, item.State)
 			default:
 				complete = false
 			}
 		}
-		if complete {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("target runtime shutdown not confirmed")
-		}
-		time.Sleep(100 * time.Millisecond)
+		return complete, nil
+	})
+	if errors.Is(err, retry.ErrExhausted) {
+		return fmt.Errorf("target runtime shutdown not confirmed")
 	}
-	return nil
+	return err
 }

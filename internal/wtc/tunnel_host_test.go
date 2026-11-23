@@ -1,11 +1,15 @@
 package wtc
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -19,6 +23,13 @@ func TestTunnelProductionForegroundCloudflareUsesMinimalEnvironmentAndConfirmedD
 			dir := filepath.Join(t.TempDir(), "owned-home")
 			if err := os.Mkdir(dir, 0700); err != nil {
 				t.Fatal(err)
+			}
+			var gate *os.File
+			if fails {
+				// The failing child must outlive startup identity so its URL and
+				// exit are the ready-then-unconfirmed-disposal case, not an
+				// exit before ownership (TestTunnelForegroundFixtureStartupOrdering).
+				gate = foregroundFixtureGate(t, dir)
 			}
 			binary := filepath.Join(t.TempDir(), "cloudflared")
 			script := foregroundCloudflareFixtureScript(fails, false)
@@ -39,10 +50,12 @@ func TestTunnelProductionForegroundCloudflareUsesMinimalEnvironmentAndConfirmedD
 				}
 				if !fails {
 					cancel()
+				} else if _, err := gate.WriteString("\n"); err != nil {
+					t.Fatal(err)
 				}
 				return nil
 			})
-			if fails && err == nil || !fails && err != nil || readyCount != 1 || address.URL != "https://synthetic.trycloudflare.com" {
+			if fails && (err == nil || err.Error() != "provider endpoint disposal not confirmed") || !fails && err != nil || readyCount != 1 || address.URL != "https://synthetic.trycloudflare.com" {
 				t.Fatal("foreground start/disposal result", readyCount, err)
 			}
 			env, readErr := os.ReadFile(filepath.Join(dir, "seen-env"))
@@ -68,7 +81,9 @@ func foregroundCloudflareFixtureScript(fails, holdAfterReady bool) string {
 	}
 	script += "printf 'https://synthetic.trycloudflare.com\\n'\n"
 	if fails {
-		return script + "exit 42\n"
+		// Hold the failing child until the test's readiness callback writes a
+		// line to $HOME/ready-gate (foregroundFixtureGate), then exit unconfirmed.
+		return script + "read ignored < \"$HOME/ready-gate\"\nexit 42\n"
 	}
 	if holdAfterReady {
 		script += "if ! /usr/bin/grep -q TERM \"$HOME/cleanup-armed\"; then read ignored < \"$HOME/ready-gate\"; fi\n"
@@ -128,6 +143,104 @@ func TestTunnelForegroundFixtureCleanupBeforeReadiness(t *testing.T) {
 			}
 			if !armed && (err == nil || !strings.Contains(err.Error(), "provider endpoint disposal not confirmed")) {
 				t.Fatal("unarmed provider bypassed disposal refusal", err)
+			}
+		})
+	}
+}
+
+// foregroundFixtureGate creates $HOME/ready-gate for a synthetic host and holds
+// it open read-write, so the child's read blocks until the test writes a line;
+// closing at cleanup releases a still-held child.
+func foregroundFixtureGate(t *testing.T, home string) *os.File {
+	t.Helper()
+	fifo := filepath.Join(home, "ready-gate")
+	if err := syscall.Mkfifo(fifo, 0600); err != nil {
+		t.Fatal(err)
+	}
+	gate, err := os.OpenFile(fifo, os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { gate.Close() })
+	return gate
+}
+
+// Startup identity is observed after Start and before stdout is read. Force an
+// inconclusive first observation and let later ones happen only after the
+// synthetic child has printed its URL. A child that
+// exits right after its URL must fail closed before ownership; the gated
+// fixture stays observable until readiness and still exits 42.
+func TestTunnelForegroundFixtureStartupOrdering(t *testing.T) {
+	const url = "https://synthetic.trycloudflare.com"
+	for _, held := range []bool{false, true} {
+		name := map[bool]string{false: "exit-before-identity", true: "held-until-ready"}[held]
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			script := foregroundCloudflareFixtureScript(true, false)
+			var gate *os.File
+			if held {
+				gate = foregroundFixtureGate(t, dir)
+			} else {
+				script = "#!/bin/sh\nprintf '" + url + "\\n'\nexit 42\n"
+			}
+			binary := filepath.Join(t.TempDir(), "cloudflared")
+			fixtureFile(t, binary, script, 0755)
+			cmd := exec.Command(binary)
+			cmd.Env = minimalTunnelEnvironment(dir)
+			out, err := cmd.StdoutPipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			waited := false
+			t.Cleanup(func() {
+				if !waited {
+					_ = cmd.Process.Kill() // this test's own child only
+					_ = cmd.Wait()
+				}
+			})
+			lines := bufio.NewReader(out)
+			observations := 0
+			read := func(pid int) (tunnelProcessIdentity, string) {
+				observations++
+				if observations > 1 {
+					return readTunnelProcess(pid)
+				}
+				if line, err := lines.ReadString('\n'); err != nil || line != url+"\n" {
+					t.Fatal("synthetic URL not emitted", line, err)
+				}
+				if !held {
+					// EOF: the child has exited and is not reaped before Wait.
+					if _, err := io.Copy(io.Discard, lines); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return tunnelProcessIdentity{}, "unknown"
+			}
+			child, observeErr := observeTunnelChildWith(context.Background(), cmd.Process.Pid, read)
+			if held {
+				if observeErr != nil || child.PID != cmd.Process.Pid {
+					t.Fatal("held fixture not identified before readiness", child, observeErr)
+				}
+				if _, err = gate.WriteString("\n"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if observeErr == nil || !strings.HasPrefix(observeErr.Error(), "owned child initialization unconfirmed") {
+					t.Fatal("exit before identity did not fail closed", child, observeErr)
+				}
+				// stdout closes before the child is a zombie; a read in between
+				// is still inconclusive, so only positive absence is required.
+				if runtime.GOOS == "linux" && !strings.HasPrefix(observeErr.Error(), "owned child initialization unconfirmed (state absent, observations ") {
+					t.Fatal("unexpected early-exit observation", observeErr)
+				}
+			}
+			waitErr := cmd.Wait()
+			waited = true
+			if cmd.ProcessState == nil || cmd.ProcessState.ExitCode() != 42 {
+				t.Fatal("synthetic child did not exit 42", waitErr)
 			}
 		})
 	}

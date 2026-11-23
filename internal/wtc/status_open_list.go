@@ -266,9 +266,9 @@ func statusFetchBBOpenList(slug string) ([]byte, error) {
 
 func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, error) {
 	started := time.Now()
-	user, pass := bitbucketCredentials()
-	if user == "" || pass == "" {
-		return nil, fmt.Errorf("no Bitbucket API credentials")
+	user, pass, err := bitbucketRESTCredentials(ctx, slug)
+	if err != nil {
+		return nil, err
 	}
 	parts := strings.SplitN(slug, "/", 2)
 	if len(parts) != 2 {
@@ -341,9 +341,9 @@ func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, err
 }
 
 func statusFetchBBBranchContext(ctx context.Context, slug, branch string) ([]byte, error) {
-	user, pass := bitbucketCredentials()
-	if user == "" || pass == "" {
-		return nil, fmt.Errorf("no Bitbucket API credentials")
+	user, pass, err := bitbucketRESTCredentials(ctx, slug)
+	if err != nil {
+		return nil, err
 	}
 	parts := strings.SplitN(slug, "/", 2)
 	if len(parts) != 2 {
@@ -408,7 +408,13 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 		if err != nil || request.URL.User != nil || (request.URL.Scheme != "http" && request.URL.Scheme != "https") {
 			return nil, fmt.Errorf("invalid Bitbucket API request")
 		}
-		request.SetBasicAuth(user, pass)
+		if user == "" {
+			// A host read credential (#471): one repository's token, sent
+			// only on this same-origin request.
+			request.Header.Set("Authorization", "Bearer "+pass)
+		} else {
+			request.SetBasicAuth(user, pass)
+		}
 		request.Header.Set("Accept", "application/json")
 		response, err := client.Do(request)
 		if err != nil {
@@ -468,9 +474,9 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 				}
 			}
 			if empty404 {
-				return nil, fmt.Errorf("Bitbucket pipelines API returned %s: %s", response.Status, body)
+				return nil, &bitbucketHTTPError{response.StatusCode, fmt.Sprintf("Bitbucket pipelines API returned %s: %s", response.Status, body)}
 			}
-			return nil, fmt.Errorf("Bitbucket pull request list API returned %s: %s", response.Status, body)
+			return nil, &bitbucketHTTPError{response.StatusCode, fmt.Sprintf("Bitbucket pull request list API returned %s: %s", response.Status, body)}
 		}
 		return raw, nil
 	}

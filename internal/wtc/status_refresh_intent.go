@@ -54,6 +54,16 @@ func statusObservationFailure(err error) StatusObservation {
 		out.Freshness, out.Reason = "deferred", "cancelled"
 	case errors.Is(err, context.DeadlineExceeded):
 		out.Freshness, out.Reason = "deferred", "deadline"
+	default:
+		// A refused Bitbucket read names its cause (#471), distinct from a
+		// network failure, so the row is not mistaken for "no pull request".
+		var classified *bitbucketReadError
+		var httpErr *bitbucketHTTPError
+		if errors.As(err, &classified) || errors.As(err, &httpErr) {
+			if refusal := ClassifyBitbucketRefusal(err, ""); refusal.Access() {
+				out.Reason = "bitbucket-" + refusal.Cause
+			}
+		}
 	}
 	var admission *statusAdmissionError
 	if errors.As(err, &admission) && !admission.retry.IsZero() {

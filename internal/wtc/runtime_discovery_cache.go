@@ -23,6 +23,9 @@ type runtimeDeclarationCache struct {
 	signature string
 	at        time.Time
 	items     []RuntimeItem
+	// inputs are what the cached declarations read beyond the signature's
+	// fixed files, such as fragments a repository's dekit.yaml loads.
+	inputs []string
 }
 
 func newRuntimeDeclarationCache() *runtimeDeclarationCache {
@@ -44,7 +47,7 @@ func (c *Context) cachedRuntimeDeclarations() []RuntimeItem {
 		return []RuntimeItem{c.runtimeDeclarationError("", ctx.Err())}
 	}
 	signature := c.statusResourceSignature(false)
-	if cache.signature == signature && !cache.at.IsZero() && time.Since(cache.at) < 5*time.Minute {
+	if cache.signature == signature+runtimeInputsSignature(cache.inputs) && !cache.at.IsZero() && time.Since(cache.at) < 5*time.Minute {
 		return append([]RuntimeItem(nil), cache.items...)
 	}
 	// Revalidate the receiver and registry when the advisory inventory changes.
@@ -53,12 +56,13 @@ func (c *Context) cachedRuntimeDeclarations() []RuntimeItem {
 	if err != nil {
 		return []RuntimeItem{c.runtimeDeclarationError("", err)}
 	}
-	items := fresh.runtimeDeclarations()
+	items, inputs := fresh.runtimeDeclarationsInputs()
 	if ctx.Err() != nil {
 		return []RuntimeItem{c.runtimeDeclarationError("", ctx.Err())}
 	}
 	if signature == c.statusResourceSignature(false) {
-		cache.signature, cache.at, cache.items = signature, time.Now(), append([]RuntimeItem(nil), items...)
+		cache.signature, cache.at, cache.items = signature+runtimeInputsSignature(inputs), time.Now(), append([]RuntimeItem(nil), items...)
+		cache.inputs = append([]string(nil), inputs...)
 	}
 	return items
 }
@@ -129,6 +133,7 @@ func (c *Context) statusResourceSignature(repoState bool) string {
 		} else if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 			fmt.Fprintln(hash, gitDir, stat.Dev, stat.Ino)
 		}
+		add(filepath.Join(path, "dekit.yaml"))
 		add(runtimeSharedFragment(path))
 		add(c.runtimeLocalFragment(entry.Name()))
 		if info.Mode().IsRegular() {

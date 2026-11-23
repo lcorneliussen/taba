@@ -35,14 +35,19 @@ type CatchUpOptions struct {
 	// refresh failed, and with NoEnv it installs what mise.toml already pins.
 	IdleOnly     bool
 	InstallTools bool
+	// UpgradeDoctor runs the pinned release's read-only doctor in each
+	// harness target this sweep updated and installed. Only the rollout asks
+	// for it; an ordinary catch-up is not a version transition.
+	UpgradeDoctor bool
 }
 
 // RolloutOptions is the sweep `wtc upgrade --rollout` runs: every
 // collection's harness, clean worktrees and idle agents only, with the pinned
-// tools installed, then reloads verified status panes. Dirty/in-progress targets,
+// tools installed and that release's doctor run as advice, then reloads
+// verified status panes. Dirty/in-progress targets,
 // busy owners, unrelated processes and failed env/tool stages stay untouched.
 func RolloutOptions(dryRun bool) CatchUpOptions {
-	return CatchUpOptions{All: true, Repos: []string{"harness"}, CleanOnly: true, IdleOnly: true, InstallTools: true, ReloadStatus: true, DryRun: dryRun}
+	return CatchUpOptions{All: true, Repos: []string{"harness"}, CleanOnly: true, IdleOnly: true, InstallTools: true, UpgradeDoctor: true, ReloadStatus: true, DryRun: dryRun}
 }
 
 type CatchUpRow struct {
@@ -59,6 +64,8 @@ type CatchUpRow struct {
 	Handoff        string  `json:"handoff,omitempty"`
 	CollectionPath string  `json:"collection_path"`
 	NextAction     string  `json:"next_action,omitempty"`
+	// Doctor is set on a rollout's doctor row only.
+	Doctor *UpgradeDoctor `json:"doctor,omitempty"`
 }
 
 type CatchUpReport struct {

@@ -2,9 +2,11 @@ package wtc
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,8 +18,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"taba.sh/taba/internal/branding"
 	"time"
+
+	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/retry"
 )
 
 type ReviewPostOptions struct {
@@ -95,7 +99,7 @@ func reviewPRHead(manifest ReviewManifest) (string, error) {
 	if manifest.Forge == "github" {
 		out, err = reviewForgeCommand(manifest.RepoDir, "gh", []string{"pr", "view", manifest.PR, "--repo", manifest.Slug, "--json", "headRefOid"}, nil)
 	} else if manifest.Forge == "bitbucket" {
-		out, err = reviewBitbucketCommand(manifest, []string{"pr", "view", manifest.PR, "--json"}, nil)
+		out, err = bitbucketReadPRWith(bitbucketReadOperation(context.Background(), manifest.bitbucketControlRoot()), manifest.Slug, manifest.PR, reviewBBPRArgs(manifest.Slug, manifest.PR))
 	} else {
 		return "", fmt.Errorf("unknown forge %q", manifest.Forge)
 	}
@@ -131,6 +135,7 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 	if err != nil {
 		return ReviewPostResult{}, err
 	}
+	manifest.ConfigRoot = c.ConfigRoot
 	worktree, slug, forge, err := c.ReviewRepo(manifest.Repo)
 	if err != nil {
 		return ReviewPostResult{}, err
@@ -216,28 +221,50 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 		body = fmt.Sprintf("⏳ **Local review: posting findings**\n\nRound %d, head `%s`.\n\n`wtc-review v1 head=%s verdict=pending blockers=0 round=%d lead=pending`\n", manifest.Round, manifest.HeadSHA[:7], manifest.HeadSHA, manifest.Round)
 	}
 	body = reviewModeBody(body, manifest)
+	if manifest.Forge == "bitbucket" && bitbucketGateway() {
+		// The person writes on a gateway (#471): one confirmed request with
+		// the final summary and the inline comments; progress and failure
+		// notes are not written there.
+		if mode != "summary" {
+			return ReviewPostResult{}, errBitbucketBrokered
+		}
+		return c.postReviewBrokered(target, bundle, cid, finalBody)
+	}
+	var posted ReviewPostResult
 	createPending := filepath.Join(bundle, "comment.create-pending")
 	if cid == "" {
-		// Record intent before sending: a lost response or interrupted process
-		// must not turn the next invocation into another uncertain create.
-		pending, err := os.OpenFile(createPending, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if err != nil {
-			return ReviewPostResult{}, fmt.Errorf("cannot start review comment create; reconcile any prior uncertain create (comment.create-pending): %w", err)
+		// A lost response or an interrupted process must not turn the next
+		// invocation into another uncertain create.
+		create := retry.Intent{
+			Marker: createPending,
+			Done: func() (bool, error) {
+				id, _ := os.ReadFile(idPath)
+				return strings.TrimSpace(string(id)) != "", nil
+			},
+			Record: func() error { return os.WriteFile(idPath, []byte(posted.CommentID+"\n"), 0644) },
 		}
-		if err := pending.Close(); err != nil {
-			return ReviewPostResult{}, err
-		}
-	}
-	posted, err := postReviewComment(target, cid, body)
-	if err != nil {
-		// A failed update is not evidence that the original comment is absent.
-		// Keep the saved ID and let an explicit retry update the same comment.
-		return ReviewPostResult{}, err
-	}
-	if posted.CommentID != "" {
-		if err := os.WriteFile(idPath, []byte(posted.CommentID+"\n"), 0644); err != nil {
+		err := create.Do(context.Background(), retry.Policy{Attempts: 1}, func(context.Context) (retry.Outcome, error) {
+			var err error
+			if posted, err = postReviewComment(target, "", body); err != nil {
+				return retry.Unknown, err
+			}
+			return retry.Applied, nil
+		})
+		switch {
+		case errors.Is(err, retry.ErrUnresolved):
+			return ReviewPostResult{}, fmt.Errorf("cannot start review comment create: another review post may be running, or an earlier create is uncertain; when no review post is running, reconcile any prior uncertain create (comment.create-pending): %w", err)
+		case errors.Is(err, retry.ErrDone):
+			return ReviewPostResult{}, fmt.Errorf("another review post created the comment meanwhile; post again to update it")
+		case err != nil:
 			return posted, err
 		}
+	} else {
+		// A failed update is not evidence that the original comment is absent.
+		// Keep the saved ID and let an explicit retry update the same comment.
+		if posted, err = postReviewComment(target, cid, body); err != nil {
+			return ReviewPostResult{}, err
+		}
+		// The saved ID settles a create whose marker a crash left behind.
 		if err := os.Remove(createPending); err != nil && !os.IsNotExist(err) {
 			return posted, err
 		}
@@ -286,6 +313,16 @@ func postReviewComment(m ReviewManifest, cid, body string) (ReviewPostResult, er
 			return ReviewPostResult{}, fmt.Errorf("GitHub comment response has no id: %v", err)
 		}
 		return ReviewPostResult{CommentID: strconv.FormatInt(result.ID, 10), URL: result.HTMLURL}, nil
+	}
+	switch route, err := selectedBitbucketWrite(m.bitbucketControlRoot(), true); {
+	case err != nil:
+		return ReviewPostResult{}, err
+	case route == bitbucketWriteBroker:
+		return ReviewPostResult{}, errBitbucketBrokered
+	case route == bitbucketWriteTWG && cid == "":
+		return twgCommentCreate(m, body, "", 0, "")
+	case route == bitbucketWriteTWG:
+		return twgCommentUpdate(m, cid, body)
 	}
 	if result, ok, err := bitbucketReviewCommentAPI(m, cid, body, "", 0, ""); ok {
 		return result, err
@@ -502,6 +539,19 @@ func priorReviewInlineKeys(m ReviewManifest, bundle string) map[string]bool {
 }
 
 func postReviewInline(m ReviewManifest, bundle string) (posted, failed, skipped int) {
+	return postReviewInlineWith(m, bundle, nil)
+}
+
+// reviewInlineWrite is one inline comment a brokered review post asks for.
+type reviewInlineWrite struct {
+	Row  ReviewInlineRecord
+	Body string
+}
+
+// postReviewInlineWith is postReviewInline; with queue set, Bitbucket inline
+// comments are collected for a brokered write instead of being posted, and
+// their records are left for the receipt to complete.
+func postReviewInlineWith(m ReviewManifest, bundle string, queue *[]reviewInlineWrite) (posted, failed, skipped int) {
 	prior := priorReviewInlineKeys(m, bundle)
 	if prior == nil {
 		fmt.Fprintln(os.Stderr, branding.Text("{{command}}: could not read prior inline comments; review remains pending"))
@@ -585,6 +635,10 @@ func postReviewInline(m ReviewManifest, bundle string) (posted, failed, skipped 
 				body += "\nSuggestion: " + f.Suggestion + "\n"
 			}
 			body += fmt.Sprintf("\nRound %d.\n\n`wtc-review-inline v1 key=%s concern=%s file=%s line=%d`\n", m.Round, key, file.Concern, f.File, f.Line)
+			if queue != nil && m.Forge == "bitbucket" {
+				*queue = append(*queue, reviewInlineWrite{Row: row, Body: body})
+				continue
+			}
 			if m.Forge == "github" {
 				payload, _ := json.Marshal(map[string]any{"body": body, "commit_id": m.HeadSHA, "path": f.File, "line": f.Line, "side": "RIGHT"})
 				out, err := reviewGitHubAPI(m.RepoDir, []string{"-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
@@ -608,6 +662,21 @@ func postReviewInline(m ReviewManifest, bundle string) (posted, failed, skipped 
 							row.Error += ": " + strings.TrimSpace(string(out))
 						}
 					}
+				}
+			} else if route, routeErr := selectedBitbucketWrite(m.bitbucketControlRoot(), true); routeErr != nil || route == bitbucketWriteBroker || route == bitbucketWriteTWG {
+				var result ReviewPostResult
+				err := routeErr
+				switch {
+				case err != nil:
+				case route == bitbucketWriteBroker:
+					err = errBitbucketBrokered
+				default:
+					result, err = twgCommentCreate(m, body, f.File, f.Line, "")
+				}
+				if err == nil {
+					row.ID, row.URL = result.CommentID, result.URL
+				} else {
+					row.Error = err.Error()
 				}
 			} else {
 				if result, ok, err := bitbucketReviewCommentAPI(m, "", body, f.File, f.Line, ""); ok {

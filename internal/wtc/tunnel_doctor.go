@@ -199,20 +199,16 @@ type namedTunnelURLs struct{ env, literal string }
 // fragments again.
 func (c *Context) namedTunnelDeclaredURLs(dir string) map[string]namedTunnelURLs {
 	out := map[string]namedTunnelURLs{}
-	for _, path := range []string{runtimeSharedFragment(filepath.Join(c.Collection, dir)), c.runtimeLocalFragment(dir)} {
-		if runtimeRegular(path) != nil {
-			continue
-		}
-		fragment, err := runtimeReadFragment(path)
-		if err != nil {
-			continue
-		}
-		for name, task := range fragment.Tasks {
-			if metadata, ok := task["x-wtc"].(map[string]any); ok {
-				env, _ := metadata["url_env"].(string)
-				literal, _ := metadata["url"].(string)
-				out[dir+"/"+name] = namedTunnelURLs{env, literal}
-			}
+	// The same loader as rendering, so configured declaration files count.
+	sources, err := c.runtimeRepoSources(filepath.Join(c.Collection, dir), dir, false)
+	if err != nil {
+		return out
+	}
+	for name, task := range sources.tasks {
+		if metadata, ok := task.spec["x-wtc"].(map[string]any); ok {
+			env, _ := metadata["url_env"].(string)
+			literal, _ := metadata["url"].(string)
+			out[dir+"/"+name] = namedTunnelURLs{env, literal}
 		}
 	}
 	return out

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -44,9 +45,10 @@ func statusForgeEntryPath(kind, forge, slug, key string) string {
 }
 func statusForgeEntryPathContext(ctx context.Context, kind, forge, slug, key string) string {
 	input := kind + "\x00" + forge + "\x00" + slug + "\x00" + key
+	entry := statusAuthEntry(ctx, statusEntryAuthKind(kind, key), forge, slug)
 	if !statusAuthSharedKind(kind) {
-		scope := statusAuthForContext(ctx, forge).scope
-		if !statusAuthForContext(ctx, forge).known {
+		scope := entry.scope
+		if !entry.known {
 			if state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState); ok {
 				scope += "\x00operation:" + state.nonce
 			}
@@ -55,7 +57,7 @@ func statusForgeEntryPathContext(ctx context.Context, kind, forge, slug, key str
 	}
 	digest := sha256.Sum256([]byte(input))
 	path := filepath.Join(statusForgeCacheDir(), kind+"-"+hex.EncodeToString(digest[:])+".json")
-	if !statusAuthSharedKind(kind) && !statusAuthForContext(ctx, forge).known {
+	if !statusAuthSharedKind(kind) && !entry.known {
 		statusAuthMemoryPath(ctx, path)
 	}
 	return path
@@ -129,7 +131,7 @@ func statusReadForgeEntryObservedContext(ctx context.Context, kind, forge, slug,
 	}
 
 	path := statusForgeEntryPathContext(ctx, kind, forge, slug, key)
-	if !statusAuthSharedKind(kind) && !statusAuthForContext(ctx, forge).known {
+	if !statusAuthSharedKind(kind) && !statusEntryKnown(ctx, kind, forge, slug, key) {
 		return statusAuthMemoryRead(ctx, path, age)
 	}
 	if !statusSecureCacheDir(filepath.Dir(path)) {
@@ -146,7 +148,7 @@ func statusReadForgeEntryObservedContext(ctx context.Context, kind, forge, slug,
 		return nil, time.Time{}, false
 	}
 	data, err := io.ReadAll(file)
-	return data, info.ModTime(), err == nil && len(data) != 0 && (statusAuthSharedKind(kind) || statusAuthCurrent(ctx, forge))
+	return data, info.ModTime(), err == nil && len(data) != 0 && (statusAuthSharedKind(kind) || statusEntryKnown(ctx, kind, forge, slug, key) && statusAuthSelectionMatches(ctx, forge))
 }
 
 func statusWriteForgeCache(forge, slug, number string, data []byte) {
@@ -232,13 +234,17 @@ func statusWriteForgeEntrySinceObservedContext(ctx context.Context, kind, forge,
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	// The receipt goes first. If it fails, the old data stays. If the data
+	// rename is lost after it, the receipt is ahead of the data and rejects
+	// only responses from requests that started before this one.
+	if !statusWriteForgeEntryObservedContext(ctx, "since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)), time.Time{}) {
+		return result, errors.New("forge observation receipt failed")
+	}
+	// Cancellation that arrived during the receipt does not stop the data.
 	if !statusWriteForgeEntryObservedContext(ctx, kind, forge, slug, key, data, observed) {
 		return result, errors.New("forge observation publication failed")
 	}
 	result.Written = true
-	// Complete the existing ordering receipt after a successful publication,
-	// even if cancellation arrived during the filesystem operation.
-	statusWriteForgeEntryObservedContext(ctx, "since", forge, slug, kind+":"+key, []byte(strconv.FormatInt(started.UnixNano(), 10)), time.Time{})
 	return result, ctx.Err()
 }
 
@@ -315,10 +321,7 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)
 	}
-	// A completed data publication must finish its ordering receipt in the
-	// pinned namespace even if local selection changed in between. A receipt
-	// contains only request order and cannot lend provider authority elsewhere.
-	if !statusAuthSharedKind(kind) && kind != "since" && !statusAuthSelectionMatches(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return false
 	}
 
@@ -326,7 +329,7 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 		return false
 	}
 	path := statusForgeEntryPathContext(ctx, kind, forge, slug, key)
-	if !statusAuthSharedKind(kind) && !statusAuthForContext(ctx, forge).known {
+	if !statusAuthSharedKind(kind) && !statusEntryKnown(ctx, kind, forge, slug, key) {
 		return statusAuthMemoryWrite(ctx, path, data, observed)
 	}
 	if !statusSecureCacheDir(filepath.Dir(path)) {
@@ -352,8 +355,25 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 	if tmp.Close() != nil {
 		return false
 	}
-	if !statusAuthSharedKind(kind) && kind != "since" && !statusAuthSelectionMatches(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return false
 	}
 	return os.Rename(tmp.Name(), path) == nil
+}
+
+// statusEntryAuthKind is the kind whose credential decides an entry's
+// context: an ordering receipt ("since", keyed "<kind>:<key>") belongs to the
+// observation it orders.
+func statusEntryAuthKind(kind, key string) string {
+	if kind == "since" {
+		if owner, _, ok := strings.Cut(key, ":"); ok {
+			return owner
+		}
+	}
+	return kind
+}
+
+// statusEntryKnown reports whether an entry's observations may persist.
+func statusEntryKnown(ctx context.Context, kind, forge, slug, key string) bool {
+	return statusAuthEntry(ctx, statusEntryAuthKind(kind, key), forge, slug).known
 }

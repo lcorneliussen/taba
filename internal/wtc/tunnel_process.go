@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"taba.sh/taba/internal/retry"
 )
 
 // Local instance evidence belongs to the same ownership journal/host observation,
@@ -123,20 +124,14 @@ func stopTunnelChildWith(ctx context.Context, expected tunnelProcessIdentity, re
 	}
 	bound, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	for {
-		switch tunnelProcessState(expected, read) {
-		case "absent":
-			return nil
-		case "unknown":
-			// Exit can briefly make argv/cwd unreadable before positive absence.
-			// Never signal again; wait within the same bound for exact disposal proof.
-		}
-		select {
-		case <-bound.Done():
-			return fmt.Errorf("owned child stop pending")
-		case <-time.After(25 * time.Millisecond):
-		}
+	// Exit can briefly make argv/cwd unreadable before positive absence.
+	// Never signal again; wait within the same bound for exact disposal proof.
+	if retry.Poll(bound, retry.Policy{Every: 25 * time.Millisecond}, func(context.Context) (bool, error) {
+		return tunnelProcessState(expected, read) == "absent", nil
+	}) != nil {
+		return fmt.Errorf("owned child stop pending")
 	}
+	return nil
 }
 
 // Only call for a newly started child before Wait/reaping. Startup identity can
@@ -148,22 +143,21 @@ func observeTunnelStartedChild(ctx context.Context, pid int) (tunnelProcessIdent
 func observeTunnelChildWith(ctx context.Context, pid int, read func(int) (tunnelProcessIdentity, string)) (tunnelProcessIdentity, error) {
 	bound, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	attempts := 0
-	for {
-		observed, next := read(pid)
+	var observed tunnelProcessIdentity
+	attempts, next := 0, ""
+	err := retry.Poll(bound, retry.Policy{Every: 10 * time.Millisecond}, func(context.Context) (bool, error) {
+		observed, next = read(pid)
 		attempts++
-		if next == "alive" && observed.PID == pid && observed.validate() == nil {
-			return observed, nil
-		}
 		if next == "absent" {
-			return tunnelProcessIdentity{}, fmt.Errorf("owned child initialization unconfirmed (state absent, observations %d)", attempts)
+			return false, fmt.Errorf("owned child initialization unconfirmed (state absent, observations %d)", attempts)
 		}
-		select {
-		case <-bound.Done():
-			return tunnelProcessIdentity{}, fmt.Errorf("owned child initialization unconfirmed (state unknown, observations %d)", attempts)
-		case <-ticker.C:
-		}
+		return next == "alive" && observed.PID == pid && observed.validate() == nil, nil
+	})
+	if err != nil && next != "absent" {
+		err = fmt.Errorf("owned child initialization unconfirmed (state unknown, observations %d)", attempts)
 	}
+	if err != nil {
+		return tunnelProcessIdentity{}, err
+	}
+	return observed, nil
 }

@@ -14,9 +14,9 @@ import (
 	"github.com/BurntSushi/toml"
 	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
-	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
 	"taba.sh/taba/internal/gitref"
+	"taba.sh/taba/internal/prompts"
 )
 
 // AdHocConfigDir holds an ad-hoc collection's registry, wtc.toml, hooks and
@@ -706,12 +706,19 @@ func (c *Context) newAdHoc(opt NewOptions) (NewResult, error) {
 			return result, fmt.Errorf("%w (partial collection at %s)", err, result.Collection)
 		}
 	}
-	branchNote := fmt.Sprintf("Worktrees start **detached at the development tip** — no branch exists yet.\nCreate one at your first commit:\n\n    git switch -c %s\n", result.IntendedBranch)
+	ctx := target.Prompts()
+	branchNote, err := prompts.Render(ctx, "launch.branch-detached", map[string]string{"branch": result.IntendedBranch})
 	if opt.Branch != "" {
-		branchNote = "All siblings are already on the explicitly requested branch. Commit on that branch; do not create it again.\n"
+		branchNote, err = prompts.Render(ctx, "launch.branch-explicit", nil)
 	}
-	handoff := fmt.Sprintf(branding.Text("# wtc: %s — launch note (EPHEMERAL)\n\n**Goal:** %s\n\nAn ad-hoc collection: no harness, registry in `.wtc/config/repos.yml`.\nFirst agent on this wtc: read this, turn anything durable into issues /\ncommits / PRs, then **delete this file as your very first action**.\n\n%s\nAdd repositories with `{{command}} add-repo <name|clone-url|path>`. Retire with `{{command}} retire .` from inside it.\n"), name, defaultSource(result.Source), branchNote)
-	if err := os.WriteFile(filepath.Join(result.Collection, "HANDOFF.md"), []byte(handoff), 0644); err != nil {
+	if err != nil {
+		return result, fmt.Errorf("%w (partial collection at %s without HANDOFF.md)", err, result.Collection)
+	}
+	handoff, err := prompts.Render(ctx, "launch.handoff-adhoc", map[string]string{"collection": name, "goal": defaultSource(result.Source), "branch_note": branchNote.String()})
+	if err != nil {
+		return result, fmt.Errorf("%w (partial collection at %s without HANDOFF.md)", err, result.Collection)
+	}
+	if err := writeLaunchNote(result.Collection, handoff); err != nil {
 		return result, err
 	}
 	if err := c.RunHook("new.post", values); err != nil {
