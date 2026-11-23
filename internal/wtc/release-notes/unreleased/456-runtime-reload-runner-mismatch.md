@@ -7,4 +7,5 @@
   reports dekit 0.10.0 running the pinned binary, changes nothing and asks for
   `down` then `up`; dekit 0.10.0 against its own runner still applies changes
   live.
-  ([#456](https://github.com/lcorneliussen/taba/issues/456)).
+  ([#456](https://github.com/lcorneliussen/taba/issues/456),
+  [#467](https://github.com/lcorneliussen/taba/pull/467)).
