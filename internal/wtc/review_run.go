@@ -81,7 +81,23 @@ type reviewRunDirs struct {
 	exec                 *reviewExecContext
 }
 
-func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ ReviewRunResult, err error) {
+// RunReviewBundle runs a review that nothing interrupts but its own timeouts.
+func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRunResult, error) {
+	return c.RunReviewBundleContext(context.Background(), bundle, opt)
+}
+
+// errReviewInterrupted marks a run its caller cancelled. It wraps the context
+// error, so errors.Is(err, context.Canceled) holds for it.
+var errReviewInterrupted = errors.New("review run interrupted")
+
+// RunReviewBundleContext runs a review that stops when ctx is done: no further
+// reviewer starts, each running reviewer's process group is stopped and waited
+// for, an isolated context is removed only after that, and the bundle keeps no
+// summary or verdict that could be posted for the interrupted run.
+func (c *Context) RunReviewBundleContext(ctx context.Context, bundle string, opt ReviewRunOptions) (_ ReviewRunResult, err error) {
+	if cause := context.Cause(ctx); cause != nil {
+		return ReviewRunResult{}, fmt.Errorf("%w before it started: %w", errReviewInterrupted, cause)
+	}
 	bundle, err = filepath.Abs(bundle)
 	if err != nil {
 		return ReviewRunResult{}, err
@@ -171,6 +187,17 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ Review
 	}
 	dirs := reviewRunDirs{bundle: bundle, runner: bundle, repo: manifest.RepoDir}
 	callerBundle := bundle
+	// Registered before the isolated context's finish, so it runs after the
+	// results return: an interrupted run leaves nothing a poster would accept.
+	defer func() {
+		if errors.Is(err, errReviewInterrupted) {
+			for _, name := range []string{"summary.md", "verdict"} {
+				if removeErr := os.Remove(filepath.Join(callerBundle, name)); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+					err = errors.Join(err, removeErr)
+				}
+			}
+		}
+	}()
 	if manifest.Public {
 		// Assign, not declare: the deferred finish must report into the
 		// function's named err, not a block-scoped copy.
@@ -216,33 +243,50 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ Review
 	var log bytes.Buffer
 	started := time.Now()
 	count := 0
+launch:
 	for _, path := range concernFiles {
 		id := strings.TrimSuffix(filepath.Base(path), ".md")
 		if len(selected) > 0 && !selected[id] {
 			continue
 		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			break launch
+		}
+		if ctx.Err() != nil {
+			<-sem
+			break launch
+		}
 		count++
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(id, path string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			entry := c.runReviewConcern(dirs, manifest, id, path, string(concernTemplate), opt)
+			entry := c.runReviewConcern(ctx, dirs, manifest, id, path, string(concernTemplate), opt)
 			mu.Lock()
 			log.WriteString(entry)
 			mu.Unlock()
 		}(id, path)
 	}
+	// Every launched reviewer has stopped and been waited for here, so an
+	// isolated context is removed only after its processes are gone.
 	wg.Wait()
+	var auditErr error
 	if dirs.exec != nil {
 		// The runner clears a selected concern's earlier results before it
-		// launches that concern, so removal is allowed there.
-		if err := dirs.exec.checkPhase("concern", func(rel string, existed, removed bool) bool {
+		// launches that concern, so removal is allowed there. An interrupted
+		// phase is audited too: what returns to the caller was checked.
+		auditErr = dirs.exec.checkPhase("concern", func(rel string, existed, removed bool) bool {
 			id, ok := reviewFindingPath(rel)
 			return ok && (len(selected) == 0 || selected[id]) && available[id]
-		}); err != nil {
-			return ReviewRunResult{}, err
-		}
+		})
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return ReviewRunResult{}, errors.Join(fmt.Errorf("%w during concern reviews: %w", errReviewInterrupted, cause), auditErr)
+	}
+	if auditErr != nil {
+		return ReviewRunResult{}, auditErr
 	}
 	for _, path := range concernFiles {
 		id := strings.TrimSuffix(filepath.Base(path), ".md")
@@ -270,7 +314,7 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ Review
 	}); err != nil {
 		return ReviewRunResult{}, err
 	}
-	leadAgent, leadModel, leadOutput, leadStats, err := runReviewChain(dirs, leadPrompt, opt.Lead, opt.Timeout, filepath.Join(dirs.runner, "stats", "lead.json"))
+	leadAgent, leadModel, leadOutput, leadStats, err := runReviewChain(ctx, dirs, leadPrompt, opt.Lead, opt.Timeout, filepath.Join(dirs.runner, "stats", "lead.json"))
 	if dirs.exec != nil {
 		if auditErr := dirs.exec.checkPhase("lead", func(rel string, existed, removed bool) bool {
 			_, finding := reviewFindingPath(rel)
@@ -279,6 +323,9 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ Review
 			}
 			return rel == "summary.md" || rel == "verdict" || finding && existed && strings.HasSuffix(rel, ".json")
 		}); auditErr != nil {
+			if cause := context.Cause(ctx); cause != nil {
+				return ReviewRunResult{}, errors.Join(fmt.Errorf("%w during the lead review: %w", errReviewInterrupted, cause), auditErr)
+			}
 			return ReviewRunResult{}, auditErr
 		}
 	}
@@ -292,6 +339,9 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ Review
 	leadStats.Status = leadStatus
 	if writeErr := writeReviewStats(dirs.runner, "lead", leadStats); writeErr != nil {
 		return ReviewRunResult{}, writeErr
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return ReviewRunResult{}, fmt.Errorf("%w during the lead review: %w", errReviewInterrupted, cause)
 	}
 	if err != nil {
 		return ReviewRunResult{}, fmt.Errorf("lead review failed: %w", err)
@@ -377,7 +427,7 @@ func alignReviewHeading(summary, verdict string) string {
 	return summary[:match[0]] + heading + summary[match[1]:]
 }
 
-func (c *Context) runReviewConcern(dirs reviewRunDirs, manifest ReviewManifest, id, path, template string, opt ReviewRunOptions) string {
+func (c *Context) runReviewConcern(ctx context.Context, dirs reviewRunDirs, manifest ReviewManifest, id, path, template string, opt ReviewRunOptions) string {
 	bundle := dirs.bundle
 	body, err := os.ReadFile(path)
 	if err != nil {
@@ -413,7 +463,7 @@ func (c *Context) runReviewConcern(dirs reviewRunDirs, manifest ReviewManifest, 
 	}); err != nil {
 		return reviewConcernError(dirs, id, err.Error())
 	}
-	_, _, output, stats, runErr := runReviewChain(dirs, prompt, spec, opt.Timeout, filepath.Join(dirs.runner, "stats", id+".json"))
+	_, _, output, stats, runErr := runReviewChain(ctx, dirs, prompt, spec, opt.Timeout, filepath.Join(dirs.runner, "stats", id+".json"))
 	_ = os.WriteFile(filepath.Join(dirs.runner, ".logs", id+".out"), output, 0644)
 	if dirs.exec != nil {
 		// A link or special file at any path the runner reads or writes for
@@ -546,7 +596,7 @@ func countReviewFindings(dir string) (blockers, errors int, err error) {
 
 var reviewLimitMessage = regexp.MustCompile(`(?i)session limit|usage limit|rate limit|too many requests|overloaded|quota|HTTP/? ?429|status 429|hit your .{0,40}limit`)
 
-func runReviewChain(dirs reviewRunDirs, prompt, specs string, timeout time.Duration, statsPath string) (string, string, []byte, reviewRunStats, error) {
+func runReviewChain(ctx context.Context, dirs reviewRunDirs, prompt, specs string, timeout time.Duration, statsPath string) (string, string, []byte, reviewRunStats, error) {
 	bundle := dirs.bundle
 	list := strings.Fields(strings.ReplaceAll(specs, ",", " "))
 	if len(list) == 0 {
@@ -572,7 +622,7 @@ func runReviewChain(dirs reviewRunDirs, prompt, specs string, timeout time.Durat
 			model = parts[1]
 		}
 		_ = os.Remove(statsPath)
-		output, elapsed, err := launchReviewAgent(dirs, prompt, agent, model, timeout, statsPath)
+		output, elapsed, err := launchReviewAgent(ctx, dirs, prompt, agent, model, timeout, statsPath)
 		limited := reviewAgentLimited(output, err)
 		if limited && err == nil {
 			err = fmt.Errorf("%s reported a review usage limit", agent)
@@ -580,7 +630,8 @@ func runReviewChain(dirs reviewRunDirs, prompt, specs string, timeout time.Durat
 		attempt := collectReviewStats(statsPath, agent, model, elapsed, "", output)
 		addReviewUsage(&total, attempt, i > 0)
 		total.Agent, total.Model = agent, attempt.Model
-		if err == nil || i == len(list)-1 || !limited {
+		// A run its caller stopped starts no fallback reviewer.
+		if err == nil || i == len(list)-1 || !limited || ctx.Err() != nil {
 			return agent, model, output, total, err
 		}
 	}
@@ -608,9 +659,16 @@ func reviewAgentLimited(output []byte, err error) bool {
 	return false
 }
 
-func launchReviewAgent(dirs reviewRunDirs, prompt, agent, model string, timeout time.Duration, statsPath string) ([]byte, time.Duration, error) {
+// reviewStopGrace is how long a reviewer's process group has to exit after
+// SIGTERM before the rest of the group is killed.
+const reviewStopGrace = 5 * time.Second
+
+func launchReviewAgent(parent context.Context, dirs reviewRunDirs, prompt, agent, model string, timeout time.Duration, statsPath string) ([]byte, time.Duration, error) {
 	bundle, repoDir, x := dirs.bundle, dirs.repo, dirs.exec
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	if err := context.Cause(parent); err != nil {
+		return nil, 0, fmt.Errorf("review agent not started: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	var cmd *exec.Cmd
 	custom := envcompat.Getenv("WTC_REVIEW_AGENT_CMD")
@@ -652,11 +710,24 @@ func launchReviewAgent(dirs reviewRunDirs, prompt, agent, model string, timeout 
 		}
 	}
 	cmd.Dir = bundle
+	// The reviewer leads a process group of its own, so the runner can stop
+	// it with its descendants. That group is not the terminal's foreground
+	// group, so a terminal interrupt reaches only the runner, which stops the
+	// group here when the caller's context is done.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// On timeout, stop the whole process group: a descendant that keeps the
-	// output pipe open would otherwise hold the run until it exits.
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
-	cmd.WaitDelay = 5 * time.Second
+	// On timeout or interrupt the whole group gets SIGTERM, first checking
+	// through the process handle that the leader has not been reaped, so its
+	// pid still names the group this runner created. WaitDelay bounds the
+	// grace: if the leader or a descendant holding the output pipe has not
+	// finished by then, Wait kills the leader, closes the pipes and returns,
+	// and stopReviewGroup kills the rest of the group.
+	cmd.Cancel = func() error {
+		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			return err
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	cmd.WaitDelay = reviewStopGrace
 	if x != nil {
 		cmd.Env = x.env(agent, statsPath)
 		x.noteClient(agent)
@@ -671,13 +742,30 @@ func launchReviewAgent(dirs reviewRunDirs, prompt, agent, model string, timeout 
 	start := time.Now()
 	output, err := cmd.CombinedOutput()
 	elapsed := time.Since(start)
-	if ctx.Err() == context.DeadlineExceeded {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	if ctx.Err() != nil {
+		stopReviewGroup(cmd)
+		if cause := context.Cause(parent); cause != nil {
+			return output, elapsed, fmt.Errorf("review agent stopped: %w", cause)
 		}
 		return output, elapsed, fmt.Errorf("review agent timed out after %s", timeout)
 	}
 	return output, elapsed, err
+}
+
+// stopReviewGroup kills what remains of a stopped reviewer's process group
+// right after Wait has returned. It signals only the group this runner created
+// for cmd, by the leader's pid: Linux and macOS do not hand out a pid that is
+// still the id of a process group with live members, so while any member is
+// left the id names this group. Once the group is empty the signal finds
+// nothing (ESRCH), unless in the moment since Wait the pid space wrapped and a
+// new process made itself a group leader under that id. A descendant that
+// left the group (setsid, setpgid) is not the runner's to stop and is not
+// signalled.
+func stopReviewGroup(cmd *exec.Cmd) {
+	if cmd.Process == nil || cmd.Process.Pid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 }
 
 // reviewPrompts resolves registry prompts for a bundle. A public bundle never

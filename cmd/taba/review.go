@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -148,7 +151,12 @@ func addReviewCommands(root *cobra.Command, asJSON *bool) {
 				fmt.Fprintln(os.Stderr, "Review progress could not be confirmed; continuing locally without further posting:", err)
 			}
 		}
-		result, runErr := c.RunReviewBundle(args[0], wtc.ReviewRunOptions{Strong: strong, Standard: standard, Fast: fast, Lead: lead, Parallel: parallel, Timeout: time.Duration(timeout) * time.Second, Only: ids})
+		// While reviewers run, an interrupt, termination or hangup stops
+		// them and their process groups before this command returns. A
+		// second signal after that falls back to the default action.
+		runCtx, stopSignals := reviewRunSignalContext(cmd.Context())
+		result, runErr := c.RunReviewBundleContext(runCtx, args[0], wtc.ReviewRunOptions{Strong: strong, Standard: standard, Fast: fast, Lead: lead, Parallel: parallel, Timeout: time.Duration(timeout) * time.Second, Only: ids})
+		stopSignals()
 		var finalPostErr error
 		// A failed progress write may have succeeded remotely without returning an
 		// ID. Do not risk creating another comment or publishing a passing receipt.
@@ -329,6 +337,25 @@ func addReviewCommands(root *cobra.Command, asJSON *bool) {
 	}
 	review.AddCommand(ready)
 	root.AddCommand(review)
+}
+
+// reviewRunSignals are the signals that end a review run early. A signal the
+// process started with ignored stays ignored: a run under nohup still survives
+// a hangup, and one a non-interactive shell started in the background still
+// ignores interrupts.
+var reviewRunSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
+
+func reviewRunSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	var watched []os.Signal
+	for _, sig := range reviewRunSignals {
+		if !signal.Ignored(sig) {
+			watched = append(watched, sig)
+		}
+	}
+	if len(watched) == 0 {
+		return context.WithCancel(parent)
+	}
+	return signal.NotifyContext(parent, watched...)
 }
 
 func reviewReadyAllowed(state wtc.ReviewStatus) bool {
