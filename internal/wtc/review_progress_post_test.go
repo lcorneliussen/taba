@@ -56,6 +56,7 @@ func TestReviewProgressPostingFailuresDoNotCreateDuplicates(t *testing.T) {
 			write(filepath.Join(bin, "gh"), `#!/bin/sh
 case "$*" in
  *'--json headRefOid'*) echo '{"headRefOid":"1234567890abcdef1234567890abcdef12345678"}';;
+ *'api graphql'*'nameWithOwner'*) echo '{"data":{"repository":{"id":"R_app","nameWithOwner":"example/app","pullRequest":{"number":7,"baseRepository":{"id":"R_app","nameWithOwner":"example/app"}}}}}';;
  *'api -X PATCH'*) cat >/dev/null; echo PATCH >> "$FORGE_LOG"; `+tc.response+`;;
  *'api -X POST'*) cat >/dev/null; echo POST >> "$FORGE_LOG"; echo '{"id":302}';;
  *) exit 8;;

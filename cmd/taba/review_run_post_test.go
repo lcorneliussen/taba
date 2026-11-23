@@ -34,6 +34,7 @@ case "$*" in
   *'pr view 7'*'--json headRefOid'*) echo '{"headRefOid":"1234567890abcdef1234567890abcdef12345678"}' ;;
   *'commits/1234567890abcdef1234567890abcdef12345678/check-runs?per_page=100 --paginate --slurp'*) echo '[{"total_count":0,"check_runs":[]}]' ;;
   *'pulls/7/reviews?per_page=100'*) echo '[[]]' ;;
+  *'api graphql'*'nameWithOwner'*) echo '{"data":{"repository":{"id":"R_app","nameWithOwner":"example/app","pullRequest":{"number":7,"baseRepository":{"id":"R_app","nameWithOwner":"example/app"}}}}}' ;;
   *'api graphql'*)
     if [ "${FAKE_HOSTED_THREAD:-}" = 1 ]; then
       echo '[{"data":{"repository":{"pullRequest":{"headRefOid":"1234567890abcdef1234567890abcdef12345678","reviewThreads":{"pageInfo":{"hasNextPage":false},"nodes":[{"id":"thread","isResolved":false,"isOutdated":true,"path":"feature.go","line":null,"comments":{"nodes":[{"body":"Keep important constraint","url":"https://github.com/example/app/pull/7#discussion_r1","author":{"login":"copilot-pull-request-reviewer"},"originalCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]}}]}}}}}]'
