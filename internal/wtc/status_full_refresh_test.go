@@ -500,6 +500,36 @@ func TestStatusOlderListDoesNotReplaceANewerPullRequest(t *testing.T) {
 	}
 }
 
+func TestStatusOlderListDoesNotReplaceANewerPullRequestAfterALostReceipt(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	slug, forge := "example/widget", "github.com"
+	record := PRRecord{Number: "7"}
+	listed := []byte(`{"number":7,"state":"OPEN","title":"Listed","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}]}`)
+	refreshed := []byte(`{"number":7,"state":"OPEN","title":"Listed","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}]}`)
+	order := map[string]int{"": 0, string(listed): 1, string(refreshed): 2}
+	listStarted := time.Now()
+
+	// A refresh starts after the list was read, and its receipt cannot be written.
+	receipt := statusForgeEntryPath("since", forge, slug, "pr:7")
+	if err := os.MkdirAll(receipt, 0700); err != nil {
+		t.Fatal(err)
+	}
+	written := statusWriteForgeEntrySince("pr", forge, slug, record.Number, refreshed, listStarted.Add(time.Second))
+	if err := os.Remove(receipt); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := statusReadForgeEntryAny("pr", forge, slug, record.Number)
+	if written != (string(before) == string(refreshed)) {
+		t.Fatalf("refresh reported written=%v, entry holds %s", written, before)
+	}
+
+	listedItem := statusOpenPR{Number: "7", Fingerprint: "listed", Raw: listed, Started: listStarted}
+	statusDetailFromOpenItem(record, slug, forge, listedItem)
+	if after, _ := statusReadForgeEntryAny("pr", forge, slug, record.Number); order[string(after)] < order[string(before)] {
+		t.Fatalf("the list read before the refresh replaced its response: %s", after)
+	}
+}
+
 func TestStatusOlderPipelinePageDoesNotReplaceANewerBuild(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	slug := "team/widget"
