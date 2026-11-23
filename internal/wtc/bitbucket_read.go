@@ -63,8 +63,6 @@ func (s bitbucketReadSelection) CredentialLabel() string {
 	return "the client's own login"
 }
 
-var errBitbucketReadCredential = errors.New("unsupported Bitbucket read credential selection")
-
 // bitbucketReadSelection is the frozen read setup of one operation.
 type bitbucketReadSelection struct {
 	Client           bitbucketClient
@@ -124,14 +122,6 @@ func (s bitbucketReadSelection) fingerprint() string {
 	return "bitbucket-read-v1\x00" + string(s.Client) + "\x00" + s.ClientSource + "\x00" + s.Credential + "\x00" + s.CredentialSource + "\x00" + failed
 }
 
-// accountKnown reports whether the selection names one stable, locally
-// fingerprinted account. TWG does not expose its profile's account without
-// an extra call, and a host credential is per repository, so observations
-// through either stay private to the operation that made them.
-func (s bitbucketReadSelection) accountKnown() bool {
-	return s.err == nil && s.Client == bitbucketClientBB && s.Credential == bitbucketCredentialPersonal
-}
-
 type bitbucketReadKey struct{}
 
 // bitbucketReadState is one operation's frozen selection and the host
@@ -165,15 +155,10 @@ func bitbucketReadFor(ctx context.Context) *bitbucketReadState {
 	return &bitbucketReadState{selection: selectedBitbucketRead(""), tokens: map[string]*bitbucketRepoToken{}}
 }
 
-// repoToken asks the host for one repository's read credential, at most once
-// per operation. Concurrent readers of the same repository share the answer.
-func (s *bitbucketReadState) repoToken(ctx context.Context, workspace, repo string) (string, error) {
-	_, token, err := s.repoCredential(ctx, workspace, repo)
-	return token, err
-}
-
-// repoCredential is repoToken with the user an API token authenticates as
-// ("" for a repository access token).
+// repoCredential asks the host for one repository's read credential, at
+// most once per operation; concurrent readers of the same repository share
+// the answer. user is the user an API token authenticates as ("" for a
+// repository access token).
 func (s *bitbucketReadState) repoCredential(ctx context.Context, workspace, repo string) (string, string, error) {
 	key := strings.ToLower(workspace + "/" + repo)
 	s.mu.Lock()
