@@ -44,6 +44,7 @@ case "$*" in
   *'--json headRefOid,statusCheckRollup'*) printf '{"headRefOid":"1234567890abcdef1234567890abcdef12345678","statusCheckRollup":[{"conclusion":"FAILURE","status":"COMPLETED"}]}\n' ;;
   *'--json headRefOid'*) printf '{"headRefOid":"%s"}\n' "${FAKE_PR_HEAD:-1234567890abcdef1234567890abcdef12345678}" ;;
   *'--paginate --slurp'*) printf '[[]]\n' ;;
+  *'api graphql'*'nameWithOwner'*) printf '%s\n' '{"data":{"repository":{"id":"R_app","nameWithOwner":"example/app","pullRequest":{"number":7,"baseRepository":{"id":"R_app","nameWithOwner":"example/app"}}}}}' ;;
   *'api graphql'*'reviewThreads'*) printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"THREAD_1","isResolved":false,"comments":{"nodes":[{"databaseId":401}]}}]}}}}}\n' ;;
   *'api graphql'*'resolveReviewThread'*) printf '{"data":{"resolveReviewThread":{"thread":{"isResolved":true}}}}\n' ;;
   *'api -X POST repos/example/app/pulls/7/comments'*)

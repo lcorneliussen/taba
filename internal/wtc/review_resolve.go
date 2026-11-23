@@ -42,6 +42,14 @@ func (c *Context) ResolveReviewBundle(bundle string, opt ReviewResolveOptions) (
 	if err := reviewPublicationAllowed(manifest); err != nil {
 		return ReviewResolveResult{}, err
 	}
+	// Replies are writes by repository name; thread lookups and resolution
+	// go through GraphQL node IDs and follow a rename on their own.
+	target := manifest
+	if opt.Reply != "" {
+		if target, err = reviewWriteTarget(manifest); err != nil {
+			return ReviewResolveResult{}, err
+		}
+	}
 	rows := readInlineRecords(bundle)
 	result := ReviewResolveResult{}
 	for i := range rows {
@@ -70,7 +78,7 @@ func (c *Context) ResolveReviewBundle(bundle string, opt ReviewResolveOptions) (
 			}
 		}
 		if opt.Reply != "" {
-			if err := replyReviewInline(manifest, row.ID, opt.Reply); err != nil {
+			if err := replyReviewInline(target, row.ID, opt.Reply); err != nil {
 				return result, err
 			}
 		}
@@ -91,7 +99,7 @@ func replyReviewInline(m ReviewManifest, id, body string) error {
 	if m.Forge == "github" {
 		num, _ := strconv.Atoi(id)
 		payload, _ := json.Marshal(map[string]any{"body": body, "in_reply_to": num})
-		_, err := reviewForgeCommand(m.RepoDir, "gh", []string{"api", "-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
+		_, err := reviewGitHubAPI(m.RepoDir, []string{"-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
 		return err
 	}
 	if _, ok, err := bitbucketReviewCommentAPI(m, "", body, "", 0, id); ok {

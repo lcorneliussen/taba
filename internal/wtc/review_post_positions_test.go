@@ -40,6 +40,7 @@ func reviewPositionFixture(t *testing.T, findings string) (*Context, string, str
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
 case "$*" in
   *'--json headRefOid'*) echo '{"headRefOid":"1234567890abcdef1234567890abcdef12345678"}' ;;
+  *'api graphql'*'nameWithOwner'*) echo '{"data":{"repository":{"id":"R_app","nameWithOwner":"example/app","pullRequest":{"number":7,"baseRepository":{"id":"R_app","nameWithOwner":"example/app"}}}}}' ;;
   *'--paginate --slurp'*) echo '[[]]' ;;
   *'api -X POST repos/example/app/pulls/7/comments'*)
     case "${FAKE_INLINE_MODE:-}" in

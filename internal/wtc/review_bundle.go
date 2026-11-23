@@ -32,19 +32,22 @@ type ReviewManifest struct {
 	PR              string          `json:"pr"`
 	Forge           string          `json:"forge"`
 	Slug            string          `json:"slug"`
-	URL             string          `json:"url"`
-	BaseRef         string          `json:"base_ref"`
-	BaseSHA         string          `json:"base_sha"`
-	HeadSHA         string          `json:"head_sha"`
-	HeadBranch      string          `json:"head_branch"`
-	Round           int             `json:"round"`
-	RepoDir         string          `json:"repo_dir"`
-	Collection      string          `json:"collection"`
-	Public          bool            `json:"public"`
-	Audience        string          `json:"audience"`
-	ModeReason      string          `json:"mode_reason"`
-	Downstream      string          `json:"downstream,omitempty"`
-	Upstream        string          `json:"upstream,omitempty"`
+	// RepositoryID is the forge's immutable repository ID observed when the
+	// bundle was built; empty in older bundles. See review_identity.go.
+	RepositoryID string `json:"repository_id,omitempty"`
+	URL          string `json:"url"`
+	BaseRef      string `json:"base_ref"`
+	BaseSHA      string `json:"base_sha"`
+	HeadSHA      string `json:"head_sha"`
+	HeadBranch   string `json:"head_branch"`
+	Round        int    `json:"round"`
+	RepoDir      string `json:"repo_dir"`
+	Collection   string `json:"collection"`
+	Public       bool   `json:"public"`
+	Audience     string `json:"audience"`
+	ModeReason   string `json:"mode_reason"`
+	Downstream   string `json:"downstream,omitempty"`
+	Upstream     string `json:"upstream,omitempty"`
 }
 
 type ReviewBundle struct {
@@ -352,6 +355,9 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 		return ReviewBundle{}, err
 	}
 	manifest := ReviewManifest{Repo: opt.Repo, PR: opt.PR, Forge: forge, Slug: slug, URL: prURL, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA, HeadBranch: branch, Round: round, RepoDir: worktree, Collection: filepath.Base(c.Collection), Public: opt.Public, Audience: audience, ModeReason: reason, DevelopmentBase: developmentBase, ObservedPRBase: prBase}
+	if forge == "github" && opt.PR != "" {
+		manifest.RepositoryID = reviewRecordedRepositoryID(worktree, slug, opt.PR)
+	}
 	prText := fmt.Sprintf("# %s\n\n%s\n", prTitle, prBody)
 	if opt.PR == "" {
 		prText = fmt.Sprintf("# %s\n\n(branch-only review)\n", branch)
