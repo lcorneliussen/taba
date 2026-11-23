@@ -73,9 +73,9 @@ func reservation482Journal(t *testing.T, sibling, path string) {
 	fixtureFile(t, filepath.Join(sibling, ".wtc/runtime/tunnels.json"), string(data), 0600)
 }
 
-// reservation482Tree fingerprints every path, mode and content under dir, so
-// a test can prove the inventory did not write, repair or create anything in
-// the sibling.
+// reservation482Tree fingerprints every path, mode, size and mtime under dir,
+// plus the content of owner-readable regular files, so a test can prove the
+// inventory did not write, repair or create anything in the sibling.
 func reservation482Tree(t *testing.T, dir string) string {
 	t.Helper()
 	h := sha256.New()
@@ -294,5 +294,24 @@ func TestTunnelReservation482InventoryStaysUnderWorkspaceLock(t *testing.T) {
 	reservation482NoMutation(t, d)
 	if !reservation482Reserved(t, c) {
 		t.Fatal("reservation receipt was not recorded after lock release")
+	}
+}
+
+// Collections outside the receiving project are not read at all; members are,
+// even when the receiver sees them through a different directory spelling.
+func TestTunnelReservation482SkipsCollectionsOutsideReceivingProject(t *testing.T) {
+	c, _, _ := reservation482Receiver(t)
+	sibling := reservation482Sibling(t, c, "sibling")
+	fixtureFile(t, filepath.Join(sibling, ".wtc/runtime/tunnels.json"), "{not json", 0600)
+	outside := ReceivingContext{Collection: c.Collection, Project: &ProjectContext{Root: t.TempDir()}}
+	if _, member, err := tunnelReservationJournal(context.Background(), outside, sibling); err != nil || member {
+		t.Fatal("collection outside the receiving project was read:", member, err)
+	}
+	receiver, err := c.receivingContext()
+	if err != nil || receiver.Project == nil {
+		t.Fatal("receiver has no project", err)
+	}
+	if _, _, err = tunnelReservationJournal(context.Background(), receiver, sibling); err == nil {
+		t.Fatal("member's malformed journal was ignored")
 	}
 }
