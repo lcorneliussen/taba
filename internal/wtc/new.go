@@ -360,11 +360,11 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 		branchNote, err = prompts.Render(ctx, "launch.branch-detached", map[string]string{"branch": result.IntendedBranch})
 	}
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("%w (partial collection at %s without HANDOFF.md)", err, result.Collection)
 	}
 	handoff, err := prompts.Render(ctx, "launch.handoff", map[string]string{"collection": filepath.Base(result.Collection), "goal": defaultSource(result.Source), "branch_note": branchNote.String()})
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("%w (partial collection at %s without HANDOFF.md)", err, result.Collection)
 	}
 	if err := writeLaunchNote(result.Collection, handoff); err != nil {
 		return result, err

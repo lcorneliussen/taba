@@ -705,11 +705,11 @@ func (c *Context) newAdHoc(opt NewOptions) (NewResult, error) {
 		branchNote, err = prompts.Render(ctx, "launch.branch-explicit", nil)
 	}
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("%w (partial collection at %s without HANDOFF.md)", err, result.Collection)
 	}
 	handoff, err := prompts.Render(ctx, "launch.handoff-adhoc", map[string]string{"collection": name, "goal": defaultSource(result.Source), "branch_note": branchNote.String()})
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("%w (partial collection at %s without HANDOFF.md)", err, result.Collection)
 	}
 	if err := writeLaunchNote(result.Collection, handoff); err != nil {
 		return result, err

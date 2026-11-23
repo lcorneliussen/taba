@@ -35,7 +35,8 @@ const (
 )
 
 // Context selects where prompts resolve from. An empty Harness means no
-// project layer. A Public audience never reads project overrides (#221).
+// project layer. A Public audience never reads or applies project overrides
+// (#221); it only notes that one exists.
 type Context struct {
 	Harness  string
 	Defaults fs.FS
@@ -74,7 +75,8 @@ type Provenance struct {
 }
 
 // Text is rendered prompt content. Agent dispatch points accept Text rather
-// than string, so only Render can produce what they send.
+// than string, so assembled strings cannot reach them; outside this package
+// only Render produces a non-empty Text.
 type Text struct {
 	s    string
 	prov Provenance
@@ -142,13 +144,17 @@ func Resolve(ctx Context, id string) (Resolution, error) {
 	prov.Source, prov.File = SourceEmbedded, "embedded:prompts/"+def.Path
 	if ctx.Harness != "" {
 		override := filepath.Join(ctx.Harness, "prompts", filepath.FromSlash(def.Path))
+		if ctx.Audience == Public {
+			if _, err := os.Lstat(override); err == nil {
+				prov.Skipped = append(prov.Skipped, Skip{File: override, Reason: "public audience uses embedded text"})
+			}
+			return Resolution{Provenance: prov, Body: body}, nil
+		}
 		raw, err := os.ReadFile(override)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 		case err != nil:
 			return Resolution{}, err
-		case ctx.Audience == Public:
-			prov.Skipped = append(prov.Skipped, Skip{File: override, Reason: "public audience uses embedded text"})
 		default:
 			project, err := Parse(def.Path, raw)
 			if err != nil {
@@ -161,7 +167,7 @@ func Resolve(ctx Context, id string) (Resolution, error) {
 				return Resolution{}, fmt.Errorf("%s: %w", override, err)
 			}
 			body = project.Body
-			prov.Source, prov.File, prov.BaseVersion = SourceProject, override, project.Version
+			prov.Source, prov.File = SourceProject, override
 		}
 		base := filepath.Join(ctx.Harness, "prompts", BaseDir, filepath.FromSlash(def.Path))
 		if raw, err := os.ReadFile(base); err == nil {

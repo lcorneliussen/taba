@@ -680,9 +680,8 @@ func launchReviewAgent(dirs reviewRunDirs, prompt, agent, model string, timeout 
 	return output, elapsed, err
 }
 
-// reviewPromptTemplate returns the harness override for a private bundle, or the
-// embedded default when the bundle is public or the harness has no override.
-// A public bundle never carries project prompt overrides (#221).
+// reviewPrompts resolves registry prompts for a bundle. A public bundle never
+// carries project prompt overrides (#221).
 func (c *Context) reviewPrompts(manifest ReviewManifest) prompts.Context {
 	ctx := c.Prompts()
 	if manifest.Public {
@@ -691,6 +690,8 @@ func (c *Context) reviewPrompts(manifest ReviewManifest) prompts.Context {
 	return ctx
 }
 
+// reviewPromptTemplate returns the harness override for a private bundle, or the
+// embedded default when the bundle is public or the harness has no override.
 func (c *Context) reviewPromptTemplate(manifest ReviewManifest, name string) ([]byte, error) {
 	if !manifest.Public {
 		body, err := os.ReadFile(filepath.Join(c.Harness, "review", "prompts", name))

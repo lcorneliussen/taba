@@ -238,7 +238,8 @@ diff reports `untracked`. `--json` provides the same findings for automation.
 
 `taba eject 'skills/taba-customize'` or another selected path copies an
 embedded default into the harness for editing; eject refuses to overwrite an
-existing file.
+existing file. Keep repository-specific agent instructions in that
+repository's `AGENTS.md` and hooks in its `.harness/` directory.
 
 ## Agent prompts
 
@@ -266,5 +267,4 @@ instead of sending a broken prompt. An override may leave out the frontmatter.
 If it keeps an `id` line, that ID must match its path.
 
 Public review bundles never use project overrides; they always send the
-embedded text, so private project instructions stay out of public artifacts. Keep repository-specific agent instructions in that
-repository's `AGENTS.md` and hooks in its `.harness/` directory.
+embedded text, so private project instructions stay out of public artifacts.
