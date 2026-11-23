@@ -37,10 +37,6 @@ func statusBBMergeEventTime(raw []byte) string {
 	return ""
 }
 
-func statusBBCompleteMergeTime(detail statusPRDetail, slug string) statusPRDetail {
-	return statusBBCompleteMergeTimeContext(context.Background(), detail, slug)
-}
-
 func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail, slug string) statusPRDetail {
 	if detail.State != "MERGED" || detail.MergedOn != "" {
 		return detail
@@ -115,17 +111,6 @@ func statusParseForgeDetail(forge string, raw []byte, record PRRecord) (statusPR
 		err = fmt.Errorf("forge returned a different PR number")
 	}
 	return detail, err
-}
-
-func statusCachedSettledMerge(record PRRecord, slug, forge string) (statusPRDetail, bool) {
-	// Settled merge detail retains authority within statusMergedCacheAge (24h
-	// by default).
-	detail, ok := statusRetainedMerge(record, slug, forge)
-	if !ok || detail.MergedOn == "" || detail.ChecksUnsettled || detail.Checks == "PENDING" {
-		return statusPRDetail{}, false
-	}
-	detail.Freshness, detail.StateSource = "settled", "settled-cache"
-	return detail, true
 }
 
 func statusReadCachedDetail(record PRRecord, slug, forge string) (statusPRDetail, bool) {
@@ -308,18 +293,6 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	}
 	unlock()
 	return detail
-}
-
-func statusViewPR(record PRRecord, slug, forge string, bypassCache bool) statusPRDetail {
-	return statusViewPRWithFreshness(record, slug, forge, bypassCache, false)
-}
-
-func statusViewFreshPR(record PRRecord, slug, forge string) statusPRDetail {
-	return statusViewPRWithFreshness(record, slug, forge, false, true)
-}
-
-func statusViewPRWithFreshness(record PRRecord, slug, forge string, bypassCache, requireFresh bool) statusPRDetail {
-	return statusViewPRWithLive(record, slug, forge, bypassCache, requireFresh, nil)
 }
 
 func statusViewPRWithLive(record PRRecord, slug, forge string, bypassCache, requireFresh bool, onLive func(statusPRDetail)) statusPRDetail {

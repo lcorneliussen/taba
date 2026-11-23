@@ -307,7 +307,7 @@ func TestUpgradeDirtySelectedInputsPreservesBothShapes(t *testing.T) {
 				if err := os.Remove(filepath.Join(c.Harness, pin)); err != nil {
 					t.Fatal(err)
 				}
-				config, pin = "taba.toml", ".taba-version"
+				config = "taba.toml"
 			}
 			fixtureGit(t, "-C", c.Harness, "add", "-A")
 			fixtureGit(t, "-C", c.Harness, "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "selected inputs")

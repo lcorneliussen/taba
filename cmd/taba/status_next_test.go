@@ -410,6 +410,7 @@ func TestStatusNextLogOverlayRoutesKeysToVisibleView(t *testing.T) {
 		m = statusScrollEvent(t, m, tea.KeyPressMsg{Code: 'j'})
 	}
 	m = statusScrollEvent(t, m, tea.MouseClickMsg{X: strings.Index(m.headerLine(), "refreshing"), Y: 0, Button: tea.MouseLeft})
+	m = statusScrollEvent(t, m, tea.MouseReleaseMsg{X: strings.Index(m.headerLine(), "refreshing"), Y: 0, Button: tea.MouseLeft})
 	if !m.showLog {
 		t.Fatal("refresh control did not open the log")
 	}

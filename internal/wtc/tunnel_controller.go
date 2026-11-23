@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"reflect"
-	"strings"
 )
 
 func tunnelOperationID() (string, error) {
@@ -319,5 +318,3 @@ func (c *Context) cleanupManagedTunnels(ctx context.Context) error {
 	}
 	return c.refuseTunnelObligations()
 }
-
-func tunnelItemService(item RuntimeItem) string { return strings.TrimPrefix(item.Group, item.Dir+"/") }

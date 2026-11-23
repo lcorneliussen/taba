@@ -25,7 +25,7 @@ func TestStatusTUIAuth441LegacyStartupDoesNotPaint(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	model := newStatusTUIModel(c, false, false, false, true, true, time.Minute, 5*time.Minute, time.Minute, ctx, cancel)
+	model := newStatusTUIModel(c, false, false, false, true, true, false, time.Minute, 5*time.Minute, time.Minute, ctx, cancel)
 	model.width, model.height = 100, 30
 	if model.snapshotLoaded || len(model.snapshot.PRs) != 0 || strings.Contains(model.View().Content, "Legacy context A") {
 		t.Fatal("active startup briefly painted an unscoped snapshot")
@@ -48,8 +48,6 @@ func statusAuth441ModelFixture(t *testing.T) (*wtc.Context, wtc.StatusSnapshot) 
 	t.Setenv("TABA_CONFIG_ROOT", "")
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
 	t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	collection := filepath.Join(t.TempDir(), "fixture")
 	harness := filepath.Join(collection, "harness")
 	if err := os.MkdirAll(harness, 0700); err != nil {

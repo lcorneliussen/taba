@@ -11,13 +11,9 @@ import (
 	"taba.sh/taba/internal/wtc"
 )
 
-// TestMain scrubs canonical collection settings. Capture the child setting
-// before that scrub and use a legacy marker that survives it.
-var testDevChildCanonical = os.Getenv("TABA_DEV_BUILD")
-
 func TestStatusNextChildBypassesDevBuild(t *testing.T) {
 	if os.Getenv("WTC_TEST_DEV_CHILD") == "1" {
-		if testDevChildCanonical != "off" || os.Getenv("WTC_DEV_BUILD") != "off" {
+		if os.Getenv("TABA_DEV_BUILD") != "off" || os.Getenv("WTC_DEV_BUILD") != "off" {
 			os.Exit(9)
 		}
 		os.Exit(0)

@@ -223,7 +223,7 @@ func TestRuntimeObservationCancellation(t *testing.T) {
 			c, m, plan := observationFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			var observation context.Context = ctx
+			observation := ctx
 			if between {
 				plan.CancelMarker = filepath.Join(t.TempDir(), "cancel")
 				writeObservationPlan(t, plan)

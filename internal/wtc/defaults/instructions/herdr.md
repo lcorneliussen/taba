@@ -128,8 +128,11 @@ taba status --procs --watch 5
 taba status --all --watch 120   # all collections at once
 ```
 
-The collection table is **clickable** wherever it has a terminal on both
-ends (`--no-click` turns that off, `--click` forces it on):
+By default the status pane does not capture the mouse: herdr's own
+selection works in it, links open with modifier-click, and the wheel scrolls
+the table where the terminal translates it into arrow keys. Run status with
+`--mouse` to make the table **clickable** (`--no-click` turns the click
+targets off again, `--click` forces them on):
 
 | Click | Does |
 |---|---|
@@ -137,10 +140,10 @@ ends (`--no-click` turns that off, `--click` forces it on):
 | the `PR` cell | `:Octo pr edit` in that tab, or the pull request in the browser |
 | the `TREE` cell | neo-tree git status in that tab; `lazygit` in a `diff:<repo>` herdr tab if nvim is not up |
 
-`r` redraws, `q` quits. Clickable cells are underlined. The pane captures
-the mouse while it runs, so herdr's own selection and wheel scrolling in that
-pane give way to the table — close the diff tabs yourself when done; the
-status pane never closes anything.
+`r` redraws, `q` quits, `v` shows the full output for selecting beyond the
+visible rows. With `--mouse` the pane captures the mouse while it runs, so
+herdr's own selection and wheel scrolling in that pane give way to the table —
+close the diff tabs yourself when done; the status pane never closes anything.
 
 ## Browse
 

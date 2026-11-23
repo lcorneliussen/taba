@@ -106,10 +106,6 @@ func statusReadForgeEntryAnyContext(ctx context.Context, kind, forge, slug, key 
 	return statusReadForgeEntryWithAgeContext(ctx, kind, forge, slug, key, 365*24*time.Hour)
 }
 
-func statusReadForgeEntryWithAge(kind, forge, slug, key string, age time.Duration) ([]byte, bool) {
-	return statusReadForgeEntryWithAgeContext(context.Background(), kind, forge, slug, key, age)
-}
-
 func statusReadForgeEntryWithAgeContext(ctx context.Context, kind, forge, slug, key string, age time.Duration) ([]byte, bool) {
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)
