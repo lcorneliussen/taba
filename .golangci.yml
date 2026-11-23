@@ -4,6 +4,7 @@ linters:
   default: none
   enable:
     - errcheck
+    - gocritic
     - govet
     - ineffassign
     - staticcheck
@@ -33,6 +34,16 @@ linters:
         - golang.org/x/sys/unix.Unlinkat
         # Never fails on darwin or linux.
         - os.Unsetenv
+    gocritic:
+      # Only the project's own rules; tools/lint/gitref.go says what they
+      # reject and which constructor to use instead.
+      disable-all: true
+      enabled-checks:
+        - ruleguard
+      settings:
+        ruleguard:
+          rules: "${base-path}/tools/lint/gitref.go"
+          failOn: all
     staticcheck:
       # golangci-lint's default set, plus:
       # ST1005: error strings here start with product names (Bitbucket,
@@ -56,6 +67,10 @@ linters:
       # A test that ignores a setup error fails on its next assertion.
       - path: _test\.go
         linters: [errcheck]
+      # Tests build Git fixtures with plain git commands. internal/gitref is
+      # where refs are built.
+      - path: (_test\.go|^internal/gitref/)
+        linters: [gocritic]
       # Releasing a flock: closing the descriptor releases it too. Taking a
       # lock (LOCK_EX, LOCK_SH) is still checked.
       - linters: [errcheck]
