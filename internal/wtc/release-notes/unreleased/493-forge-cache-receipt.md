@@ -6,4 +6,5 @@
   refresh could later replace the refreshed state in `taba status`. The
   receipt is now written first, and a failed receipt leaves the cached state
   as it was.
-  ([#493](https://github.com/lcorneliussen/taba/issues/493)).
+  ([#493](https://github.com/lcorneliussen/taba/issues/493),
+  [#501](https://github.com/lcorneliussen/taba/pull/501)).
