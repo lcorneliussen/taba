@@ -83,6 +83,8 @@ esac
 			os.Unsetenv(key)
 		}
 	}
+	// This flow is the deprecated bb client's contract (#471): select it.
+	t.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/usr/bin:/bin")
 	t.Setenv("FAKE_BB_LOG", filepath.Join(state, "calls.log"))
 	t.Setenv("FAKE_BB_STATE", state)

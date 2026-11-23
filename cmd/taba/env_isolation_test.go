@@ -16,6 +16,9 @@ func TestMain(m *testing.M) {
 		}
 	}
 	guard := installTestNetworkGuard()
+	// Fixtures written against bb select it explicitly (the deprecated
+	// compatibility client, #471); tests of the twg default clear it.
+	os.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
 	code := m.Run()
 	if err := guard(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

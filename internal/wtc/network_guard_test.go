@@ -18,13 +18,23 @@ var networkGuardLog string
 // PATH. HTTP(S) traffic goes through a closed local proxy, so a request that
 // escapes a test's local server fails instead of reaching a real host
 // (loopback servers are never proxied). check reports any recorded attempt.
+//
+// A test binary that a test starts again as a child process inherits the
+// guard (its proxy, git and Go settings, and the log through
+// TEST_NETWORK_GUARD_LOG) and keeps the PATH its parent test chose for
+// it: a fixture's own fake client first. The parent checks the shared log.
 func installTestNetworkGuard() (check func() error) {
+	if inherited := os.Getenv("TEST_NETWORK_GUARD_LOG"); inherited != "" {
+		networkGuardLog = inherited
+		return func() error { return nil }
+	}
 	dir, err := os.MkdirTemp("", "taba-network-guard-")
 	if err != nil {
 		panic(err)
 	}
 	log := filepath.Join(dir, "attempts.log")
 	networkGuardLog = log
+	os.Setenv("TEST_NETWORK_GUARD_LOG", log)
 	gitConfig := filepath.Join(dir, "gitconfig")
 	if err := os.WriteFile(gitConfig, []byte("[credential]\n\thelper =\n[user]\n\tname = Synthetic Test\n\temail = test@example.invalid\n"), 0o600); err != nil {
 		panic(err)
@@ -53,8 +63,10 @@ func installTestNetworkGuard() (check func() error) {
 	for _, name := range []string{"HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY"} {
 		os.Setenv(name, "http://127.0.0.1:9")
 	}
-	os.Unsetenv("NO_PROXY")
-	os.Unsetenv("no_proxy")
+	// Loopback stays direct for every tool, not only Go: tests run local
+	// servers and runtimes.
+	os.Setenv("NO_PROXY", "127.0.0.1,localhost,::1")
+	os.Setenv("no_proxy", "127.0.0.1,localhost,::1")
 	return func() error {
 		defer os.RemoveAll(dir)
 		if raw, _ := os.ReadFile(log); len(raw) > 0 {
