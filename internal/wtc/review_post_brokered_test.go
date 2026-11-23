@@ -150,6 +150,18 @@ func TestBrokeredReviewPostAsksForTheRestAfterAStoppedRun(t *testing.T) {
 	if _, err := os.Stat(reviewReceiptPath(f.c.Collection, "bitbucket", "acme/alpha", "7", f.m.HeadSHA, "900", "pass")); !os.IsNotExist(err) {
 		t.Fatal("an incomplete post must not earn the review receipt")
 	}
+	// The person confirms the rest: the next post applies both receipts.
+	f.receipt(t, second.IntentID, true, "done:900", "done:902")
+	result, err := f.c.postReviewBrokered(f.m, f.bundle, "", brokeredSummary)
+	if err != nil || result.CommentID != "900" || result.InlinePosted != 1 {
+		t.Fatalf("after the second receipt = %+v, %v", result, err)
+	}
+	if _, err := os.Stat(reviewReceiptPath(f.c.Collection, "bitbucket", "acme/alpha", "7", f.m.HeadSHA, "900", "pass")); err != nil {
+		t.Fatal("a completed second attempt must earn the review receipt")
+	}
+	if rows := readInlineRecords(f.bundle); len(rows) != 1 || rows[0].ID != "902" {
+		t.Fatalf("inline records = %+v", rows)
+	}
 }
 
 func TestBrokeredReviewPostKeepsUnknownOutcomesPending(t *testing.T) {

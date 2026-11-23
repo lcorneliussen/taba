@@ -32,6 +32,11 @@ func BitbucketBranchPullRequest(root, slug, branch string) (*BitbucketCheckoutPR
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	ctx = statusAuthOperation(bitbucketReadOperation(ctx, root))
+	if bitbucketReadFor(ctx).selection.Client == bitbucketClientBB {
+		// bb lists pull requests without a source-branch filter: a lookup
+		// through it could only guess, so it is reported, never "no PR".
+		return nil, &bitbucketReadError{cause: bitbucketCauseBranchLookup}
+	}
 	number := ""
 	for _, state := range []string{"OPEN", "MERGED", "DECLINED", "SUPERSEDED"} {
 		raw, err := bitbucketReadPRsByState(ctx, slug, branch, state, 10)

@@ -70,7 +70,7 @@ func BitbucketReadDiagnose(root, repo, slug string, probe bool) BitbucketReadDia
 		d.Detail = "repository read: " + refusal.Message
 		return d
 	}
-	if _, err := bitbucketReadPRsByState(ctx, slug, "", "OPEN", 1); err != nil {
+	if err := bitbucketProbePRs(ctx, slug); err != nil {
 		refusal := ClassifyBitbucketRefusal(err, label)
 		d.Cause, d.Status = refusal.Cause, refusal.Status
 		d.Detail = "repository readable; pull request read: " + refusal.Message

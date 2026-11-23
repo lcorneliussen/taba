@@ -279,8 +279,8 @@ const (
 // credential, noninteractively. useHttpPath is forced so helpers see the
 // repository path and can answer per repository. Only the password is used; the helper's
 // username is ignored rather than interpreted as an authentication mode. The
-// helper's stderr and stdout are never echoed. The username is returned for
-// an API token; for a repository access token it is ignored, never read as an
+// helper's stderr and stdout are never echoed. The username is returned; the
+// caller uses it only for the API-token type, never to infer an
 // authentication mode. git is never asked to approve
 // or reject, so no credential store is written.
 func gitCredentialFill(parent context.Context, workspace, repo string) (string, string, error) {
@@ -782,4 +782,32 @@ func twgValues(data []byte) ([]json.RawMessage, error) {
 func reviewBBPRArgs(slug, number string) []string {
 	workspace, repo, _ := strings.Cut(slug, "/")
 	return []string{"--workspace", workspace, "--repo", repo, "pr", "view", number, "--json"}
+}
+
+// bitbucketProbePRs reads one page of a repository's open pull requests and
+// accepts any well-formed answer: doctor's probe asks whether pull requests
+// can be read, not whether the list is complete.
+func bitbucketProbePRs(ctx context.Context, slug string) error {
+	workspace, repo, err := splitBitbucketSlug(slug)
+	if err != nil {
+		return err
+	}
+	s := bitbucketReadFor(ctx)
+	if s.selection.err != nil {
+		return bitbucketOperationError("Bitbucket PR list", s.selection.err)
+	}
+	if s.selection.Client == bitbucketClientBB {
+		_, err := bitbucketReadRun(ctx, nil, "bb pr list", "bb", "pr", "list", "--state", "OPEN", "--limit", "1", "--json", "--workspace", workspace, "--repo", repo)
+		return bitbucketOperationError("bb pr list", err)
+	}
+	const operation = "twg bitbucket pull-requests query"
+	out, err := s.twgRead(ctx, workspace, repo, operation, "bitbucket", "pull-requests", "query", "--scope", "repo", "--state", "OPEN", "--limit", "1")
+	if err != nil {
+		return err
+	}
+	var any json.RawMessage
+	if json.Unmarshal(out, &any) != nil {
+		return bitbucketOperationError(operation, &bitbucketReadError{cause: bitbucketCauseInvalidJSON})
+	}
+	return nil
 }

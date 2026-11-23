@@ -9,7 +9,8 @@ import (
 
 // The gateway's Collection card and pull request news read a Bitbucket
 // checkout's pull request through taba's Bitbucket reader: TWG with the
-// host's read credential where configured, never bb (#471). A read that
+// host's read credential where configured. The deprecated bb client cannot
+// look a pull request up by branch here and reports that as a refusal. A read that
 // fails is reported with its classified cause on the card and, once per
 // cause, in the news; it is never shown as "no pull request".
 func init() {

@@ -59,7 +59,7 @@ case "$*" in
 *"pull-requests activity"*) echo '{"items":[{"input":"7","ok":true,"data":[{"pull_request":{"id":7},"update":{"state":"MERGED","date":"2026-11-20T10:00:00Z"}}]}]}';;
 *"comment query"*) echo '{"values":[{"id":1,"content":{"raw":"hello"},"created_on":"2026-11-20T10:00:00Z"}]}';;
 *"repo get"*) echo '{"full_name":"acme/'"$repo"'","is_private":true}';;
-*"pull-requests query"*) if [ "$FAKE_TWG_MODE" = no-pr ]; then echo '{"values":[]}'; else echo '{"values":[{"id":7,"source":{"branch":{"name":"feature"}}}]}'; fi;;
+*"pull-requests query"*) if [ "$FAKE_TWG_MODE" = no-pr ]; then echo '{"values":[]}'; elif [ "$FAKE_TWG_MODE" = busy ]; then echo '{"values":[{"id":7},{"id":8},{"id":9}],"next":"https://example.invalid/page2"}'; else echo '{"values":[{"id":7,"source":{"branch":{"name":"feature"}}}]}'; fi;;
 *"comment create"*) [ "$FAKE_TWG_MODE" = write-denied ] && { echo '{"ok":false,"error":{"code":"FORBIDDEN","statusCode":403}}'; exit 1; }
   echo '{"id":555,"links":{"html":{"href":"https://bitbucket.org/acme/'"$repo"'/pull-requests/7#comment-555"}}}';;
 *"comment update"*) echo '{"id":41}';;
@@ -678,6 +678,14 @@ func TestBitbucketBranchPullRequestForTheGatewayCard(t *testing.T) {
 	if pr, err := BitbucketBranchPullRequest("", "acme/alpha", "feature"); pr != nil || err != nil {
 		t.Fatalf("no PR = %+v, %v", pr, err)
 	}
+	// The deprecated bb client cannot look up by branch: a refusal, not "no PR".
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "")
+	t.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
+	if pr, err := BitbucketBranchPullRequest("", "acme/alpha", "feature"); pr != nil || ClassifyBitbucketRefusal(err, "").Cause != RefusalClient {
+		t.Fatalf("bb branch lookup = %+v, %v", pr, err)
+	}
+	t.Setenv("TABA_BITBUCKET_TRANSPORT", "")
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
 	// A denied read is an error, never "no pull request".
 	t.Setenv("FAKE_TWG_MODE", "denied")
 	if pr, err := BitbucketBranchPullRequest("", "acme/alpha", "feature"); pr != nil || err == nil {
@@ -700,9 +708,15 @@ func TestBitbucketDoctorReadRowProbesOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("probe = %+v", d)
 	}
 	log := h.read(t, h.log)
-	if !strings.Contains(log, "argv:bitbucket repo get --workspace acme --repo alpha") || !strings.Contains(log, "argv:bitbucket pull-requests query --scope repo --state OPEN --limit 2") {
+	if !strings.Contains(log, "argv:bitbucket repo get --workspace acme --repo alpha") || !strings.Contains(log, "argv:bitbucket pull-requests query --scope repo --state OPEN --limit 1") {
 		t.Fatalf("probe reads:\n%s", log)
 	}
+	// A busy repository (several open PRs, more pages) is readable.
+	t.Setenv("FAKE_TWG_MODE", "busy")
+	if d := BitbucketReadDiagnose("", "alpha", "acme/alpha", true); !d.OK {
+		t.Fatalf("busy repository = %+v", d)
+	}
+	t.Setenv("FAKE_TWG_MODE", "")
 	// No credential for the repository, and a denied read: reported, nothing echoed.
 	if d := BitbucketReadDiagnose("", "gamma", "acme/gamma", true); d.OK || d.Cause != RefusalNoCredential || !strings.Contains(d.Detail, "credential helper has none") {
 		t.Fatalf("gamma = %+v", d)

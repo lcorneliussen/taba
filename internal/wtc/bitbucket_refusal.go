@@ -28,6 +28,9 @@ const (
 	RefusalOther        = "other"
 )
 
+// bitbucketCauseBranchLookup refuses a gateway branch lookup through bb.
+const bitbucketCauseBranchLookup = "branch lookups need twg; the deprecated bb client is selected (unset " + bitbucketClientVariable + ")"
+
 // BitbucketRefusal is one classified read failure. Message is fixed text for
 // people; it never holds a credential, response body or stderr.
 type BitbucketRefusal struct {
@@ -89,7 +92,7 @@ func ClassifyBitbucketRefusal(err error, credential string) BitbucketRefusal {
 		return BitbucketRefusal{Cause: RefusalUnsupported, Message: "the configured Bitbucket read credential cannot be used: " + text}
 	case classified != nil && classified.cause == bitbucketCauseAuth:
 		return BitbucketRefusal{Cause: RefusalUnauthorized, Message: "Bitbucket read refused: " + who + " was not accepted"}
-	case errors.Is(err, exec.ErrNotFound) || strings.Contains(text, "is not installed") || strings.Contains(text, "unsupported TWG version"):
+	case errors.Is(err, exec.ErrNotFound) || strings.Contains(text, "is not installed") || strings.Contains(text, "unsupported TWG version") || strings.Contains(text, bitbucketCauseBranchLookup):
 		return BitbucketRefusal{Cause: RefusalClient, Message: "the Bitbucket client cannot run: " + text}
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(text, "timed out"):
 		return BitbucketRefusal{Cause: RefusalTimeout, Message: "Bitbucket read timed out"}

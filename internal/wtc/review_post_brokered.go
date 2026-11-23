@@ -35,7 +35,7 @@ import (
 const (
 	bitbucketWriteRequestFile = "bitbucket-pr-writes.json"
 	bitbucketWriteReceiptsDir = "bitbucket-pr-writes"
-	brokeredSidecarFile       = "bitbucket-pr-writes.intent.json"
+	brokeredSidecarPrefix     = "bitbucket-pr-writes."
 )
 
 // errBrokeredIncomplete marks a receipt whose run stopped early: its
@@ -101,6 +101,12 @@ type brokeredReceipt struct {
 // brokeredIntentID names attempt n of a review's brokered post. A stopped
 // attempt keeps its id (the plugin carries an intent out once); the rest is
 // asked for under the next one.
+// brokeredSidecarPath is the local record of one attempt, kept per intent so
+// a later attempt never replaces the record an earlier receipt needs.
+func brokeredSidecarPath(bundle, intent string) string {
+	return filepath.Join(bundle, brokeredSidecarPrefix+intent+".intent.json")
+}
+
 func brokeredIntentID(m ReviewManifest, bundle string, attempt int) string {
 	sum := sha256.Sum256([]byte(strings.Join([]string{"review-post-v1", m.Slug, m.PR, m.HeadSHA, strconv.Itoa(m.Round), bundle, strconv.Itoa(attempt)}, "\x00")))
 	return "taba-review-" + hex.EncodeToString(sum[:])[:24]
@@ -190,7 +196,7 @@ func (c *Context) postReviewBrokered(m ReviewManifest, bundle, cid, finalBody st
 	if len(request.Operations) > 100 {
 		return ReviewPostResult{}, fmt.Errorf("the review has more than 100 comments to write; a confirmed request holds at most 100")
 	}
-	if err := writePrivateJSON(filepath.Join(bundle, brokeredSidecarFile), sidecar); err != nil {
+	if err := writePrivateJSON(brokeredSidecarPath(bundle, intent), sidecar); err != nil {
 		return ReviewPostResult{}, err
 	}
 	if cid == "" {
@@ -221,7 +227,7 @@ func (c *Context) reconcileBrokeredReview(m ReviewManifest, bundle, gitDir, inte
 	if !strings.EqualFold(receipt.Owner, workspace) || !strings.EqualFold(receipt.Repo, repo) || strconv.Itoa(receipt.PR) != m.PR {
 		return ReviewPostResult{}, fmt.Errorf("the Bitbucket write receipt names another pull request")
 	}
-	sideRaw, err := os.ReadFile(filepath.Join(bundle, brokeredSidecarFile))
+	sideRaw, err := os.ReadFile(brokeredSidecarPath(bundle, intent))
 	var sidecar brokeredSidecar
 	if err != nil || json.Unmarshal(sideRaw, &sidecar) != nil || sidecar.IntentID != intent || len(receipt.Results) != len(sidecar.Purposes) {
 		return ReviewPostResult{}, fmt.Errorf("the brokered review's local record is missing or does not match its receipt; reconcile by reading the pull request")
