@@ -265,6 +265,9 @@ export function pullRequestWatch(file, now = Date.now) {
         if (!r.path || r.error) continue;
         const prev = c.repos[r.path];
         const cur = prFacts(r.pullRequest);
+        // Checks that could not be read this time are not a change: keep
+        // what was seen, so a later read does not announce it again.
+        if (cur && cur.checks === "unknown") cur.checks = prev?.number === cur.number ? prev.checks : "none";
         // A pull request does not go away: none after one was seen means
         // the forge could not be asked this time. (wtc status reports both
         // that and no pull request yet as none.)

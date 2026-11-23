@@ -63,6 +63,11 @@ type CheckoutStatus struct {
 	CatchUpRecoveryCompleted *RecoveryCompletion `json:"catchUpRecoveryCompleted,omitempty"`
 }
 
+// BitbucketPullRequest reads a Bitbucket checkout's pull request; the taba
+// command sets it to its Bitbucket reader (#471). nil, or a nil answer,
+// leaves the checkout without a pull request.
+var BitbucketPullRequest func(dir, owner, repo, branch string) *PullRequest
+
 // PullRequest is the pull request of a checkout's branch.
 type PullRequest struct {
 	Number int    `json:"number"`
@@ -254,6 +259,9 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 	s.Proposal = ReadProposal(top, s.Branch)
 	if pullRequests && origin.Forge == ForgeGitHub && s.Branch != "" {
 		s.PullRequest = gitHubPullRequest(top, origin, s.Branch)
+	}
+	if pullRequests && origin.Forge == ForgeBitbucket && s.Branch != "" && BitbucketPullRequest != nil {
+		s.PullRequest = BitbucketPullRequest(top, origin.Owner, origin.Repo, s.Branch)
 	}
 	checkout := &Checkout{Dir: top}
 	if ref, exists, err := checkout.recoveryMarker(); err != nil {

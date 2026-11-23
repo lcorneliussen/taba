@@ -59,7 +59,7 @@ case "$*" in
 *"pull-requests activity"*) echo '{"items":[{"input":"7","ok":true,"data":[{"pull_request":{"id":7},"update":{"state":"MERGED","date":"2026-11-20T10:00:00Z"}}]}]}';;
 *"comment query"*) echo '{"values":[{"id":1,"content":{"raw":"hello"},"created_on":"2026-11-20T10:00:00Z"}]}';;
 *"repo get"*) echo '{"full_name":"acme/'"$repo"'","is_private":true}';;
-*"pull-requests query"*) echo '{"values":[{"id":7,"source":{"branch":{"name":"feature"}}}]}';;
+*"pull-requests query"*) if [ "$FAKE_TWG_MODE" = no-pr ]; then echo '{"values":[]}'; else echo '{"values":[{"id":7,"source":{"branch":{"name":"feature"}}}]}'; fi;;
 *"comment create"*) [ "$FAKE_TWG_MODE" = write-denied ] && { echo '{"ok":false,"error":{"code":"FORBIDDEN","statusCode":403}}'; exit 1; }
   echo '{"id":555,"links":{"html":{"href":"https://bitbucket.org/acme/'"$repo"'/pull-requests/7#comment-555"}}}';;
 *"comment update"*) echo '{"id":41}';;
@@ -645,5 +645,42 @@ func TestBitbucketWriteRoutesAreExplicit(t *testing.T) {
 	unsetEnv(t, "BB_USERNAME", "BB_API_TOKEN")
 	if route, _ := selectedBitbucketWrite("", true); route != bitbucketWriteBB {
 		t.Fatalf("bb route = %s", route)
+	}
+}
+
+func TestBitbucketBranchPullRequestForTheGatewayCard(t *testing.T) {
+	newNoBBHost(t)
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	var mu sync.Mutex
+	auth := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auth[r.Header.Get("Authorization")] = true
+		mu.Unlock()
+		w.Write([]byte(`{"values":[]}`))
+	}))
+	defer server.Close()
+	statusBBAPI = server.URL // restored by newNoBBHost's cleanup
+	pr, err := BitbucketBranchPullRequest("", "acme/alpha", "feature")
+	if err != nil || pr == nil || pr.Number != 7 || pr.State != "open" || pr.URL != "https://bitbucket.org/acme/alpha/pull-requests/7" || pr.Head != "aaaaaaaaaaaa" {
+		t.Fatalf("pr = %+v, %v", pr, err)
+	}
+	if pr.Checks != "none" && pr.Checks != "unknown" {
+		t.Fatalf("checks = %q", pr.Checks)
+	}
+	for header := range auth {
+		if header != "Bearer "+poisonTokenAlpha {
+			t.Fatalf("check reads used %q, not alpha's host credential", header)
+		}
+	}
+	// No pull request for the branch: nil, not an error.
+	t.Setenv("FAKE_TWG_MODE", "no-pr")
+	if pr, err := BitbucketBranchPullRequest("", "acme/alpha", "feature"); pr != nil || err != nil {
+		t.Fatalf("no PR = %+v, %v", pr, err)
+	}
+	// A denied read is an error, never "no pull request".
+	t.Setenv("FAKE_TWG_MODE", "denied")
+	if pr, err := BitbucketBranchPullRequest("", "acme/alpha", "feature"); pr != nil || err == nil {
+		t.Fatalf("denied = %+v, %v", pr, err)
 	}
 }

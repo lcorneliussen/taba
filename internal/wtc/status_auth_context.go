@@ -248,7 +248,12 @@ func statusAuthOperation(ctx context.Context) context.Context {
 	}
 	var nonce [16]byte
 	_, _ = rand.Read(nonce[:])
+	// An operation that already chose its Bitbucket reader (for a given
+	// control root) is fingerprinted with that same selection.
 	read := selectedBitbucketRead("")
+	if attached, ok := ctx.Value(bitbucketReadKey{}).(*bitbucketReadState); ok {
+		read = attached.selection
+	}
 	state := &statusAuthOperationState{selection: statusAuthSelection{
 		"github.com": statusResolveAuthContext("github.com"), "bitbucket.org": statusResolveAuthContextWith("bitbucket.org", read)}, nonce: hex.EncodeToString(nonce[:]), observations: map[string]statusAuthObservation{}, gates: map[string]chan struct{}{}}
 	ctx = context.WithValue(ctx, statusAuthOperationKey{}, state)

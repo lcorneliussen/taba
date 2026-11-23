@@ -609,6 +609,12 @@ func bitbucketReadRepo(ctx context.Context, slug string) ([]byte, error) {
 // bitbucketReadOpenPRs lists open pull requests whose source branch is
 // branch, as {"values":[...]}. Reaching limit is an error, never a full list.
 func bitbucketReadOpenPRs(ctx context.Context, slug, branch string, limit int) ([]byte, error) {
+	return bitbucketReadPRsByState(ctx, slug, branch, "OPEN", limit)
+}
+
+// bitbucketReadPRsByState lists the pull requests from branch in one state
+// (OPEN, MERGED, DECLINED or SUPERSEDED).
+func bitbucketReadPRsByState(ctx context.Context, slug, branch, state string, limit int) ([]byte, error) {
 	workspace, repo, err := splitBitbucketSlug(slug)
 	if err != nil {
 		return nil, err
@@ -619,11 +625,11 @@ func bitbucketReadOpenPRs(ctx context.Context, slug, branch string, limit int) (
 	}
 	if s.selection.Client == bitbucketClientBB {
 		// open review's bb form: the target after --json.
-		out, err := bitbucketReadRun(ctx, nil, "bb pr list", "bb", "pr", "list", "--state", "OPEN", "--limit", strconv.Itoa(limit), "--json", "--workspace", workspace, "--repo", repo)
+		out, err := bitbucketReadRun(ctx, nil, "bb pr list", "bb", "pr", "list", "--state", state, "--limit", strconv.Itoa(limit), "--json", "--workspace", workspace, "--repo", repo)
 		return out, bitbucketOperationError("bb pr list", err)
 	}
 	const operation = "twg bitbucket pull-requests query"
-	out, err := s.twgRead(ctx, workspace, repo, operation, "bitbucket", "pull-requests", "query", "--scope", "repo", "--state", "OPEN", "--source", branch, "--limit", strconv.Itoa(limit+1))
+	out, err := s.twgRead(ctx, workspace, repo, operation, "bitbucket", "pull-requests", "query", "--scope", "repo", "--state", state, "--source", branch, "--limit", strconv.Itoa(limit+1))
 	if err != nil {
 		return nil, err
 	}

@@ -320,6 +320,20 @@ test("what changed on a pull request, one line each", () => {
   assert.deepEqual(changes(pr, { ...pr, number: 3, url: "u3", draft: false }), ["site: pull request #3 (u3) opened."]);
 });
 
+test("checks that could not be read are no news, and a later read is not announced twice (#471)", () => {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), "pull-requests.json");
+  const look = (checks, state = "open") => [{ path: "/w/app", repo: "app", pullRequest: { number: 7, url: "u", state, draft: false, checks } }];
+  const watch = pullRequestWatch(file);
+  assert.deepEqual(watch.observe("main", "s", look("pending")), []);
+  assert.deepEqual(watch.observe("main", "s", look("success")), ["app: checks passed on #7 (u)."]);
+  // A refresh that could not read checks, then one that reads them again.
+  assert.deepEqual(watch.observe("main", "s", look("unknown")), []);
+  assert.deepEqual(watch.observe("main", "s", look("success")), []);
+  assert.deepEqual(watch.observe("main", "s", look("success")), []);
+  // A Bitbucket pull request declined is closed without merging.
+  assert.deepEqual(watch.observe("main", "s", look("unknown", "closed")), ["app: pull request #7 (u) was closed without merging."]);
+});
+
 test("the pull requests seen are kept across restarts, and a failed look is no news", () => {
   const file = path.join(mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), "pull-requests.json");
   const pr = { number: 2, url: "u", state: "open", draft: true, checks: "none" };
