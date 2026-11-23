@@ -290,7 +290,8 @@ taba status --local --json  # local preview; no forge calls
 context cannot be opened, for example because its generated environment names a
 control root the receiving policy rejects, is listed under unreadable collections
 with a fixed reason; the other collections are still read and their shared owners
-refreshed. Nothing in a rejected collection is run, fetched or written. Such a
+refreshed. A local sweep also lists a collection whose checked-out repository has
+no resolvable Git owner, naming that repository. Nothing in a rejected collection is run, fetched or written. Such a
 partial sweep still prints its report, adds an `unreadable` list to `--json`, and
 exits nonzero. Dirty worktrees are observed as usual. `taba catch-up` keeps its
 own refusals and exit status.

@@ -334,3 +334,25 @@ func TestCollectionOpenFailureClassesAreFixed(t *testing.T) {
 		}
 	}
 }
+
+// A credential selection that changes during the sweep is not one collection's
+// fact: it ends the sweep instead of marking later collections unreadable.
+func TestStatusAllCredentialChangeEndsTheSweep(t *testing.T) {
+	c, _ := statusSweepFixture(t)
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("GH_TOKEN", "fixture-before")
+	c.StatusProgress = func(step string) {
+		if strings.HasPrefix(step, "Checking collection 1/") {
+			os.Setenv("GH_TOKEN", "fixture-after")
+		}
+	}
+	snapshot, _, err := c.StatusLiveSnapshot(true, true)
+	if !errors.Is(err, errStatusCredentialChanged) {
+		t.Fatalf("credential change became a partial result: %v %+v", err, snapshot.Unreadable)
+	}
+	for _, row := range snapshot.Unreadable {
+		if row.Reason == unreadableStatus {
+			t.Fatalf("credential change marked a collection unreadable: %+v", snapshot.Unreadable)
+		}
+	}
+}

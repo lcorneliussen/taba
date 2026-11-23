@@ -43,3 +43,14 @@ func TestStatusTUIShowsUnreadableCollections(t *testing.T) {
 		}
 	}
 }
+
+// The report is rendered first; a partial sweep then exits nonzero.
+func TestStatusPartialErrorOnlyForUnreadableCollections(t *testing.T) {
+	if err := statusPartialError(wtc.StatusSnapshot{Schema: 1}); err != nil {
+		t.Fatalf("complete sweep failed: %v", err)
+	}
+	err := statusPartialError(wtc.StatusSnapshot{Schema: 1, Unreadable: []wtc.StatusUnreadable{{Collection: "a", Reason: "x"}, {Collection: "b", Reason: "y"}}})
+	if err == nil || err.Error() != "partial status: 2 collection(s) unreadable" {
+		t.Fatalf("partial sweep exit: %v", err)
+	}
+}

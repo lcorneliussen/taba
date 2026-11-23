@@ -214,14 +214,19 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 		} else {
 			fmt.Print(snapshot.Markdown())
 		}
-		// A workspace sweep that could not read every collection is a partial
-		// result: the report above stands, and the exit status says so.
-		if len(snapshot.Unreadable) != 0 {
-			return fmt.Errorf("partial status: %d collection(s) unreadable", len(snapshot.Unreadable))
-		}
-		return nil
+		return statusPartialError(snapshot)
 	}
 	root.AddCommand(cmd)
+}
+
+// statusPartialError is the exit of a rendered report. A workspace sweep that
+// could not read every collection is a partial result: the report stands, and
+// the exit status says so.
+func statusPartialError(snapshot wtc.StatusSnapshot) error {
+	if len(snapshot.Unreadable) != 0 {
+		return fmt.Errorf("partial status: %d collection(s) unreadable", len(snapshot.Unreadable))
+	}
+	return nil
 }
 
 func statusTerminalWidth() int {

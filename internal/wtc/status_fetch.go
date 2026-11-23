@@ -148,7 +148,7 @@ func (c *Context) StatusLiveSnapshotWithFetchAge(all, noFetch bool, maxAge time.
 		// their local PR registries.
 		part, err := collection.statusForgePreview(false, false)
 		if err != nil {
-			if err := statusCanceled(c.resourceContext(), err); err != nil {
+			if err := statusSweepFatal(ctx, err); err != nil {
 				return snapshot, report, err
 			}
 			snapshot.Unreadable = append(snapshot.Unreadable, StatusUnreadable{Collection: runtimeTextSafe(filepath.Base(dir)), Reason: unreadableStatus})

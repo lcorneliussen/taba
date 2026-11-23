@@ -32,8 +32,8 @@ const (
 )
 
 // collectionOpenFailure classifies an OpenCollectionContext error into one of
-// the fixed reasons above. Cancellation is not a collection fact; callers
-// check the context before classifying.
+// the fixed reasons above. Status sweeps check cancellation first, since it is
+// not a collection fact; catch-up records whatever its open returned.
 func collectionOpenFailure(err error) string {
 	if err == nil {
 		return ""
@@ -63,9 +63,9 @@ func collectionOpenFailure(err error) string {
 	return unreadableOther
 }
 
-// statusInventoryUnreadable turns the failed collection rows of a catch-up
-// inventory into sweep rows. Only fixed reasons pass through; anything else
-// becomes a generic class.
+// statusInventoryUnreadable turns the failed collection and repository rows of
+// a catch-up inventory into sweep rows. Only fixed reasons and the sanitized
+// repository name pass through; anything else becomes a generic class.
 func statusInventoryUnreadable(report CatchUpReport) []StatusUnreadable {
 	var rows []StatusUnreadable
 	seen := map[string]bool{}
@@ -100,3 +100,18 @@ func statusCanceled(ctx context.Context, err error) error {
 	}
 	return nil
 }
+
+// statusSweepFatal returns the error that ends a whole sweep: cancellation,
+// or a forge credential selection that changed under it. Either would make
+// every later collection fail too, so it is not one collection's fact.
+func statusSweepFatal(ctx context.Context, err error) error {
+	if err := statusCanceled(ctx, err); err != nil {
+		return err
+	}
+	if !statusAuthSelectionCurrent(ctx) {
+		return errStatusCredentialChanged
+	}
+	return nil
+}
+
+var errStatusCredentialChanged = errors.New("forge credential context changed")
