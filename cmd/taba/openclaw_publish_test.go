@@ -48,7 +48,6 @@ func publishPlan(t *testing.T, dir, stdin string, args ...string) (openclaw.Plan
 // flag, a file or stdin, and the plan says what is still missing.
 func TestPublishRecordsThePullRequestText(t *testing.T) {
 	t.Setenv("OPENCLAW_SHELL", "exec")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	root := t.TempDir()
 	git := func(dir string, args ...string) {
 		t.Helper()
