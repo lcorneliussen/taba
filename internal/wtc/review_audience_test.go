@@ -149,7 +149,7 @@ func TestReviewAudienceForgeParsing(t *testing.T) {
 		{"bitbucket", `{"is_private":"false"}`, "unknown"},
 	} {
 		t.Setenv("AUDIENCE_JSON", tc.raw)
-		if got := reviewRepositoryAudience(c.Collection, tc.forge, "example/app"); got != tc.want {
+		if got := reviewRepositoryAudience(c.ConfigRoot, c.Collection, tc.forge, "example/app"); got != tc.want {
 			t.Fatalf("%s %s: %s", tc.forge, tc.raw, got)
 		}
 	}
