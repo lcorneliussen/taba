@@ -7,10 +7,10 @@
 (* The entry is a "pr" or a "build" cache entry. Every production writer   *)
 (* publishes it through statusWriteForgeEntrySinceObservedContext          *)
 (* (status_cache.go): check the "since" entry (the receipt), retain a      *)
-(* confirmed merge in the "merge" entry, rename the data file into place,  *)
-(* then rename the receipt into place. Callers hold the entry lock         *)
-(* (statusLockCacheContext, an flock on <entry path>.lock) around that     *)
-(* call.                                                                   *)
+(* confirmed merge in the "merge" entry, rename the receipt into place,    *)
+(* then rename the data file into place. Before 1b4a2d6 the data file went *)
+(* first. Callers hold the entry lock (statusLockCacheContext, an flock on *)
+(* <entry path>.lock) around that call.                                    *)
 (*                                                                         *)
 (* A build entry follows the same protocol without the merge rules, which  *)
 (* status_cache.go applies only to kind "pr". Every build-entry behavior   *)
@@ -28,12 +28,14 @@ CONSTANTS
     SinceGuard,      \* the receipt check and receipt write (9274035 and later)
     MergeRules,      \* the retained-merge rules (46b48d3 and later)
     LockFallthrough, \* a writer whose lock attempt fails still publishes (before 4764f64)
-    ReceiptMayFail,  \* the receipt after a publication can be lost
+    ReceiptFirst,    \* the receipt rename precedes the data rename (1b4a2d6 and later)
+    RenameMayFail,   \* a rename fails, or the process dies between the two
     None             \* a model value: no response, no lock holder
 
 ASSUME ListWriters \cap LockedWriters = {}
 ASSUME MaxRequests \in Nat
-ASSUME {SinceGuard, MergeRules, LockFallthrough, ReceiptMayFail} \subseteq BOOLEAN
+ASSUME {SinceGuard, MergeRules, LockFallthrough, ReceiptFirst, RenameMayFail} \subseteq BOOLEAN
+ASSUME ReceiptFirst => SinceGuard
 
 Writers == ListWriters \cup LockedWriters
 States == {"open", "merged"}
@@ -54,7 +56,7 @@ vars == <<clock, pc, resp, holder, content, since, retained, replaced>>
 TypeOK ==
     /\ clock \in 1..(MaxRequests + 1)
     /\ pc \in [Writers -> {"idle", "fetched", "locked", "ready", "merging",
-                           "passed", "published", "done"}]
+                           "passed", "receipted", "published", "done"}]
     /\ resp \in [Writers -> Response \cup {None}]
     /\ holder \in Writers \cup {None}
     /\ content \in Response
@@ -159,7 +161,7 @@ Refused(w) ==
 Known == retained \/ content.state = "merged"
 
 (***************************************************************************)
-(* statusWriteForgeEntrySinceObservedContext, status_cache.go:202-223.     *)
+(* statusWriteForgeEntrySinceObservedContext, status_cache.go:198-219.     *)
 (* With MergeRules, a known merge rejects a non-merged response, and the   *)
 (* first confirmed merge (promotesMerge) skips the receipt check. With     *)
 (* SinceGuard, a receipt from a later request rejects the response         *)
@@ -179,7 +181,7 @@ Check(w) ==
                     ELSE "passed"]
     /\ UNCHANGED <<clock, resp, holder, content, since, retained, replaced>>
 
-\* statusRetainMergeObservationContext (status_cache.go:226-235) writes the
+\* statusRetainMergeObservationContext (status_cache.go:222-231) writes the
 \* "merge" entry under that entry's own lock, before the pr entry.
 RetainMerge(w) ==
     /\ pc[w] = "merging"
@@ -187,35 +189,38 @@ RetainMerge(w) ==
     /\ pc' = [pc EXCEPT ![w] = "passed"]
     /\ UNCHANGED <<clock, resp, holder, content, since, replaced>>
 
+(***************************************************************************)
+(* The receipt: statusWriteForgeEntryObservedContext renames the request's *)
+(* start stamp into the "since" entry (status_cache.go:238). With          *)
+(* ReceiptFirst it precedes the data. Before 1b4a2d6 it followed the data  *)
+(* and its result was ignored.                                             *)
+(***************************************************************************)
+Receipt(w) ==
+    /\ pc[w] = IF ReceiptFirst THEN "passed" ELSE "published"
+    /\ since' = resp[w].start
+    /\ pc' = [pc EXCEPT ![w] = IF ReceiptFirst THEN "receipted" ELSE "done"]
+    /\ UNCHANGED <<clock, resp, holder, content, retained, replaced>>
+
 \* statusWriteForgeEntryObservedContext renames the data file into place
-\* (status_cache.go:239).
+\* (status_cache.go:242). It runs after cancellation that arrives during the
+\* receipt. Without SinceGuard there is no receipt.
 Publish(w) ==
-    /\ pc[w] = "passed"
+    /\ pc[w] = IF ReceiptFirst THEN "receipted" ELSE "passed"
     /\ content' = resp[w]
     /\ replaced' = content
-    /\ pc' = [pc EXCEPT ![w] = IF SinceGuard THEN "published" ELSE "done"]
+    /\ pc' = [pc EXCEPT ![w] =
+                 IF SinceGuard /\ ~ReceiptFirst THEN "published" ELSE "done"]
     /\ UNCHANGED <<clock, resp, holder, since, retained>>
 
 (***************************************************************************)
-(* The receipt: statusWriteForgeEntryObservedContext renames the request's *)
-(* start stamp into the "since" entry (status_cache.go:245). It runs after *)
-(* cancellation (cc0226a) and after a changed credential selection (the    *)
-(* kind != "since" exemption in statusWriteForgeEntryObservedContext).     *)
+(* The write path ends before its next rename: that rename fails, or the   *)
+(* process dies and the kernel releases its flock. Since 1b4a2d6 a failed  *)
+(* receipt ends the write before the data (status_cache.go:238-240).       *)
+(* Before it, a lost receipt after the data rename went unnoticed.         *)
 (***************************************************************************)
-Receipt(w) ==
-    /\ pc[w] = "published"
-    /\ since' = resp[w].start
-    /\ pc' = [pc EXCEPT ![w] = "done"]
-    /\ UNCHANGED <<clock, resp, holder, content, retained, replaced>>
-
-(***************************************************************************)
-(* The receipt is lost: the process dies between the two renames, and the  *)
-(* kernel releases its flock, or the receipt write fails and               *)
-(* status_cache.go:245 ignores the result.                                 *)
-(***************************************************************************)
-LoseReceipt(w) ==
-    /\ ReceiptMayFail
-    /\ pc[w] = "published"
+Interrupt(w) ==
+    /\ RenameMayFail
+    /\ pc[w] \in {"passed", "receipted", "published"}
     /\ pc' = [pc EXCEPT ![w] = "done"]
     /\ UNCHANGED <<clock, resp, holder, content, since, retained, replaced>>
 
@@ -242,9 +247,9 @@ Next ==
         \/ Refused(w)
         \/ Check(w)
         \/ RetainMerge(w)
-        \/ Publish(w)
         \/ Receipt(w)
-        \/ LoseReceipt(w)
+        \/ Publish(w)
+        \/ Interrupt(w)
         \/ Unlock(w)
     \/ Finished
 
@@ -254,7 +259,7 @@ Spec == Init /\ [][Next]_vars
 (* The property. A publication never replaces the response of a request    *)
 (* that started later, except that a confirmed merge replaces a response   *)
 (* that is not a merge (the comment on statusWriteForgeEntrySince,         *)
-(* status_cache.go:160-164).                                               *)
+(* status_cache.go:156-160).                                               *)
 (***************************************************************************)
 NoEarlierOverwrite ==
     \/ replaced = None

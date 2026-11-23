@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+	"taba.sh/taba/internal/retry"
 )
 
 type catchUpWorkspaceList struct {
@@ -203,7 +204,7 @@ func catchUpReloadOutput(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 				select {
 				case result := <-done:
 					finished = &result
-				case <-time.After(10 * time.Millisecond):
+				case <-time.After(10 * time.Millisecond): //nolint:forbidigo // Drains output; repeats no attempt.
 				}
 			}
 			continue
@@ -238,7 +239,7 @@ func catchUpReloadOutput(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 }
 
 func catchUpReloadWait(ctx context.Context) error {
-	timer := time.NewTimer(time.Second)
+	timer := time.NewTimer(time.Second) //nolint:forbidigo // The pause between retry.Poll attempts, on catch-up's clock.
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -608,21 +609,12 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 			return
 		}
 	}
-	idle := false
-	for attempt := 0; attempt < 5; attempt++ {
+	idle := retry.Poll(ops.ctx, retry.Policy{Attempts: 5, Pause: ops.wait}, func(context.Context) (bool, error) {
 		argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
 		// A foreground group can disappear while the interrupted process exits.
 		// An unknown observation consumes the same budget as a busy process.
-		if err == nil && ops.err() == nil && catchUpShell(argv) {
-			idle = true
-			break
-		}
-		if attempt < 4 {
-			if waitErr := ops.wait(ops.ctx); waitErr != nil {
-				break
-			}
-		}
-	}
+		return err == nil && ops.err() == nil && catchUpShell(argv), nil
+	}) == nil
 	if !idle {
 		if expired("failed", "no command sent") {
 			return
@@ -661,18 +653,13 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		add("failed", "restart delivery unconfirmed for "+pane+"; inspect pane before retrying reload")
 		return
 	}
-	for attempt := 0; attempt < 5; attempt++ {
+	if retry.Poll(ops.ctx, retry.Policy{Attempts: 5, Pause: ops.wait}, func(context.Context) (bool, error) {
 		argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
 		// Command delivery is not proof that the status process has started.
-		if err == nil && ops.err() == nil && catchUpStatusProcess(argv) {
-			add("restarted", "observed status process in "+pane+"; ongoing health not monitored")
-			return
-		}
-		if attempt < 4 {
-			if waitErr := ops.wait(ops.ctx); waitErr != nil {
-				break
-			}
-		}
+		return err == nil && ops.err() == nil && catchUpStatusProcess(argv), nil
+	}) == nil {
+		add("restarted", "observed status process in "+pane+"; ongoing health not monitored")
+		return
 	}
 	if expired("failed", "command delivered to "+pane+" but status restart not observed") {
 		return

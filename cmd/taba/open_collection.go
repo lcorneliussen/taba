@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"taba.sh/taba/internal/envcompat"
 	"taba.sh/taba/internal/prompts"
+	"taba.sh/taba/internal/retry"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -137,7 +139,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		openWaitWorkspaceIdle(opt.Session, item.Workspace)
 	} else {
 		for _, pane := range added {
-			openWaitIdle(opt.Session, pane, 10*time.Second)
+			openWaitIdle(opt.Session, pane)
 		}
 	}
 	if len(added) > 0 {
@@ -363,7 +365,7 @@ func openStartPanes(item *openItem, target *wtc.Context, panes []openPaneInfo, o
 				}
 				item.Actions = append(item.Actions, detail)
 			}
-			if !openWaitIdle(opt.Session, pane.ID, 0) {
+			if !openPaneIdle(opt.Session, pane.ID) {
 				item.Actions = append(item.Actions, label+" busy — left alone")
 				continue
 			}
@@ -417,27 +419,41 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 		command = append(command, "--")
 		command = append(command, strings.Fields(args)...)
 	}
-	for attempt := 0; ; attempt++ {
+	start := func(context.Context) (retry.Outcome, error) {
 		_, err := openHerdr(opt.Session, command...)
-		if err == nil {
-			break
-		}
 		var failure *openHerdrError
-		if !errors.As(err, &failure) {
-			return err
+		switch {
+		case err == nil:
+			return retry.Applied, nil
+		case !errors.As(err, &failure):
+			return retry.Unknown, err
+		case failure.Code == "agent_not_ready":
+			err = openReconcileStartedAgent(target, opt.Session, command[2], kind, pane, err)
+			var started *openAgentStartedError
+			if errors.As(err, &started) {
+				return retry.Applied, err
+			}
+			return retry.Unknown, err
+		case failure.Code == "agent_pane_busy" && openPaneIdle(opt.Session, pane):
+			return retry.Busy, err // A busy shell can settle during cold startup.
+		case failure.Code == "agent_pane_busy", failure.Code == "agent_name_taken", failure.Code == "agent_start_failed":
+			return retry.Refused, err
 		}
-		if failure.Code == "agent_not_ready" {
-			return openReconcileStartedAgent(target, opt.Session, command[2], kind, pane, err)
-		}
-		// A busy shell can settle during cold startup. No other failure is
-		// proof that retrying will not launch a second process.
-		if failure.Code != "agent_pane_busy" || attempt >= 14 {
-			return err
-		}
-		if !openWaitIdle(opt.Session, pane, 0) {
-			return err
-		}
-		time.Sleep(time.Second)
+		return retry.Unknown, err
+	}
+	marker := filepath.Join(target.Collection, ".wtc-agent-start.pending")
+	occupied := func() (bool, error) {
+		argv, err := openPaneCommand(opt.Session, pane)
+		return err == nil && !openShellCommand(argv), err
+	}
+	err := retry.Intent{Marker: marker, Done: occupied}.Do(context.Background(), retry.Policy{Every: time.Second, Attempts: 15}, start)
+	switch {
+	case errors.Is(err, retry.ErrUnresolved):
+		return fmt.Errorf("an agent start in this collection is in progress or has no confirmed outcome; when no taba open is running, inspect pane %s, then remove %s to allow another start", pane, marker)
+	case errors.Is(err, retry.ErrDone):
+		return fmt.Errorf("another open started a process in pane %s meanwhile; no agent start sent", pane)
+	case err != nil:
+		return err
 	}
 	if opt.NoFirstPrompt {
 		return nil
