@@ -80,15 +80,16 @@ broadened by a selection, and follow-up steps require a new selection.
 ## Share a local preview with a selected reviewer
 
 For a one-off browser review, you can use qURL with a development service
-that Taba already runs. The reviewer needs your approval before qURL connects
-to the app. Local publication needs no qURL account or API key. This uses the
+that Taba already runs. Approval controls the reviewer's access through this
+qURL share; it does not protect other routes to the app. Local publication needs
+no qURL account or API key, but creates and stores a device identity. This uses the
 qURL CLI alongside Taba; Taba does not manage the share or observe its policy.
 
 1. Start the preview with `wtc up <name>`. Check its assigned port in
    `wtc svc status` or the service log. Use a preview with test data. Share
    only the app port, and keep the Taba control panel and admin APIs local.
 2. Install the [qURL CLI](https://github.com/layervai/qurl-integrations/releases),
-   version 4.4.4 or later. Replace `3000` with the preview port. Choose a new
+   checked version 4.4.4. Replace `3000` with the preview port. Choose a new
    local ID for this review. The example uses `taba-review-1`:
 
    ```sh
@@ -97,8 +98,13 @@ qURL CLI alongside Taba; Taba does not manage the share or observe its policy.
 
    Keep this terminal and the preview running.
 3. Check for `status: serving`, `found_existing: false`, `private: true`, and
-   `access_requests: true` in the JSON. If any check fails, stop here. Do not
-   change or delete a resource you did not create for this review.
+   `access_requests: true` in the JSON, and require and retain its full `crid`
+   and `resource_url`. Missing fields fail these checks. Setup failure can return
+   a resource identity for recovery; that is not a successful share. Stop on
+   failure or a reused resource.
+   Retain the identity for recovery, close only your owned foreground publisher,
+   and do not approve or delete a resource as though it were newly created.
+   Do not reuse the port until recovery is reconciled.
    Send the returned `resource_url` to one reviewer. In their own browser,
    they choose **Request access**, save a passkey and give you the six-digit
    code on their screen through a conversation you trust. A typed name is
@@ -110,16 +116,28 @@ qURL CLI alongside Taba; Taba does not manage the share or observe its policy.
    ```
 
 4. Ask the approved reviewer to choose **Open** and confirm that the app and
-   one agreed action work. An unapproved browser must not load the app;
-   watch the app log for requests before approval. Keep the app's sign-in,
+   one agreed action work. Use a separate browser identity for the unapproved
+   check: it must not load the app through this share. Watch the app log before
+   approval, distinguishing those attempts from local visits and health checks.
+   Record actual requests rather than assuming zero. Keep the app's sign-in,
    Host and Origin checks. For a dev-server rejection, use its documented
    exact-host or exact-origin setting instead of disabling the check.
-5. Delete the review resource with `qurl delete '<CRID>'` **before** stopping
-   or reusing the app port. This permanently removes that qURL resource.
-   Then stop the foreground publisher and, if no longer needed, the Taba
-   development service. Stopping the app alone does not delete the share.
+5. Check that `<CRID>` is the exact resource this review created with
+   `found_existing: false`, then run `qurl delete '<CRID>' --yes -o json`.
+   `--yes` confirms permanent deletion. Require `deleted: true` and an `id`
+   matching that CRID; exit status zero alone or missing fields are not confirmation.
+   Before reusing the port, verify fresh access is revoked: in the checked flow,
+   `qurl get '<CRID>' --file -` must fail with `Resource Revoked`, not return app
+   bytes. A network error alone does not confirm revocation. Then stop the owned
+   foreground publisher and, if no longer needed, the Taba development service.
+   If deletion fails or remains unconfirmed, close the owned foreground publisher,
+   retain the resource identity for recovery, and do not reuse the port until
+   cleanup is reconciled. Taba stopping or retiring a collection does not clean
+   up this manually managed share.
 
-[First-share walkthrough](https://qurl.link/share-without-deploying?utm_source=taba-github&utm_medium=referral&utm_campaign=first-share-pilot)
+[Checked 4.4.4 browser-code walkthrough](https://github.com/layervai/qurl-integrations/blob/5c7a7dad83bdcb3a1dfe492bbbfa5f5c178189ed/docs/approval-first-demo/README.md).
+This uses `--allow-requests` and browser-code approval, not the separate
+`--access review` consumer-policy flow; do not combine `--access` and `--allow-requests`.
 
 ## Retirement readiness
 
