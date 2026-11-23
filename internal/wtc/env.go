@@ -339,7 +339,11 @@ func (c *Context) EnsureEnvSupport() error {
 	if err := os.Chmod(local, 0600); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(c.Collection, "mise.toml"), mise, 0644)
+	if err := os.WriteFile(filepath.Join(c.Collection, "mise.toml"), mise, 0644); err != nil {
+		return err
+	}
+	c.refreshRootSelection()
+	return nil
 }
 
 // TrustMise makes a freshly generated collection config usable by subsequent

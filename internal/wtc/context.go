@@ -108,6 +108,9 @@ type Context struct {
 	ConfigRoot               string          `json:"config_root"`
 	Project                  *ProjectContext `json:"project,omitempty"`
 	creatingReceiver         bool
+	// harnessProvisioned marks a root creation whose collection folder and
+	// harness checkout already exist; see NewCollectionAtRoot.
+	harnessProvisioned bool
 	// ownerFetches is set only while NewCollection runs; see prefetchOwners.
 	ownerFetches *ownerFetches
 	// AdHoc marks a collection without a harness repository. Its Harness is the

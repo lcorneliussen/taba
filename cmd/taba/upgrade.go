@@ -70,6 +70,11 @@ func addUpgradeCommand(root *cobra.Command, asJSON *bool) {
 		if result.NotInstalled {
 			fmt.Printf("mise not found: wtc %s is pinned but not installed\n", result.To)
 		}
+		if result.RootSelectionError != "" {
+			fmt.Printf(branding.Text("project root selection not updated: %s (see `{{command}} env root --check`)\n"), result.RootSelectionError)
+		} else if result.RootSelection != nil && result.RootSelection.Source != nil {
+			fmt.Printf("project root selects %s from %s; it follows the harness default ref after the upgrade merges\n", result.RootSelection.Source.Version, result.RootSelection.Source.Ref)
+		}
 		if result.NotesError != "" {
 			fmt.Printf(branding.Text("release notes unavailable (%s); read them with the new binary: {{command}} release-notes --since %s\n"), result.NotesError, result.From)
 		} else {

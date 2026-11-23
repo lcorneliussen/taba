@@ -49,11 +49,7 @@ func addNewCommand(root *cobra.Command, asJSON *bool) {
 		if err != nil {
 			return err
 		}
-		c, err := wtc.Discover(cwd)
-		if err != nil {
-			return err
-		}
-		return runNew(c, opt, open, noOpen, *asJSON)
+		return newFromDirectory(cwd, opt, open, noOpen, *asJSON)
 	}
 	root.AddCommand(cmd)
 }
@@ -65,6 +61,34 @@ func runNew(c *wtc.Context, opt wtc.NewOptions, open, noOpen, asJSON bool) error
 		return err
 	}
 	if err := openAfterNew(c, result.Collection, open, noOpen); err != nil {
+		return err
+	}
+	return emit(envelope{OK: true, Data: result, Summary: "done: " + result.Collection}, asJSON)
+}
+
+// newFromDirectory runs the same creation for options parsed once: from a
+// collection it creates from that collection; from a project root that has a
+// generated root selection it creates from the recorded project source.
+func newFromDirectory(dir string, opt wtc.NewOptions, open, noOpen, asJSON bool) error {
+	c, err := wtc.Discover(dir)
+	if err == nil {
+		return runNew(c, opt, open, noOpen, asJSON)
+	}
+	if location, locErr := wtc.DiscoverLocation(dir); locErr == nil && location.Collection == "" {
+		if root, ok := wtc.FindProjectRoot(dir); ok {
+			return runNewAtRoot(root, opt, open, noOpen, asJSON)
+		}
+	}
+	return err
+}
+
+// runNewAtRoot creates a collection from the project source a root records.
+func runNewAtRoot(root string, opt wtc.NewOptions, open, noOpen, asJSON bool) error {
+	result, creating, err := wtc.NewCollectionAtRoot(root, opt)
+	if err != nil {
+		return err
+	}
+	if err := openAfterNew(creating, result.Collection, open, noOpen); err != nil {
 		return err
 	}
 	return emit(envelope{OK: true, Data: result, Summary: "done: " + result.Collection}, asJSON)
