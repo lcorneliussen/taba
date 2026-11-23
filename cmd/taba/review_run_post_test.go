@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,12 +13,28 @@ func TestReviewRunPostUpdatesOneCommentOnSuccessAndFailure(t *testing.T) {
 	collection := filepath.Join(t.TempDir(), "sample")
 	for _, dir := range []string{
 		filepath.Join(collection, "harness"),
-		filepath.Join(collection, "app", ".git"),
+		filepath.Join(collection, "app"),
 	} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// A public run reads a snapshot of the reviewed head, so the fixture
+	// repository holds a real commit; the forge reports that head.
+	app := filepath.Join(collection, "app")
+	if err := os.WriteFile(filepath.Join(app, "feature.go"), []byte("package app\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "."}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "-m", "fixture"}} {
+		if out, err := exec.Command("git", append([]string{"-C", app}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s %v", args, out, err)
+		}
+	}
+	out, err := exec.Command("git", "-C", app, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(out))
 	if err := os.WriteFile(filepath.Join(collection, "harness", ".harness-repos.yml"), []byte("repos:\n  - name: app\n    remote: https://github.com/example/app.git\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +70,7 @@ case "$*" in
   *) echo "unexpected gh args: $*" >&2; exit 2 ;;
 esac
 `
+	gh = strings.ReplaceAll(gh, "1234567890abcdef1234567890abcdef12345678", head)
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(gh), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +90,8 @@ esac
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_FORGE_LOG", forgeLog)
 	t.Setenv("WTC_REVIEW_AGENT_CMD", filepath.Join(bin, "review-agent"))
+	// Public reviewers receive only allowlisted variables.
+	t.Setenv("WTC_REVIEW_ENV", "FAKE_REVIEW_FAIL")
 	oldArgs := os.Args
 	t.Cleanup(func() { os.Args = oldArgs })
 	for _, tc := range []struct {
@@ -89,8 +109,8 @@ esac
 			}
 			manifest := map[string]any{
 				"repo": "app", "pr": "7", "forge": "github", "slug": "example/app",
-				"head_sha": "1234567890abcdef1234567890abcdef12345678", "round": 1,
-				"repo_dir": filepath.Join(collection, "app"), "public": true,
+				"head_sha": head, "round": 1,
+				"repo_dir": app, "public": true,
 			}
 			data, _ := json.Marshal(manifest)
 			if err := os.WriteFile(filepath.Join(bundle, "manifest.json"), data, 0644); err != nil {

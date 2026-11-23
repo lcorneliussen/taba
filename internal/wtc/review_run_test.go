@@ -196,7 +196,7 @@ printf 'complete\n'
 	}
 	t.Setenv("WTC_REVIEW_AGENT_CMD", launcher)
 	statsPath := filepath.Join(bundle, "stats.json")
-	agent, _, output, stats, err := runReviewChain(bundle, bundle, prompt, "first: second:", time.Minute, statsPath)
+	agent, _, output, stats, err := runReviewChain(reviewRunDirs{bundle: bundle, runner: bundle, repo: bundle}, prompt, "first: second:", time.Minute, statsPath)
 	if err != nil || agent != "second" || !strings.Contains(string(output), "complete") {
 		t.Fatalf("fallback failed: %s %s %v", agent, output, err)
 	}
@@ -227,7 +227,7 @@ echo '{"type":"turn.completed"}'
 		t.Fatal(err)
 	}
 	t.Setenv("WTC_REVIEW_AGENT_CMD", launcher)
-	agent, _, _, _, err := runReviewChain(bundle, bundle, prompt, "first: second:", time.Minute, filepath.Join(bundle, "stats.json"))
+	agent, _, _, _, err := runReviewChain(reviewRunDirs{bundle: bundle, runner: bundle, repo: bundle}, prompt, "first: second:", time.Minute, filepath.Join(bundle, "stats.json"))
 	if err != nil || agent != "second" {
 		t.Fatalf("structured limit did not fallback: %s %v", agent, err)
 	}

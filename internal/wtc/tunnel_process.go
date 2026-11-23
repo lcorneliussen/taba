@@ -150,11 +150,10 @@ func observeTunnelChildWith(ctx context.Context, pid int, read func(int) (tunnel
 	defer cancel()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	state, attempts := "unknown", 0
+	attempts := 0
 	for {
 		observed, next := read(pid)
 		attempts++
-		state = "unknown"
 		if next == "alive" && observed.PID == pid && observed.validate() == nil {
 			return observed, nil
 		}
@@ -163,7 +162,7 @@ func observeTunnelChildWith(ctx context.Context, pid int, read func(int) (tunnel
 		}
 		select {
 		case <-bound.Done():
-			return tunnelProcessIdentity{}, fmt.Errorf("owned child initialization unconfirmed (state %s, observations %d)", state, attempts)
+			return tunnelProcessIdentity{}, fmt.Errorf("owned child initialization unconfirmed (state unknown, observations %d)", attempts)
 		case <-ticker.C:
 		}
 	}

@@ -6,7 +6,15 @@ Build with Go 1.27 or newer:
 go build -o wtc ./cmd/taba
 go test ./...
 go vet ./...
+golangci-lint run   # v2.15.0, as CI runs it; linters in .golangci.yml
 ```
+
+Tests see the environment CI gives them, also from a collection shell. Every
+test package's `TestMain` calls `testenv.Main` from `internal/testenv`. It
+removes your shell's `WTC_*`, `TABA_*` and `GIT_*` variables, except test
+settings and `GIT_TRACE*`. Git then reads no system configuration, and a
+global configuration that holds only a fixture identity. Name a new test
+setting `WTC_TEST_*` or `TABA_TEST_*` so that it reaches the tests.
 
 ## Running a development build in a collection
 
@@ -153,6 +161,14 @@ It does not use an existing shared database.
 CI verifies the dekit archive checksum and uses a pinned Postgres image digest.
 Actual Azure provisioning and connectivity across machines remain onboarding
 checks for the project using them.
+
+## Formal models
+
+`tools/formal/forge-cache-order/check.sh` model-checks the order in which status
+writers publish a forge cache entry. It needs Java 11 or later and runs in the
+`formal` CI job. Before you change a writer of a pr or build cache entry, read
+[the verify skill](formal/verify-forge-cache-order/SKILL.md): it says when the
+check applies, how to read a counterexample, and how to update the model.
 
 [Release notes](release-notes.md) are committed and embedded separately from
 generated harness guidance. A change that affects behaviour adds its own

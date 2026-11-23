@@ -2,6 +2,7 @@ package openclaw
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -32,7 +33,7 @@ type Checkout struct {
 }
 
 func git(dir string, args ...string) (string, error) {
-	cmd, err := gitCommand(nil, dir, args...)
+	cmd, err := gitCommand(context.Background(), dir, args...)
 	if err != nil {
 		return "", err
 	}

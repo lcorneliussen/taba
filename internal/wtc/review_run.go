@@ -72,8 +72,16 @@ func reviewEnv(key, fallback string) string {
 	return fallback
 }
 
-func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRunResult, error) {
-	bundle, err := filepath.Abs(bundle)
+// reviewRunDirs separates what an agent may see from what the runner keeps.
+// A private run uses the bundle and the collection worktree directly; a public
+// run uses an isolated execution context (see review_context.go).
+type reviewRunDirs struct {
+	bundle, runner, repo string
+	exec                 *reviewExecContext
+}
+
+func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ ReviewRunResult, err error) {
+	bundle, err = filepath.Abs(bundle)
 	if err != nil {
 		return ReviewRunResult{}, err
 	}
@@ -120,6 +128,17 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRu
 		}
 		opt.Timeout = time.Duration(seconds) * time.Second
 	}
+	if manifest.Public {
+		// Refuse a client that cannot isolate before probing one that can,
+		// so the actionable refusal is not hidden by an unrelated client check.
+		agents := reviewSpecAgents(opt.Strong, opt.Standard, opt.Fast, opt.Lead)
+		sort.SliceStable(agents, func(i, j int) bool { return agents[i] != "claude" && agents[j] == "claude" })
+		for _, agent := range agents {
+			if err := reviewPublicClient(agent); err != nil {
+				return ReviewRunResult{}, err
+			}
+		}
+	}
 	concernTemplate, err := c.reviewPromptTemplate(manifest, "concern.md")
 	if err != nil {
 		return ReviewRunResult{}, err
@@ -145,6 +164,26 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRu
 			}
 		}
 	}
+	dirs := reviewRunDirs{bundle: bundle, runner: bundle, repo: manifest.RepoDir}
+	callerBundle := bundle
+	if manifest.Public {
+		// Assign, not declare: the deferred finish must report into the
+		// function's named err, not a block-scoped copy.
+		var x *reviewExecContext
+		x, err = newReviewExecContext(c.Collection, bundle, manifest)
+		if err != nil {
+			return ReviewRunResult{}, err
+		}
+		dirs = reviewRunDirs{bundle: x.bundle, runner: x.runner, repo: x.source, exec: x}
+		defer func() {
+			if finishErr := x.finish(callerBundle); finishErr != nil && err == nil {
+				err = finishErr
+			}
+		}()
+	}
+	// From here on bundle is the directory agents use; the caller's bundle
+	// receives the results when an isolated run finishes.
+	bundle = dirs.bundle
 	concernFiles, err := filepath.Glob(filepath.Join(bundle, "concerns", "*.md"))
 	if err != nil {
 		return ReviewRunResult{}, err
@@ -183,17 +222,27 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRu
 		go func(id, path string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			entry := c.runReviewConcern(bundle, manifest, id, path, string(concernTemplate), opt)
+			entry := c.runReviewConcern(dirs, manifest, id, path, string(concernTemplate), opt)
 			mu.Lock()
 			log.WriteString(entry)
 			mu.Unlock()
 		}(id, path)
 	}
 	wg.Wait()
+	if dirs.exec != nil {
+		// The runner clears a selected concern's earlier results before it
+		// launches that concern, so removal is allowed there.
+		if err := dirs.exec.checkPhase("concern", func(rel string, existed, removed bool) bool {
+			id, ok := reviewFindingPath(rel)
+			return ok && (len(selected) == 0 || selected[id]) && available[id]
+		}); err != nil {
+			return ReviewRunResult{}, err
+		}
+	}
 	for _, path := range concernFiles {
 		id := strings.TrimSuffix(filepath.Base(path), ".md")
 		if err := validateReviewFindings(filepath.Join(bundle, "findings", id+".json"), id); err != nil {
-			log.WriteString(reviewConcernError(bundle, id, err.Error()))
+			log.WriteString(reviewConcernError(dirs, id, err.Error()))
 		}
 	}
 	if err := os.WriteFile(filepath.Join(bundle, "run.log"), log.Bytes(), 0644); err != nil {
@@ -204,15 +253,31 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRu
 	if _, err := refreshReviewConvergence(bundle, manifest); err != nil {
 		return ReviewRunResult{}, err
 	}
-	leadPrompt := filepath.Join(bundle, ".prompts", "lead.md")
+	if dirs.exec != nil {
+		if err := dirs.exec.snapshotBundle(); err != nil {
+			return ReviewRunResult{}, err
+		}
+	}
+	leadPrompt := filepath.Join(dirs.runner, ".prompts", "lead.md")
 	if err := renderReviewPrompt(leadPrompt, string(leadTemplate), map[string]string{
-		"BUNDLE": bundle, "REPO_DIR": manifest.RepoDir, "SUMMARY_FILE": filepath.Join(bundle, "summary.md"),
+		"BUNDLE": bundle, "REPO_DIR": dirs.repo, "SUMMARY_FILE": filepath.Join(bundle, "summary.md"),
 		"VERDICT_FILE": filepath.Join(bundle, "verdict"), "MANIFEST": filepath.Join(bundle, "manifest.env"),
 	}); err != nil {
 		return ReviewRunResult{}, err
 	}
-	leadAgent, leadModel, leadOutput, leadStats, err := runReviewChain(bundle, manifest.RepoDir, leadPrompt, opt.Lead, opt.Timeout, filepath.Join(bundle, "stats", "lead.json"))
-	if writeErr := os.WriteFile(filepath.Join(bundle, ".logs", "lead.out"), leadOutput, 0644); writeErr != nil {
+	leadAgent, leadModel, leadOutput, leadStats, err := runReviewChain(dirs, leadPrompt, opt.Lead, opt.Timeout, filepath.Join(dirs.runner, "stats", "lead.json"))
+	if dirs.exec != nil {
+		if auditErr := dirs.exec.checkPhase("lead", func(rel string, existed, removed bool) bool {
+			_, finding := reviewFindingPath(rel)
+			if removed {
+				return false
+			}
+			return rel == "summary.md" || rel == "verdict" || finding && existed && strings.HasSuffix(rel, ".json")
+		}); auditErr != nil {
+			return ReviewRunResult{}, auditErr
+		}
+	}
+	if writeErr := os.WriteFile(filepath.Join(dirs.runner, ".logs", "lead.out"), leadOutput, 0644); writeErr != nil {
 		return ReviewRunResult{}, writeErr
 	}
 	leadStatus := "ok"
@@ -220,7 +285,7 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRu
 		leadStatus = "error"
 	}
 	leadStats.Status = leadStatus
-	if writeErr := writeReviewStats(bundle, "lead", leadStats); writeErr != nil {
+	if writeErr := writeReviewStats(dirs.runner, "lead", leadStats); writeErr != nil {
 		return ReviewRunResult{}, writeErr
 	}
 	if err != nil {
@@ -262,7 +327,7 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRu
 			clean = append(clean, line)
 		}
 	}
-	stats, err := reviewStatsTable(bundle, time.Since(started))
+	stats, err := reviewStatsTable(dirs.runner, time.Since(started))
 	if err != nil {
 		return ReviewRunResult{}, err
 	}
@@ -270,12 +335,30 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRu
 	if checkpoints := reviewConvergenceReport(convergence); checkpoints != "" {
 		final += "\n\n" + checkpoints
 	}
-	final += "\n\n" + reviewChecksReport(bundle, manifest) + "\n\n" + stats + "\n\n" + statusLine + "\n"
+	final += "\n\n" + reviewChecksReport(bundle, manifest)
+	if dirs.exec != nil {
+		final += "\n\n" + dirs.exec.report()
+	}
+	final += "\n\n" + stats + "\n\n" + statusLine + "\n"
 	final = reviewModeBody(alignReviewHeading(final, verdict), manifest)
 	if err := os.WriteFile(summaryPath, []byte(final), 0644); err != nil {
 		return ReviewRunResult{}, err
 	}
-	return ReviewRunResult{Bundle: bundle, Verdict: verdict, Blockers: blockers, Round: manifest.Round, Concerns: count}, nil
+	return ReviewRunResult{Bundle: callerBundle, Verdict: verdict, Blockers: blockers, Round: manifest.Round, Concerns: count}, nil
+}
+
+// reviewFindingPath reports the concern of a findings/<id>.json or .raw path.
+func reviewFindingPath(rel string) (string, bool) {
+	name, ok := strings.CutPrefix(rel, "findings/")
+	if !ok || strings.Contains(name, "/") {
+		return "", false
+	}
+	for _, ext := range []string{".json", ".raw"} {
+		if id, ok := strings.CutSuffix(name, ext); ok && id != "" {
+			return id, true
+		}
+	}
+	return "", false
 }
 
 var reviewHeading = regexp.MustCompile(`(?m)^(?:🟢 |🟡 |🔴 )?\*\*Local review: (pass|pass-with-notes|changes-requested|error)\*\*[^\n]*`)
@@ -289,10 +372,11 @@ func alignReviewHeading(summary, verdict string) string {
 	return summary[:match[0]] + heading + summary[match[1]:]
 }
 
-func (c *Context) runReviewConcern(bundle string, manifest ReviewManifest, id, path, template string, opt ReviewRunOptions) string {
+func (c *Context) runReviewConcern(dirs reviewRunDirs, manifest ReviewManifest, id, path, template string, opt ReviewRunOptions) string {
+	bundle := dirs.bundle
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return reviewConcernError(bundle, id, err.Error())
+		return reviewConcernError(dirs, id, err.Error())
 	}
 	tier, needs := "standard", ""
 	for _, line := range strings.Split(string(body), "\n") {
@@ -305,7 +389,7 @@ func (c *Context) runReviewConcern(bundle string, manifest ReviewManifest, id, p
 	}
 	if needs == "downstream" && !hasReviewSnapshots(bundle) {
 		_ = writeReviewStub(bundle, id, "skipped", "needs downstream repos; the bundle has none")
-		_ = writeReviewStats(bundle, id, reviewRunStats{Status: "skipped"})
+		_ = writeReviewStats(dirs.runner, id, reviewRunStats{Status: "skipped"})
 		return "skipped " + id + " (no downstream)\n"
 	}
 	spec := opt.Standard
@@ -314,18 +398,31 @@ func (c *Context) runReviewConcern(bundle string, manifest ReviewManifest, id, p
 	} else if tier == "fast" {
 		spec = opt.Fast
 	}
-	prompt := filepath.Join(bundle, ".prompts", id+".md")
+	prompt := filepath.Join(dirs.runner, ".prompts", id+".md")
 	findings := filepath.Join(bundle, "findings", id+".json")
 	_ = os.Remove(findings)
 	_ = os.Remove(filepath.Join(bundle, "findings", id+".raw"))
 	if err := renderReviewPrompt(prompt, template, map[string]string{
-		"BUNDLE": bundle, "REPO_DIR": manifest.RepoDir, "CONCERN_FILE": path, "CONCERN_ID": id,
+		"BUNDLE": bundle, "REPO_DIR": dirs.repo, "CONCERN_FILE": path, "CONCERN_ID": id,
 		"FINDINGS_FILE": findings, "MANIFEST": filepath.Join(bundle, "manifest.env"),
 	}); err != nil {
-		return reviewConcernError(bundle, id, err.Error())
+		return reviewConcernError(dirs, id, err.Error())
 	}
-	_, _, output, stats, runErr := runReviewChain(bundle, manifest.RepoDir, prompt, spec, opt.Timeout, filepath.Join(bundle, "stats", id+".json"))
-	_ = os.WriteFile(filepath.Join(bundle, ".logs", id+".out"), output, 0644)
+	_, _, output, stats, runErr := runReviewChain(dirs, prompt, spec, opt.Timeout, filepath.Join(dirs.runner, "stats", id+".json"))
+	_ = os.WriteFile(filepath.Join(dirs.runner, ".logs", id+".out"), output, 0644)
+	if dirs.exec != nil {
+		// A link or special file at any path the runner reads or writes for
+		// this concern is left as the reviewer made it, unread and not
+		// written through (a FIFO would block, a link would redirect the
+		// write), so the phase audit rejects it.
+		for _, path := range []string{findings, filepath.Join(bundle, "findings", id+".raw")} {
+			if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+				stats.Status = "error"
+				_ = writeReviewStats(dirs.runner, id, stats)
+				return "ERROR " + id + ": " + filepath.Base(path) + " is not a regular file\n"
+			}
+		}
+	}
 	status := "ok"
 	if runErr == nil {
 		runErr = validateReviewFindings(findings, id)
@@ -340,7 +437,7 @@ func (c *Context) runReviewConcern(bundle string, manifest ReviewManifest, id, p
 		_ = writeReviewStub(bundle, id, "error", runErr.Error())
 	}
 	stats.Status = status
-	_ = writeReviewStats(bundle, id, stats)
+	_ = writeReviewStats(dirs.runner, id, stats)
 	if runErr != nil {
 		return "ERROR " + id + ": " + runErr.Error() + "\n"
 	}
@@ -372,9 +469,9 @@ func writeReviewStub(bundle, id, status, notes string) error {
 	return os.WriteFile(filepath.Join(bundle, "findings", id+".json"), append(data, '\n'), 0644)
 }
 
-func reviewConcernError(bundle, id, reason string) string {
-	_ = writeReviewStub(bundle, id, "error", reason)
-	_ = writeReviewStats(bundle, id, reviewRunStats{Status: "error"})
+func reviewConcernError(dirs reviewRunDirs, id, reason string) string {
+	_ = writeReviewStub(dirs.bundle, id, "error", reason)
+	_ = writeReviewStats(dirs.runner, id, reviewRunStats{Status: "error"})
 	return "ERROR " + id + ": " + reason + "\n"
 }
 
@@ -444,7 +541,8 @@ func countReviewFindings(dir string) (blockers, errors int, err error) {
 
 var reviewLimitMessage = regexp.MustCompile(`(?i)session limit|usage limit|rate limit|too many requests|overloaded|quota|HTTP/? ?429|status 429|hit your .{0,40}limit`)
 
-func runReviewChain(bundle, repoDir, prompt, specs string, timeout time.Duration, statsPath string) (string, string, []byte, reviewRunStats, error) {
+func runReviewChain(dirs reviewRunDirs, prompt, specs string, timeout time.Duration, statsPath string) (string, string, []byte, reviewRunStats, error) {
+	bundle := dirs.bundle
 	list := strings.Fields(strings.ReplaceAll(specs, ",", " "))
 	if len(list) == 0 {
 		return "", "", nil, reviewRunStats{}, fmt.Errorf("no review agent specified")
@@ -469,7 +567,7 @@ func runReviewChain(bundle, repoDir, prompt, specs string, timeout time.Duration
 			model = parts[1]
 		}
 		_ = os.Remove(statsPath)
-		output, elapsed, err := launchReviewAgent(bundle, repoDir, prompt, agent, model, timeout, statsPath)
+		output, elapsed, err := launchReviewAgent(dirs, prompt, agent, model, timeout, statsPath)
 		limited := reviewAgentLimited(output, err)
 		if limited && err == nil {
 			err = fmt.Errorf("%s reported a review usage limit", agent)
@@ -505,7 +603,8 @@ func reviewAgentLimited(output []byte, err error) bool {
 	return false
 }
 
-func launchReviewAgent(bundle, repoDir, prompt, agent, model string, timeout time.Duration, statsPath string) ([]byte, time.Duration, error) {
+func launchReviewAgent(dirs reviewRunDirs, prompt, agent, model string, timeout time.Duration, statsPath string) ([]byte, time.Duration, error) {
+	bundle, repoDir, x := dirs.bundle, dirs.repo, dirs.exec
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	var cmd *exec.Cmd
@@ -514,22 +613,29 @@ func launchReviewAgent(bundle, repoDir, prompt, agent, model string, timeout tim
 		parts := strings.Fields(custom)
 		cmd = exec.CommandContext(ctx, parts[0], append(parts[1:], agent, model, prompt, bundle)...)
 	} else {
-		switch agent {
-		case "claude":
+		switch {
+		case x != nil && agent == "claude":
+			cmd = exec.CommandContext(ctx, "claude", x.claudeArgs(model)...)
+		case x != nil:
+			if err := reviewPublicClient(agent); err != nil {
+				return nil, 0, err
+			}
+			return nil, 0, fmt.Errorf("unsupported review agent %q", agent)
+		case agent == "claude":
 			args := []string{"-p", "--output-format", "json"}
 			if model != "" {
 				args = append(args, "--model", model)
 			}
-			args = append(args, "--add-dir", repoDir, "--permission-mode", "acceptEdits", "--disallowedTools", "Edit("+repoDir+"/**)", "Write("+repoDir+"/**)", "Bash(git * --ou*)", "--allowedTools", "Read", "Grep", "Glob", "Write", "Edit", "Bash(git log:*)", "Bash(git show:*)", "Bash(ls:*)", "Agent")
+			args = append(args, "--add-dir", repoDir, "--permission-mode", "acceptEdits", "--disallowedTools", claudeDenyEdits(repoDir), "Bash(git * --ou*)", "--allowedTools", "Read", "Grep", "Glob", "Write", "Edit", "Bash(git log:*)", "Bash(git show:*)", "Bash(ls:*)", "Agent")
 			cmd = exec.CommandContext(ctx, "claude", args...)
-		case "codex":
+		case agent == "codex":
 			args := []string{"exec", "--json"}
 			if model != "" {
 				args = append(args, "-m", model)
 			}
 			args = append(args, "-C", bundle, "--skip-git-repo-check", "-s", "workspace-write", "-")
 			cmd = exec.CommandContext(ctx, "codex", args...)
-		case "grok":
+		case agent == "grok":
 			args := []string{"--prompt-file", prompt, "--output-format", "json", "--cwd", bundle, "--sandbox", "workspace", "--always-approve", "--no-alt-screen", "--disable-web-search", "--no-subagents", "--verbatim", "--disallowed-tools", "web_search,web_fetch"}
 			if model != "" {
 				args = append(args, "--model", model)
@@ -542,7 +648,16 @@ func launchReviewAgent(bundle, repoDir, prompt, agent, model string, timeout tim
 	}
 	cmd.Dir = bundle
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = append(os.Environ(), "WTC_REVIEW_STATS_FILE="+statsPath)
+	// On timeout, stop the whole process group: a descendant that keeps the
+	// output pipe open would otherwise hold the run until it exits.
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
+	if x != nil {
+		cmd.Env = x.env(agent, statsPath)
+		x.noteClient(agent)
+	} else {
+		cmd.Env = append(os.Environ(), "WTC_REVIEW_STATS_FILE="+statsPath)
+	}
 	promptBody, err := os.ReadFile(prompt)
 	if err != nil {
 		return nil, 0, err

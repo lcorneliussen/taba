@@ -22,7 +22,7 @@ func statusHideBitbucketLogin(t *testing.T) {
 
 func TestStatusListFingerprintNoticesCommentsAndChecks(t *testing.T) {
 	bb := statusBBListItem{ID: 9, UpdatedOn: "2026-10-01T00:00:00Z", CommentCount: 1, TaskCount: 0, State: "OPEN", Title: "Listed"}
-	if bb.fingerprint() != bb.fingerprint() {
+	if first, second := bb.fingerprint(), bb.fingerprint(); first != second {
 		t.Fatal("Bitbucket fingerprint is unstable")
 	}
 	commented := bb

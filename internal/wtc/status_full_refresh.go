@@ -135,10 +135,6 @@ func statusIncrementalMissLog() string {
 	return filepath.Join(statusForgeCacheDir(), "incremental-misses.log")
 }
 
-func statusFetchPRRaw(record PRRecord, slug, forge string) ([]byte, error) {
-	return statusFetchPRRawWithRequest(record, slug, forge, nil)
-}
-
 // statusRefreshRecord is the explicit local metadata primitive. It does not
 // enumerate repositories or read an open list, so stale membership cannot
 // suppress the selected record's foreground observation. Collector integration
@@ -340,10 +336,6 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	return raw, nil
 }
 
-func statusFetchPRRawWithRequest(record PRRecord, slug, forge string, onRequest func()) ([]byte, error) {
-	return statusFetchPRRawWithRequestContext(context.Background(), record, slug, forge, onRequest)
-}
-
 func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, slug, forge string, onRequest func()) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -378,7 +370,7 @@ func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, sl
 		return nil, fmt.Errorf("unsupported forge")
 	}
 	if err != nil && statusRateLimited(err) {
-		statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
+		_, _ = statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
 	}
 	return raw, err
 }
@@ -395,10 +387,6 @@ func statusConfirmFullPRContext(ctx context.Context, record PRRecord, slug, forg
 	}
 	defer unlock()
 	return statusConfirmFullPRLockedContext(ctx, record, slug, forge, incremental, source)
-}
-
-func statusConfirmFullPRLocked(record PRRecord, slug, forge string, incremental statusPRDetail, source string) statusPRDetail {
-	return statusConfirmFullPRLockedContext(context.Background(), record, slug, forge, incremental, source)
 }
 
 func statusConfirmFullPRLockedContext(ctx context.Context, record PRRecord, slug, forge string, incremental statusPRDetail, source string) statusPRDetail {
@@ -435,10 +423,6 @@ func statusConfirmFullPRLockedContext(ctx context.Context, record PRRecord, slug
 	return full
 }
 
-func statusConfirmFullBuild(slug, branch string, incremental *StatusBuild, source, user, pass string) *StatusBuild {
-	return statusConfirmFullBuildContext(context.Background(), slug, branch, incremental, source, user, pass)
-}
-
 func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, incremental *StatusBuild, source, user, pass string) *StatusBuild {
 	ctx = statusAuthOperation(ctx)
 	unlock, lockErr := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "build", "bitbucket.org", slug, branch))
@@ -468,7 +452,7 @@ func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, inc
 	raw, err := statusBBPipelinesContext(ctx, parts[0], parts[1], branch, user, pass)
 	if err != nil {
 		if statusRateLimited(err) {
-			statusForgeCoolContext(ctx, "bitbucket.org", statusRetryAfter(err))
+			_, _ = statusForgeCoolContext(ctx, "bitbucket.org", statusRetryAfter(err))
 		}
 		return fallback
 	}
@@ -490,20 +474,12 @@ func statusBuildFingerprint(build *StatusBuild) string {
 	return number + "|" + checks + "|" + sha
 }
 
-func statusPreferAuditedBuild(slug, branch string, pageBuild *StatusBuild) (*StatusBuild, bool) {
-	return statusPreferAuditedBuildContext(context.Background(), slug, branch, pageBuild)
-}
-
 func statusPreferAuditedBuildContext(ctx context.Context, slug, branch string, pageBuild *StatusBuild) (*StatusBuild, bool) {
 	ctx = statusAuthOperation(ctx)
 	if pageBuild == nil || statusFullRefreshDueContext(ctx, "bitbucket.org", slug, "build:"+branch) {
 		return nil, false
 	}
 	return statusAuditedCorrectionContext(ctx, slug, branch, pageBuild)
-}
-
-func statusAuditedCorrection(slug, branch string, pageBuild *StatusBuild) (*StatusBuild, bool) {
-	return statusAuditedCorrectionContext(context.Background(), slug, branch, pageBuild)
 }
 
 func statusAuditedCorrectionContext(ctx context.Context, slug, branch string, pageBuild *StatusBuild) (*StatusBuild, bool) {

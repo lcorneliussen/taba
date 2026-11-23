@@ -204,10 +204,6 @@ func (c *Context) InspectRetirementContext(ctx context.Context, name string, tra
 	return report, nil
 }
 
-func retirementGit(path string, args ...string) (string, error) {
-	return retirementGitContext(context.Background(), path, args...)
-}
-
 func retirementGitContext(ctx context.Context, path string, args ...string) (string, error) {
 	argv := []string{"--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-C", path}
 	out, err := statusRunContext(ctx, 30*time.Second, func(cmd *exec.Cmd) ([]byte, error) {

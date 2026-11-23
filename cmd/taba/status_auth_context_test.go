@@ -48,8 +48,6 @@ func statusAuth441ModelFixture(t *testing.T) (*wtc.Context, wtc.StatusSnapshot) 
 	t.Setenv("TABA_CONFIG_ROOT", "")
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
 	t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	collection := filepath.Join(t.TempDir(), "fixture")
 	harness := filepath.Join(collection, "harness")
 	if err := os.MkdirAll(harness, 0700); err != nil {
