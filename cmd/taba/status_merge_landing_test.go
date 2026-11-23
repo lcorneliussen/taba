@@ -34,12 +34,20 @@ func TestStatusMergedUnknownCanonicalSnapshots(t *testing.T) {
 					layout := statusTUIPRLayout(width, row)
 					start := layout.number + 1 + layout.repo + 1
 					cell := strings.TrimSpace(ansi.Cut(ansi.Strip(lines[3]), start, start+layout.state))
-					if cell != "merged" {
-						t.Errorf("width=%d styled=%v: known merge rendered as %q", width, styled, cell)
+					if cell != "merged?" {
+						t.Errorf("width=%d styled=%v: known merge with unknown landing rendered as %q", width, styled, cell)
 					}
+					if len(lines) != 4 {
+						t.Errorf("width=%d styled=%v: PR row is not one line:\n%s", width, styled, ansi.Strip(strings.Join(lines, "\n")))
+					}
+					// The full explanation stays inline where it fits and in help.
 					out := ansi.Strip(strings.Join(lines, "\n"))
-					if !strings.Contains(out, "landing unknown") || !strings.Contains(out, "inspect branch") {
+					if width >= 140 && (!strings.Contains(out, "landing unknown") || !strings.Contains(out, "inspect branch")) {
 						t.Errorf("width=%d styled=%v: missing full landing explanation:\n%s", width, styled, out)
+					}
+					help := statusTUIModel{snapshot: snapshot, width: width, height: 80, showHelp: true}
+					if flat := strings.Join(strings.Fields(ansi.Strip(strings.Join(help.contentLayout().lines, " "))), " "); !strings.Contains(flat, row.LandingLabel()) {
+						t.Errorf("width=%d styled=%v: help lost landing explanation", width, styled)
 					}
 					for _, line := range lines {
 						if ansi.StringWidth(line) > width {
@@ -47,7 +55,7 @@ func TestStatusMergedUnknownCanonicalSnapshots(t *testing.T) {
 						}
 					}
 				}
-				if out := statusTable(snapshot, false, width); !strings.Contains(out, "merged") || !strings.Contains(out, "landing unknown") || !strings.Contains(out, "inspect branch") {
+				if out := statusTable(snapshot, false, width); !strings.Contains(out, "merged?") || width >= 140 && (!strings.Contains(out, "landing unknown") || !strings.Contains(out, "inspect branch")) {
 					t.Errorf("width=%d: plain table lost independent facts:\n%s", width, out)
 				}
 			}
@@ -97,10 +105,7 @@ func TestStatusMergedLandingDetailGeometry(t *testing.T) {
 		lines := statusTUIPRLines(snapshot, width, false, false, func(line int, row wtc.StatusPRRow) {
 			positions = append(positions, line)
 		})
-		wantGap := 1
-		if width <= 80 {
-			wantGap++
-		}
+		wantGap := 1 // #426: no explanation lines between PR rows at any width
 		if len(positions) != 2 || positions[0] != 3 || positions[1]-positions[0] != wantGap || len(lines) != positions[1]+1 {
 			t.Fatalf("width=%d: positions=%v lines=%d; want row gap %d", width, positions, len(lines), wantGap)
 		}
@@ -116,11 +121,6 @@ func TestStatusMergedLandingDetailGeometry(t *testing.T) {
 			}
 			if got := model.buildClickTarget(1, row.start); got != target {
 				t.Fatalf("width=%d: PR hit=%q want=%q", width, got, target)
-			}
-		}
-		if wantGap > 1 {
-			if got := model.buildClickTarget(1, content.rows[0].end); got != "" {
-				t.Fatalf("width=%d: explanation inherited PR hit target %q", width, got)
 			}
 		}
 		// Scrolling to the second PR must use its actual rendered position.
