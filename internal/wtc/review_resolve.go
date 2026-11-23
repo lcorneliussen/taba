@@ -255,12 +255,16 @@ func (c *Context) resolveReviewBrokered(m ReviewManifest, bundle string, rows []
 	// from this record, never from a recomputed plan.
 	selection := brokeredHash("resolve-v2", bundle, m.PR, opt.Reply, opt.Key, opt.Concern, opt.File, strconv.Itoa(opt.Line))
 	recordPath := filepath.Join(bundle, "bitbucket-resolve."+selection+".json")
+	type resolveAttempt struct {
+		Intent string   `json:"intent"`
+		Head   string   `json:"head"`
+		Keys   []string `json:"keys"`
+		// Discarded: the request was removed before anyone confirmed it
+		// (no receipt, no claim), so nothing was written for it.
+		Discarded bool `json:"discarded,omitempty"`
+	}
 	var record struct {
-		Attempts []struct {
-			Intent string   `json:"intent"`
-			Head   string   `json:"head"`
-			Keys   []string `json:"keys"`
-		} `json:"attempts"`
+		Attempts []resolveAttempt `json:"attempts"`
 	}
 	if raw, err := os.ReadFile(recordPath); err == nil && json.Unmarshal(raw, &record) != nil {
 		return result, fmt.Errorf("the brokered resolve record is unreadable; reconcile by reading the pull request")
@@ -282,57 +286,72 @@ func (c *Context) resolveReviewBrokered(m ReviewManifest, bundle string, rows []
 			}
 		}
 	}
-	for _, attempt := range record.Attempts {
-		receipt, err := readBrokeredReceipt(gitDir, m.Slug, m.PR, attempt.Intent)
-		if err != nil {
-			return result, err
-		}
-		if receipt == nil {
-			return result, brokeredPending(gitDir, attempt.Intent, m.PR)
-		}
-		apply(attempt.Keys, receipt)
-		if err := writeInlineRecords(bundle, rows); err != nil {
-			return result, err
-		}
-		for _, entry := range receipt.Results {
-			if entry.Status == "unknown" {
-				return result, fmt.Errorf("a confirmed Bitbucket resolve for PR #%s has an unknown outcome; reconcile by reading the pull request before asking again", m.PR)
+	// One state machine: replay every recorded attempt, then ask for what is
+	// still open. Success is only "nothing left to ask for".
+	for {
+		for i := range record.Attempts {
+			attempt := &record.Attempts[i]
+			if attempt.Discarded {
+				continue
+			}
+			receipt, err := readBrokeredReceipt(gitDir, m.Slug, m.PR, attempt.Intent)
+			if err != nil {
+				return result, err
+			}
+			if receipt == nil {
+				// Claimed without a receipt: the outcome is unknown; never ask again.
+				if err := brokeredStarted(gitDir, attempt.Intent); err != nil {
+					return result, err
+				}
+				// Still waiting for the person.
+				if pending, ok := brokeredPendingRequest(gitDir); ok && pending == attempt.Intent {
+					return result, fmt.Errorf("%w: PR #%s resolves wait for the person to confirm them in the Control UI; run this again afterwards", ErrBitbucketAwaitingConfirmation, m.PR)
+				}
+				// Neither receipt, claim nor request: discarded before it was
+				// confirmed, so nothing was written; it may be asked for again.
+				attempt.Discarded = true
+				if err := writePrivateJSON(recordPath, record); err != nil {
+					return result, err
+				}
+				continue
+			}
+			apply(attempt.Keys, receipt)
+			if err := writeInlineRecords(bundle, rows); err != nil {
+				return result, err
+			}
+			for _, entry := range receipt.Results {
+				if entry.Status == "unknown" {
+					return result, fmt.Errorf("a confirmed Bitbucket resolve for PR #%s has an unknown outcome; reconcile by reading the pull request before asking again", m.PR)
+				}
 			}
 		}
-	}
-	operations, keys := plan()
-	if len(operations) == 0 {
-		return result, nil
-	}
-	if len(record.Attempts) >= 20 {
-		return result, fmt.Errorf("too many incomplete Bitbucket resolve attempts for PR #%s; inspect the pull request", m.PR)
-	}
-	head, err := reviewPRHead(m)
-	if err != nil {
-		return result, fmt.Errorf("cannot verify PR head: %w", err)
-	}
-	// The attempt is recorded only once its request exists (or its receipt
-	// does): a refused ask leaves nothing behind and is asked again later.
-	// Intents are numbered by attempt, so a record lost after the request was
-	// written resumes on the same intent.
-	intent := fmt.Sprintf("taba-resolve-%s-%d", selection, len(record.Attempts))
-	receipt, err := brokeredWrites(m.RepoDir, m.Slug, m.PR, head, intent, operations)
-	if err != nil && !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
-		return result, err
-	}
-	record.Attempts = append(record.Attempts, struct {
-		Intent string   `json:"intent"`
-		Head   string   `json:"head"`
-		Keys   []string `json:"keys"`
-	}{intent, head, keys})
-	if saveErr := writePrivateJSON(recordPath, record); saveErr != nil {
-		return result, saveErr
-	}
-	if receipt != nil {
-		apply(keys, receipt)
-		if err := writeInlineRecords(bundle, rows); err != nil {
+		operations, keys := plan()
+		if len(operations) == 0 {
+			return result, nil
+		}
+		if len(record.Attempts) >= 20 {
+			return result, fmt.Errorf("too many incomplete Bitbucket resolve attempts for PR #%s; inspect the pull request", m.PR)
+		}
+		head, err := reviewPRHead(m)
+		if err != nil {
+			return result, fmt.Errorf("cannot verify PR head: %w", err)
+		}
+		// Recorded only once its request exists (or its receipt does): a
+		// refused ask leaves nothing behind. Intents are numbered by attempt,
+		// so a record lost after the request was written resumes on the same
+		// intent.
+		intent := fmt.Sprintf("taba-resolve-%s-%d", selection, len(record.Attempts))
+		receipt, err := brokeredWrites(m.RepoDir, m.Slug, m.PR, head, intent, operations)
+		if err != nil && !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
 			return result, err
 		}
+		record.Attempts = append(record.Attempts, resolveAttempt{Intent: intent, Head: head, Keys: keys})
+		if saveErr := writePrivateJSON(recordPath, record); saveErr != nil {
+			return result, saveErr
+		}
+		if receipt == nil {
+			return result, err
+		}
+		// A receipt already exists for this attempt: replay it like any other.
 	}
-	return result, err
 }

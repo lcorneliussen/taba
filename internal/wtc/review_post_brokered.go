@@ -455,16 +455,15 @@ func readBrokeredReceipt(gitDir, slug, number, intent string) (*brokeredReceipt,
 	return &receipt, nil
 }
 
-// brokeredPending explains an asked-for intent without a receipt: started
-// without one (outcome unknown), still waiting, or its request is gone.
-func brokeredPending(gitDir, intent, number string) error {
-	if err := brokeredStarted(gitDir, intent); err != nil {
-		return err
-	}
+// brokeredPendingRequest returns the intent of the worktree's pending request.
+func brokeredPendingRequest(gitDir string) (string, bool) {
 	raw, err := os.ReadFile(filepath.Join(gitDir, bitbucketWriteRequestFile))
-	var pending brokeredRequest
-	if err == nil && json.Unmarshal(raw, &pending) == nil && pending.IntentID == intent {
-		return fmt.Errorf("%w: PR #%s writes wait for the person to confirm them in the Control UI; run this again afterwards", ErrBitbucketAwaitingConfirmation, number)
+	if err != nil {
+		return "", false
 	}
-	return fmt.Errorf("the Bitbucket write request %s is gone without a receipt; reconcile by reading the pull request", intent)
+	var pending brokeredRequest
+	if json.Unmarshal(raw, &pending) != nil {
+		return "", false
+	}
+	return pending.IntentID, true
 }

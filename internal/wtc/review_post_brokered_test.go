@@ -414,3 +414,135 @@ func TestStoredReviewManifestUsesItsCollectionsControlRoot(t *testing.T) {
 		t.Fatalf("explicit control root = %q", got)
 	}
 }
+
+// A resolve request the person discarded (no receipt, no claim, request
+// file gone) was never started: the next run asks again.
+func TestBrokeredResolveAsksAgainAfterADiscardedRequest(t *testing.T) {
+	f := newBrokeredFixture(t)
+	if err := writeInlineRecords(f.bundle, []ReviewInlineRecord{{Key: "k1", File: "a.go", Line: 3, ID: "901"}}); err != nil {
+		t.Fatal(err)
+	}
+	opt := ReviewResolveOptions{Reply: "Fixed."}
+	if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), opt); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("ask = %v", err)
+	}
+	first := f.request(t)
+	if err := os.Remove(filepath.Join(f.gitDir, bitbucketWriteRequestFile)); err != nil { // discarded
+		t.Fatal(err)
+	}
+	if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), opt); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("after a discarded request = %v, want a fresh ask", err)
+	}
+	second := f.request(t)
+	if second.IntentID == first.IntentID || len(second.Operations) != 2 {
+		t.Fatalf("fresh ask = %+v", second)
+	}
+	// A claimed request that is gone is never asked again: its outcome is unknown.
+	dir := filepath.Join(f.gitDir, bitbucketWriteReceiptsDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, second.IntentID+".claim"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(f.gitDir, bitbucketWriteRequestFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), opt); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("claimed and gone = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.gitDir, bitbucketWriteRequestFile)); !os.IsNotExist(err) {
+		t.Fatal("a claimed intent must not be asked again")
+	}
+}
+
+// A receipt found for the attempt being asked (its record was lost after
+// confirmation) is applied like any other: unknown stops, failed threads
+// are asked for again, and only nothing left to do is success.
+func TestBrokeredResolveReceiptFoundWhileAskingIsNotSuccessUnlessComplete(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		statuses []string
+		want     string // "unknown", "ask" or "done"
+	}{
+		{"failed thread", []string{"done:901", "failed"}, "ask"},
+		{"unknown thread", []string{"done:901", "unknown"}, "unknown"},
+		{"all done", []string{"done:901", "done:902"}, "done"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newBrokeredFixture(t)
+			if err := writeInlineRecords(f.bundle, []ReviewInlineRecord{{Key: "k1", File: "a.go", Line: 3, ID: "901"}, {Key: "k2", File: "b.go", Line: 4, ID: "902"}}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), ReviewResolveOptions{}); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+				t.Fatalf("ask = %v", err)
+			}
+			first := f.request(t)
+			// The record of the attempt is lost; the plugin left a receipt.
+			records, _ := filepath.Glob(filepath.Join(f.bundle, "bitbucket-resolve.*.json"))
+			for _, r := range records {
+				os.Remove(r)
+			}
+			f.receipt(t, first.IntentID, tc.want == "done", tc.statuses...)
+			_, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), ReviewResolveOptions{})
+			switch tc.want {
+			case "done":
+				if err != nil {
+					t.Fatalf("complete receipt = %v", err)
+				}
+			case "unknown":
+				if err == nil || !strings.Contains(err.Error(), "unknown outcome") {
+					t.Fatalf("unknown receipt = %v", err)
+				}
+			case "ask":
+				if !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+					t.Fatalf("failed receipt = %v, want a new ask", err)
+				}
+				if next := f.request(t); next.IntentID == first.IntentID || len(next.Operations) != 1 || next.Operations[0].Comment != 902 {
+					t.Fatalf("new ask = %+v", next)
+				}
+			}
+			if rows := readInlineRecords(f.bundle); !rows[0].Resolved {
+				t.Fatalf("done thread not recorded: %+v", rows)
+			}
+		})
+	}
+}
+
+// Repeated failed resolves after a successful reply: the reply is asked for
+// once; every retry asks only to resolve, under a new intent each time.
+func TestBrokeredResolveRepeatedRetriesNeverRepeatTheReply(t *testing.T) {
+	f := newBrokeredFixture(t)
+	if err := writeInlineRecords(f.bundle, []ReviewInlineRecord{{Key: "k1", File: "a.go", Line: 3, ID: "901"}}); err != nil {
+		t.Fatal(err)
+	}
+	opt := ReviewResolveOptions{Reply: "Fixed."}
+	seen := map[string]bool{}
+	replies := 0
+	for round, statuses := range [][]string{{"done:950", "failed"}, {"failed"}, {"done:901"}} {
+		if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), opt); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+			t.Fatalf("round %d ask = %v", round, err)
+		}
+		request := f.request(t)
+		if seen[request.IntentID] {
+			t.Fatalf("round %d reused intent %s", round, request.IntentID)
+		}
+		seen[request.IntentID] = true
+		for _, op := range request.Operations {
+			if op.Op == "comment.create" {
+				replies++
+			}
+		}
+		if len(request.Operations) != len(statuses) {
+			t.Fatalf("round %d request = %+v", round, request)
+		}
+		f.receipt(t, request.IntentID, statuses[len(statuses)-1] != "failed", statuses...)
+	}
+	if replies != 1 {
+		t.Fatalf("the reply was asked for %d times", replies)
+	}
+	result, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), opt)
+	if err != nil || !readInlineRecords(f.bundle)[0].Resolved {
+		t.Fatalf("final = %+v, %v", result, err)
+	}
+}
