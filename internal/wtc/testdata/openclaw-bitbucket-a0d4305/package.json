@@ -1,0 +1,35 @@
+{
+  "name": "openclaw-bitbucket",
+  "version": "0.3.7",
+  "description": "Bitbucket Cloud for OpenClaw: a skill for pull requests, review comments and pipelines, and personal Bitbucket logins for shared gateways",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lcorneliussen/openclaw-bitbucket.git"
+  },
+  "files": [
+    "index.js",
+    "dist",
+    "lib",
+    "skills",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "install": {
+      "minHostVersion": ">=2026.10.2"
+    },
+    "compat": {
+      "pluginApi": ">=2026.10.2"
+    }
+  }
+}

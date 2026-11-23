@@ -1,0 +1,11 @@
+Pinned copy of the merged openclaw-bitbucket pull request write module (MIT, see LICENSE),
+used only by the joint taba <-> plugin contract test (bitbucket_joint_contract_test.go).
+repository: github.com/lcorneliussen/openclaw-bitbucket
+commit: a0d4305ead109681ea79bd0f6815d1a26597d088 (main, release 0.3.7 preparation)
+files are byte-identical to that commit; sha256:
+339ba8cb9da6eff50619a95040ee353a54a78c359c1a5b113dccebb6e76cdacb  lib/logins.js
+efb0e57bbc83ba8d3edc8c4643ff0459468b6a4346d862b0905800c62ac144e8  lib/pr-writes.js
+b4d013927214aec7308e8b49895f17f5f67a42755c7c87d95f94fdd126c94106  lib/publish.js
+8aaa4d34e477ac760752046a79f6486147813ca230365889be03b6f32159a652  lib/scopes.js
+4ba0dc5111c2cc7a76babd6e99c7490a6c799d47a7b067d248d659bae8cd177b  package.json
+8053eb688bec851a807211c5c9f93ab791a73b6845afef421a338db8eb7cd892  LICENSE
