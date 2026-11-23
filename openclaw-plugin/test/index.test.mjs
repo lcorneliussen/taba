@@ -890,7 +890,7 @@ for (const gatewayMethods of [true, false]) test(`status never restores; restora
   assert.equal(commands.filter(a=>a[0]==="openclaw"&&a[2]==="list").length,1,"missing rows share cached native metadata");
   if (gatewayMethods) {
     assert.deepEqual(methods.get("wtc.checkout.restore").opts.scope,"operator.admin");
-    assert.deepEqual(methods.get("wtc.checkout.restore").opts.sessionAccess,{mode:"write"});
+    assert.equal(methods.get("wtc.checkout.restore").opts.sessionAccess,undefined);
     // Outside a gateway the native dispatcher is missing: the snapshot is shown, restore is not promised.
     assert.equal(first.recovery.state,"snapshot-only");
     assert.match(first.recovery.reason,/snapshot is recorded.*cannot restore checkouts from Collection/);

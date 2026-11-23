@@ -60,11 +60,11 @@ const succeed = (method, params, state, entry) => {
   return { ok: true, payload: state.record };
 };
 
-test("the restore method requires gateway admin and session write access, and is the only restore path", () => {
+test("the restore method requires gateway admin and an authenticated profile", () => {
   const { methods, restore } = setup();
   const { opts } = methods.get(RESTORE_METHOD);
   assert.equal(opts.scope, "operator.admin");
-  assert.deepEqual(opts.sessionAccess, { mode: "write" });
+  assert.equal(opts.sessionAccess, undefined, "the host admits session-scoped plugin methods only at operator.write");
   assert.equal(opts.profileAccess, "required");
   assert.notEqual(restore.capability().state, "unavailable");
 });

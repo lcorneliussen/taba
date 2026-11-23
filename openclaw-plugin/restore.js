@@ -119,7 +119,9 @@ export function registerCheckoutRestore(api, { collectionOf, collectionIdentity,
         // restore() handles every failure after dispatch itself: this one came first.
         respond(true, { status: "failed", ...classifyRestoreFailure(error), mutation: "none", detail: sanitize(error) });
       }
-    }, { scope: "operator.admin", profileAccess: "required", sessionAccess: { mode: "write" } });
+    // Admin only. OpenClaw admits session-scoped plugin methods (sessionAccess)
+    // only at operator.write, so membership is checked here instead.
+    }, { scope: "operator.admin", profileAccess: "required" });
   }
   return { restore, capability: () => capability };
 }
