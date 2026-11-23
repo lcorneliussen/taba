@@ -229,7 +229,7 @@ func (x *reviewExecContext) prepare(bundle string, manifest ReviewManifest) erro
 		Version: 1, Mode: mode,
 		WorkingDir:  "fresh temporary directory outside the collection; no agent configuration found in its ancestors",
 		Environment: reviewContextEnvRec{Policy: "allowlist"},
-		Source:      reviewSourceRec{Commit: x.sourceSHA, Snapshot: "reviewed head tree as stored (no export attributes or filters), read-only files", TreeBefore: x.sourceTree},
+		Source:      reviewSourceRec{Commit: x.sourceSHA, Snapshot: "read-only files of the reviewed head written from raw blob contents (no export attributes or filters); symlinks with absolute or parent-step targets omitted; submodule contents not materialized", TreeBefore: x.sourceTree},
 		Limits: []string{
 			"client restrictions and file-tool confinement are not an OS sandbox",
 			"unexpected writes are detected after each phase, not prevented",
@@ -476,7 +476,7 @@ func (x *reviewExecContext) writeRecord(bundle string) error {
 	return os.WriteFile(filepath.Join(bundle, reviewContextRecord), append(data, '\n'), 0644)
 }
 
-// reviewContextReport is the public, path-free provenance line of a summary.
+// report is the public, path-free provenance line of a summary.
 func (x *reviewExecContext) report() string {
 	if x.custom {
 		return fmt.Sprintf("Execution context: public review through an operator launcher. taba started it in a fresh directory outside the authoring collection with an allowlisted environment and a read-only snapshot of `%s`, and audited its writes (source unchanged: %t); client-level isolation was not established by taba.", shortSHA(x.sourceSHA), x.record.Source.Unchanged)
@@ -520,10 +520,12 @@ func sweepReviewContexts() {
 	}
 }
 
-// snapshotReviewSource writes the commit's tree exactly as stored: blob
-// contents straight from the object database. git archive is not used because
-// it applies export-ignore and export-subst, and checkout would run repository
-// filters; neither belongs in what a reviewer reads as the reviewed head.
+// snapshotReviewSource writes the reviewed head's files read-only from raw
+// blob contents in the object database. git archive is not used because it
+// applies export-ignore and export-subst, and checkout would run repository
+// filters. It is not the complete tree: symlinks with absolute or parent-step
+// targets are omitted, and submodules become empty directories without their
+// contents.
 func snapshotReviewSource(repo, commit, dest string) error {
 	list, err := reviewGit(repo, "ls-tree", "-r", "-z", "--full-tree", commit)
 	if err != nil {

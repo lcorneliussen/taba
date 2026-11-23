@@ -2,8 +2,10 @@
 
 - **Public reviews run outside the authoring collection.** Concern and lead
   processes of a public bundle now start in a fresh temporary directory with a
-  copy of the bundle and a read-only snapshot of the reviewed head's tree as
-  stored (export attributes and filters do not apply), instead of
+  copy of the bundle and a read-only snapshot of the reviewed head's files,
+  written from raw blob contents (export attributes and filters do not apply;
+  symlinks with absolute or parent-step targets are omitted and submodule
+  contents are not included), instead of
   beneath the collection with the worktree beside them. Concern rules still
   come from the target's base through the bundle. Reviewers receive an
   allowlisted environment (locale, proxy, certificate and client

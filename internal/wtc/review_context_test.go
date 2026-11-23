@@ -11,9 +11,10 @@ import (
 )
 
 // The sentinel launcher observes its own process boundary and reports it in
-// the outputs it may write (a concern's findings, the lead's summary). It does not echo its arguments as evidence: it
-// walks its working directory's ancestors, reads its environment and tries to
-// change the source and bundle it was given.
+// the outputs it may write (a concern's findings, the lead's summary). It does
+// not echo its arguments as evidence: it walks its working directory's
+// ancestors, reads its environment and tries to change the source and bundle
+// it was given.
 const reviewSentinelLauncher = `#!/bin/sh
 bundle="$4"
 id=$(basename "$3" .md)
@@ -245,6 +246,9 @@ func TestPublicReviewRunsOutsideCollectionContext(t *testing.T) {
 			t.Fatalf("provenance leaks %q: %s", leak, record)
 		}
 	}
+	if !strings.Contains(string(record), "symlinks with absolute or parent-step targets omitted") || !strings.Contains(string(record), "submodule contents not materialized") || strings.Contains(string(record), "as stored") {
+		t.Fatalf("provenance overstates the snapshot: %s", record)
+	}
 	if !strings.Contains(string(record), `"mode": "public-operator-launcher"`) || !strings.Contains(string(record), `"commit": "`+bundle.Manifest.HeadSHA) || !strings.Contains(string(record), `"unchanged": true`) || !strings.Contains(string(record), `"WANTED_VALUE"`) || strings.Contains(string(record), "SENTINEL_PARENT_VALUE") {
 		t.Fatalf("provenance does not describe the context: %s", record)
 	}
@@ -411,7 +415,7 @@ esac
 	}
 }
 
-// The snapshot is the reviewed tree as stored: export attributes must not
+// The snapshot holds the reviewed files from raw blobs: export attributes must not
 // drop or rewrite files, and links may not lead out of the snapshot.
 func TestPublicReviewSnapshotIsTheStoredTree(t *testing.T) {
 	repo := t.TempDir()
