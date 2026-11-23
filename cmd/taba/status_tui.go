@@ -1897,7 +1897,9 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		if merged && !row.OnBranch {
 			linkTone = statusToneDim
 		}
-		if closed && row.Archived {
+		// A confirmed closure is struck through at once; archiving only
+		// decides whether the row is listed.
+		if closed {
 			linkTone = statusToneDim + ";9"
 		}
 		number := statusTUIPRNumberCell(row.Number, target, l.number, styled, linkTone)
@@ -1920,7 +1922,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 			if merged && !row.OnBranch {
 				rowTone = statusToneDim
 			}
-			if closed && row.Archived {
+			if closed {
 				rowTone = statusToneDim + ";9"
 			}
 			repo = statusTUIStyle(repo, rowTone)
