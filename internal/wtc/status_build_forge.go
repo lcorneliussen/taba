@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // The built-in build providers answer the same question as a harness
@@ -29,7 +31,7 @@ func statusGHBuildContext(ctx context.Context, slug, branch string) (*StatusBuil
 	}
 	raw, err := statusSingleFlightContext(ctx, "build", "github.com", slug, branch, func() ([]byte, error) {
 		return statusJSONContext(ctx, "gh", "api", "graphql", "-f", "query="+statusGHBuildQuery,
-			"-f", "owner="+parts[0], "-f", "name="+parts[1], "-f", "ref=refs/heads/"+branch)
+			"-f", "owner="+parts[0], "-f", "name="+parts[1], "-f", "ref="+gitref.LocalBranch(branch).String())
 	})
 	if err != nil {
 		return nil, err

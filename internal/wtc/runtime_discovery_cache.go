@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // This is process-local advisory declaration data, never PR/action authority.
@@ -163,9 +165,9 @@ func (c *Context) statusResourceSignature(repoState bool) string {
 		add(filepath.Join(common, "packed-refs"))
 		add(filepath.Join(common, "refs", "heads"))
 		if data, err := statusResourceReadFile(filepath.Join(gitDir, "HEAD"), 4096); err == nil {
-			ref, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "ref: ")
-			if ok && strings.HasPrefix(ref, "refs/heads/") && !strings.Contains(ref, "..") && !strings.ContainsAny(ref, "\r\n\x00") {
-				add(filepath.Join(common, ref))
+			name, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "ref: ")
+			if ref, err := gitref.Parse(name); ok && err == nil && ref.IsLocalBranch() {
+				add(filepath.Join(common, ref.String()))
 			}
 		}
 	}

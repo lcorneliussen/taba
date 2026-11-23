@@ -9,6 +9,8 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/Masterminds/semver/v3"
 	"gopkg.in/yaml.v3"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 type HarnessInitOptions struct {
@@ -60,7 +62,7 @@ func InitHarness(opt HarnessInitOptions) (HarnessInitResult, error) {
 			return result, err
 		}
 	}
-	registry, err := yaml.Marshal(Registry{SchemaVersion: 1, Repos: []Repo{{Name: opt.Name, Remote: opt.Remote, DefaultRef: "origin/main", Role: "Project harness"}}})
+	registry, err := yaml.Marshal(Registry{SchemaVersion: 1, Repos: []Repo{{Name: opt.Name, Remote: opt.Remote, DefaultRef: gitref.RemoteBranch("origin", "main").Short(), Role: "Project harness"}}})
 	if err != nil {
 		return result, err
 	}

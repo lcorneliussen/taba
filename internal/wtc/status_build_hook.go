@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 type statusBuildRequest struct {
@@ -146,13 +148,13 @@ type statusBuildTier struct {
 // itself. That one branch is production. A different production ref keeps the
 // development ref as the test tier.
 func statusBuildTiers(repo Repo) []statusBuildTier {
-	tip := strings.TrimPrefix(repo.DefaultRef, "origin/")
+	tip := gitref.OriginBranch(repo.DefaultRef)
 	if tip == "" {
 		tip = "main"
 	}
-	prod := strings.TrimPrefix(repo.ProductionRef, "origin/")
+	prod := gitref.OriginBranch(repo.ProductionRef)
 	if prod == "" {
-		prod = strings.TrimPrefix(repo.ReleaseRef, "origin/")
+		prod = gitref.OriginBranch(repo.ReleaseRef)
 	}
 	if prod == "" {
 		if tip == "dev" {
@@ -243,7 +245,7 @@ func (c *Context) statusBuildFacts(snapshot *StatusSnapshot) error {
 		tiers[repo.Name] = statusBuildTiers(repo)
 		if base := row.DevelopmentBase; base != nil && base.Source == "collection" {
 			prod := tiers[repo.Name][len(tiers[repo.Name])-1]
-			tip := strings.TrimPrefix(base.EffectiveRef, "origin/")
+			tip := gitref.OriginBranch(base.EffectiveRef)
 			tiers[repo.Name] = []statusBuildTier{prod}
 			if tip != prod.Branch {
 				tiers[repo.Name] = append([]statusBuildTier{{"tip", tip}}, tiers[repo.Name]...)

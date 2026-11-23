@@ -13,6 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/gitref"
 )
 
 // RootSelectionFile is the generated tool configuration at a project root. It
@@ -166,49 +167,54 @@ func validRootHarness(harness string) error {
 // bare clone's HEAD names (the forge default at clone time), else origin/main.
 // A ref recorded in the generated file is provenance only and never chooses
 // what is read.
-func rootSourceProbe(owner string) (string, error) {
-	resolves := func(ref string) bool {
-		_, err := projectSnapshotGit(owner, "rev-parse", "--verify", ref+"^{commit}")
+func rootSourceProbe(owner string) (gitref.Ref, error) {
+	resolves := func(ref gitref.Ref) bool {
+		_, err := projectSnapshotGit(owner, "rev-parse", "--verify", ref.String()+"^{commit}")
 		return err == nil
 	}
-	candidates := []string{"origin/HEAD"}
-	if head, err := projectSnapshotGit(owner, "symbolic-ref", "--quiet", "HEAD"); err == nil && strings.HasPrefix(head, "refs/heads/") {
-		candidates = append(candidates, "origin/"+strings.TrimPrefix(head, "refs/heads/"))
+	candidates := []gitref.Ref{gitref.RemoteBranch("origin", "HEAD")}
+	if head, err := projectSnapshotGit(owner, "symbolic-ref", "--quiet", "HEAD"); err == nil {
+		if ref, err := gitref.Parse(head); err == nil && ref.IsLocalBranch() {
+			candidates = append(candidates, gitref.RemoteBranch("origin", ref.Branch()))
+		}
 	}
-	candidates = append(candidates, "origin/main")
+	candidates = append(candidates, gitref.RemoteBranch("origin", "main"))
+	var tried []string
 	for _, ref := range candidates {
 		if resolves(ref) {
 			return ref, nil
 		}
+		tried = append(tried, ref.Short())
 	}
-	return "", fmt.Errorf("cannot find the harness default branch in %s (tried %s)", owner, strings.Join(candidates, ", "))
+	return gitref.Ref{}, fmt.Errorf("cannot find the harness default branch in %s (tried %s)", owner, strings.Join(tried, ", "))
 }
 
 // declaredHarnessRef reads the registry at commit and returns the default ref
 // the harness declares for itself. An owner whose registry does not declare
 // it is not a project harness.
-func declaredHarnessRef(p *ProjectContext, harness, origin string) (string, []string, error) {
+func declaredHarnessRef(p *ProjectContext, harness, origin string) (gitref.Ref, []string, error) {
 	data, _, err := p.snapshotFile(".harness-repos.yml", ".harness-repos.yml")
 	if err != nil {
-		return "", nil, err
+		return gitref.Ref{}, nil, err
 	}
 	if data == nil {
-		return "", nil, fmt.Errorf("harness owner %s has no .harness-repos.yml at %s", harness, p.Source.Ref)
+		return gitref.Ref{}, nil, fmt.Errorf("harness owner %s has no .harness-repos.yml at %s", harness, p.Source.Ref)
 	}
 	registry, err := ParseRegistry(data)
 	if err != nil {
-		return "", nil, err
+		return gitref.Ref{}, nil, err
 	}
 	for _, repo := range registry.Repos {
 		if repo.Answers(harness) || origin != "" && repo.Remote == origin {
-			ref := repositoryBaseFacts(repo, repoBaseStore{}, false).EffectiveRef
-			if !rootRefPattern.MatchString(ref) || strings.Contains(ref, "..") {
-				return "", nil, fmt.Errorf("invalid declared harness ref %q", ref)
+			declared := repositoryBaseFacts(repo, repoBaseStore{}, false).EffectiveRef
+			ref, err := gitref.Parse(declared)
+			if err != nil || !rootRefPattern.MatchString(declared) {
+				return gitref.Ref{}, nil, fmt.Errorf("invalid declared harness ref %q", declared)
 			}
 			return ref, repo.Names(), nil
 		}
 	}
-	return "", nil, fmt.Errorf("the registry in %s does not declare that harness; it is not this project's harness", harness)
+	return gitref.Ref{}, nil, fmt.Errorf("the registry in %s does not declare that harness; it is not this project's harness", harness)
 }
 
 // resolveRootSource derives the project source from the harness's shared
@@ -236,10 +242,10 @@ func resolveRootSource(root, harness string) (RootSelectionSource, error) {
 		return source, fmt.Errorf("harness owner %s is not an available bare repository", source.Owner)
 	}
 	origin, _ := projectSnapshotGit(owner, "config", "--get", "remote.origin.url")
-	resolve := func(ref string) (*ProjectContext, error) {
-		sha, err := projectSnapshotGit(owner, "rev-parse", "--verify", ref+"^{commit}")
+	resolve := func(ref gitref.Ref) (*ProjectContext, error) {
+		sha, err := projectSnapshotGit(owner, "rev-parse", "--verify", ref.String()+"^{commit}")
 		if err != nil || len(sha) < 40 {
-			return nil, fmt.Errorf("harness ref %s is unavailable in %s; fetch the owner", ref, source.Owner)
+			return nil, fmt.Errorf("harness ref %s is unavailable in %s; fetch the owner", ref.Short(), source.Owner)
 		}
 		return &ProjectContext{Source: ProjectSource{Owner: owner, Ref: sha}}, nil
 	}
@@ -264,22 +270,22 @@ func resolveRootSource(root, harness string) (RootSelectionSource, error) {
 		if err != nil {
 			return source, err
 		} else if again != ref {
-			return source, fmt.Errorf("harness default ref is inconsistent: %s declares %s", ref, again)
+			return source, fmt.Errorf("harness default ref is inconsistent: %s declares %s", ref.Short(), again.Short())
 		}
 		names = againNames
 	}
 	source.names = names
-	source.Ref, source.Commit = ref, p.Source.Ref
+	source.Ref, source.Commit = ref.Short(), p.Source.Ref
 	data, name, err := p.snapshotFile(".wtc-cli-version", ".taba-version")
 	if err != nil {
 		return source, err
 	}
 	if data == nil {
-		return source, fmt.Errorf("the harness pins no CLI release at %s", ref)
+		return source, fmt.Errorf("the harness pins no CLI release at %s", ref.Short())
 	}
 	version := strings.TrimSpace(string(data))
 	if !cliVersionPattern.MatchString(version) {
-		return source, fmt.Errorf("invalid CLI version in %s at %s: %q", name, ref, version)
+		return source, fmt.Errorf("invalid CLI version in %s at %s: %q", name, ref.Short(), version)
 	}
 	source.Pin, source.Version = name, version
 	return source, nil
@@ -609,7 +615,7 @@ func NewCollectionAtRoot(root string, opt NewOptions) (NewResult, *Context, erro
 		if registeredWorktree(owner, harness) {
 			_, _ = gitOutput("--git-dir="+owner, "worktree", "remove", "--force", harness)
 		}
-		if createdBranch && gitRefExists(owner, "refs/heads/"+opt.Branch) && !branchCheckedOut(owner, opt.Branch) {
+		if createdBranch && gitRefExists(owner, gitref.LocalBranch(opt.Branch)) && !branchCheckedOut(owner, opt.Branch) {
 			_, _ = gitOutput("--git-dir="+owner, "branch", "-D", opt.Branch)
 		}
 		_ = os.RemoveAll(harness)
@@ -647,17 +653,17 @@ func rootHarnessWorktreeArgs(owner, path, branch, commit string) []string {
 	switch {
 	case branch == "":
 		return append(args, "--detach", path, commit)
-	case gitRefExists(owner, "refs/heads/"+branch):
+	case gitRefExists(owner, gitref.LocalBranch(branch)):
 		return append(args, path, branch)
-	case gitRefExists(owner, "refs/remotes/origin/"+branch):
-		return append(args, "-b", branch, path, "origin/"+branch)
+	case gitRefExists(owner, gitref.RemoteBranch("origin", branch)):
+		return append(args, "-b", branch, path, gitref.RemoteBranch("origin", branch).String())
 	default:
 		return append(args, "-b", branch, path, commit)
 	}
 }
 
-func gitRefExists(owner, ref string) bool {
-	_, err := gitOutput("--git-dir="+owner, "rev-parse", "--verify", "--quiet", ref)
+func gitRefExists(owner string, ref gitref.Ref) bool {
+	_, err := gitOutput("--git-dir="+owner, "rev-parse", "--verify", "--quiet", ref.String())
 	return err == nil
 }
 
@@ -677,7 +683,7 @@ func registeredWorktree(owner, path string) bool {
 
 // branchCheckedOut reports whether a worktree of owner has branch checked out.
 func branchCheckedOut(owner, branch string) bool {
-	return worktreeListHas(owner, "branch ", "refs/heads/"+branch)
+	return worktreeListHas(owner, "branch ", gitref.LocalBranch(branch).String())
 }
 
 func worktreeListHas(owner, prefix, value string) bool {

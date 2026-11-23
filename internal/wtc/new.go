@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/gitref"
 )
 
 type NewOptions struct {
@@ -350,7 +351,7 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	case opt.Review:
 		branchNote = fmt.Sprintf(branding.Text("**Review-only collection.** You review someone else's PR; the result is a verdict and nothing else.\nProduce and post the review only: `{{command}} review bundle`, `{{command}} review run`, `{{command}} review post`.\nNo commits, no pushes, no thread resolution, no `{{command}} review ready`; those belong to the author.\nPushing from `%s` is disabled. When the author pushes again, `{{command}} review bundle` moves to the new head for the next round.\n\nOther siblings start detached at the tip."), primaryDir(primary, harnessRepo))
 	case opt.PR != "":
-		branchNote = fmt.Sprintf("The primary sibling is on a local branch at the exact PR head. Push review work with:\n\n    git -C %s push %s %s\n\nOther siblings start detached at the tip.", shellQuote(primaryDir(primary, harnessRepo)), shellQuote(result.PushRemote), shellQuote("HEAD:refs/heads/"+result.IntendedBranch))
+		branchNote = fmt.Sprintf("The primary sibling is on a local branch at the exact PR head. Push review work with:\n\n    git -C %s push %s %s\n\nOther siblings start detached at the tip.", shellQuote(primaryDir(primary, harnessRepo)), shellQuote(result.PushRemote), shellQuote("HEAD:"+gitref.LocalBranch(result.IntendedBranch).String()))
 	case opt.Branch != "":
 		branchNote = "All siblings are already on the explicitly requested branch. Commit on that branch; do not create it again."
 	default:

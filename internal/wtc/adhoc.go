@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/gitref"
 )
 
 // AdHocConfigDir holds an ad-hoc collection's registry, wtc.toml, hooks and
@@ -209,7 +210,7 @@ func (c *Context) RegisterAdHocRepo(opt AdHocRepoOptions) (Repo, error) {
 	}
 	if opt.Name == "" {
 		if repo, err := c.Repository(opt.Spec); err == nil {
-			if opt.Target != "" && repo.DefaultRef != "origin/"+opt.Target {
+			if opt.Target != "" && repo.DefaultRef != gitref.RemoteBranch("origin", opt.Target).Short() {
 				return Repo{}, fmt.Errorf("%s is already registered with development tip %s", repo.Name, repo.DefaultRef)
 			}
 			return repo, nil
@@ -272,17 +273,21 @@ func (c *Context) RegisterAdHocRepo(opt AdHocRepoOptions) (Repo, error) {
 		if _, err := gitOutput("check-ref-format", "--branch", target); err != nil {
 			return Repo{}, fmt.Errorf("invalid target branch %q", target)
 		}
-		heads, err := gitOutput("ls-remote", "--heads", repo.Remote, "refs/heads/"+target)
+		heads, err := gitOutput("ls-remote", "--heads", repo.Remote, gitref.LocalBranch(target).String())
 		if err != nil {
 			return Repo{}, err
 		}
 		if heads == "" {
 			return Repo{}, fmt.Errorf("%s has no branch %s", repo.Remote, target)
 		}
-		repo.DefaultRef = "origin/" + target
+		repo.DefaultRef = gitref.RemoteBranch("origin", target).Short()
 	}
 	if repo.Owner != "" {
-		if err := trackOwnerTip(repo.Owner, repo.DefaultRef); err != nil {
+		tip, err := gitref.Parse(repo.DefaultRef)
+		if err != nil {
+			return Repo{}, fmt.Errorf("development tip of %s: %w", repo.Name, err)
+		}
+		if err := trackOwnerTip(repo.Owner, tip); err != nil {
 			return Repo{}, err
 		}
 	}
@@ -311,14 +316,14 @@ func (c *Context) RegisterAdHocRepo(opt AdHocRepoOptions) (Repo, error) {
 // later plain fetch, then fetches it now. A single-branch clone would
 // otherwise keep a frozen tip. It runs before anything is recorded, so a
 // failed add leaves no registry entry.
-func trackOwnerTip(owner, ref string) error {
-	branch := strings.TrimPrefix(ref, "origin/")
-	refspec := "+refs/heads/" + branch + ":refs/remotes/" + ref
+func trackOwnerTip(owner string, tip gitref.Ref) error {
+	refspec := tip.FetchSpec()
+	all := gitref.RemoteBranch("origin", "*").FetchSpec()
 	configured, _ := gitOutput("--git-dir="+owner, "config", "--get-all", "remote.origin.fetch")
 	covered := false
 	for _, line := range strings.Split(configured, "\n") {
 		line = strings.TrimSpace(line)
-		covered = covered || line == refspec || line == "+refs/heads/*:refs/remotes/origin/*" || line == "refs/heads/*:refs/remotes/origin/*"
+		covered = covered || line == refspec || line == all || "+"+line == all
 	}
 	if !covered {
 		if _, err := gitOutput("--git-dir="+owner, "config", "--add", "remote.origin.fetch", refspec); err != nil {
@@ -326,7 +331,7 @@ func trackOwnerTip(owner, ref string) error {
 		}
 	}
 	if _, err := gitOutput("--git-dir="+owner, "fetch", "origin", refspec); err != nil {
-		return fmt.Errorf("fetch %s into %s: %w", ref, owner, err)
+		return fmt.Errorf("fetch %s into %s: %w", tip.Short(), owner, err)
 	}
 	return nil
 }
@@ -381,7 +386,9 @@ func remoteDefaultBranch(remote string) (string, error) {
 	}
 	for _, line := range strings.Split(out, "\n") {
 		if fields := strings.Fields(line); len(fields) == 3 && fields[0] == "ref:" && fields[2] == "HEAD" {
-			return strings.TrimPrefix(fields[1], "refs/heads/"), nil
+			if head, err := gitref.Parse(fields[1]); err == nil && head.IsLocalBranch() {
+				return head.Branch(), nil
+			}
 		}
 	}
 	return "", fmt.Errorf("cannot tell the default branch of %s; pass --target", remote)
