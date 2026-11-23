@@ -679,8 +679,11 @@ func runtimeReloadUnsupported(err error) bool {
 	return strings.Contains(err.Error(), "unknown command or unsupported file: `reload`")
 }
 
-// runtimeReloadPreflight checks, read-only, that a changed config can reach
-// the running runner. A reload without --yes only shows the plan.
+// runtimeReloadPreflight detects, read-only, a pinned client without reload
+// and then checks whether the running runner would import the change on
+// restart. A reload without --yes only shows the plan. Any other reload
+// error passes through, as before, and the later reload --yes reports it
+// after the write.
 func runtimeReloadPreflight(m *runtimeManifest) error {
 	if _, err := runtimeCommand(m, false, "reload"); err == nil || !runtimeReloadUnsupported(err) {
 		// Supported, or failing for another reason the reload will report.
