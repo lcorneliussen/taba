@@ -86,6 +86,10 @@ type ReadRefusal struct {
 	// Access is true when a person must change access or credentials;
 	// transient causes clear on their own.
 	Access bool `json:"access"`
+	// ReadIdentity is a non-secret digest of the read context that was
+	// refused; ObservedAt is when the read completed (RFC 3339, UTC).
+	ReadIdentity string `json:"readIdentity,omitempty"`
+	ObservedAt   string `json:"observedAt,omitempty"`
 }
 
 // PullRequest is the pull request of a checkout's branch.
@@ -113,6 +117,10 @@ type PullRequest struct {
 	Head        string `json:"head,omitempty"`
 	Branch      string `json:"branch,omitempty"`
 	MergeCommit string `json:"mergeCommit,omitempty"`
+	// For a Bitbucket read: the non-secret read identity and when the read
+	// completed, as on ReadRefusal.
+	ReadIdentity string `json:"readIdentity,omitempty"`
+	ObservedAt   string `json:"observedAt,omitempty"`
 }
 
 // ManagedCollections finds the gateway's collections: the managed worktrees

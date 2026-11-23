@@ -879,3 +879,50 @@ func TestBitbucketRefusalWordingAndTransportClasses(t *testing.T) {
 		t.Fatalf("5xx body: %v -> %+v", err, r)
 	}
 }
+
+// The read identity is a non-secret digest: stable for an unchanged host
+// token, new after rotation, and never shared by an unknown context.
+func TestBitbucketReadIdentityFollowsTheCredentialWithoutRevealingIt(t *testing.T) {
+	newNoBBHost(t)
+	tokens := t.TempDir()
+	t.Setenv("FAKE_TOKEN_DIR", tokens)
+	if err := os.MkdirAll(filepath.Join(tokens, "acme"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	set := func(token string) {
+		bitbucketHostCredentials = sync.Map{}
+		if err := os.WriteFile(filepath.Join(tokens, "acme", "alpha"), []byte(token), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"values":[]}`)) }))
+	defer server.Close()
+	statusBBAPI = server.URL // restored by newNoBBHost's cleanup
+	set("synthetic-identity-one")
+	first := BitbucketBranchRead("", "acme/alpha", "feature")
+	set("synthetic-identity-one")
+	again := BitbucketBranchRead("", "acme/alpha", "feature")
+	set("synthetic-identity-two")
+	rotated := BitbucketBranchRead("", "acme/alpha", "feature")
+	unknown := BitbucketBranchRead("", "acme/gamma", "feature") // the helper has nothing for gamma
+	if !strings.HasPrefix(first.Identity, "k:") || first.Identity != again.Identity {
+		t.Fatalf("unchanged token: %q vs %q", first.Identity, again.Identity)
+	}
+	if rotated.Identity == first.Identity {
+		t.Fatal("a rotated token must be another read identity")
+	}
+	if !strings.HasPrefix(unknown.Identity, "u:") || unknown.Err == nil {
+		t.Fatalf("no credential: %+v", unknown)
+	}
+	for _, r := range []BitbucketBranchReadResult{first, rotated, unknown} {
+		if r.ObservedAt.IsZero() {
+			t.Fatal("a read must say when it completed")
+		}
+		for _, secret := range []string{"synthetic-identity-one", "synthetic-identity-two", poisonTokenAlpha, poisonTokenBeta} {
+			if strings.Contains(r.Identity, secret) {
+				t.Fatalf("identity %q reveals a credential", r.Identity)
+			}
+		}
+	}
+}

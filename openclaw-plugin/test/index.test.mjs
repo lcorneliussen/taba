@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import plugin, { agentGitIdentity, collectionFolder, decideProjects, matchProjects, openaiDecisions, pullRequestChanges, pullRequestWatch, repositoryOrigin, versionWarning, wtcVersionOf } from "../index.js";
-import { mkdirSync, mkdtempSync, symlinkSync, rmSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, rmSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { registerPublicationBridge } from "../publication.js";
 import os from "node:os";
 import path from "node:path";
@@ -355,6 +355,38 @@ test("a refused pull request read is news once per cause, survives restarts and 
   assert.deepEqual(watch.observe("main", "s", ok), []);
   // Revoked again: told again.
   assert.deepEqual(watch.observe("main", "s", refused("not-visible")).length, 1);
+});
+
+test("refusal news is keyed by read identity and cause, unknown identities stay apart, and stale results are fenced (#471)", () => {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), "pull-requests.json");
+  const pr = (at, identity = "k:alpha") => [{ path: "/w/app", repo: "app", pullRequest: { number: 7, url: "u", state: "open", draft: false, checks: "success", readIdentity: identity, observedAt: at } }];
+  const refused = (at, identity, cause = "not-visible") => [{ path: "/w/app", repo: "app", pullRequest: null, pullRequestRefusal: { cause, access: true, message: `refused (${cause})`, readIdentity: identity, observedAt: at } }];
+  const watch = pullRequestWatch(file);
+  assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:00:00Z")), []);
+  assert.equal(watch.observe("main", "s", refused("2026-11-23T10:01:00Z", "k:alpha")).length, 1);
+  assert.deepEqual(watch.observe("main", "s", refused("2026-11-23T10:02:00Z", "k:alpha")), []);
+  // The credential rotated or another identity reads now: news again, once.
+  assert.equal(watch.observe("main", "s", refused("2026-11-23T10:03:00Z", "k:beta")).length, 1);
+  assert.deepEqual(watch.observe("main", "s", refused("2026-11-23T10:04:00Z", "k:beta")), []);
+  // An unknown identity is never the same as a known one.
+  assert.equal(watch.observe("main", "s", refused("2026-11-23T10:05:00Z", "u:selection")).length, 1);
+  // Only the identity digest and the cause are stored.
+  const stored = readFileSync(file, "utf8");
+  assert.ok(stored.includes('"u:selection|not-visible"'), stored);
+  assert.ok(!/token|password|Bearer/i.test(stored), "no credential material is persisted");
+  // A result that finished before the newest one is fenced out, whatever it says.
+  assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:04:30Z")), []);
+  assert.deepEqual(watch.observe("main", "s", refused("2026-11-23T10:00:30Z", "k:gamma")), []);
+  // Recovery is news once.
+  assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:06:00Z")), ["app: its pull request can be read again."]);
+  assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:07:00Z")), []);
+});
+
+test("a refusal kept by an older version is not announced again after an upgrade (#471)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), file = path.join(dir, "pull-requests.json");
+  writeFileSync(file, JSON.stringify({ "main s": { agentId: "main", sessionKey: "s", at: Date.now(), repos: {}, refusals: { "/w/app": "not-visible" } } }));
+  const watch = pullRequestWatch(file);
+  assert.deepEqual(watch.observe("main", "s", [{ path: "/w/app", repo: "app", pullRequest: null, pullRequestRefusal: { cause: "not-visible", access: true, message: "m", readIdentity: "k:alpha", observedAt: "2026-11-23T10:00:00Z" } }]), []);
 });
 
 test("the pull requests seen are kept across restarts, and a failed look is no news", () => {
