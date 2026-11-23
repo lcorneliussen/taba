@@ -5,13 +5,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
+
+	"taba.sh/taba/internal/testenv"
 )
 
-func TestMain(m *testing.M) {
-	unsetTabaEnvironment()
+func TestMain(m *testing.M) { testenv.Main(m, forgeFixtures) }
+
+func forgeFixtures() (cleanup func() error) {
 	statusTurnOffSharedForgeBudgetAndAudit()
 	// Create synthetic selection and isolated stores unless inheriting a parent test fixture.
 	home := os.Getenv("WTC_TEST_AUTH_HOME")
@@ -37,20 +39,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv("GH_CONFIG_DIR") == "" {
 		os.Setenv("GH_CONFIG_DIR", filepath.Join(home, "gh"))
 	}
-	code := m.Run()
-	if owned {
-		os.RemoveAll(home)
-	}
-	os.Exit(code)
-}
-
-// A collection shell carries generated TABA_ variables, and readers prefer
-// them; tests that set only a WTC_ name must not read the developer's values.
-func unsetTabaEnvironment() {
-	for _, setting := range os.Environ() {
-		if name, _, _ := strings.Cut(setting, "="); strings.HasPrefix(name, "TABA_") {
-			os.Unsetenv(name)
+	return func() error {
+		if owned {
+			os.RemoveAll(home)
 		}
+		return nil
 	}
 }
 
