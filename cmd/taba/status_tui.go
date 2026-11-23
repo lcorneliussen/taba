@@ -2346,8 +2346,9 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	// Every paint, including scroll and key feedback, waits for the next
 	// renderer frame, so the frame rate bounds input-to-screen latency. View
 	// runs per message rather than per frame, and a frame with an unchanged
-	// view writes nothing; an idle frame costs only a timer wakeup and a view
-	// comparison, which is why this stays below the renderer's default sixty.
+	// view writes nothing. An idle frame still wakes the renderer, which
+	// re-measures the cached view before skipping the write, so this stays
+	// below the renderer's default sixty.
 	// Input and collector work run independently of this cadence.
 	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(statusFrameRate)).Run()
 	interrupted := ctx.Err() != nil
