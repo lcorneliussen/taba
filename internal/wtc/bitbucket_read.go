@@ -153,8 +153,49 @@ func (s *bitbucketReadState) repoToken(ctx context.Context, workspace, repo stri
 		s.tokens[key] = entry
 	}
 	s.mu.Unlock()
-	entry.once.Do(func() { entry.token, entry.err = gitCredentialFill(ctx, workspace, repo) })
+	entry.once.Do(func() { entry.token, entry.err = bitbucketHostCredential(ctx, workspace, repo) })
 	return entry.token, entry.err
+}
+
+// Host credential answers are remembered in this process's memory for a
+// bounded time, so operations that only read caches (a status frame, a
+// row, another pane's refresh in the same process) do not each run the
+// helper. An answer is reused for bitbucketHostCredentialTTL and a failure
+// for bitbucketHostCredentialCooldown; after that the next operation asks
+// again, so rotation, logout or a new grant applies within that window. The
+// memory is never written anywhere.
+var (
+	bitbucketHostCredentialTTL      = 60 * time.Second
+	bitbucketHostCredentialCooldown = 15 * time.Second
+	bitbucketHostCredentials        sync.Map // lower(workspace/repo) -> *bitbucketHostAnswer
+	bitbucketHostCredentialAsk      = gitCredentialFill
+)
+
+type bitbucketHostAnswer struct {
+	mu    sync.Mutex
+	token string
+	err   error
+	at    time.Time
+}
+
+func bitbucketHostCredential(ctx context.Context, workspace, repo string) (string, error) {
+	value, _ := bitbucketHostCredentials.LoadOrStore(strings.ToLower(workspace+"/"+repo), &bitbucketHostAnswer{})
+	answer := value.(*bitbucketHostAnswer)
+	answer.mu.Lock()
+	defer answer.mu.Unlock()
+	if !answer.at.IsZero() {
+		age := time.Since(answer.at)
+		if answer.err == nil && age < bitbucketHostCredentialTTL || answer.err != nil && age < bitbucketHostCredentialCooldown {
+			return answer.token, answer.err
+		}
+	}
+	token, err := bitbucketHostCredentialAsk(ctx, workspace, repo)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// A cancelled caller learned nothing about the credential.
+		return "", err
+	}
+	answer.token, answer.err, answer.at = token, err, time.Now()
+	return token, err
 }
 
 // childEnv is the environment addition for one read child. A personal read
@@ -282,7 +323,8 @@ func bitbucketReadRun(ctx context.Context, env []string, operation string, args 
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
-	cmd.Stderr = discardWriter{}
+	stderr := &boundedBuffer{limit: 8192}
+	cmd.Stderr = stderr
 	out, err := forgeOutput(cmd)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -293,12 +335,32 @@ func bitbucketReadRun(ctx context.Context, env []string, operation string, args 
 	if errors.Is(err, exec.ErrNotFound) {
 		return out, fmt.Errorf("%s: %s is not installed", operation, commandLabel(args[0]))
 	}
+	if err != nil && statusRateLimitedText.Match(stderr.buf) {
+		// Only the fact and the wait leave stderr, as fixed text the budget
+		// recognizes; the child's own words are never echoed.
+		limited := "rate limited by Bitbucket (HTTP 429)"
+		if match := statusRetryAfterText.FindSubmatch(stderr.buf); match != nil {
+			if seconds, convErr := strconv.Atoi(string(match[1])); convErr == nil && seconds > 0 && seconds < 86400 {
+				limited += fmt.Sprintf("; retry-after: %d", seconds)
+			}
+		}
+		return out, &bitbucketReadError{limited}
+	}
 	return out, err
 }
 
-type discardWriter struct{}
+// boundedBuffer keeps the first limit bytes a child writes and drops the rest.
+type boundedBuffer struct {
+	buf   []byte
+	limit int
+}
 
-func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - len(b.buf); room > 0 {
+		b.buf = append(b.buf, p[:min(room, len(p))]...)
+	}
+	return len(p), nil
+}
 
 // bitbucketReadError wraps a classified failure with the operation name.
 func bitbucketOperationError(operation string, err error) error {
@@ -343,6 +405,13 @@ func (s *bitbucketReadState) twgRead(ctx context.Context, workspace, repo, opera
 // bitbucketReadPR reads one pull request as its Bitbucket resource, with the
 // returned id and repository pinned to the request when TWG answered.
 func bitbucketReadPR(ctx context.Context, slug, number string) ([]byte, error) {
+	return bitbucketReadPRWith(ctx, slug, number, nil)
+}
+
+// bitbucketReadPRWith is bitbucketReadPR with the exact argv a caller has
+// always given the deprecated bb client (bbArgs, after "bb"); nil uses the
+// status form. TWG reads are the same for every caller.
+func bitbucketReadPRWith(ctx context.Context, slug, number string, bbArgs []string) ([]byte, error) {
 	workspace, repo, err := splitBitbucketSlug(slug)
 	if err != nil {
 		return nil, err
@@ -355,7 +424,10 @@ func bitbucketReadPR(ctx context.Context, slug, number string) ([]byte, error) {
 		return nil, bitbucketOperationError("Bitbucket PR read", s.selection.err)
 	}
 	if s.selection.Client == bitbucketClientBB {
-		out, err := bitbucketReadRun(ctx, nil, "bb pr view", "bb", "pr", "view", number, "--workspace", workspace, "--repo", repo, "--json")
+		if bbArgs == nil {
+			bbArgs = []string{"pr", "view", number, "--workspace", workspace, "--repo", repo, "--json"}
+		}
+		out, err := bitbucketReadRun(ctx, nil, "bb pr view", append([]string{"bb"}, bbArgs...)...)
 		return out, bitbucketOperationError("bb pr view", err)
 	}
 	const operation = "twg bitbucket pull-requests get"
@@ -546,7 +618,8 @@ func bitbucketReadOpenPRs(ctx context.Context, slug, branch string, limit int) (
 		return nil, bitbucketOperationError("Bitbucket PR list", s.selection.err)
 	}
 	if s.selection.Client == bitbucketClientBB {
-		out, err := bitbucketReadRun(ctx, nil, "bb pr list", "bb", "--workspace", workspace, "--repo", repo, "pr", "list", "--state", "OPEN", "--limit", strconv.Itoa(limit), "--json")
+		// open review's bb form: the target after --json.
+		out, err := bitbucketReadRun(ctx, nil, "bb pr list", "bb", "pr", "list", "--state", "OPEN", "--limit", strconv.Itoa(limit), "--json", "--workspace", workspace, "--repo", repo)
 		return out, bitbucketOperationError("bb pr list", err)
 	}
 	const operation = "twg bitbucket pull-requests query"
@@ -586,7 +659,9 @@ func bitbucketReadOpenPRs(ctx context.Context, slug, branch string, limit int) (
 func BitbucketReadPR(root, slug, number string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return bitbucketReadPR(bitbucketReadOperation(ctx, root), slug, number)
+	workspace, repo, _ := strings.Cut(slug, "/")
+	// open review's bb form: the target after --json.
+	return bitbucketReadPRWith(bitbucketReadOperation(ctx, root), slug, number, []string{"pr", "view", number, "--json", "--workspace", workspace, "--repo", repo})
 }
 
 // BitbucketReadOpenPRs lists open pull requests from branch, as
@@ -650,4 +725,11 @@ func twgValues(data []byte) ([]json.RawMessage, error) {
 		return nil, &bitbucketReadError{bitbucketCauseMalformed}
 	}
 	return list, nil
+}
+
+// reviewBBPRArgs is the bb argv review reads have always used: the target
+// pinned before the subcommand.
+func reviewBBPRArgs(slug, number string) []string {
+	workspace, repo, _ := strings.Cut(slug, "/")
+	return []string{"--workspace", workspace, "--repo", repo, "pr", "view", number, "--json"}
 }

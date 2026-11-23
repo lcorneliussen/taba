@@ -37,7 +37,7 @@ func statusFullRefreshDueContext(ctx context.Context, forge, slug, key string) b
 	// Incremental audits protect reuse of persistent observations. Unknown
 	// selection has only live operation-private observations, so there is no
 	// persistent fingerprint to audit. Explicit/by-number reads still run.
-	if !statusAuthForContext(ctx, forge).known {
+	if !statusEntryKnown(ctx, "full", forge, slug, key) {
 		return false
 	}
 	every := statusFullRefreshEvery()

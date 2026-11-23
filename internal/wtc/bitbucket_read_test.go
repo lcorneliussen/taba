@@ -8,9 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Synthetic host without bb (#471): a fake twg, git with a fake per-repository
@@ -69,6 +71,9 @@ const fakeHelperScript = `#!/bin/sh
 path=""
 while IFS= read -r line; do [ -z "$line" ] && break; case "$line" in path=*) path="${line#path=}";; esac; done
 echo "query:$path" >> "$FAKE_HELPER_LOG"
+if [ -n "$FAKE_TOKEN_DIR" ] && [ -f "$FAKE_TOKEN_DIR/${path%.git}" ]; then
+  printf 'username=x-token-auth\npassword=%s\n' "$(cat "$FAKE_TOKEN_DIR/${path%.git}")"; exit 0
+fi
 case "$path" in
 acme/alpha.git) printf 'username=x-token-auth\npassword=%s\n' "` + poisonTokenAlpha + `";;
 acme/beta.git) printf 'username=someone\npassword=%s\n' "` + poisonTokenBeta + `";;
@@ -135,6 +140,9 @@ func newNoBBHost(t *testing.T) noBBHost {
 		t.Fatalf("synthetic host must shadow bb with its poison tool, found %q", path)
 	}
 	twgVersionChecks = sync.Map{}
+	bitbucketHostCredentials = sync.Map{}
+	t.Cleanup(func() { bitbucketHostCredentials = sync.Map{} })
+	t.Setenv("FAKE_TOKEN_DIR", "")
 	return h
 }
 
@@ -236,12 +244,22 @@ func TestBitbucketHostReadCredentialReachesOnlyItsRepositoryChild(t *testing.T) 
 	if _, set := os.LookupEnv("TWG_BBC_TOKEN"); set {
 		t.Fatal("a host token entered this process's environment")
 	}
-	// A new operation asks again, so rotation applies to the next operation.
+	// Within the memory window another operation reuses the answer; after
+	// it, the next operation asks again, so rotation applies.
+	if _, err := bitbucketReadPR(statusAuthOperation(context.Background()), "acme/alpha", "7"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(h.read(t, h.helperLog), "query:acme/alpha.git"); got != 1 {
+		t.Fatalf("alpha queried %d times within the memory window", got)
+	}
+	old := bitbucketHostCredentialTTL
+	bitbucketHostCredentialTTL = 0
+	defer func() { bitbucketHostCredentialTTL = old }()
 	if _, err := bitbucketReadPR(statusAuthOperation(context.Background()), "acme/alpha", "7"); err != nil {
 		t.Fatal(err)
 	}
 	if got := strings.Count(h.read(t, h.helperLog), "query:acme/alpha.git"); got != 2 {
-		t.Fatalf("alpha queried %d times across two operations", got)
+		t.Fatalf("alpha queried %d times after the memory window", got)
 	}
 }
 
@@ -326,13 +344,15 @@ func TestBitbucketReadSelectionIsPartOfAuthContext(t *testing.T) {
 	t.Setenv("BB_USERNAME", "personal-user")
 	t.Setenv("BB_API_TOKEN", "personal-token")
 	twg := statusResolveAuthContext("bitbucket.org")
-	if twg.known {
-		t.Fatal("TWG profile observations must stay operation-private")
+	// The forge context covers the REST credential; PR detail through an
+	// unfingerprinted TWG profile is operation-private per entry.
+	if !twg.known || statusAuthEntry(statusAuthOperation(context.Background()), "pr", "bitbucket.org", "acme/alpha").known {
+		t.Fatal("REST context must stay known; TWG profile PR detail must stay operation-private")
 	}
 	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
 	host := statusResolveAuthContext("bitbucket.org")
 	if host.known || host.scope == twg.scope {
-		t.Fatalf("host credential context = %+v, personal TWG = %+v", host, twg)
+		t.Fatalf("host credential forge context = %+v, personal TWG = %+v", host, twg)
 	}
 	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "")
 	t.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
@@ -412,4 +432,116 @@ func TestBitbucketHostReadCredentialIsNotForwardedCrossHost(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 	assertNoPoison(t, "diagnostic", err.Error())
+}
+
+// Cached observations follow the credential that produced them (#471).
+func TestBitbucketCacheContextsFollowTheReadCredential(t *testing.T) {
+	h := newNoBBHost(t)
+	tokens := t.TempDir()
+	t.Setenv("FAKE_TOKEN_DIR", tokens)
+	if err := os.MkdirAll(filepath.Join(tokens, "acme"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	setToken := func(repo, token string) {
+		t.Helper()
+		bitbucketHostCredentials = sync.Map{} // a new process, or the window passed
+		if token == "" {
+			os.Remove(filepath.Join(tokens, "acme", repo))
+			return
+		}
+		if err := os.WriteFile(filepath.Join(tokens, "acme", repo), []byte(token), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := strconv.FormatInt(time.Now().UnixNano(), 10)
+	write := func(kind, slug, data string) {
+		t.Helper()
+		if !statusWriteForgeEntryObservedContext(statusAuthOperation(context.Background()), kind, "bitbucket.org", slug, key, []byte(data), time.Now()) {
+			t.Fatalf("write %s %s refused", kind, slug)
+		}
+	}
+	read := func(kind, slug string) string {
+		t.Helper()
+		data, _, ok := statusReadForgeEntryObservedContext(statusAuthOperation(context.Background()), kind, "bitbucket.org", slug, key, time.Hour)
+		if !ok {
+			return ""
+		}
+		return string(data)
+	}
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	setToken("alpha", "synthetic-alpha-1")
+	setToken("beta", "synthetic-beta-1")
+
+	// Unchanged known token: another operation (refresh, pane, process)
+	// shares the observation and the in-flight path.
+	write("pr", "acme/alpha", `{"id":7}`)
+	setToken("alpha", "synthetic-alpha-1")
+	if read("pr", "acme/alpha") != `{"id":7}` {
+		t.Fatal("an unchanged host token must share cached observations across operations")
+	}
+	a := statusForgeEntryPathContext(statusAuthOperation(context.Background()), "pr", "bitbucket.org", "acme/alpha", key)
+	b := statusForgeEntryPathContext(statusAuthOperation(context.Background()), "pr", "bitbucket.org", "acme/alpha", key)
+	if a != b {
+		t.Fatal("two operations with the same token must share one in-flight path")
+	}
+	// Another repository's token is another context.
+	write("pr", "acme/beta", `{"id":8}`)
+	if read("pr", "acme/beta") != `{"id":8}` || read("pr", "acme/alpha") != `{"id":7}` {
+		t.Fatal("repositories must keep their own contexts")
+	}
+	// Rotation: the old observation is not reused.
+	setToken("alpha", "synthetic-alpha-2")
+	if read("pr", "acme/alpha") != "" {
+		t.Fatal("a rotated host token must not reuse the old token's observations")
+	}
+	// Logout or no answer (the helper has nothing for gamma): operation-
+	// private, never on disk.
+	if statusEntryKnown(statusAuthOperation(context.Background()), "pr", "bitbucket.org", "acme/gamma", key) {
+		t.Fatal("a repository without a host credential must not have a known context")
+	}
+	write("checks", "acme/gamma", `{"head":"x"}`)
+	if read("checks", "acme/gamma") != "" {
+		t.Fatal("an unknown context must not share observations")
+	}
+	// Switching back to personal reads never sees host-token observations.
+	setToken("alpha", "synthetic-alpha-1")
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "")
+	if read("pr", "acme/alpha") != "" {
+		t.Fatal("personal reads must not see host-credential observations")
+	}
+
+	// Personal TWG with a profile taba cannot fingerprint: PR detail stays
+	// operation-private, REST checks keep their own shared context.
+	t.Setenv("BB_USERNAME", "synthetic-user")
+	t.Setenv("BB_API_TOKEN", "synthetic-rest-token")
+	write("pr", "acme/alpha", `{"id":9}`)
+	if read("pr", "acme/alpha") != "" {
+		t.Fatal("an unfingerprinted TWG profile must keep PR detail operation-private")
+	}
+	write("checks", "acme/alpha", `{"head":"y"}`)
+	if read("checks", "acme/alpha") != `{"head":"y"}` {
+		t.Fatal("REST observations must stay shared under the personal TWG default")
+	}
+	// TWG token from the environment: fingerprinted, shared, and separate
+	// from another token.
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-1")
+	write("pr", "acme/alpha", `{"id":10}`)
+	if read("pr", "acme/alpha") != `{"id":10}` {
+		t.Fatal("a fingerprinted TWG token must share PR detail")
+	}
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-2")
+	if read("pr", "acme/alpha") != "" {
+		t.Fatal("another TWG token must not reuse PR detail")
+	}
+	// No cache file name or content holds a token.
+	entries, _ := os.ReadDir(statusForgeCacheDir())
+	for _, entry := range entries {
+		raw, _ := os.ReadFile(filepath.Join(statusForgeCacheDir(), entry.Name()))
+		for _, secret := range []string{"synthetic-alpha-1", "synthetic-alpha-2", "synthetic-beta-1", "synthetic-twg-1", "synthetic-rest-token"} {
+			if strings.Contains(entry.Name(), secret) || strings.Contains(string(raw), secret) {
+				t.Fatalf("cache entry %s holds a credential", entry.Name())
+			}
+		}
+	}
+	_ = h
 }

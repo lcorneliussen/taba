@@ -148,7 +148,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 		if forge == "github" {
 			raw, err = exec.Command("gh", "pr", "view", opt.PR, "--repo", slug, "--json", "title,body,baseRefName,headRefOid,headRefName,url").Output()
 		} else {
-			raw, err = bitbucketReadPR(bitbucketReadOperation(context.Background(), c.ConfigRoot), slug, opt.PR)
+			raw, err = bitbucketReadPRWith(bitbucketReadOperation(context.Background(), c.ConfigRoot), slug, opt.PR, reviewBBPRArgs(slug, opt.PR))
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, branding.Text("{{command}}: warning: PR #%s metadata unavailable; bundle will use local refs\n"), opt.PR)

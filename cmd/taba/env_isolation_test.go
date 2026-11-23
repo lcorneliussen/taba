@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -14,5 +15,11 @@ func TestMain(m *testing.M) {
 			os.Unsetenv(name)
 		}
 	}
-	os.Exit(m.Run())
+	guard := installTestNetworkGuard()
+	code := m.Run()
+	if err := guard(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code = 1
+	}
+	os.Exit(code)
 }

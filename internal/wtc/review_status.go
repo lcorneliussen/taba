@@ -308,7 +308,7 @@ func (c *Context) GetReviewStatus(repo, number string, trusted bool) (ReviewStat
 		}
 	} else {
 		ctx := bitbucketReadOperation(context.Background(), c.ConfigRoot)
-		head, err = bitbucketReadPR(ctx, slug, number)
+		head, err = bitbucketReadPRWith(ctx, slug, number, reviewBBPRArgs(slug, number))
 		if err == nil {
 			comments, err = bitbucketReadPRComments(ctx, slug, number, 0)
 		}

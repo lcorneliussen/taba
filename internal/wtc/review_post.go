@@ -96,7 +96,7 @@ func reviewPRHead(manifest ReviewManifest) (string, error) {
 	if manifest.Forge == "github" {
 		out, err = reviewForgeCommand(manifest.RepoDir, "gh", []string{"pr", "view", manifest.PR, "--repo", manifest.Slug, "--json", "headRefOid"}, nil)
 	} else if manifest.Forge == "bitbucket" {
-		out, err = bitbucketReadPR(bitbucketReadOperation(context.Background(), ""), manifest.Slug, manifest.PR)
+		out, err = bitbucketReadPRWith(bitbucketReadOperation(context.Background(), ""), manifest.Slug, manifest.PR, reviewBBPRArgs(manifest.Slug, manifest.PR))
 	} else {
 		return "", fmt.Errorf("unknown forge %q", manifest.Forge)
 	}

@@ -79,7 +79,9 @@ git -c credential.interactive=false -c credential.useHttpPath=true credential fi
 ```
 
 with `protocol=https`, `host=bitbucket.org`, `path=<workspace>/<repo>.git`,
-`GIT_TERMINAL_PROMPT=0` and empty askpass programs, bounded to 10 s. Only the
+`GIT_TERMINAL_PROMPT=0` and empty askpass programs, bounded to 10 s. git
+itself needs the helper to answer a `username` as well (any value); without
+one, the fill fails and the repository has no host credential. Only the
 `password` is used; the helper's `username` is ignored rather than read as an
 authentication mode. No helper is ever asked to store or erase. The answer is
 kept in that operation's memory for that repository and then:
