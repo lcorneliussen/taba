@@ -6,6 +6,7 @@ Build with Go 1.27 or newer:
 go build -o wtc ./cmd/taba
 go test ./...
 go vet ./...
+golangci-lint run   # v2.15.0, as CI runs it; linters in .golangci.yml
 ```
 
 ## Running a development build in a collection
