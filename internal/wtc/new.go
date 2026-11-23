@@ -81,6 +81,9 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 		if err != nil {
 			return result, err
 		}
+		if c.harnessProvisioned && repo.Name == harnessRepo {
+			return result, fmt.Errorf("a harness PR collection is created from a collection, not from the project root")
+		}
 		url := prURL(repo.Remote, parts[1])
 		if !strings.HasPrefix(url, "https://github.com/") {
 			return result, fmt.Errorf("PR collection requires a GitHub repository remote")
@@ -178,7 +181,11 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 		}
 	}
 	result.Collection = filepath.Join(c.Workspace, result.Collection)
-	if _, err := os.Lstat(result.Collection); err == nil {
+	if c.harnessProvisioned {
+		if !sameCanonicalPath(result.Collection, c.Collection) {
+			return result, fmt.Errorf("collection name changed during root creation")
+		}
+	} else if _, err := os.Lstat(result.Collection); err == nil {
 		return result, fmt.Errorf("collection already exists: %s", result.Collection)
 	} else if !os.IsNotExist(err) {
 		return result, err
@@ -204,8 +211,10 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	if err := c.RunHook("new.pre", values); err != nil {
 		return result, err
 	}
-	if err := os.Mkdir(result.Collection, 0755); err != nil {
-		return result, err
+	if !c.harnessProvisioned {
+		if err := os.Mkdir(result.Collection, 0755); err != nil {
+			return result, err
+		}
 	}
 	if err := c.writeNewBases(opt, result.Collection); err != nil {
 		return result, err
@@ -224,6 +233,9 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	for _, name := range result.Repositories {
 		directory, branch := name, opt.Branch
 		if name == harnessRepo {
+			if c.harnessProvisioned {
+				continue // Checked out at the project source before creation.
+			}
 			directory = "harness"
 		}
 		if name == primary {

@@ -48,6 +48,12 @@ type UpgradeResult struct {
 	// mise, so the release itself still has to be installed.
 	NotInstalled bool          `json:"not_installed,omitempty"`
 	Notes        []ReleaseNote `json:"notes"`
+	// RootSelection is the project root's generated CLI selection after the
+	// upgrade. It follows the harness default ref, so it moves to the new pin
+	// once the change is merged and fetched. RootSelectionError explains why
+	// it could not be written; the upgrade itself still succeeded.
+	RootSelection      *RootSelectionReport `json:"root_selection,omitempty"`
+	RootSelectionError string               `json:"root_selection_error,omitempty"`
 }
 
 // CompatibilityRange is the harness range a pin implies: the pinned release up
@@ -177,6 +183,7 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 		} else if err := c.InstallMise(); err != nil {
 			return result, fmt.Errorf("pin updated, but the new release was not installed: %w", err)
 		}
+		c.upgradeRootSelection(&result)
 	}
 	result.Notes, result.NotesSource, err = upgradeNotes(c.Collection, from, to, opt.DryRun)
 	if err != nil && !opt.DryRun {
@@ -361,4 +368,21 @@ func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
 		return notes, fmt.Errorf(branding.Text("{{command}} %s is not a published release"), to)
 	}
 	return notes, nil
+}
+
+// upgradeRootSelection creates or refreshes the project root selection from
+// the project source. The pin this upgrade just wrote is local and does not
+// become the root's selection until it is merged and fetched; catch-up then
+// refreshes the root. A conflict or missing source is reported, not fatal.
+func (c *Context) upgradeRootSelection(result *UpgradeResult) {
+	harness, err := c.RootSelectionHarness()
+	if err != nil {
+		result.RootSelectionError = err.Error()
+		return
+	}
+	report, err := SyncRootSelection(RootSyncOptions{Root: c.Workspace, Harness: harness, Create: true})
+	result.RootSelection = &report
+	if err != nil {
+		result.RootSelectionError = err.Error()
+	}
 }

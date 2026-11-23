@@ -45,7 +45,9 @@ wtc skills render --seed-scope
 ```
 
 With mise, run `mise install`. WTC generates the collection-root `mise.toml`
-from the committed CLI pin and harness tool configuration. Local environment
+from the committed CLI pin and harness tool configuration. To run the same
+release from the project root as well, run `taba env root` in the collection;
+see [project-root CLI selection](project-root-version.md). Local environment
 overrides belong in `.env.collection.local` and survive environment refreshes.
 
 ## Add repos and tasks

@@ -189,6 +189,7 @@ func run() error {
 	setup.RunE = runEnvSetup
 	envCmd.AddCommand(setup)
 	addEnvListCommand(envCmd, &asJSON, cwd)
+	addEnvRootCommand(envCmd, &asJSON)
 	root.AddCommand(envCmd)
 	commands := &cobra.Command{Use: "commands", Short: "List commands and machine-readable metadata", Args: cobra.NoArgs}
 	commands.RunE = func(cmd *cobra.Command, args []string) error {
