@@ -2333,7 +2333,7 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 }
 
 // statusFrameRate is the status renderer's paint cadence (frames per second).
-const statusFrameRate = 30
+const statusFrameRate = 60
 
 func runStatusProgram(model tea.Model, ctx context.Context, cancel context.CancelFunc) (tea.Model, error) {
 	defer cancel()
