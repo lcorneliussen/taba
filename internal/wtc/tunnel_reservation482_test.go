@@ -297,8 +297,8 @@ func TestTunnelReservation482InventoryStaysUnderWorkspaceLock(t *testing.T) {
 	}
 }
 
-// Collections outside the receiving project are not read at all; members are,
-// even when the receiver sees them through a different directory spelling.
+// Collections outside the receiving project are not read; a member's malformed
+// journal still refuses.
 func TestTunnelReservation482SkipsCollectionsOutsideReceivingProject(t *testing.T) {
 	c, _, _ := reservation482Receiver(t)
 	sibling := reservation482Sibling(t, c, "sibling")
