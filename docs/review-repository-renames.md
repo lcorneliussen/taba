@@ -29,7 +29,8 @@ then fail to post it ([#458](https://github.com/lcorneliussen/taba/issues/458)).
 
 Nothing is written, and no intent marker is created, when:
 
-- the bundle predates recorded repository IDs and the repository was renamed:
+- the bundle recorded no repository ID (it predates recorded IDs, or the
+  lookup failed when it was built) and the repository was renamed:
   build a fresh review, which records the ID and then posts under the verified
   name;
 - the configured name now resolves to a different repository ID than the

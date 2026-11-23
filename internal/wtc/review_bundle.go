@@ -33,7 +33,8 @@ type ReviewManifest struct {
 	Forge           string          `json:"forge"`
 	Slug            string          `json:"slug"`
 	// RepositoryID is the forge's immutable repository ID observed when the
-	// bundle was built; empty in older bundles. See review_identity.go.
+	// bundle was built; empty when none was recorded (older bundles, or a
+	// failed lookup at build time). See review_identity.go.
 	RepositoryID string `json:"repository_id,omitempty"`
 	URL          string `json:"url"`
 	BaseRef      string `json:"base_ref"`

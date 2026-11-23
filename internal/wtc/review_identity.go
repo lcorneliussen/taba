@@ -133,7 +133,7 @@ func reviewWriteTarget(m ReviewManifest) (ReviewManifest, error) {
 		return m, nil
 	}
 	if m.RepositoryID == "" {
-		return m, fmt.Errorf("GitHub repository %s was renamed to %s, and this review bundle predates recorded repository identity; nothing was posted; build a fresh review to post under the verified name", m.Slug, identity.Slug)
+		return m, fmt.Errorf("GitHub repository %s was renamed to %s, and this review bundle recorded no repository identity (it predates recorded IDs, or the lookup failed when it was built); nothing was posted; build a fresh review to post under the verified name", m.Slug, identity.Slug)
 	}
 	fmt.Fprintf(os.Stderr, branding.Text("{{command}}: GitHub repository %s is now %s (same repository ID); posting there. Update the registry remote to the new name.\n"), m.Slug, identity.Slug)
 	m.Slug = identity.Slug

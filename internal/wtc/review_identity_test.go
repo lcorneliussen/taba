@@ -164,7 +164,7 @@ func TestReviewPostRenameRefusals(t *testing.T) {
 	}{
 		// An old bundle has no identity to carry forward, even though old,
 		// canonical and PR metadata agree today.
-		{"old bundle without recorded identity", "", nil, "predates recorded repository identity"},
+		{"old bundle without recorded identity", "", nil, "recorded no repository identity"},
 		// The old name now belongs to another repository.
 		{"reused name", "R_widget", map[string]string{"FAKE_OLD_ID": "R_other", "FAKE_OLD_NAME": "example/old-widget"}, "name may have been reused"},
 		{"reused name after a second rename", "R_widget", map[string]string{"FAKE_OLD_ID": "R_other"}, "name may have been reused"},
@@ -301,7 +301,7 @@ func TestReviewResolveReplyFollowsVerifiedRename(t *testing.T) {
 	if err := writeInlineRecords(g.bundle, []ReviewInlineRecord{{Key: "012345abcd", ID: "401"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := g.c.ResolveReviewBundle(g.bundle, ReviewResolveOptions{Reply: "Fixed."}); err == nil || !strings.Contains(err.Error(), "predates recorded repository identity") {
+	if _, err := g.c.ResolveReviewBundle(g.bundle, ReviewResolveOptions{Reply: "Fixed."}); err == nil || !strings.Contains(err.Error(), "recorded no repository identity") {
 		t.Fatalf("old bundle reply gained rename authority: %v", err)
 	}
 	if writes := reviewIdentityWrites(g.requests(t)); len(writes) != 0 {
