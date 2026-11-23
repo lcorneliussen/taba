@@ -27,6 +27,10 @@ type ReviewBundleOptions struct {
 }
 
 type ReviewManifest struct {
+	// ConfigRoot is the control root of the collection handling the bundle,
+	// so every Bitbucket read and write of one review resolves the same
+	// client selection (#471). It is never stored in the bundle.
+	ConfigRoot      string          `json:"-"`
 	DevelopmentBase *RepositoryBase `json:"development_base,omitempty"`
 	ObservedPRBase  string          `json:"observed_pr_base,omitempty"`
 	Repo            string          `json:"repo"`
@@ -245,7 +249,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 		}
 		prURL = "https://" + host + "/" + slug + "/" + suffix + opt.PR
 	}
-	audience := reviewRepositoryAudience(worktree, forge, slug)
+	audience := reviewRepositoryAudience(c.ConfigRoot, worktree, forge, slug)
 	public, reason := c.reviewBundleMode(opt, forge, slug, audience)
 	opt.Public = public
 	headSHA, err := reviewRef(worktree, opt.Head)
@@ -356,7 +360,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	if err := os.MkdirAll(filepath.Join(dir, "concerns"), 0755); err != nil {
 		return ReviewBundle{}, err
 	}
-	manifest := ReviewManifest{Repo: opt.Repo, PR: opt.PR, Forge: forge, Slug: slug, URL: prURL, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA, HeadBranch: branch, Round: round, RepoDir: worktree, Collection: filepath.Base(c.Collection), Public: opt.Public, Audience: audience, ModeReason: reason, DevelopmentBase: developmentBase, ObservedPRBase: prBase}
+	manifest := ReviewManifest{Repo: opt.Repo, PR: opt.PR, Forge: forge, Slug: slug, URL: prURL, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA, HeadBranch: branch, Round: round, RepoDir: worktree, ConfigRoot: c.ConfigRoot, Collection: filepath.Base(c.Collection), Public: opt.Public, Audience: audience, ModeReason: reason, DevelopmentBase: developmentBase, ObservedPRBase: prBase}
 	if forge == "github" && opt.PR != "" {
 		manifest.RepositoryID = reviewRecordedRepositoryID(worktree, slug, opt.PR)
 	}
@@ -590,4 +594,27 @@ func matchReviewGlob(pattern, file string) bool {
 	}
 	b.WriteByte('$')
 	return regexp.MustCompile(b.String()).MatchString(file)
+}
+
+// bitbucketControlRoot is the control root whose Bitbucket client selection
+// a review's reads and writes use: the one the handling collection set, else
+// the root of the collection that holds the reviewed worktree, so a review
+// path that only has the stored manifest still uses that collection's
+// selection rather than whatever the process environment names (#471).
+func (m ReviewManifest) bitbucketControlRoot() string {
+	if m.ConfigRoot != "" {
+		return m.ConfigRoot
+	}
+	if m.RepoDir == "" {
+		return ""
+	}
+	root := FindCollectionRoot(m.RepoDir)
+	if root == "" {
+		return ""
+	}
+	c, err := OpenCollection(root)
+	if err != nil {
+		return ""
+	}
+	return c.ConfigRoot
 }

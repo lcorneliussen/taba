@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"taba.sh/taba/internal/envcompat"
 )
 
 // Bitbucket writes (issue #471).
@@ -62,7 +64,8 @@ func selectedBitbucketWrite(root string, rest bool) (bitbucketWriteRoute, error)
 		return bitbucketWriteREST, nil
 	}
 	if root == "" {
-		root, _ = os.LookupEnv("TABA_CONFIG_ROOT")
+		// The alias-aware lookup the readers use: WTC_CONFIG_ROOT too.
+		root, _ = envcompat.LookupEnv("TABA_CONFIG_ROOT")
 	}
 	selection, err := selectedBitbucketClient(root)
 	if err != nil {
@@ -217,14 +220,18 @@ func BitbucketMarkReady(root, worktree, slug, number, head string) error {
 	}
 	switch route {
 	case bitbucketWriteBroker:
-		receipt, err := brokeredWrites(worktree, slug, number, head, "taba-ready-"+brokeredHash("ready-v1", slug, number, head), []brokeredOperation{{Op: "pr.ready"}})
-		if err != nil {
-			return err
-		}
-		if receipt.Results[0].Status != "done" {
-			return fmt.Errorf("the confirmed un-draft of PR #%s ended %s; check the pull request", number, receipt.Results[0].Status)
-		}
-		return nil
+		done := false
+		return brokeredAttempts(worktree, slug, number, head, "taba-ready-"+brokeredHash("ready-v1", slug, number, head),
+			func() []brokeredOperation {
+				if done {
+					return nil
+				}
+				return []brokeredOperation{{Op: "pr.ready"}}
+			},
+			func(receipt *brokeredReceipt) (bool, error) {
+				done = len(receipt.Results) == 1 && receipt.Results[0].Status == "done"
+				return done, nil
+			})
 	case bitbucketWriteBB:
 		cmd := exec.Command("bb", "pr", "ready", number)
 		cmd.Dir = worktree

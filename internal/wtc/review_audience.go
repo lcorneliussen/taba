@@ -11,7 +11,7 @@ import (
 
 // Audience is fresh forge evidence, never inferred from authentication, the
 // harness visibility, or a cached PR. Missing fields must not mean private.
-func reviewRepositoryAudience(worktree, forge, slug string) string {
+func reviewRepositoryAudience(root, worktree, forge, slug string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var raw []byte
@@ -22,7 +22,7 @@ func reviewRepositoryAudience(worktree, forge, slug string) string {
 		cmd.Dir = worktree
 		raw, err = forgeOutput(cmd)
 	case "bitbucket":
-		raw, err = bitbucketReadRepo(bitbucketReadOperation(ctx, ""), slug)
+		raw, err = bitbucketReadRepo(bitbucketReadOperation(ctx, root), slug)
 	default:
 		return "unknown"
 	}
@@ -94,7 +94,7 @@ func reviewModeBody(body string, m ReviewManifest) string {
 // Force only overrides the stale-head check. It cannot override this boundary,
 // including for failed/progress posts or bundles made before audience discovery.
 func reviewPublicationAllowed(m ReviewManifest) error {
-	if !m.Public && reviewRepositoryAudience(m.RepoDir, m.Forge, m.Slug) != "private" {
+	if !m.Public && reviewRepositoryAudience(m.bitbucketControlRoot(), m.RepoDir, m.Forge, m.Slug) != "private" {
 		return fmt.Errorf("refusing to publish a private review bundle to a public or unknown audience; rebuild with --public and rerun the review")
 	}
 	return nil
