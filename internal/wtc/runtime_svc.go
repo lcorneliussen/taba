@@ -282,7 +282,8 @@ func (c *Context) AddService(opt ServiceOptions) (RuntimeResult, error) {
 
 // RemoveService stops a service with its tunnels and removes it from its task
 // file. A service from the repo's committed file needs shared: that is a repo
-// change.
+// change. A service from the repo's dekit.yaml tree, including a harness file
+// it loads, is never removed here: that file is edited in the repository.
 func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, error) {
 	defer c.signalServicesChanged()
 	if err := c.runtimeConflict(); err != nil {
@@ -303,7 +304,7 @@ func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, err
 			others++
 			continue
 		}
-		if task.Source != runtimeSharedFragment(repo.path) && task.Source != c.runtimeLocalFragment(repo.dir) {
+		if task.nativeDeclaration || task.Source != runtimeSharedFragment(repo.path) && task.Source != c.runtimeLocalFragment(repo.dir) {
 			file := "dekit.yaml"
 			if task.Declaration != nil {
 				file = task.Declaration.File

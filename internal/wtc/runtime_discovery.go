@@ -8,8 +8,9 @@ import (
 )
 
 // runtimeWithDeclarations adds tasks that have not been rendered yet. Observed
-// items win in their entirety: declarations cannot replace a live URL, failure,
-// resource state or tunnel choice. This path never plans or applies a runtime.
+// items win: declarations cannot replace a live URL, failure, resource state or
+// tunnel choice, and only fill a missing Declaration. This path never plans or
+// applies a runtime.
 func (c *Context) runtimeWithDeclarations(observed []RuntimeItem) []RuntimeItem {
 	seen := make(map[string]bool, len(observed))
 	for _, item := range observed {

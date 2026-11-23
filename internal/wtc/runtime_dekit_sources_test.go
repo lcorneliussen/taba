@@ -418,3 +418,17 @@ func TestRootDekitHarnessWithXWTCLoadedFromRoot(t *testing.T) {
 		t.Fatalf("diagnostic: %+v", got)
 	}
 }
+
+func TestRootDekitRemoveRefusesHarnessLoadedFromRoot(t *testing.T) {
+	c, repo := rootDekitFixture(t, map[string]string{"dekit.yaml": "load: [.harness/dekit.tasks.yaml]\n", ".harness/dekit.tasks.yaml": "tasks: {web/main: {cmd: [sh, -c, ':']}}\n"})
+	before, err := os.ReadFile(filepath.Join(repo, ".harness", "dekit.tasks.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RemoveService("widget/web", true); err == nil || !strings.Contains(err.Error(), "widget/.harness/dekit.tasks.yaml") {
+		t.Fatalf("rm --shared of a harness file loaded by dekit.yaml: %v", err)
+	}
+	if after, _ := os.ReadFile(filepath.Join(repo, ".harness", "dekit.tasks.yaml")); string(after) != string(before) {
+		t.Fatal("the loaded harness file was edited")
+	}
+}

@@ -44,6 +44,8 @@ type runtimeDeclaredTask struct {
 	// source keeps RuntimeItem.Source semantics: the absolute task file.
 	source string
 	decl   RuntimeDeclaration
+	// native marks the dekit.yaml tree, even a harness file it loads.
+	native bool
 }
 
 type runtimeResourceFile struct {
@@ -480,7 +482,7 @@ func (l *runtimeDekitLoader) addTasks(abs, mount string, tasks map[string]any) e
 			}
 			task["deps"] = moved
 		}
-		l.tasks[full] = runtimeDeclaredTask{spec: task, source: filepath.Join(l.display, filepath.FromSlash(l.name(abs))), decl: RuntimeDeclaration{Scope: "repository", File: l.name(abs), Mount: mount}}
+		l.tasks[full] = runtimeDeclaredTask{spec: task, source: filepath.Join(l.display, filepath.FromSlash(l.name(abs))), decl: RuntimeDeclaration{Scope: "repository", File: l.name(abs), Mount: mount}, native: true}
 	}
 	return nil
 }
@@ -618,8 +620,8 @@ func (l *runtimeDekitLoader) glob(pattern string) ([]string, error) {
 
 // linkOnTheWay refuses a symlink a pattern would descend through when it
 // names a directory, which may hold files dekit would load. A link to
-// anything else holds no further path, so it is skipped. Only the link's
-// metadata is read.
+// anything else holds no further path, so it is skipped. Only the target's
+// metadata is read (os.Stat), never its content.
 func (l *runtimeDekitLoader) linkOnTheWay(link string) error {
 	if info, err := os.Stat(link); err == nil && info.IsDir() {
 		return fmt.Errorf("%s is a symlink to a directory; taba does not read symlinked declaration files or directories", l.name(link))
@@ -713,7 +715,7 @@ func (l *runtimeDekitLoader) match(dir string, parts []string, found map[string]
 }
 
 // runtimeInputsSignature fingerprints files and directories a declaration read
-// by identity, size, time and, for files, content.
+// by path, mode, size, modification time and, for regular files, content.
 func runtimeInputsSignature(paths []string) string {
 	hash := sha256.New()
 	for _, path := range paths {

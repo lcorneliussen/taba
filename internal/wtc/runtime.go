@@ -25,6 +25,8 @@ type RuntimeItem struct {
 	DefinitionID        string `json:"definition_id,omitempty"`
 	// runnerStarting distinguishes runner readiness from an observed task state.
 	runnerStarting bool
+	// nativeDeclaration marks a planned task from the dekit.yaml tree.
+	nativeDeclaration bool
 
 	Collection string `json:"collection"`
 	Repo       string `json:"repo"`

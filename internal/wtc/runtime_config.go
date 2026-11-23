@@ -167,8 +167,9 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 		tasks := map[string]map[string]any{}
 		source := map[string]string{}
 		declaration := map[string]RuntimeDeclaration{}
+		nativeTask := map[string]bool{}
 		for name, task := range sources.tasks {
-			tasks[name], source[name], declaration[name] = task.spec, task.source, task.decl
+			tasks[name], source[name], declaration[name], nativeTask[name] = task.spec, task.source, task.decl, task.native
 		}
 		for _, file := range sources.resources {
 			for name, resource := range file.fragment.Resources {
@@ -192,6 +193,7 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 			if decl, ok := declaration[local]; ok {
 				item.Declaration = &decl
 			}
+			item.nativeDeclaration = nativeTask[local]
 			if metadata, ok := task["x-wtc"].(map[string]any); ok {
 				for key := range metadata {
 					if key != "url" && key != "url_env" && key != "url_log" && key != "public" && key != "mark" && key != "tunnel" && key != "port_env" {

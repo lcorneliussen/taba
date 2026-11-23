@@ -85,8 +85,9 @@ fragments, so a natively declared task has no `port_env`, mark or tunnel
 metadata. Its URL comes only from a literal `ready.http` probe. No port is derived
 from environment variables.
 
-`taba svc rm` does not edit `dekit.yaml` or its fragments, even with `--shared`:
-change that file in the repository.
+`taba svc rm` does not edit `dekit.yaml` or its fragments, even with `--shared`,
+and that includes a `.harness/dekit.tasks.yaml` that `dekit.yaml` loads: change the
+file in the repository.
 
 ## Provenance
 
