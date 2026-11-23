@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Commits and trees of the PR or push range only; history blobs stay remote.
+      # Fetches ancestor commits and trees without history blobs; the checker reads only
+      # the head tree and base..head. A missing or unrelated base fails the step.
       - name: Reject generated Python artifacts in range history
         env:
           EVENT_NAME: ${{ github.event_name }}

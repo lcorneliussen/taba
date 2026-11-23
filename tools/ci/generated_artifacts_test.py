@@ -203,7 +203,10 @@ class GeneratedArtifactsTest(unittest.TestCase):
         clone.git("fetch", "-q", "--depth=1", "origin", self.base)
         self.assertUnverifiable(clone.check(self.base, head))
 
-    def test_shallow_clone_covering_range_passes_or_fails_on_content(self):
+    def test_shallow_clone_covering_range_is_verified(self):
+        clean = self.repo.commit(tree({b"c.py": b"c\n"}), [self.base])
+        clone = self.shallow_clone(clean, 2)
+        self.assertClean(clone.check(self.base, clean))
         added = self.repo.commit(tree({b"t/__pycache__/s.pyc": PLACEHOLDER}),
                                  [self.base])
         head = self.repo.commit(BASE_FILES, [added])
