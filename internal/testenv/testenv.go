@@ -30,7 +30,7 @@ func Main(m *testing.M, setup ...func() (cleanup func() error)) {
 
 func run(m *testing.M, setup []func() func() error) (code int) {
 	if os.Getenv(marker) == "" {
-		dir, err := isolate()
+		dir, err := isolate(osEnv{})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "testenv:", err)
 			return 1
@@ -49,25 +49,53 @@ func run(m *testing.M, setup []func() func() error) (code int) {
 	return m.Run()
 }
 
-func isolate() (string, error) {
+// env is the process environment isolate changes.
+type env interface {
+	Setenv(name, value string) error
+	Unsetenv(name string) error
+}
+
+type osEnv struct{}
+
+func (osEnv) Setenv(name, value string) error { return os.Setenv(name, value) }
+func (osEnv) Unsetenv(name string) error      { return os.Unsetenv(name) }
+
+// isolate fails closed: if any change to the environment fails, it removes
+// its directory and returns the error, and no test runs.
+func isolate(e env) (string, error) {
 	for _, setting := range os.Environ() {
 		if name, _, _ := strings.Cut(setting, "="); fromShell(name) {
-			os.Unsetenv(name)
+			if err := e.Unsetenv(name); err != nil {
+				return "", fmt.Errorf("unset %s: %w", name, err)
+			}
 		}
 	}
 	dir, err := os.MkdirTemp("", "taba-testenv-")
 	if err != nil {
 		return "", err
 	}
-	config := filepath.Join(dir, "gitconfig")
-	if err := os.WriteFile(config, []byte(gitConfig), 0o600); err != nil {
+	if err := configure(e, dir); err != nil {
 		os.RemoveAll(dir)
 		return "", err
 	}
-	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	os.Setenv("GIT_CONFIG_GLOBAL", config)
-	os.Setenv(marker, dir)
 	return dir, nil
+}
+
+func configure(e env, dir string) error {
+	config := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(config, []byte(gitConfig), 0o600); err != nil {
+		return err
+	}
+	for _, setting := range [][2]string{
+		{"GIT_CONFIG_NOSYSTEM", "1"},
+		{"GIT_CONFIG_GLOBAL", config},
+		{marker, dir},
+	} {
+		if err := e.Setenv(setting[0], setting[1]); err != nil {
+			return fmt.Errorf("set %s: %w", setting[0], err)
+		}
+	}
+	return nil
 }
 
 // knobs are the WTC_ and TABA_ names a test reads on purpose. New knobs use
