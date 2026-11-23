@@ -217,6 +217,15 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 		body = fmt.Sprintf("⏳ **Local review: posting findings**\n\nRound %d, head `%s`.\n\n`wtc-review v1 head=%s verdict=pending blockers=0 round=%d lead=pending`\n", manifest.Round, manifest.HeadSHA[:7], manifest.HeadSHA, manifest.Round)
 	}
 	body = reviewModeBody(body, manifest)
+	if manifest.Forge == "bitbucket" && bitbucketGateway() {
+		// The person writes on a gateway (#471): one confirmed request with
+		// the final summary and the inline comments; progress and failure
+		// notes are not written there.
+		if mode != "summary" {
+			return ReviewPostResult{}, errBitbucketBrokered
+		}
+		return c.postReviewBrokered(target, bundle, cid, finalBody)
+	}
 	createPending := filepath.Join(bundle, "comment.create-pending")
 	if cid == "" {
 		// Record intent before sending: a lost response or interrupted process
@@ -513,6 +522,19 @@ func priorReviewInlineKeys(m ReviewManifest, bundle string) map[string]bool {
 }
 
 func postReviewInline(m ReviewManifest, bundle string) (posted, failed, skipped int) {
+	return postReviewInlineWith(m, bundle, nil)
+}
+
+// reviewInlineWrite is one inline comment a brokered review post asks for.
+type reviewInlineWrite struct {
+	Row  ReviewInlineRecord
+	Body string
+}
+
+// postReviewInlineWith is postReviewInline; with queue set, Bitbucket inline
+// comments are collected for a brokered write instead of being posted, and
+// their records are left for the receipt to complete.
+func postReviewInlineWith(m ReviewManifest, bundle string, queue *[]reviewInlineWrite) (posted, failed, skipped int) {
 	prior := priorReviewInlineKeys(m, bundle)
 	if prior == nil {
 		fmt.Fprintln(os.Stderr, branding.Text("{{command}}: could not read prior inline comments; review remains pending"))
@@ -596,6 +618,10 @@ func postReviewInline(m ReviewManifest, bundle string) (posted, failed, skipped 
 				body += "\nSuggestion: " + f.Suggestion + "\n"
 			}
 			body += fmt.Sprintf("\nRound %d.\n\n`wtc-review-inline v1 key=%s concern=%s file=%s line=%d`\n", m.Round, key, file.Concern, f.File, f.Line)
+			if queue != nil && m.Forge == "bitbucket" {
+				*queue = append(*queue, reviewInlineWrite{Row: row, Body: body})
+				continue
+			}
 			if m.Forge == "github" {
 				payload, _ := json.Marshal(map[string]any{"body": body, "commit_id": m.HeadSHA, "path": f.File, "line": f.Line, "side": "RIGHT"})
 				out, err := reviewGitHubAPI(m.RepoDir, []string{"-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
