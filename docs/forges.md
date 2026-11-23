@@ -259,9 +259,64 @@ refreshes these reads, and Bitbucket review receipts
 ([#444](https://github.com/lcorneliussen/taba/issues/444)) changed how the
 summary comment id is read back; neither added a Bitbucket operation.
 
+## Writes
+
+A write takes one route, chosen before anything is sent, and is never
+retried through another:
+
+| Where | Route |
+|---|---|
+| A gateway that keeps logins away from commands (`BITBUCKET_PUBLISH=gateway`) | a request for the Bitbucket plugin's confirmed pull request writes; the person confirms on the Collection card |
+| Explicit `BB_API_USER`/`BB_API_PASS` or `BB_USERNAME`/`BB_API_TOKEN` | the existing REST comment writes |
+| `TABA_BITBUCKET_TRANSPORT=bb` | the deprecated `bb` client |
+| otherwise | the person's own TWG login: `pull-requests comment create/update/resolve`, `pull-requests update --ready` |
+
+The host read credential is never used for a write. Existing create-intent,
+saved-id and receipt guards apply to every route.
+
+### Gateway writes
+
+On a gateway, `review post` (summary), `review resolve` and `review ready`
+write `bitbucket-pr-writes.json` into the worktree's git directory: a closed
+set of operations (`comment.create` with optional `inline`/`parent`,
+`comment.update`, `comment.resolve`, `pr.ready`, `pr.update`) for one pull
+request and head, under an intent id derived from the review. The command
+reports that the writes await confirmation. The Collection card shows
+**Confirm Bitbucket writes…** for that checkout; the Bitbucket plugin
+(`pr-writes`, then `pr-writes-confirm`, openclaw-bitbucket with #33) shows
+exactly what it would write and with whose login, writes as that person, and
+leaves `bitbucket-pr-writes/<intent>.receipt.json`. Running the command again
+applies the receipt: the summary id, inline records and — only for a complete
+post — the review receipt. A summary create stays `comment.create-pending`
+until its id is known; an unknown outcome stays pending for reconciliation; a
+run that stopped asks for the rest under a new intent, because the plugin
+carries an intent out once. Without a plugin that has `pr-writes`, the card
+says so and nothing is written.
+
+## Gateway card and pull request news
+
+The gateway's checkout status reads a Bitbucket branch's pull request — the
+open one, else the latest merged, declined or superseded one — through the
+read adapter, with head checks from the budgeted status reader. Declined and
+superseded show as closed. A read that fails leaves the checkout without a
+pull request, which the news watcher treats as "could not be asked", never as
+a change; checks that could not be read keep the previous value, so a later
+read is not announced again.
+
+## Doctor
+
+`taba doctor` shows a `bitbucket-read <repo>` row per Bitbucket repository
+(collection doctor: the checked-out repositories; gateway doctor: the managed
+checkouts): the client, the read credential and its source. It reads local
+configuration only — no client, credential helper or network. `taba doctor
+--bitbucket-read-probe` additionally runs, per repository and within 30 s, one
+repository read and one one-item pull request list through the selected client
+and credential, and reports the classified result (no host credential,
+authentication or authorization failed, client missing or unsupported). The
+rows are advisory.
+
 ## Next steps
 
-Writes (review post, reply, resolve, ready, PR title/description) move next,
-under the write rules above: locally through the person's own TWG login, on
-a gateway only through brokered methods of the Bitbucket plugin, and never
-through the host read credential. A per-repository doctor read row follows.
+Live provider acceptance of the TWG write and list shapes and of the plugin's
+un-draft and resolve endpoints; removal of the deprecated `bb` client after
+one release.

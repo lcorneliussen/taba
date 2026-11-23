@@ -629,7 +629,11 @@ func bitbucketReadPRsByState(ctx context.Context, slug, branch, state string, li
 		return out, bitbucketOperationError("bb pr list", err)
 	}
 	const operation = "twg bitbucket pull-requests query"
-	out, err := s.twgRead(ctx, workspace, repo, operation, "bitbucket", "pull-requests", "query", "--scope", "repo", "--state", state, "--source", branch, "--limit", strconv.Itoa(limit+1))
+	args := []string{"bitbucket", "pull-requests", "query", "--scope", "repo", "--state", state}
+	if branch != "" {
+		args = append(args, "--source", branch)
+	}
+	out, err := s.twgRead(ctx, workspace, repo, operation, append(args, "--limit", strconv.Itoa(limit+1))...)
 	if err != nil {
 		return nil, err
 	}

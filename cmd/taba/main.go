@@ -213,6 +213,7 @@ func run() error {
 	var doctorRequirementFlags requirementsFlags
 	addRequirementsFlags(doctor, &doctorRequirementFlags)
 	doctor.Flags().BoolVar(&doctorOpenClaw, "openclaw", false, "Check the OpenClaw gateway on this host, also from outside an agent's command")
+	doctor.Flags().BoolVar(&doctorBitbucketReadProbe, "bitbucket-read-probe", false, "Try one read of each Bitbucket repository through the selected client and read credential (contacts Bitbucket and the credential helper)")
 	doctor.Flags().BoolVar(&doctorAll, "all", false, "Check every collection in the workspace for wtc conventions still in use; also works from the workspace root")
 	doctor.RunE = func(cmd *cobra.Command, args []string) error {
 		if (doctorOpenClaw || currentHost() == openclaw.HostOpenClaw || openclaw.GatewayFromEnv(os.Getenv) != nil) && (len(doctorRequirementFlags.examples) > 0 || doctorRequirementFlags.process) {
@@ -233,7 +234,7 @@ func run() error {
 			return printDoctor(sandboxChecks(gw, os.Getenv, env.run), "OpenClaw sandbox diagnostics", asJSON)
 		}
 		if doctorOpenClaw || currentHost() == openclaw.HostOpenClaw {
-			return printDoctor(openClawChecks(realOpenClawEnv()), "OpenClaw gateway diagnostics", asJSON)
+			return printDoctor(append(openClawChecks(realOpenClawEnv()), gatewayBitbucketReadChecks()...), "OpenClaw gateway diagnostics", asJSON)
 		}
 		c, err := cwd()
 		if err != nil {
@@ -263,6 +264,7 @@ func run() error {
 		}
 		checks = append(checks, requirements)
 		checks = append(checks, bitbucketClientCheck(c))
+		checks = append(checks, bitbucketReadChecks(c)...)
 		tunnelsRow, tunnels := namedTunnelsCheck(c)
 		checks = append(checks, tunnelsRow)
 		okay := true
@@ -291,6 +293,9 @@ func run() error {
 				}
 				if check["name"] == "conventions" {
 					state = "migrate"
+				}
+				if name, _ := check["name"].(string); strings.HasPrefix(name, "bitbucket-read ") {
+					state = "problem"
 				}
 				if check["name"] == "named-tunnels" {
 					state = "problem"

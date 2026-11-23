@@ -684,3 +684,34 @@ func TestBitbucketBranchPullRequestForTheGatewayCard(t *testing.T) {
 		t.Fatalf("denied = %+v, %v", pr, err)
 	}
 }
+
+func TestBitbucketDoctorReadRowProbesOnlyWhenAsked(t *testing.T) {
+	h := newNoBBHost(t)
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	d := BitbucketReadDiagnose("", "alpha", "acme/alpha", false)
+	if !d.OK || d.Probed || !strings.Contains(d.Client, "twg") || !strings.Contains(d.Credential, "host git credential helper") || !strings.Contains(d.Detail, "--bitbucket-read-probe") {
+		t.Fatalf("unprobed row = %+v", d)
+	}
+	if h.read(t, h.log) != "" || h.read(t, h.helperLog) != "" {
+		t.Fatal("doctor without the probe ran a client or asked the credential helper")
+	}
+	d = BitbucketReadDiagnose("", "alpha", "acme/alpha", true)
+	if !d.OK || !d.Probed || d.Detail != "repository and pull requests readable" {
+		t.Fatalf("probe = %+v", d)
+	}
+	log := h.read(t, h.log)
+	if !strings.Contains(log, "argv:bitbucket repo get --workspace acme --repo alpha") || !strings.Contains(log, "argv:bitbucket pull-requests query --scope repo --state OPEN --limit 2") {
+		t.Fatalf("probe reads:\n%s", log)
+	}
+	// No credential for the repository, and a denied read: reported, nothing echoed.
+	if d := BitbucketReadDiagnose("", "gamma", "acme/gamma", true); d.OK || !strings.Contains(d.Detail, "no host read credential") {
+		t.Fatalf("gamma = %+v", d)
+	}
+	t.Setenv("FAKE_TWG_MODE", "denied")
+	bitbucketHostCredentials = sync.Map{}
+	d = BitbucketReadDiagnose("", "alpha", "acme/alpha", true)
+	if d.OK || !strings.Contains(d.Detail, "authentication or authorization failed") {
+		t.Fatalf("denied = %+v", d)
+	}
+	assertNoPoison(t, "doctor row", d.Detail+d.Client+d.Credential)
+}
