@@ -129,6 +129,16 @@ type statusTUIModel struct {
 	startedAt         time.Time
 	errorText         string
 	hover             string
+	press             statusTUIPress
+}
+
+// statusTUIPress is a left-button press waiting for its release. Targets act
+// on release at the press cell with the same target, so a drag that starts on
+// a link selects text instead of opening it (issue 473).
+type statusTUIPress struct {
+	active, moved bool
+	x, y          int
+	row, target   string
 }
 
 // Row locations come from the renderers, including conditional detail lines.
@@ -827,11 +837,15 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.resourceTick()
 	case tea.MouseMotionMsg:
+		if m.press.active && msg.Button != tea.MouseNone && (msg.X != m.press.x || msg.Y != m.press.y) {
+			m.press.moved = true
+		}
 		m.hover = ""
 		if item, ok := m.runtimeItemAt(msg.X, msg.Y); ok {
 			m.hover = statusRuntimeHover(item)
 		}
 	case tea.MouseWheelMsg:
+		m.press = statusTUIPress{}
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			m.scrollBy(-3)
@@ -839,15 +853,22 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollBy(3)
 		}
 	case tea.MouseClickMsg:
-		header := m.headerLine()
-		refreshIndex := strings.Index(header, "refreshing")
-		headerWidth := m.width
-		if headerWidth <= 0 {
-			headerWidth = 80
+		m.press = statusTUIPress{}
+		if msg.Button == tea.MouseLeft {
+			row, target := m.pointerTarget(msg.X, msg.Y)
+			m.press = statusTUIPress{active: true, x: msg.X, y: msg.Y, row: row, target: target}
 		}
-		if msg.Y == 0 && m.refreshing && refreshIndex >= 0 &&
-			msg.X >= runewidth.StringWidth(header[:refreshIndex]) &&
-			msg.X < min(headerWidth, runewidth.StringWidth(header)) {
+	case tea.MouseReleaseMsg:
+		press := m.press
+		m.press = statusTUIPress{}
+		if !press.active || press.moved || msg.X != press.x || msg.Y != press.y || press.target == "" {
+			break
+		}
+		// A redraw under a held press must not open another row's target.
+		if row, target := m.pointerTarget(msg.X, msg.Y); row != press.row || target != press.target {
+			break
+		}
+		if press.target == statusTUIRefreshTarget {
 			m.showLog = !m.showLog
 			m.scroll = 0
 			m.focusLogTail()
@@ -856,10 +877,13 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if !m.noClick && !m.procs && !m.showNext {
-			if target := m.buildClickTarget(msg.X, msg.Y); target != "" {
-				return m, statusOpenURL(target)
-			}
+		return m, statusOpenURL(press.target)
+	case statusSelectionDoneMsg:
+		if msg.err != nil {
+			m.errorText = "selection view: " + msg.err.Error()
+		}
+		if msg.quit {
+			return m.quit()
 		}
 	case statusOpenedMsg:
 		if msg.err != nil {
@@ -894,6 +918,10 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.watcherPending && (msg.String() == "enter" || msg.String() == "n" || msg.String() == "r") {
 			return m, nil
+		}
+		if msg.String() == "v" {
+			m.press, m.hover = statusTUIPress{}, ""
+			return m, statusSelectionCommand(m.selectionView(time.Now()))
 		}
 		if m.interval > 0 && !m.resourceObserved(time.Now()) {
 			m.nextRefresh = time.Now().Add(m.interval)
@@ -1020,17 +1048,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "q", "ctrl+c":
-			if m.uiCancel != nil {
-				m.uiCancel()
-			}
-			if m.refreshCancel != nil {
-				m.refreshCancel()
-			}
-			m.devAutoExit, m.devRestart = false, nil
-			if m.nextCancel != nil {
-				m.nextCancel()
-			}
-			return m, tea.Quit
+			return m.quit()
 		case "esc":
 			m.showHelp = false
 		case "?":
@@ -1083,6 +1101,46 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m.finishDevUpdate()
+}
+
+func (m statusTUIModel) quit() (tea.Model, tea.Cmd) {
+	if m.uiCancel != nil {
+		m.uiCancel()
+	}
+	if m.refreshCancel != nil {
+		m.refreshCancel()
+	}
+	m.devAutoExit, m.devRestart = false, nil
+	if m.nextCancel != nil {
+		m.nextCancel()
+	}
+	return m, tea.Quit
+}
+
+const statusTUIRefreshTarget = "\x00refresh-log"
+
+// pointerTarget is what a completed click at a cell would act on: the
+// refresh-log marker, an ordinary TUI link, or nothing, with the logical row
+// that owns it.
+func (m statusTUIModel) pointerTarget(x, y int) (string, string) {
+	header := m.headerLine()
+	refreshIndex := strings.Index(header, "refreshing")
+	headerWidth := m.width
+	if headerWidth <= 0 {
+		headerWidth = 80
+	}
+	if y == 0 && m.refreshing && refreshIndex >= 0 &&
+		x >= runewidth.StringWidth(header[:refreshIndex]) &&
+		x < min(headerWidth, runewidth.StringWidth(header)) {
+		return "header", statusTUIRefreshTarget
+	}
+	if !m.noClick && !m.procs && !m.showNext {
+		if target := m.buildClickTarget(x, y); target != "" {
+			row, _ := m.visibleRow(x, y)
+			return row.key, target
+		}
+	}
+	return "", ""
 }
 
 func statusTUIFit(value string, width int) string {
@@ -2096,9 +2154,9 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 		lines[1] = statusTUIStyle(statusTUIProgressLine(m.progressStep, elapsed, width), statusToneWarning)
 	}
 	if m.showHelp {
-		keys := "n next actions   r refresh   l log   a archived PRs   ? help   q quit"
+		keys := "n next actions   r refresh   l log   a archived PRs   v select/copy   ? help   q quit"
 		if m.procs {
-			keys = "r refresh   l log   ? help   q quit"
+			keys = "r refresh   l log   v select/copy   ? help   q quit"
 		}
 		mode := "Recently observed view; normal refresh cadence."
 		if !m.resourceObserved(time.Now()) {
@@ -2108,7 +2166,8 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			mode = "Waiting for status watcher; cached actions unavailable."
 		}
 		help := []string{keys, mode,
-			"↗ link: modifier-click; PR/TEST/PROD: click; ↑/↓ or wheel scroll; PgUp/PgDn page; Home/End",
+			"↗ link: modifier-click; PR/TEST/PROD: click release (a drag never opens); ↑/↓ or wheel scroll; PgUp/PgDn page; Home/End",
+			"v select/copy: shows the full output on the terminal's normal screen with mouse capture off; select, scroll and copy with the terminal or multiplexer, then Enter, q or v returns. Refresh continues meanwhile. --no-click only disables click targets.",
 			"PR signals, left to right: C checks · M mergeability · R reviews. ? toggles this help.",
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
@@ -2220,16 +2279,16 @@ func (m statusTUIModel) View() tea.View {
 	}
 	content := m.contentLayout()
 	v := m.viewport(content)
-	footer := "n next actions · r refresh · l log · a archived · ↗ link · ? help · q quit"
+	footer := "n next actions · r refresh · l log · a archived · ↗ link · v select · ? help · q quit"
 	if m.procs {
-		footer = "r refresh · l log · ? help · q quit"
+		footer = "r refresh · l log · v select · ? help · q quit"
 	}
 	if m.showNext && !m.showLog {
-		footer = "↑/↓ choose · PgUp/PgDn scroll · Home/End · Enter run · Esc back"
+		footer = "↑/↓ choose · PgUp/PgDn scroll · Home/End · Enter run · v select · Esc back"
 	} else if v.limit > 0 {
-		footer = "↑/↓ wheel · PgUp/PgDn · Home/End · n next · r refresh · ? help · q quit"
+		footer = "↑/↓ wheel · PgUp/PgDn · Home/End · n next · r refresh · v select · ? help · q quit"
 		if m.procs || m.showLog {
-			footer = "↑/↓ wheel · PgUp/PgDn · Home/End · l log · r refresh · ? help · q quit"
+			footer = "↑/↓ wheel · PgUp/PgDn · Home/End · l log · r refresh · v select · ? help · q quit"
 		}
 	}
 	if !m.nextRefresh.IsZero() && !m.refreshing {

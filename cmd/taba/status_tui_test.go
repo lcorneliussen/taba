@@ -1279,7 +1279,8 @@ func TestStatusTUIRefreshLogUpdatesWhileCollectorRuns(t *testing.T) {
 		t.Fatalf("refresh progress was not visible or clickable: %s", model.View().Content)
 	}
 	refreshAt := runewidth.StringWidth(strings.Split(model.headerLine(), "refreshing")[0])
-	updated, _ = model.Update(tea.MouseClickMsg{X: refreshAt, Y: 0})
+	updated, _ = model.Update(tea.MouseClickMsg{X: refreshAt, Y: 0, Button: tea.MouseLeft})
+	updated, _ = updated.Update(tea.MouseReleaseMsg{X: refreshAt, Y: 0, Button: tea.MouseLeft})
 	model = updated.(statusTUIModel)
 	if !model.showLog || !strings.Contains(model.View().Content, "2s  Checked pull requests 2/4") {
 		t.Fatalf("refresh click did not open log: %s", model.View().Content)

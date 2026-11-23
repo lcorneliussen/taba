@@ -320,8 +320,29 @@ logs/JSON for detail. Color supports the text and position; it does not replace 
 `?` explains the view; arrows, Page Up/Down and the wheel scroll; `a` toggles
 archived PRs; `q` quits. Available repository, branch, PR and build targets
 use terminal hyperlinks. Modifier-click follows the terminal's convention;
-`--no-click` disables ordinary TUI targets, not native links. `NO_COLOR` keeps
+ordinary TUI targets act when the button is released on the same row and cell
+where it was pressed, so a drag never opens a link. `--no-click` disables
+ordinary TUI targets, not native links or wheel scrolling. `NO_COLOR` keeps
 links; `TERM=dumb` uses plain text.
+
+### Selecting and copying
+
+The live view may report mouse input for the wheel, click targets and hover
+text, and it draws only the rows that fit. To select text, press `v`. The
+selection view leaves the live screen, turns mouse reporting off and writes the
+complete current output, including rows outside the viewport, to the
+terminal's normal screen with the time it shows. Select, scroll and copy with
+the terminal or multiplexer as usual; in a multiplexer pane its own copy mode
+works too. That output stays as it is while you select. Enter, `q` or `v`
+returns to the live view; Ctrl+C quits.
+
+Refreshes already running continue meanwhile. Returning shows their results
+with their original observation times; neither opening the selection view nor
+copying reads the forge or starts another refresh. The written output remains
+in the terminal's scrollback after you return, within the terminal's own
+scrollback and clipboard limits. Terminal-specific modifier selection (for
+example Shift- or Option-drag) also works in many terminals, but only for the
+visible rows.
 
 Repository JSON facts expose `comparison_ref` and, for registered repositories,
 `development_base`. These fields reflect a collection override when one is set.
