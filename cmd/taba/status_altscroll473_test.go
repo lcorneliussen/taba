@@ -94,8 +94,12 @@ type status473Buffer struct {
 	b  bytes.Buffer
 }
 
-func (s *status473Buffer) Write(p []byte) (int, error) { s.mu.Lock(); defer s.mu.Unlock(); return s.b.Write(p) }
-func (s *status473Buffer) String() string              { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
+func (s *status473Buffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *status473Buffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }
 
 // status473Program queries like the live view, handles the reply with the
 // same function, quits on q and panics on p.
