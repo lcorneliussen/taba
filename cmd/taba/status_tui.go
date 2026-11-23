@@ -2332,6 +2332,9 @@ func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, 
 	return err
 }
 
+// statusFrameRate is the status renderer's paint cadence (frames per second).
+const statusFrameRate = 30
+
 func runStatusProgram(model tea.Model, ctx context.Context, cancel context.CancelFunc) (tea.Model, error) {
 	defer cancel()
 	// Each interactive CLI has its own scheduler. One CPU execution slot
@@ -2340,11 +2343,12 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	// Restore the caller's setting on every return.
 	previous := runtime.GOMAXPROCS(1)
 	defer runtime.GOMAXPROCS(previous)
-	// The status view has no animation requiring the renderer's default
-	// sixty wakeups per second. All paints, including input feedback, wait for
-	// the next frame (up to one second); input and collector work still execute
-	// independently of that physical paint cadence.
-	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(1)).Run()
+	// Every paint, including scroll and key feedback, waits for the next
+	// renderer frame, so the frame rate bounds input-to-screen latency. A
+	// frame with an unchanged view writes nothing, and View runs per message
+	// rather than per frame, so idle cost stays with the refresh and freshness
+	// ticks rather than this cadence. Input and collector work run independently.
+	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(statusFrameRate)).Run()
 	interrupted := ctx.Err() != nil
 	if start, ok := final.(statusStartupModel); ok && start.err != nil {
 		return final, start.err
