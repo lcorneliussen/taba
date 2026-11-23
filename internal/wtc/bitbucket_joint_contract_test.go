@@ -165,7 +165,7 @@ func TestJointContractReviewPostResolveAndReadyWithoutBB(t *testing.T) {
 	if len(rows) != 1 || rows[0].ID != "951" {
 		t.Fatalf("inline record = %+v", rows)
 	}
-	// What the plugin sent is what taba planned: the inline anchor and text.
+	// What the plugin sent is where taba planned it: the inline anchor.
 	anchored := false
 	for _, c := range run.Calls {
 		inline, _ := c.Body["inline"].(map[string]any)

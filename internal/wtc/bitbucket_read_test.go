@@ -141,6 +141,11 @@ func newNoBBHost(t *testing.T) noBBHost {
 	t.Setenv("GIT_SSH_COMMAND", filepath.Join(h.bin, "ssh"))
 	t.Setenv("TABA_CONFIG_ROOT", "")
 	t.Setenv("WTC_CONFIG_ROOT", "")
+	// Without a control root the read identity key falls back to the user's
+	// configuration directory: keep that inside this test.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	unsetEnv(t, "TABA_BITBUCKET_TRANSPORT", "WTC_BITBUCKET_TRANSPORT", "TABA_BITBUCKET_READ_CREDENTIAL", "WTC_BITBUCKET_READ_CREDENTIAL", "TWG_BBC_TOKEN", "TWG_BBC_USER")
 	if path, _ := exec.LookPath("bb"); path != filepath.Join(h.bin, "bb") {
 		t.Fatalf("synthetic host must shadow bb with its poison tool, found %q", path)
@@ -899,6 +904,10 @@ func TestBitbucketReadIdentityFollowsTheCredentialWithoutRevealingIt(t *testing.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"values":[]}`)) }))
 	defer server.Close()
 	statusBBAPI = server.URL // restored by newNoBBHost's cleanup
+	config, err := os.UserConfigDir()
+	if err != nil || !strings.HasPrefix(config, os.Getenv("HOME")) {
+		t.Fatalf("the user configuration directory %q is not inside this test", config)
+	}
 	set("synthetic-identity-one")
 	first := BitbucketBranchRead("", "acme/alpha", "feature")
 	set("synthetic-identity-one")
@@ -906,6 +915,9 @@ func TestBitbucketReadIdentityFollowsTheCredentialWithoutRevealingIt(t *testing.
 	set("synthetic-identity-two")
 	rotated := BitbucketBranchRead("", "acme/alpha", "feature")
 	unknown := BitbucketBranchRead("", "acme/gamma", "feature") // the helper has nothing for gamma
+	if _, err := os.Stat(filepath.Join(config, "taba", bitbucketReadIdentityKeyName)); err != nil {
+		t.Fatalf("without a control root the key is kept in this test's configuration directory: %v", err)
+	}
 	if !strings.HasPrefix(first.Identity, "k:") || first.Identity != again.Identity {
 		t.Fatalf("unchanged token: %q vs %q", first.Identity, again.Identity)
 	}
