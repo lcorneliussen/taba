@@ -3,6 +3,8 @@ package wtc
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"io"
 	"os"
 	"os/exec"
@@ -241,5 +243,30 @@ func TestTunnelForegroundFixtureStartupOrdering(t *testing.T) {
 				t.Fatal("synthetic child did not exit 42", waitErr)
 			}
 		})
+	}
+}
+
+func TestTunnelNamedCloudflareHostReportsRejectedCommand(t *testing.T) {
+	c := runtimeFixture(t)
+	scope, err := c.ValidateControlRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := json.Marshal(map[string]any{"a": "synthetic-account", "t": "synthetic-tunnel", "s": make([]byte, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, filepath.Join(scope.Root, "provider/host.token"), base64.StdEncoding.EncodeToString(capability)+"\n", 0600)
+	d := testTunnelDefinition()
+	// A relative executable makes the host command constructor refuse.
+	d.Entry.Policy.Inputs = tunnelInputRefs{Executable: "cloudflared", HostingFile: "provider/host.token"}
+	receipt := tunnelResourceRef{Provider: "cloudflare", Scope: "synthetic-account", Kind: "tunnel", ID: "synthetic-tunnel", Ownership: "owned"}
+	call := tunnelEffectCall{Definition: d, Entry: tunnelEntryState{Provider: "cloudflare", Mode: "named", Resources: []tunnelResourceRef{receipt}}}
+	_, err = (&tunnelProviderRuntime{c: c}).runHost(context.Background(), call, t.TempDir(), func(string) error {
+		t.Fatal("rejected host reported ready")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "explicit scoped Cloudflare host inputs required") {
+		t.Fatal("rejected host command was not reported", err)
 	}
 }

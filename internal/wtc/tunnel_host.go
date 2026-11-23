@@ -374,6 +374,9 @@ func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCa
 		backend, _ := url.Parse(d.Target)
 		port, _ := strconv.Atoi(backend.Port())
 		cmd, err = devTunnelHostCommand(ctx, refs.Node, helper, env, devTunnelHostInput{Schema: 1, TunnelID: registration.ID, ClusterID: registration.Scope, HostID: call.Owner, PortNumber: port, HostToken: token})
+		if err != nil {
+			return address, err
+		}
 	} else if call.Entry.Provider == "cloudflare" {
 		config := filepath.Join(dir, "cloudflared.json")
 		if err = writeTunnelAsset(config, []byte("{}\n")); err != nil {
@@ -416,13 +419,13 @@ func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCa
 				}
 			}
 			cmd, err = cloudflareHostCommand(ctx, refs.Executable, config, receipt.Scope, receipt.ID, token, env)
+			if err != nil {
+				return address, err
+			}
 			expected = "https://" + d.Entry.Policy.Options.Hostname
 		}
 	} else {
 		return address, fmt.Errorf("unsupported owned host provider")
-	}
-	if err != nil {
-		return address, err
 	}
 	// Let official clients dispose their owned endpoint on SIGTERM. A forced
 	// kill or missing stopped acknowledgement remains pending, never success.
@@ -478,7 +481,7 @@ func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCa
 			if event.Event == "started" && !started {
 				address, _ = parseTunnelAddress(expected)
 				if err = ready(address.URL); err != nil {
-					cmd.Cancel()
+					_ = cmd.Cancel()
 					break
 				}
 				started = true
@@ -490,14 +493,14 @@ func (p *tunnelProviderRuntime) runHost(ctx context.Context, call tunnelEffectCa
 			if expected != "" && bytes.Contains(line, []byte("Registered tunnel connection")) {
 				address, _ = parseTunnelAddress(expected)
 				if err = ready(address.URL); err != nil {
-					cmd.Cancel()
+					_ = cmd.Cancel()
 					break
 				}
 				started = true
 			} else if raw := quickURL.Find(line); raw != nil {
 				address, _ = parseTunnelAddress(string(raw))
 				if err = ready(address.URL); err != nil {
-					cmd.Cancel()
+					_ = cmd.Cancel()
 					break
 				}
 				started = true
@@ -531,9 +534,6 @@ func (p *tunnelProviderRuntime) devHostCapability(ctx context.Context, call tunn
 			return "", "", fmt.Errorf("registered devtunnel URL missing")
 		}
 		return token, call.Entry.Known.URL, nil
-	}
-	if !strings.HasPrefix(token, "Bearer ") {
-		token = "Bearer " + token
 	}
 	var wire struct {
 		TunnelID     string            `json:"tunnelId"`

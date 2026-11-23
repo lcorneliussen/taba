@@ -291,10 +291,6 @@ func catchUpSession(c *Context) string {
 	return strings.TrimSuffix(strings.TrimSuffix(filepath.Base(c.Workspace), "-harness"), "-wtc")
 }
 
-func catchUpPane(c *Context, session, collection string) (string, bool, error) {
-	return catchUpPaneWithHerdr(session, collection, catchUpHerdr)
-}
-
 func catchUpPaneWithHerdr(session, collection string, herdr func(string, ...string) ([]byte, error)) (string, bool, error) {
 	workspaces, err := herdr(session, "workspace", "list")
 	if err != nil {

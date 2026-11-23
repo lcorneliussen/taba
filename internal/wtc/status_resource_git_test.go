@@ -144,8 +144,6 @@ func TestStatusResourceLocalActualGitComparison(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoIdentityAndScope(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t)
 	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
 	ctx := statusResourceOperation(context.Background())
@@ -183,8 +181,6 @@ func TestStatusResourceGitMemoIdentityAndScope(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoConcurrentAndCancelledWaiter(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t)
 	args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
 	ctx := statusResourceOperation(context.Background())
@@ -241,8 +237,6 @@ func TestStatusResourceGitMemoConcurrentAndCancelledWaiter(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoNoCancelledPublication(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t)
 	args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
 	base := statusResourceOperation(context.Background())
@@ -294,8 +288,6 @@ func TestStatusResourceLocalUnsupportedGitFallback(t *testing.T) {
 }
 
 func TestStatusResourceForegroundObservationSharesIdentityMemo(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t)
 	ctx := context.Background()
 	receiver, err := c.StatusReadContext(ctx)
@@ -361,8 +353,6 @@ func TestStatusResourceGitMemoUnknownConfigBypassesSafely(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoIgnoresUnrelatedDirectoryWrites(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t)
 	ctx := statusResourceOperation(context.Background())
 	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
@@ -381,8 +371,6 @@ func TestStatusResourceGitMemoIgnoresUnrelatedDirectoryWrites(t *testing.T) {
 }
 
 func TestStatusResourceGitMemoRevalidatesCanonicalParent(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	root := t.TempDir()
 	first, second := filepath.Join(root, "first"), filepath.Join(root, "second")
 	if err := os.MkdirAll(second, 0700); err != nil {
@@ -436,8 +424,6 @@ func TestStatusResourceLocalNamedDetachedBranch(t *testing.T) {
 }
 
 func TestStatusResourceIdentitySurvivesValidatedObservations(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
 	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
 	calls := 0
@@ -466,8 +452,6 @@ func TestStatusResourceIdentitySurvivesValidatedObservations(t *testing.T) {
 }
 
 func TestStatusResourceIdentityBoundAndMutableBypass(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
 	args := []string{"-C", c.Harness, "remote", "get-url", "origin"}
 	config := fixtureGit(t, "-C", c.Harness, "rev-parse", "--git-path", "config")
@@ -609,8 +593,6 @@ func TestStatusResourceIdentityProvenanceCancellation(t *testing.T) {
 }
 
 func TestStatusResourceIdentityLiveWaiterAfterLeaderCancel(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
 	args := []string{"-C", c.Harness, "rev-parse", "--show-toplevel"}
 	leader, cancel := context.WithCancel(c.resourceContext())
@@ -654,8 +636,6 @@ func TestStatusResourceIdentityLiveWaiterAfterLeaderCancel(t *testing.T) {
 }
 
 func TestStatusResourceIdentityLegacyRemoteFallback(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	root := t.TempDir()
 	fixtureGit(t, "init", "-q", root)
 	remote := filepath.Join(root, ".git/remotes/origin")
@@ -702,7 +682,7 @@ func TestStatusResourceIdentityNullConfigDiscardDoesNotInvalidate(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.ModTime() == after.ModTime() {
+	if before.ModTime().Equal(after.ModTime()) {
 		t.Skip("null-device writes do not update metadata on this platform")
 	}
 	got, err := statusResourceGit(c.resourceContext(), args, read)
@@ -733,8 +713,6 @@ func TestStatusResourceIdentityRegularGlobalConfigStillInvalidates(t *testing.T)
 }
 
 func TestStatusResourceIdentityOwnerRemoteReuse(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
 	owner := fixtureGit(t, "-C", c.Harness, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	args := []string{"--git-dir=" + owner, "remote"}
@@ -751,8 +729,6 @@ func TestStatusResourceIdentityOwnerRemoteReuse(t *testing.T) {
 }
 
 func TestStatusResourceIdentityMarkerPathsRemainFresh(t *testing.T) {
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	c := newWorkspaceFixture(t).WithStatusContext(context.Background())
 	args := []string{"-C", c.Harness, "rev-parse", "--path-format=absolute"}
 	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"} {

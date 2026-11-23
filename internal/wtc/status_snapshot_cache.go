@@ -40,10 +40,6 @@ type statusLegacyCacheRepo struct {
 	Title  string `yaml:"title"`
 }
 
-func statusAtomicWrite(path string, data []byte) error {
-	return statusAtomicWriteContext(context.Background(), path, data)
-}
-
 func statusAtomicWriteContext(ctx context.Context, path string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -68,15 +64,6 @@ func statusAtomicWriteContext(ctx context.Context, path string, data []byte) err
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
-}
-
-func (c *Context) statusLegacy(snapshot StatusSnapshot) statusLegacyCache {
-	return c.statusLegacyContext(context.Background(), snapshot)
-}
-
-func (c *Context) statusLegacyContext(ctx context.Context, snapshot StatusSnapshot) statusLegacyCache {
-	legacy, _ := c.statusLegacyWithHeads(ctx, snapshot, nil)
-	return legacy
 }
 
 func (c *Context) statusLegacyWithHeads(ctx context.Context, snapshot StatusSnapshot, readShort func(StatusRepo) (string, error)) (statusLegacyCache, error) {
