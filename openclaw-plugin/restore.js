@@ -17,30 +17,35 @@ const probeNativeDispatch = async () => typeof (await import("openclaw/plugin-sd
 const UNAVAILABLE = "This gateway cannot restore checkouts from Collection";
 const text = (error) => [error?.code, error?.details?.code, error?.details?.reason, error?.message ?? error].filter(Boolean).join(" ");
 
-// What a failed native call means for the person. Only refusals that happen
-// before the native operation can take effect say that nothing changed.
+// The cause of a failed native call, in words for the person. Whether anything
+// changed is not decided here: the caller uses refusedBeforeEffects or reads
+// the native record back.
 export function classifyRestoreFailure(error) {
   const t = text(error);
   if (/unknown method|method not found|METHOD_NOT_FOUND|dispatch is reserved|Cannot find (?:module|package)|ERR_MODULE_NOT_FOUND|ERR_PACKAGE_PATH_NOT_EXPORTED/i.test(t))
-    return { kind: "capability", message: `${UNAVAILABLE}: update OpenClaw and the taba plugin together, or restore it from OpenClaw's Worktrees settings`, mutation: "none" };
+    return { kind: "capability", message: `${UNAVAILABLE}: update OpenClaw and the taba plugin together, or restore it from OpenClaw's Worktrees settings` };
   if (/MISSING_SCOPE|missing scope|FORBIDDEN|not authorized|permission denied/i.test(t))
-    return { kind: "permission", message: "Permission denied: restoring a checkout requires gateway admin permission", mutation: "none" };
+    return { kind: "permission", message: "Permission denied: restoring a checkout requires gateway admin permission" };
   if (/unauthori[sz]ed|AUTH_|authenticat|requires an authenticated plugin request scope|ECONNREFUSED|connect failed/i.test(t))
-    return { kind: "authentication", message: "Gateway authentication failed; reconnect and refresh before restoring", mutation: "none" };
+    return { kind: "authentication", message: "Gateway authentication failed; reconnect and refresh before restoring" };
   if (/not restorable|snapshot/i.test(t))
-    return { kind: "snapshot", message: "The saved snapshot is no longer available; the checkout was not restored", mutation: "unknown" };
-  return { kind: "unknown", message: "Native restore did not confirm a result", mutation: "unknown" };
+    return { kind: "snapshot", message: "The saved snapshot is no longer available; the checkout was not restored" };
+  return { kind: "unknown", message: "Native restore did not confirm a result" };
 }
 
-// Refusals the host makes before the native handler runs, recognised by
-// structure rather than wording: the native operation cannot have started.
+// Failures that prove the native operation never started, so nothing changed.
+// Anything else is reconciled by reading the native record back.
 export function refusedBeforeEffects(error) {
-  const code = String(error?.details?.code ?? "");
+  const code = String(error?.details?.code ?? ""), message = String(error?.message ?? "");
+  // Structured host refusals before the method handler runs.
   if (error?.details?.mutationAccepted === false || code === "MISSING_SCOPE" || code.startsWith("AUTH_")) return true;
-  if (error?.code === "INVALID_REQUEST" && /^unknown method: /.test(String(error?.message ?? ""))) return true;
-  // The SDK refuses before dispatching; these carry no gateway error code.
-  return error?.code === undefined && /^(?:Gateway method dispatch is reserved|In-process gateway dispatch requires an authenticated plugin request scope)/.test(String(error?.message ?? ""))
-    || error?.code === "ERR_MODULE_NOT_FOUND" || error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED";
+  // Loading the dispatcher module failed, before any dispatch.
+  if (error?.code === "ERR_MODULE_NOT_FOUND" || error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED") return true;
+  // These carry no structured code, so they are matched by the exact leading
+  // text the host uses: the router's unknown-method reply, and the SDK's two
+  // refusals to dispatch outside an authenticated plugin request.
+  if (error?.code === "INVALID_REQUEST" && /^unknown method: /.test(message)) return true;
+  return error?.code === undefined && /^(?:Gateway method dispatch is reserved|In-process gateway dispatch requires an authenticated plugin request scope)/.test(message);
 }
 
 const sanitize = (error) => String(error?.message ?? error ?? "").replace(/\s+/g, " ").trim().slice(-600);
@@ -65,7 +70,9 @@ export function registerCheckoutRestore(api, { collectionOf, collectionIdentity,
     if (!Array.isArray(out?.worktrees)) throw Error("Native worktree records unavailable");
     return out.worktrees;
   };
-  // Read-only: does the recorded snapshot still resolve in its repository?
+  // Read-only check that the recorded snapshot still resolves in its
+  // repository: true it does, false it does not, null the check could not run
+  // (the native restore then decides).
   const snapshotPresent = async (record) => {
     if (!record?.snapshotRef || !record.repoRoot) return false;
     const r = await run(["git", "-C", record.repoRoot, "rev-parse", "--verify", "--quiet", `${record.snapshotRef}^{commit}`], { timeoutMs: 10000 }).catch(() => null);
@@ -113,7 +120,8 @@ export function registerCheckoutRestore(api, { collectionOf, collectionIdentity,
       if (after && Number.isFinite(after.removedAt) && after.snapshotRef && !existsSync(destination)) {
         const present = await snapshotPresent(after);
         if (present === false) return { status: "failed", kind: "snapshot", message: "The saved snapshot is no longer available; the checkout was not restored", mutation: "none", detail: sanitize(failure) };
-        return { status: "failed", ...classified, message: `${classified.kind === "snapshot" ? classified.message : "Native restore failed"}; the checkout is still evicted and its snapshot is recorded`, mutation: "none", detail: sanitize(failure) };
+        // The snapshot was not shown to be missing, whatever the native text says.
+        return { status: "failed", kind: "unknown", message: "Native restore failed; the checkout is still evicted and its snapshot is recorded", mutation: "none", detail: sanitize(failure) };
       }
       return { status: "failed", kind: "unknown", message: "Restore outcome unknown; inspect the checkout and refresh before retrying", mutation: "unknown", detail: sanitize(failure) };
     } finally { restoring.delete(id); onSettled(); }

@@ -1222,7 +1222,7 @@ function collectionTables(v) {
       } catch (err) {
         const failure = restoreRequestFailure(err);
         const status = `${name}: ${failure.unconfirmed ? "restore unconfirmed" : "not restored"} — ${failure.message}`;
-        recordActivity(logKey, id, { state: failure.unconfirmed ? "unknown" : "failed", status, detail: `${status}. Details: ${String(err?.message ?? err).slice(-600)}` }); say(status, true);
+        recordActivity(logKey, id, { state: failure.unconfirmed ? "unknown" : "failed", status, detail: `${status}. Details: ${String(err?.message ?? err).replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(-600)}` }); say(status, true);
       } finally {
         recordActivity(logKey, id, { inFlight: false });
         queue.targets.delete(r.sessionKey);

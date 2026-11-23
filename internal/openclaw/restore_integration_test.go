@@ -74,7 +74,7 @@ const (
 	localSecret  = "local-synthetic"
 )
 
-// as is one request as the user behind port, through the SDK client.
+// as sends one request for the user behind port, through the SDK client.
 func (g *gateway) as(port, method string, params any) reply {
 	g.t.Helper()
 	p, err := json.Marshal(params)

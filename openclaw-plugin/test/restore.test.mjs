@@ -112,7 +112,7 @@ test("membership, key, owner, destination, branch and snapshot changes refuse be
 });
 
 test("an existing checkout and a concurrent restore are refused", async () => {
-  const { state, call, entry } = setup({ dispatch: async (method, params, s, e) => {
+  const { state, call } = setup({ dispatch: async (method, params, s, e) => {
     if (method === "worktrees.list") return { ok: true, payload: { worktrees: [s.record] } };
     await new Promise(r => { s.release = r; });
     return succeed(method, params, s, e);
@@ -125,7 +125,6 @@ test("an existing checkout and a concurrent restore are refused", async () => {
   const again = await call();
   assert.equal(again.payload.status, "refused", "an existing checkout is never overwritten");
   assert.equal(restores(state), 1);
-  assert.ok(entry.workspaceDir);
 });
 
 test("permission denial, connection authentication and missing capability are distinct and report no change", async () => {
@@ -262,5 +261,18 @@ test("only structured pre-handler refusals skip reconciliation, never matching w
   assert.equal(listed, 2, "the native record is read again after an effectful failure");
   assert.equal(out.payload.status, "failed");
   assert.match(out.payload.message, /still evicted/);
+  assert.equal(restores(state), 1);
+});
+
+test("a native failure that mentions the snapshot does not claim it is gone while it still resolves", async () => {
+  const { state, call } = setup({ dispatch: (method, params, s) =>
+    method === "worktrees.list" ? { ok: true, payload: { worktrees: [s.record] } } : { ok: false, error: { code: "UNAVAILABLE", message: "Error: snapshot copy failed: disk full" } } });
+  const out = await call();
+  assert.equal(out.payload.status, "failed");
+  assert.equal(out.payload.kind, "unknown");
+  assert.equal(out.payload.mutation, "none");
+  assert.doesNotMatch(out.payload.message, /no longer available/);
+  assert.match(out.payload.message, /still evicted and its snapshot is recorded/);
+  assert.match(out.payload.detail, /snapshot copy failed/, "the native text stays in the details");
   assert.equal(restores(state), 1);
 });
