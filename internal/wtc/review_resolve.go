@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,7 +109,7 @@ func replyReviewInline(m ReviewManifest, id, body string) error {
 		_, err := reviewGitHubAPI(m.RepoDir, []string{"-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
 		return err
 	}
-	switch route, err := selectedBitbucketWrite(m.ConfigRoot, true); {
+	switch route, err := selectedBitbucketWrite(m.bitbucketControlRoot(), true); {
 	case err != nil:
 		return err
 	case route == bitbucketWriteBroker:
@@ -129,7 +130,7 @@ func replyReviewInline(m ReviewManifest, id, body string) error {
 
 func resolveReviewInline(m ReviewManifest, id, threadID string) error {
 	if m.Forge == "bitbucket" {
-		switch route, err := selectedBitbucketWrite(m.ConfigRoot, false); {
+		switch route, err := selectedBitbucketWrite(m.bitbucketControlRoot(), false); {
 		case err != nil:
 			return err
 		case route == bitbucketWriteBroker:
@@ -225,15 +226,17 @@ func (c *Context) resolveReviewBrokered(m ReviewManifest, bundle string, rows []
 			return result, fmt.Errorf("invalid inline comment id for %s", row.Key)
 		}
 	}
+	// Replies already made, by thread: a retry never posts one again.
+	replied := map[string]bool{}
 	plan := func() (operations []brokeredOperation, keys []string) {
 		for _, row := range rows {
 			if !selected(row) {
 				continue
 			}
 			id, _ := strconv.ParseInt(row.ID, 10, 64)
-			if opt.Reply != "" {
+			if opt.Reply != "" && !replied[row.Key] {
 				operations = append(operations, brokeredOperation{Op: "comment.create", Text: opt.Reply, Parent: id})
-				keys = append(keys, "")
+				keys = append(keys, "reply:"+row.Key)
 			}
 			operations = append(operations, brokeredOperation{Op: "comment.resolve", Comment: id})
 			keys = append(keys, row.Key)
@@ -265,6 +268,10 @@ func (c *Context) resolveReviewBrokered(m ReviewManifest, bundle string, rows []
 	apply := func(keys []string, receipt *brokeredReceipt) {
 		for index, entry := range receipt.Results {
 			if index >= len(keys) || keys[index] == "" || entry.Status != "done" {
+				continue
+			}
+			if thread, ok := strings.CutPrefix(keys[index], "reply:"); ok {
+				replied[thread] = true
 				continue
 			}
 			for i := range rows {
@@ -304,15 +311,28 @@ func (c *Context) resolveReviewBrokered(m ReviewManifest, bundle string, rows []
 	if err != nil {
 		return result, fmt.Errorf("cannot verify PR head: %w", err)
 	}
+	// The attempt is recorded only once its request exists (or its receipt
+	// does): a refused ask leaves nothing behind and is asked again later.
+	// Intents are numbered by attempt, so a record lost after the request was
+	// written resumes on the same intent.
 	intent := fmt.Sprintf("taba-resolve-%s-%d", selection, len(record.Attempts))
+	receipt, err := brokeredWrites(m.RepoDir, m.Slug, m.PR, head, intent, operations)
+	if err != nil && !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		return result, err
+	}
 	record.Attempts = append(record.Attempts, struct {
 		Intent string   `json:"intent"`
 		Head   string   `json:"head"`
 		Keys   []string `json:"keys"`
 	}{intent, head, keys})
-	if err := writePrivateJSON(recordPath, record); err != nil {
-		return result, err
+	if saveErr := writePrivateJSON(recordPath, record); saveErr != nil {
+		return result, saveErr
 	}
-	_, err = brokeredWrites(m.RepoDir, m.Slug, m.PR, head, intent, operations)
+	if receipt != nil {
+		apply(keys, receipt)
+		if err := writeInlineRecords(bundle, rows); err != nil {
+			return result, err
+		}
+	}
 	return result, err
 }

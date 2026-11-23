@@ -134,7 +134,7 @@ const bitbucketReviewCommentLimit = 1000
 
 // Both supported community CLI versions collect pages into a comments/count envelope.
 func readBitbucketReviewComments(m ReviewManifest) ([]bundleComment, error) {
-	raw, err := bitbucketReadPRComments(bitbucketReadOperation(context.Background(), m.ConfigRoot), m.Slug, m.PR, bitbucketReviewCommentLimit)
+	raw, err := bitbucketReadPRComments(bitbucketReadOperation(context.Background(), m.bitbucketControlRoot()), m.Slug, m.PR, bitbucketReviewCommentLimit)
 	if err != nil {
 		return nil, err
 	}

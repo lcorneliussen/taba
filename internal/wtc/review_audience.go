@@ -94,7 +94,7 @@ func reviewModeBody(body string, m ReviewManifest) string {
 // Force only overrides the stale-head check. It cannot override this boundary,
 // including for failed/progress posts or bundles made before audience discovery.
 func reviewPublicationAllowed(m ReviewManifest) error {
-	if !m.Public && reviewRepositoryAudience(m.ConfigRoot, m.RepoDir, m.Forge, m.Slug) != "private" {
+	if !m.Public && reviewRepositoryAudience(m.bitbucketControlRoot(), m.RepoDir, m.Forge, m.Slug) != "private" {
 		return fmt.Errorf("refusing to publish a private review bundle to a public or unknown audience; rebuild with --public and rerun the review")
 	}
 	return nil

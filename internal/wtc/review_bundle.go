@@ -595,3 +595,26 @@ func matchReviewGlob(pattern, file string) bool {
 	b.WriteByte('$')
 	return regexp.MustCompile(b.String()).MatchString(file)
 }
+
+// bitbucketControlRoot is the control root whose Bitbucket client selection
+// a review's reads and writes use: the one the handling collection set, else
+// the root of the collection that holds the reviewed worktree, so a review
+// path that only has the stored manifest still uses that collection's
+// selection rather than whatever the process environment names (#471).
+func (m ReviewManifest) bitbucketControlRoot() string {
+	if m.ConfigRoot != "" {
+		return m.ConfigRoot
+	}
+	if m.RepoDir == "" {
+		return ""
+	}
+	root := FindCollectionRoot(m.RepoDir)
+	if root == "" {
+		return ""
+	}
+	c, err := OpenCollection(root)
+	if err != nil {
+		return ""
+	}
+	return c.ConfigRoot
+}

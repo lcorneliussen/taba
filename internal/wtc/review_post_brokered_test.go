@@ -244,7 +244,7 @@ func TestBrokeredWritesStartedWithoutReceiptAreReconciledNotAskedAgain(t *testin
 	}
 }
 
-// Hosted review findings on 63fa7f4 (#471).
+// One review uses one client selection: the collection's control root.
 func TestBitbucketSelectionFollowsTheControlRootEverywhere(t *testing.T) {
 	h := newNoBBHost(t)
 	root := t.TempDir()
@@ -261,7 +261,9 @@ func TestBitbucketSelectionFollowsTheControlRootEverywhere(t *testing.T) {
 	if !strings.Contains(h.read(t, h.networkLog), "network-tool:bb") {
 		t.Fatal("the review read did not use the selected bb client")
 	}
-	os.WriteFile(h.networkLog, nil, 0o600) // the bb launch above was intended
+	if err := os.WriteFile(h.networkLog, nil, 0o600); err != nil { // the bb launch above was intended
+		t.Fatal(err)
+	}
 	// Writes find the control root through the legacy alias as well.
 	unsetEnv(t, "BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "BITBUCKET_PUBLISH", "TABA_CONFIG_ROOT")
 	t.Setenv("WTC_CONFIG_ROOT", root)
@@ -333,5 +335,82 @@ func TestBrokeredReadyAndResolveAskAgainAfterAFailedReceipt(t *testing.T) {
 	g.receipt(t, g.request(t).IntentID, false, "unknown")
 	if err := BitbucketMarkReady("", g.m.RepoDir, "acme/alpha", "7", "aaaaaaaaaaaa"); err == nil || !strings.Contains(err.Error(), "unknown outcome") {
 		t.Fatalf("ready after an unknown receipt = %v", err)
+	}
+}
+
+func TestBrokeredResolveRepliesOnceAndRecordsOnlyAskedAttempts(t *testing.T) {
+	f := newBrokeredFixture(t)
+	rows := []ReviewInlineRecord{{Key: "k1", File: "a.go", Line: 3, ID: "901"}}
+	if err := writeInlineRecords(f.bundle, rows); err != nil {
+		t.Fatal(err)
+	}
+	opt := ReviewResolveOptions{Reply: "Fixed."}
+	// Another request waits in the worktree: the ask is refused and nothing
+	// is recorded, so a later run asks normally.
+	other := brokeredRequest{Version: 1, IntentID: "taba-other-0000000000000000", Owner: "acme", Repo: "alpha", PR: 7, Head: "aaaaaaaaaaaa", Operations: []brokeredOperation{{Op: "pr.ready"}}}
+	if err := writePrivateJSON(filepath.Join(f.gitDir, bitbucketWriteRequestFile), other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), opt); err == nil || errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("refused ask = %v", err)
+	}
+	if records, _ := filepath.Glob(filepath.Join(f.bundle, "bitbucket-resolve.*.json")); len(records) != 0 {
+		t.Fatalf("a refused ask was recorded: %v", records)
+	}
+	os.Remove(filepath.Join(f.gitDir, bitbucketWriteRequestFile))
+	if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), opt); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("ask = %v", err)
+	}
+	first := f.request(t)
+	if len(first.Operations) != 2 || first.Operations[0].Parent != 901 {
+		t.Fatalf("first request = %+v", first)
+	}
+	// The reply was made, the resolve failed: the retry asks only to resolve.
+	f.receipt(t, first.IntentID, false, "done:950", "failed")
+	if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), opt); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("retry = %v", err)
+	}
+	second := f.request(t)
+	if second.IntentID == first.IntentID || len(second.Operations) != 1 || second.Operations[0].Op != "comment.resolve" {
+		t.Fatalf("retry request must not repeat the reply: %+v", second)
+	}
+}
+
+func TestBrokeredPostClaimWithoutRequestAndLaterRequestsSurvive(t *testing.T) {
+	f := newBrokeredFixture(t)
+	f.c.postReviewBrokered(f.m, f.bundle, "", brokeredSummary)
+	request := f.request(t)
+	// The plugin claimed the intent and the request file is gone: unknown outcome.
+	dir := filepath.Join(f.gitDir, bitbucketWriteReceiptsDir)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, request.IntentID+".claim"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(f.gitDir, bitbucketWriteRequestFile)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.postReviewBrokered(f.m, f.bundle, "", brokeredSummary); err == nil || !strings.Contains(err.Error(), "outcome is unknown") {
+		t.Fatalf("claim without request = %v", err)
+	}
+	// Reconciling one intent never removes another intent's pending request.
+	later := brokeredRequest{Version: 1, IntentID: "taba-later-0000000000000000", Owner: "acme", Repo: "alpha", PR: 7, Head: "aaaaaaaaaaaa", Operations: []brokeredOperation{{Op: "pr.ready"}}}
+	if err := writePrivateJSON(filepath.Join(f.gitDir, bitbucketWriteRequestFile), later); err != nil {
+		t.Fatal(err)
+	}
+	removeBrokeredRequest(f.gitDir, request.IntentID)
+	if got := f.request(t); got.IntentID != later.IntentID {
+		t.Fatalf("a later intent's request was removed: %+v", got)
+	}
+}
+
+func TestStoredReviewManifestUsesItsCollectionsControlRoot(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	if got := (ReviewManifest{RepoDir: c.Harness}).bitbucketControlRoot(); got != c.ConfigRoot {
+		t.Fatalf("control root from a stored manifest = %q, want %q", got, c.ConfigRoot)
+	}
+	if got := (ReviewManifest{RepoDir: c.Harness, ConfigRoot: "/explicit"}).bitbucketControlRoot(); got != "/explicit" {
+		t.Fatalf("explicit control root = %q", got)
 	}
 }
