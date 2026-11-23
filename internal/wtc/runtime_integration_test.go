@@ -18,8 +18,9 @@ import (
 	"time"
 )
 
-// Ports handed to runtime tasks come from below the kernels' ephemeral ranges
-// (Linux 32768-60999 by default, macOS/BSD 49152-65535). A port picked with
+// Ports handed to runtime tasks come from outside the kernel ephemeral range
+// (Linux 32768-60999 and macOS 49152-65535 by default; Linux checks its
+// configured range below). A port picked with
 // listen(":0") and released goes back into that range, where a concurrently
 // running test process's listen(":0") or outgoing connect can be given it
 // before the task binds it; the task then exits with "address already in use".
@@ -34,8 +35,10 @@ func runtimeFreePort(t *testing.T) int {
 	t.Helper()
 	if data, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range"); err == nil {
 		if fields := strings.Fields(string(data)); len(fields) == 2 {
-			if low, err := strconv.Atoi(fields[0]); err == nil && low < runtimePortHigh {
-				t.Fatalf("ephemeral ports start at %d, inside the runtime test range %d-%d", low, runtimePortLow, runtimePortHigh)
+			low, lowErr := strconv.Atoi(fields[0])
+			high, highErr := strconv.Atoi(fields[1])
+			if lowErr == nil && highErr == nil && low < runtimePortHigh && high >= runtimePortLow {
+				t.Fatalf("ephemeral ports %d-%d overlap the runtime test range %d-%d", low, high, runtimePortLow, runtimePortHigh-1)
 			}
 		}
 	}
