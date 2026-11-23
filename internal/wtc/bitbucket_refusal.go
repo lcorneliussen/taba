@@ -11,19 +11,20 @@ import (
 	"strings"
 )
 
-// Refused Bitbucket reads are visible, with their cause (#471): a missing,
-// invalid or expired credential, a missing scope, or a repository the
-// credential cannot see is not the same as a network failure, and it must not
-// look like "no pull request" or a silent UNKNOWN.
+// Refused Bitbucket reads are visible, with their cause (#471): a missing
+// credential or an HTTP 401, 403 or 404 is not the same as a network, TLS or
+// provider failure, and it must not look like "no pull request" or a silent
+// UNKNOWN. Messages state what was observed and never assert a reason (an
+// expiry, a missing scope) the HTTP status alone does not show.
 
 // Refusal causes. The access causes are the ones a person must act on; the
 // transient ones (network, timeout, rate-limited) clear on their own.
 const (
 	RefusalNoCredential = "no-credential"          // no credential for this repository
 	RefusalUnsupported  = "unsupported-credential" // the configured credential type cannot be used here
-	RefusalUnauthorized = "unauthorized"           // 401: credential invalid or expired
-	RefusalForbidden    = "forbidden"              // 403: a scope or permission is missing
-	RefusalNotFound     = "not-visible"            // 404: the credential cannot see the repository
+	RefusalUnauthorized = "unauthorized"           // 401: the credential was not accepted
+	RefusalForbidden    = "forbidden"              // 403: access was refused
+	RefusalNotFound     = "not-visible"            // 404: not found or not visible to the credential
 	RefusalClient       = "client-unavailable"     // the selected client is missing or unsupported
 	RefusalRateLimited  = "rate-limited"
 	RefusalTimeout      = "timeout"

@@ -110,6 +110,21 @@ read is reported as unavailable for that repository and never falls back to
 a personal login. A new operation asks again, so a rotated or removed token
 applies to the next refresh.
 
+### Trust boundary
+
+The host's git credential helper is a **trusted-process mechanism**, not a
+secret store. Any process that runs as the same host user and can run `git
+credential fill` (or read the helper's storage) gets the same token, and that
+includes an agent command run on the host. taba keeps the token out of the
+places it controls (listed above), but it does not enforce an execution
+boundary and does not hide the token from arbitrary commands on the host.
+Configure a host read credential only where every process that can reach the
+helper is trusted with read access to those repositories: a read-only,
+per-repository token limits what such a process can do. Keeping the token
+from agent commands needs a boundary outside taba, such as a gateway that
+runs agent commands where the helper is not reachable; taba does not provide
+or check one.
+
 `taba doctor` in a collection shows a `bitbucket-client` row with the
 selected client and where it came from (environment, `taba.env`/`wtc.env` or
 default). When TWG is selected it also runs `twg --version` once and reports
@@ -321,18 +336,34 @@ A read that fails is never shown as "no pull request". It is classified:
 |---|---|
 | `no-credential` | the host's credential helper has none for the repository |
 | `unsupported-credential` | the configured credential type cannot be used (for example an API token without a user) |
-| `unauthorized` (401) | the credential is invalid or expired |
-| `forbidden` (403) | a permission or scope is missing |
-| `not-visible` (404) | the credential cannot see the repository |
+| `unauthorized` (401) | Bitbucket did not accept the credential; it may be invalid, revoked or expired |
+| `forbidden` (403) | Bitbucket refused access; a repository permission or token scope may be missing |
+| `not-visible` (404) | the repository or pull request was not found or is not visible to the credential |
 | `client-unavailable` | the selected client is missing or unsupported |
+| `tls` | TLS verification with Bitbucket failed (certificate or handshake) |
+| `provider-error` (5xx) | Bitbucket answered with a server error |
 | `rate-limited`, `timeout`, `network`, `incomplete`, `other` | transient; retried later |
 
+Messages state the HTTP status Bitbucket answered and offer explanations; they
+never assert an expiry or a missing scope, which an HTTP status alone does not
+show. `tls`, `provider-error` and the transient causes are retried later and
+are not access causes. A TWG failure is classified from its structured status,
+code and kind only, never its message text; a REST failure without an HTTP
+answer keeps only its class (TLS, timeout, network), never the URL or a
+response body.
+
 The first six are access causes. The gateway checkout status carries
-`pullRequestRefusal {cause, status, message, access}`; the card shows
-**⚠ PR read refused** with the message (or **PR read failed** for a transient
-cause). PR news tells the conversation once per access cause — not per poll,
-not again after a restart or a transient failure in between — and once when
-reads work again. `taba status` records `observation_reason:
+`pullRequestRefusal {cause, status, message, access, readIdentity,
+observedAt}`; the card shows **⚠ PR read refused** with the message (or **PR
+read failed** for a transient cause). `readIdentity` is a non-secret digest of
+the read context (`k:` when it is fingerprinted, such as an unchanged host
+token; `u:` when it is not, which never equals a `k:` identity) and
+`observedAt` is when the read completed. PR news tells the conversation once
+per read identity and access cause — not per poll, not again after a restart
+or a transient failure in between — again when another read identity is
+refused (a rotated or switched credential), and once when reads work again. A
+result that completed before one already seen for the checkout is ignored.
+Only the digest and the cause are kept. `taba status` records `observation_reason:
 bitbucket-<cause>` for an access refusal. Messages are fixed text naming the
 credential type, never a value, response or stderr.
 
