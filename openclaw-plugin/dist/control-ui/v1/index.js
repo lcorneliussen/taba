@@ -2428,7 +2428,9 @@ function collectionTables(v) {
       localChanges(r),
       busy.has(r.sessionKey) || sharedPushBusy(r) ? pendingPushCount(n) : pushCell(r, n),
       catchUpRunning(r) ? working() : toCatchUp(r) ? catchUpCell(r) : caughtUp ? toned("✓", TONE.success, "Caught up; no base changes remain in this snapshot") : null,
-      pr ? css(el("span", { title: `${pr.draft && open ? "Draft PR. " : ""}${pr.title ?? ""}` }, link(`#${pr.number}`, pr.url), pr.draft && open && !otherPRs(r).length ? muted("draft") : pr.state !== "open" ? muted(pr.state) : null), "display:inline-flex;gap:4px") : null,
+      pr ? css(el("span", { title: `${pr.draft && open ? "Draft PR. " : ""}${pr.title ?? ""}` }, link(`#${pr.number}`, pr.url), pr.draft && open && !otherPRs(r).length ? muted("draft") : pr.state !== "open" ? muted(pr.state) : null), "display:inline-flex;gap:4px")
+        // A read that was refused is not "no pull request" (#471).
+        : r.pullRequestRefusal ? toned(r.pullRequestRefusal.access ? "⚠ PR read refused" : "PR read failed", r.pullRequestRefusal.access ? TONE.failure : TONE.pending, r.pullRequestRefusal.message) : null,
       ci, conflict, review, nextCell(r), prHints(r),
     ];
   }
@@ -2627,7 +2629,7 @@ function collectionTables(v) {
       // Retain observed columns so refresh/progress cannot make facts jump sideways.
       repoFacts.ahead ||= repos.some(r => r.dirty > 0 || toPush(r) > 0) || (workers ?? []).some(w => w.repos.some(r => r.toMerge > 0 || r.mergeError));
       repoFacts.behind ||= repos.some(r => toCatchUp(r)) || (workers ?? []).some(w => w.repos.some(r => r.behind > 0));
-      repoFacts.pr ||= repos.some(r => r.pullRequest || otherPRs(r).length);
+      repoFacts.pr ||= repos.some(r => r.pullRequest || r.pullRequestRefusal || otherPRs(r).length);
       actionColumns = Math.max(actionColumns, choosing ? 1 : 0, ...repos.map(r => repoActionOptions(r).filter(o => !o.disabled && o.label !== "Commit changes").length));
       const availableWidth = v.repoWidth?.() ?? v.width?.() ?? 0;
       narrow = repositoryCompact(availableWidth);

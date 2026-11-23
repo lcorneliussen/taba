@@ -106,12 +106,13 @@ func bitbucketRESTCredentials(ctx context.Context, slug string) (user, pass stri
 	if err != nil {
 		return "", "", err
 	}
-	token, host, err := bitbucketReadFor(ctx).restBearer(ctx, workspace, repo)
+	hostUser, token, host, err := bitbucketReadFor(ctx).restCredential(ctx, workspace, repo)
 	if err != nil {
 		return "", "", err
 	}
 	if host {
-		return "", token, nil
+		// An empty user sends token as a bearer token.
+		return hostUser, token, nil
 	}
 	user, pass = bitbucketCredentials()
 	if user == "" || pass == "" {

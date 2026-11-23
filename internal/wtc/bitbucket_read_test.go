@@ -50,7 +50,7 @@ if [ "$ws" != "acme" ]; then printf 'network-tool:twg-target:%s\n' "$ws" >> "$FA
 printf 'argv:%s\n' "$*" >> "$log"
 printf 'token:%s user-set:%s user:[%s]\n' "${TWG_BBC_TOKEN:-none}" "${TWG_BBC_USER+yes}" "${TWG_BBC_USER-}" >> "$log"
 case "$FAKE_TWG_MODE" in
-denied) echo '{"ok":false,"error":{"code":"AUTH_INVALID","kind":"auth","statusCode":401,"message":"secret '"$TWG_BBC_TOKEN"'"}}'; exit 1;;
+denied) echo '{"ok":false,"error":{"code":"AUTH_INVALID","kind":"auth","statusCode":'"${FAKE_TWG_STATUS:-401}"',"message":"secret '"$TWG_BBC_TOKEN"'"}}'; exit 1;;
 esac
 repo=""; prev=""
 for a in "$@"; do [ "$prev" = "--repo" ] && repo="$a"; prev="$a"; done
@@ -317,7 +317,7 @@ func TestBitbucketHostReadCredentialFailsClosed(t *testing.T) {
 	// bb cannot carry a host credential: refused before any child runs.
 	t.Setenv("TABA_BITBUCKET_TRANSPORT", "bb")
 	_, err = bitbucketReadPR(statusAuthOperation(context.Background()), "acme/alpha", "7")
-	if err == nil || !strings.Contains(err.Error(), "needs the twg client") {
+	if err == nil || !strings.Contains(err.Error(), "host credentials need the twg client") {
 		t.Fatalf("err = %v", err)
 	}
 	// An unknown credential selection is refused, never the default.
@@ -689,7 +689,7 @@ func TestBitbucketDoctorReadRowProbesOnlyWhenAsked(t *testing.T) {
 	h := newNoBBHost(t)
 	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
 	d := BitbucketReadDiagnose("", "alpha", "acme/alpha", false)
-	if !d.OK || d.Probed || !strings.Contains(d.Client, "twg") || !strings.Contains(d.Credential, "host git credential helper") || !strings.Contains(d.Detail, "--bitbucket-read-probe") {
+	if !d.OK || d.Probed || !strings.Contains(d.Client, "twg") || !strings.Contains(d.Credential, "repository access token (bearer) from the host's git credential helper") || !strings.Contains(d.Detail, "--bitbucket-read-probe") {
 		t.Fatalf("unprobed row = %+v", d)
 	}
 	if h.read(t, h.log) != "" || h.read(t, h.helperLog) != "" {
@@ -704,14 +704,109 @@ func TestBitbucketDoctorReadRowProbesOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("probe reads:\n%s", log)
 	}
 	// No credential for the repository, and a denied read: reported, nothing echoed.
-	if d := BitbucketReadDiagnose("", "gamma", "acme/gamma", true); d.OK || !strings.Contains(d.Detail, "no host read credential") {
+	if d := BitbucketReadDiagnose("", "gamma", "acme/gamma", true); d.OK || d.Cause != RefusalNoCredential || !strings.Contains(d.Detail, "credential helper has none") {
 		t.Fatalf("gamma = %+v", d)
 	}
 	t.Setenv("FAKE_TWG_MODE", "denied")
 	bitbucketHostCredentials = sync.Map{}
 	d = BitbucketReadDiagnose("", "alpha", "acme/alpha", true)
-	if d.OK || !strings.Contains(d.Detail, "authentication or authorization failed") {
+	if d.OK || d.Cause != RefusalUnauthorized || d.Status != 401 || !strings.Contains(d.Detail, "invalid or expired") {
 		t.Fatalf("denied = %+v", d)
 	}
 	assertNoPoison(t, "doctor row", d.Detail+d.Client+d.Credential)
+}
+
+func TestBitbucketRefusalsNameTheirCause(t *testing.T) {
+	newNoBBHost(t)
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	label := BitbucketReadCredentialLabel("")
+	t.Setenv("FAKE_TWG_MODE", "denied")
+	for status, cause := range map[string]string{"401": RefusalUnauthorized, "403": RefusalForbidden, "404": RefusalNotFound} {
+		t.Setenv("FAKE_TWG_STATUS", status)
+		_, err := BitbucketBranchPullRequest("", "acme/alpha", "feature")
+		refusal := ClassifyBitbucketRefusal(err, label)
+		if refusal.Cause != cause || !refusal.Access() || !strings.Contains(refusal.Message, "("+status+")") || !strings.Contains(refusal.Message, "repository access token") {
+			t.Fatalf("%s: %+v (%v)", status, refusal, err)
+		}
+		assertNoPoison(t, "refusal", refusal.Message)
+	}
+	t.Setenv("FAKE_TWG_MODE", "")
+	_, err := BitbucketBranchPullRequest("", "acme/gamma", "feature")
+	if refusal := ClassifyBitbucketRefusal(err, label); refusal.Cause != RefusalNoCredential || !refusal.Access() {
+		t.Fatalf("no credential: %+v", refusal)
+	}
+	// REST answers keep their status; a transient failure is not an access cause.
+	for status, cause := range map[int]string{404: RefusalNotFound, 403: RefusalForbidden} {
+		refusal := ClassifyBitbucketRefusal(&bitbucketHTTPError{status, "Bitbucket pull request list API returned x"}, label)
+		if refusal.Cause != cause {
+			t.Fatalf("REST %d: %+v", status, refusal)
+		}
+	}
+	for _, transient := range []error{errors.New("Bitbucket API request failed"), errors.New("twg bitbucket pull-requests get timed out after 30s"), &bitbucketReadError{cause: "rate limited by Bitbucket (HTTP 429); retry later", status: 429}} {
+		if refusal := ClassifyBitbucketRefusal(transient, label); refusal.Access() {
+			t.Fatalf("transient %v classified as access: %+v", transient, refusal)
+		}
+	}
+}
+
+func TestBitbucketAPITokenCredentialAuthenticatesAsItsUser(t *testing.T) {
+	h := newNoBBHost(t)
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential-api-token")
+	tokens := t.TempDir()
+	t.Setenv("FAKE_TOKEN_DIR", tokens)
+	os.MkdirAll(filepath.Join(tokens, "acme"), 0o700)
+	if _, err := bitbucketReadPR(statusAuthOperation(context.Background()), "acme/alpha", "7"); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture helper answers alpha with username x-token-auth: sent as the user.
+	if log := h.read(t, h.log); !strings.Contains(log, "token:"+poisonTokenAlpha+" user-set:yes user:[x-token-auth]") {
+		t.Fatalf("API token not sent with its user:\n%s", log)
+	}
+	// REST reads authenticate with user and token, not as a bearer token.
+	ctx := statusAuthOperation(context.Background())
+	user, pass, err := bitbucketRESTCredentials(ctx, "acme/beta")
+	if err != nil || user != "someone" || pass != poisonTokenBeta {
+		t.Fatalf("REST credential user=%q err=%v", user, err)
+	}
+	// A repository access token and an API token are different identities,
+	// even with the same token.
+	apiScope := statusAuthEntry(statusAuthOperation(context.Background()), "pr", "bitbucket.org", "acme/alpha").scope
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+	bitbucketHostCredentials = sync.Map{}
+	if statusAuthEntry(statusAuthOperation(context.Background()), "pr", "bitbucket.org", "acme/alpha").scope == apiScope {
+		t.Fatal("credential types must not share cached observations")
+	}
+	// An API token without a username is refused, never sent as bearer.
+	t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential-api-token")
+	bitbucketHostCredentials = sync.Map{}
+	if err := os.WriteFile(filepath.Join(tokens, "acme", "delta"), []byte("synthetic-delta"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The fake helper always adds username=x-token-auth for token-dir answers;
+	// make delta's answer user-less through a dedicated helper.
+	helper := filepath.Join(t.TempDir(), "nouser.sh")
+	os.WriteFile(helper, []byte("#!/bin/sh\n[ \"$1\" = get ] || exit 0\nprintf 'username=\\npassword=synthetic-delta\\n'\n"), 0o755)
+	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	os.WriteFile(gitConfig, []byte("[credential]\n\thelper = \n\thelper = "+helper+"\n"), 0o600)
+	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
+	_, err = bitbucketReadPR(statusAuthOperation(context.Background()), "acme/delta", "7")
+	if refusal := ClassifyBitbucketRefusal(err, ""); err == nil || refusal.Cause != RefusalUnsupported && refusal.Cause != RefusalNoCredential {
+		t.Fatalf("user-less API token: %v (%+v)", err, refusal)
+	}
+	if strings.Contains(h.read(t, h.log), "synthetic-delta") {
+		t.Fatal("a user-less API token reached a read")
+	}
+}
+
+func TestStatusRowNamesARefusedBitbucketRead(t *testing.T) {
+	newNoBBHost(t)
+	t.Setenv("FAKE_TWG_MODE", "denied")
+	t.Setenv("FAKE_TWG_STATUS", "404")
+	_, err := statusFetchPRRawContext(statusAuthOperation(context.Background()), PRRecord{Repo: "alpha", Number: "7"}, "acme/alpha", "bitbucket.org")
+	if got := statusObservationFailure(err); got.Freshness != "unavailable" || got.Reason != "bitbucket-not-visible" {
+		t.Fatalf("observation = %+v (%v)", got, err)
+	}
+	if got := statusObservationFailure(errors.New("Bitbucket API request failed")); got.Reason != "refresh-failed" {
+		t.Fatalf("a network failure must not read as a refusal: %+v", got)
+	}
 }

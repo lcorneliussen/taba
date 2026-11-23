@@ -16,9 +16,9 @@ func TestCheckoutStatusReadsBitbucketPullRequestsThroughTheHook(t *testing.T) {
 	old := BitbucketPullRequest
 	t.Cleanup(func() { BitbucketPullRequest = old })
 	var asked string
-	BitbucketPullRequest = func(_, owner, repo, branch string) *PullRequest {
+	BitbucketPullRequest = func(_, owner, repo, branch string) (*PullRequest, *ReadRefusal) {
 		asked = owner + "/" + repo + "@" + branch
-		return &PullRequest{Number: 7, State: "open", Checks: "success"}
+		return &PullRequest{Number: 7, State: "open", Checks: "success"}, nil
 	}
 	s := checkoutStatus(dir, true)
 	if asked != "example-ws/widget@feature" || s.PullRequest == nil || s.PullRequest.Number != 7 {

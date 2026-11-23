@@ -47,7 +47,7 @@ func TestNetworkGuardStopsUnmockedCalls(t *testing.T) {
 		}
 	}
 	bitbucketHostCredentials.Clear()
-	if _, err := gitCredentialFill(context.Background(), "acme", "unmocked"); err == nil {
+	if _, _, err := gitCredentialFill(context.Background(), "acme", "unmocked"); err == nil {
 		t.Fatal("a git credential fill answered inside the guard")
 	}
 

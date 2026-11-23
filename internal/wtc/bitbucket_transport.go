@@ -186,7 +186,10 @@ type bitbucketPR struct {
 // Causes never echo response bodies, stderr, URLs or account details; the only
 // response value they may carry is a TWG error code that passed
 // twgErrorCodePattern.
-type bitbucketReadError struct{ cause string }
+type bitbucketReadError struct {
+	cause  string
+	status int // the HTTP status a client reported, when it named one
+}
 
 func (e *bitbucketReadError) Error() string { return e.cause }
 
@@ -231,7 +234,7 @@ func (r bbBitbucketReader) PullRequest(workspace, repo, number string) (bitbucke
 	}
 	var facts bitbucketRESTPullRequest
 	if json.Unmarshal(out, &facts) != nil {
-		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseInvalidJSON}
+		return bitbucketPR{}, &bitbucketReadError{cause: bitbucketCauseInvalidJSON}
 	}
 	// Unlike the TWG reader, this reader does not check the response's PR id
 	// or repository: it keeps the pre-adapter bb behavior unchanged.
@@ -274,7 +277,7 @@ func (p bitbucketRESTPullRequest) normalize() (bitbucketPR, error) {
 		state = "DRAFT"
 	}
 	if !catchUpValidPRState(state) {
-		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseState}
+		return bitbucketPR{}, &bitbucketReadError{cause: bitbucketCauseState}
 	}
 	pr := bitbucketPR{State: state, Destination: p.Destination.Branch.Name}
 	if p.Source.Commit != nil {
@@ -356,7 +359,7 @@ func (r twgBitbucketReader) checkVersion() error {
 	}
 	var result error
 	if !twgVersionSupported(string(out)) {
-		result = &bitbucketReadError{fmt.Sprintf("unsupported TWG version; this reader needs TWG %d.x at or above %d.%d.%d", twgMinimumVersion[0], twgMinimumVersion[0], twgMinimumVersion[1], twgMinimumVersion[2])}
+		result = &bitbucketReadError{cause: fmt.Sprintf("unsupported TWG version; this reader needs TWG %d.x at or above %d.%d.%d", twgMinimumVersion[0], twgMinimumVersion[0], twgMinimumVersion[1], twgMinimumVersion[2])}
 	}
 	twgVersionChecks.Store(key, result)
 	return result
@@ -386,28 +389,28 @@ func (r twgBitbucketReader) PullRequest(workspace, repo, number string) (bitbuck
 	}
 	var facts bitbucketRESTPullRequest
 	if json.Unmarshal(data, &facts) != nil {
-		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseInvalidJSON}
+		return bitbucketPR{}, &bitbucketReadError{cause: bitbucketCauseInvalidJSON}
 	}
 	if len(facts.Failures) > 0 {
-		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseIncomplete}
+		return bitbucketPR{}, &bitbucketReadError{cause: bitbucketCauseIncomplete}
 	}
 	// The resource id is a JSON integer; a string or another number is not
 	// the PR that was asked for.
 	if string(bytes.TrimSpace(facts.ID)) != number {
-		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseIdentity}
+		return bitbucketPR{}, &bitbucketReadError{cause: bitbucketCauseIdentity}
 	}
 	if facts.Destination.Repository == nil || facts.Destination.Repository.FullName == "" {
-		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseMissingField}
+		return bitbucketPR{}, &bitbucketReadError{cause: bitbucketCauseMissingField}
 	}
 	if !strings.EqualFold(facts.Destination.Repository.FullName, workspace+"/"+repo) {
-		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseIdentity}
+		return bitbucketPR{}, &bitbucketReadError{cause: bitbucketCauseIdentity}
 	}
 	pr, err := facts.normalize()
 	if err != nil {
 		return pr, err
 	}
 	if (pr.State == "OPEN" || pr.State == "DRAFT") && pr.Destination == "" {
-		return bitbucketPR{}, &bitbucketReadError{bitbucketCauseMissingField}
+		return bitbucketPR{}, &bitbucketReadError{cause: bitbucketCauseMissingField}
 	}
 	return pr, nil
 }
@@ -463,26 +466,29 @@ func twgFailure(out []byte) (*bitbucketReadError, bool) {
 
 func classifyTWGError(e *twgError) *bitbucketReadError {
 	if e == nil {
-		return &bitbucketReadError{"TWG reported a failure without an error; inspect the operation locally and retry"}
+		return &bitbucketReadError{cause: "TWG reported a failure without an error; inspect the operation locally and retry"}
 	}
 	envelope := struct{ Error *twgError }{e}
 	text := strings.ToLower(envelope.Error.Code + " " + envelope.Error.Kind)
 	if envelope.Error.StatusCode == 429 {
-		return &bitbucketReadError{"rate limited by Bitbucket (HTTP 429); retry later"}
+		return &bitbucketReadError{cause: "rate limited by Bitbucket (HTTP 429); retry later", status: 429}
 	}
 	if envelope.Error.StatusCode == 401 || envelope.Error.StatusCode == 403 {
-		return &bitbucketReadError{bitbucketCauseAuth}
+		return &bitbucketReadError{cause: bitbucketCauseAuth, status: envelope.Error.StatusCode}
+	}
+	if envelope.Error.StatusCode == 404 {
+		return &bitbucketReadError{cause: "not found: the credential cannot see the repository or pull request", status: 404}
 	}
 	for _, marker := range []string{"auth", "unauthori", "forbidden", "permission", "denied", "login", "credential", "scope"} {
 		if strings.Contains(text, marker) {
-			return &bitbucketReadError{bitbucketCauseAuth}
+			return &bitbucketReadError{cause: bitbucketCauseAuth}
 		}
 	}
 	code := envelope.Error.Code
 	if !twgErrorCodePattern.MatchString(code) {
 		code = "unrecognized"
 	}
-	return &bitbucketReadError{"TWG reported error " + code + "; inspect the operation locally and retry"}
+	return &bitbucketReadError{cause: "TWG reported error " + code + "; inspect the operation locally and retry"}
 }
 
 // twgSinglePullRequest returns the one pull-request resource in a TWG reply.
@@ -512,14 +518,14 @@ func twgSingleBatchData(out []byte, number string, list bool) ([]byte, error) {
 	}
 	var items []json.RawMessage
 	if json.Unmarshal(rawItems, &items) != nil || items == nil {
-		return nil, &bitbucketReadError{bitbucketCauseMalformed}
+		return nil, &bitbucketReadError{cause: bitbucketCauseMalformed}
 	}
 	if len(items) != 1 {
-		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+		return nil, &bitbucketReadError{cause: bitbucketCauseIncomplete}
 	}
 	item, err := twgObject(items[0])
 	if err != nil {
-		return nil, &bitbucketReadError{bitbucketCauseMalformed}
+		return nil, &bitbucketReadError{cause: bitbucketCauseMalformed}
 	}
 	switch strings.TrimSpace(string(item["ok"])) {
 	case "true":
@@ -530,9 +536,9 @@ func twgSingleBatchData(out []byte, number string, list bool) ([]byte, error) {
 		}
 		return nil, classifyTWGError(failure)
 	case "":
-		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+		return nil, &bitbucketReadError{cause: bitbucketCauseIncomplete}
 	default:
-		return nil, &bitbucketReadError{bitbucketCauseMalformed}
+		return nil, &bitbucketReadError{cause: bitbucketCauseMalformed}
 	}
 	if err := twgComplete(item); err != nil {
 		return nil, err
@@ -540,19 +546,19 @@ func twgSingleBatchData(out []byte, number string, list bool) ([]byte, error) {
 	if raw, ok := item["input"]; ok {
 		var input string
 		if json.Unmarshal(raw, &input) == nil && input != "" && input != number {
-			return nil, &bitbucketReadError{bitbucketCauseIdentity}
+			return nil, &bitbucketReadError{cause: bitbucketCauseIdentity}
 		}
 	}
 	data, ok := item["data"]
 	if !ok {
-		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+		return nil, &bitbucketReadError{cause: bitbucketCauseIncomplete}
 	}
 	if trimmed := bytes.TrimSpace(data); list && len(trimmed) > 0 && trimmed[0] == '[' {
 		return trimmed, nil
 	}
 	resource, err := twgObject(data)
 	if err != nil {
-		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+		return nil, &bitbucketReadError{cause: bitbucketCauseIncomplete}
 	}
 	if err := twgComplete(resource); err != nil {
 		return nil, err
@@ -564,10 +570,10 @@ func twgSingleBatchData(out []byte, number string, list bool) ([]byte, error) {
 func twgObject(raw []byte) (map[string]json.RawMessage, error) {
 	var object map[string]json.RawMessage
 	if json.Unmarshal(raw, &object) != nil {
-		return nil, &bitbucketReadError{bitbucketCauseInvalidJSON}
+		return nil, &bitbucketReadError{cause: bitbucketCauseInvalidJSON}
 	}
 	if object == nil {
-		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+		return nil, &bitbucketReadError{cause: bitbucketCauseIncomplete}
 	}
 	return object, nil
 }
@@ -586,31 +592,31 @@ func twgComplete(object map[string]json.RawMessage) error {
 		switch strings.TrimSpace(string(raw)) {
 		case "false":
 		case "true":
-			return &bitbucketReadError{bitbucketCauseIncomplete}
+			return &bitbucketReadError{cause: bitbucketCauseIncomplete}
 		default:
-			return &bitbucketReadError{bitbucketCauseMalformed}
+			return &bitbucketReadError{cause: bitbucketCauseMalformed}
 		}
 	}
 	if raw, ok := object["_failures"]; ok && strings.TrimSpace(string(raw)) != "null" {
 		var failures []json.RawMessage
 		if json.Unmarshal(raw, &failures) != nil {
-			return &bitbucketReadError{bitbucketCauseMalformed}
+			return &bitbucketReadError{cause: bitbucketCauseMalformed}
 		}
 		if len(failures) > 0 {
-			return &bitbucketReadError{bitbucketCauseIncomplete}
+			return &bitbucketReadError{cause: bitbucketCauseIncomplete}
 		}
 	}
 	if raw, ok := object["ok"]; ok {
 		switch strings.TrimSpace(string(raw)) {
 		case "true":
 		case "false":
-			return &bitbucketReadError{bitbucketCauseIncomplete}
+			return &bitbucketReadError{cause: bitbucketCauseIncomplete}
 		default:
-			return &bitbucketReadError{bitbucketCauseMalformed}
+			return &bitbucketReadError{cause: bitbucketCauseMalformed}
 		}
 	}
 	if raw, ok := object["error"]; ok && strings.TrimSpace(string(raw)) != "null" {
-		return &bitbucketReadError{bitbucketCauseMalformed}
+		return &bitbucketReadError{cause: bitbucketCauseMalformed}
 	}
 	return nil
 }

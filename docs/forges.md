@@ -64,13 +64,22 @@ consult the selection.
 
 ## Host read credential
 
-A host whose Bitbucket reads must not use a personal login — a gateway with
-one repository access token per repository — opts in with
-`TABA_BITBUCKET_READ_CREDENTIAL=git-credential` (legacy alias
-`WTC_BITBUCKET_READ_CREDENTIAL`; same precedence as the client selection).
-Unset, empty or `personal` keeps the client's own login. Any other value, or
-`git-credential` with `bb` selected, makes every Bitbucket read unavailable
-with a fixed diagnostic; nothing runs.
+A host whose Bitbucket reads must not use a personal login opts in with
+`TABA_BITBUCKET_READ_CREDENTIAL` (legacy alias `WTC_BITBUCKET_READ_CREDENTIAL`;
+same precedence as the client selection). The value names the credential
+**type**; taba never guesses it from what a helper answers, because the types
+authenticate differently and are not interchangeable:
+
+| Value | Credential | Sent as |
+|---|---|---|
+| unset, empty, `personal` | the client's own login | — |
+| `git-credential` | a repository access token per repository | bearer: `TWG_BBC_TOKEN` with an empty `TWG_BBC_USER`; REST `Authorization: Bearer` |
+| `git-credential-api-token` | a scoped API token (a person's or a service account's, such as the gateway login proposed in openclaw-bitbucket#32) | its user and token: `TWG_BBC_USER`/`TWG_BBC_TOKEN`; REST Basic |
+
+Any other value, or a host credential with `bb` selected, makes every
+Bitbucket read unavailable with a fixed diagnostic; nothing runs. The
+`git-credential-api-token` type is covered by synthetic fixtures only; no
+gateway login helper exists yet, so it is not claimed to work with one.
 
 With `git-credential`, the first read of a repository in an operation runs
 
@@ -81,9 +90,12 @@ git -c credential.interactive=false -c credential.useHttpPath=true credential fi
 with `protocol=https`, `host=bitbucket.org`, `path=<workspace>/<repo>.git`,
 `GIT_TERMINAL_PROMPT=0` and empty askpass programs, bounded to 10 s. git
 itself needs the helper to answer a `username` as well (any value); without
-one, the fill fails and the repository has no host credential. Only the
-`password` is used; the helper's `username` is ignored rather than read as an
-authentication mode. No helper is ever asked to store or erase. The answer is
+one, the fill fails and the repository has no host credential. For a
+repository access token only the `password` is used and the `username` is
+ignored; for an API token the `username` is required (one line, no `:`) and
+is the user the token authenticates as. The credential type, user and token
+together are the observation's identity (a keyed digest), so the two types
+never share cached observations. No helper is ever asked to store or erase. The answer is
 kept in that operation's memory for that repository and then:
 
 - added to that repository's TWG read child only, as `TWG_BBC_TOKEN` with an
@@ -298,10 +310,31 @@ says so and nothing is written.
 The gateway's checkout status reads a Bitbucket branch's pull request — the
 open one, else the latest merged, declined or superseded one — through the
 read adapter, with head checks from the budgeted status reader. Declined and
-superseded show as closed. A read that fails leaves the checkout without a
-pull request, which the news watcher treats as "could not be asked", never as
-a change; checks that could not be read keep the previous value, so a later
-read is not announced again.
+superseded show as closed. Checks that could not be read keep the previous
+value, so a later read is not announced again.
+
+### Refused reads
+
+A read that fails is never shown as "no pull request". It is classified:
+
+| Cause | Meaning |
+|---|---|
+| `no-credential` | the host's credential helper has none for the repository |
+| `unsupported-credential` | the configured credential type cannot be used (for example an API token without a user) |
+| `unauthorized` (401) | the credential is invalid or expired |
+| `forbidden` (403) | a permission or scope is missing |
+| `not-visible` (404) | the credential cannot see the repository |
+| `client-unavailable` | the selected client is missing or unsupported |
+| `rate-limited`, `timeout`, `network`, `incomplete`, `other` | transient; retried later |
+
+The first six are access causes. The gateway checkout status carries
+`pullRequestRefusal {cause, status, message, access}`; the card shows
+**⚠ PR read refused** with the message (or **PR read failed** for a transient
+cause). PR news tells the conversation once per access cause — not per poll,
+not again after a restart or a transient failure in between — and once when
+reads work again. `taba status` records `observation_reason:
+bitbucket-<cause>` for an access refusal. Messages are fixed text naming the
+credential type, never a value, response or stderr.
 
 ## Doctor
 
@@ -311,9 +344,8 @@ checkouts): the client, the read credential and its source. It reads local
 configuration only — no client, credential helper or network. `taba doctor
 --bitbucket-read-probe` additionally runs, per repository and within 30 s, one
 repository read and one one-item pull request list through the selected client
-and credential, and reports the classified result (no host credential,
-authentication or authorization failed, client missing or unsupported). The
-rows are advisory.
+and credential, and reports the classified cause and HTTP status (see
+Refused reads) for the credential type it names. The rows are advisory.
 
 ## Next steps
 

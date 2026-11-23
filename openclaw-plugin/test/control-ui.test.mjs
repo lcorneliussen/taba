@@ -4021,3 +4021,13 @@ test("a Bitbucket checkout's waiting pull request writes are shown and confirmed
     assert.match(readable(host), /hooks: 3 of 3 writes made\. Ask the conversation to run its command again to record them\./);
   } finally { view.dispose(); bitbucket = before; }
 });
+
+test("a refused Bitbucket pull request read is shown on the row, not as no pull request (#471)", async () => {
+  const refusal = { cause: "not-visible", status: 404, access: true, message: "Bitbucket read refused (404): the host's API token cannot see this repository; grant it read access" };
+  const { host, view } = await mount("panel", collection([repo("hooks", { forge: "bitbucket", pullRequestRefusal: refusal }), repo("site", { forge: "bitbucket", pullRequestRefusal: { cause: "network", access: false, message: "Bitbucket could not be reached" } })]));
+  try {
+    const nodes = [...host.all()];
+    assert.ok(nodes.some((n) => n.textContent === "⚠ PR read refused" && n.title === refusal.message), "the access refusal is visible with its cause");
+    assert.ok(nodes.some((n) => n.textContent === "PR read failed" && n.title === "Bitbucket could not be reached"), "a transient failure is shown as such");
+  } finally { view.dispose(); }
+});

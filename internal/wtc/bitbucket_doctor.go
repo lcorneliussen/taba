@@ -14,6 +14,8 @@ type BitbucketReadDiagnosis struct {
 	Client     string `json:"client"`
 	Credential string `json:"credential"`
 	Probed     bool   `json:"probed"`
+	Cause      string `json:"cause,omitempty"`  // a refusal cause; see ClassifyBitbucketRefusal
+	Status     int    `json:"status,omitempty"` // the HTTP status Bitbucket answered, when known
 	OK         bool   `json:"ok"`
 	Detail     string `json:"detail"`
 }
@@ -40,7 +42,9 @@ func BitbucketReadDiagnose(root, repo, slug string, probe bool) BitbucketReadDia
 	}
 	switch selection.Credential {
 	case bitbucketCredentialGit:
-		d.Credential = "host git credential helper, per repository (" + selection.CredentialSource + ")"
+		d.Credential = "repository access token (bearer) from the host's git credential helper (" + selection.CredentialSource + ")"
+	case bitbucketCredentialAPIToken:
+		d.Credential = "API token (user and token) from the host's git credential helper (" + selection.CredentialSource + ")"
 	case bitbucketCredentialPersonal:
 		d.Credential = "the client's own login"
 	default:
@@ -59,12 +63,17 @@ func BitbucketReadDiagnose(root, repo, slug string, probe bool) BitbucketReadDia
 	ctx, cancel := context.WithTimeout(context.Background(), bitbucketProbeTimeout)
 	defer cancel()
 	ctx = bitbucketReadOperation(ctx, root)
+	label := selection.CredentialLabel()
 	if _, err := bitbucketReadRepo(ctx, slug); err != nil {
-		d.Detail = "repository read failed: " + err.Error()
+		refusal := ClassifyBitbucketRefusal(err, label)
+		d.Cause, d.Status = refusal.Cause, refusal.Status
+		d.Detail = "repository read: " + refusal.Message
 		return d
 	}
 	if _, err := bitbucketReadPRsByState(ctx, slug, "", "OPEN", 1); err != nil {
-		d.Detail = "repository readable, pull request read failed (pull request read scope?): " + err.Error()
+		refusal := ClassifyBitbucketRefusal(err, label)
+		d.Cause, d.Status = refusal.Cause, refusal.Status
+		d.Detail = "repository readable; pull request read: " + refusal.Message
 		return d
 	}
 	d.OK = true

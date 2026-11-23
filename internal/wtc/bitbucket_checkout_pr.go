@@ -51,13 +51,13 @@ func BitbucketBranchPullRequest(root, slug, branch string) (*BitbucketCheckoutPR
 		decoder := json.NewDecoder(strings.NewReader(string(raw)))
 		decoder.UseNumber()
 		if decoder.Decode(&list) != nil {
-			return nil, &bitbucketReadError{bitbucketCauseInvalidJSON}
+			return nil, &bitbucketReadError{cause: bitbucketCauseInvalidJSON}
 		}
 		best := 0
 		for _, pr := range list.Values {
 			// The query filters by source branch; the answer must agree.
 			if pr.Source.Branch.Name != "" && pr.Source.Branch.Name != branch {
-				return nil, &bitbucketReadError{bitbucketCauseIdentity}
+				return nil, &bitbucketReadError{cause: bitbucketCauseIdentity}
 			}
 			if n, err := strconv.Atoi(pr.ID.String()); err == nil && n > best {
 				best = n

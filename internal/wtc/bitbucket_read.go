@@ -36,10 +36,32 @@ import (
 // WTC_BITBUCKET_READ_CREDENTIAL. Resolved like TABA_BITBUCKET_TRANSPORT.
 const bitbucketReadCredentialVariable = "TABA_BITBUCKET_READ_CREDENTIAL"
 
+// Credential types. The type is configured, never guessed from what a
+// helper answers: a repository access token is a bearer token (the helper's
+// username is ignored), a scoped API token (a person's or a service
+// account's) authenticates as its user, which the helper must answer.
 const (
 	bitbucketCredentialPersonal = "personal"
-	bitbucketCredentialGit      = "git-credential"
+	bitbucketCredentialGit      = "git-credential"           // repository access token, bearer
+	bitbucketCredentialAPIToken = "git-credential-api-token" // scoped API token, user + token
 )
+
+// hostCredential reports whether the selection reads with a credential from
+// the host's git credential helper.
+func (s bitbucketReadSelection) hostCredential() bool {
+	return s.Credential == bitbucketCredentialGit || s.Credential == bitbucketCredentialAPIToken
+}
+
+// CredentialLabel names the read credential for diagnostics, never a value.
+func (s bitbucketReadSelection) CredentialLabel() string {
+	switch s.Credential {
+	case bitbucketCredentialGit:
+		return "the host's repository access token"
+	case bitbucketCredentialAPIToken:
+		return "the host's API token"
+	}
+	return "the client's own login"
+}
 
 var errBitbucketReadCredential = errors.New("unsupported Bitbucket read credential selection")
 
@@ -62,25 +84,25 @@ func selectedBitbucketRead(root string) bitbucketReadSelection {
 	client, err := selectedBitbucketClient(root)
 	selection := bitbucketReadSelection{Client: client.Client, ClientSource: client.Source}
 	if err != nil {
-		selection.err = &bitbucketReadError{bitbucketSelectionCause(err, client.Source)}
+		selection.err = &bitbucketReadError{cause: bitbucketSelectionCause(err, client.Source)}
 		return selection
 	}
 	value, source, err := bitbucketSetting(root, bitbucketReadCredentialVariable)
 	selection.CredentialSource = source
 	if err != nil {
-		selection.err = &bitbucketReadError{"Bitbucket read credential selection unavailable; the machine defaults file cannot be read safely"}
+		selection.err = &bitbucketReadError{cause: "Bitbucket read credential selection unavailable; the machine defaults file cannot be read safely"}
 		return selection
 	}
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", bitbucketCredentialPersonal:
 		selection.Credential = bitbucketCredentialPersonal
-	case bitbucketCredentialGit:
-		selection.Credential = bitbucketCredentialGit
+	case bitbucketCredentialGit, bitbucketCredentialAPIToken:
+		selection.Credential = strings.ToLower(strings.TrimSpace(value))
 		if selection.Client != bitbucketClientTWG {
-			selection.err = &bitbucketReadError{bitbucketReadCredentialVariable + "=git-credential needs the twg client; bb cannot take a host read credential"}
+			selection.err = &bitbucketReadError{cause: bitbucketReadCredentialVariable + " host credentials need the twg client; bb cannot take a host read credential"}
 		}
 	default:
-		selection.err = &bitbucketReadError{"unsupported " + bitbucketReadCredentialVariable + " value; set it to personal or git-credential, or unset it"}
+		selection.err = &bitbucketReadError{cause: "unsupported " + bitbucketReadCredentialVariable + " value; set it to personal, git-credential (repository access token) or git-credential-api-token (scoped API token), or unset it"}
 	}
 	return selection
 }
@@ -122,6 +144,7 @@ type bitbucketReadState struct {
 
 type bitbucketRepoToken struct {
 	once  sync.Once
+	user  string
 	token string
 	err   error
 }
@@ -145,6 +168,13 @@ func bitbucketReadFor(ctx context.Context) *bitbucketReadState {
 // repoToken asks the host for one repository's read credential, at most once
 // per operation. Concurrent readers of the same repository share the answer.
 func (s *bitbucketReadState) repoToken(ctx context.Context, workspace, repo string) (string, error) {
+	_, token, err := s.repoCredential(ctx, workspace, repo)
+	return token, err
+}
+
+// repoCredential is repoToken with the user an API token authenticates as
+// ("" for a repository access token).
+func (s *bitbucketReadState) repoCredential(ctx context.Context, workspace, repo string) (string, string, error) {
 	key := strings.ToLower(workspace + "/" + repo)
 	s.mu.Lock()
 	entry := s.tokens[key]
@@ -153,8 +183,24 @@ func (s *bitbucketReadState) repoToken(ctx context.Context, workspace, repo stri
 		s.tokens[key] = entry
 	}
 	s.mu.Unlock()
-	entry.once.Do(func() { entry.token, entry.err = bitbucketHostCredential(ctx, workspace, repo) })
-	return entry.token, entry.err
+	entry.once.Do(func() {
+		var user string
+		user, entry.token, entry.err = bitbucketHostCredential(ctx, workspace, repo)
+		if entry.err == nil && s.selection.Credential == bitbucketCredentialAPIToken {
+			if !bitbucketCredentialUser(user) {
+				entry.token, entry.err = "", &bitbucketReadError{cause: "the git credential helper gave no username for the API token; an API token authenticates as its user"}
+				return
+			}
+			entry.user = user
+		}
+	})
+	return entry.user, entry.token, entry.err
+}
+
+// bitbucketCredentialUser accepts a user an API token can authenticate as: an
+// e-mail address or account name, one line.
+func bitbucketCredentialUser(user string) bool {
+	return user != "" && len(user) <= 254 && !strings.ContainsAny(user, "\x00\r\n:")
 }
 
 // Host credential answers are remembered in this process's memory for a
@@ -173,12 +219,13 @@ var (
 
 type bitbucketHostAnswer struct {
 	mu    sync.Mutex
+	user  string
 	token string
 	err   error
 	at    time.Time
 }
 
-func bitbucketHostCredential(ctx context.Context, workspace, repo string) (string, error) {
+func bitbucketHostCredential(ctx context.Context, workspace, repo string) (string, string, error) {
 	value, _ := bitbucketHostCredentials.LoadOrStore(strings.ToLower(workspace+"/"+repo), &bitbucketHostAnswer{})
 	answer := value.(*bitbucketHostAnswer)
 	answer.mu.Lock()
@@ -186,16 +233,16 @@ func bitbucketHostCredential(ctx context.Context, workspace, repo string) (strin
 	if !answer.at.IsZero() {
 		age := time.Since(answer.at)
 		if answer.err == nil && age < bitbucketHostCredentialTTL || answer.err != nil && age < bitbucketHostCredentialCooldown {
-			return answer.token, answer.err
+			return answer.user, answer.token, answer.err
 		}
 	}
-	token, err := bitbucketHostCredentialAsk(ctx, workspace, repo)
+	user, token, err := bitbucketHostCredentialAsk(ctx, workspace, repo)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		// A cancelled caller learned nothing about the credential.
-		return "", err
+		return "", "", err
 	}
-	answer.token, answer.err, answer.at = token, err, time.Now()
-	return token, err
+	answer.user, answer.token, answer.err, answer.at = user, token, err, time.Now()
+	return user, token, err
 }
 
 // childEnv is the environment addition for one read child. A personal read
@@ -209,27 +256,30 @@ func (s *bitbucketReadState) childEnv(ctx context.Context, workspace, repo strin
 		return nil, nil
 	}
 	env := twgChildEnv()
-	if s.selection.Credential == bitbucketCredentialGit {
-		token, err := s.repoToken(ctx, workspace, repo)
+	if s.selection.hostCredential() {
+		user, token, err := s.repoCredential(ctx, workspace, repo)
 		if err != nil {
 			return nil, err
 		}
-		env = append(env, "TWG_BBC_TOKEN="+token, "TWG_BBC_USER=")
+		// A repository access token is sent as a bearer token (empty user);
+		// an API token as its user and token.
+		env = append(env, "TWG_BBC_TOKEN="+token, "TWG_BBC_USER="+user)
 	}
 	return env, nil
 }
 
-// restBearer returns the host read token for one repository's REST reads, or
-// "" when reads use the personal credential.
-func (s *bitbucketReadState) restBearer(ctx context.Context, workspace, repo string) (string, bool, error) {
+// restCredential returns the host read credential for one repository's REST
+// reads: an empty user means a bearer token. host is false when reads use the
+// personal credential.
+func (s *bitbucketReadState) restCredential(ctx context.Context, workspace, repo string) (user, token string, host bool, err error) {
 	if s.selection.err != nil {
-		return "", false, s.selection.err
+		return "", "", false, s.selection.err
 	}
-	if s.selection.Credential != bitbucketCredentialGit {
-		return "", false, nil
+	if !s.selection.hostCredential() {
+		return "", "", false, nil
 	}
-	token, err := s.repoToken(ctx, workspace, repo)
-	return token, true, err
+	user, token, err = s.repoCredential(ctx, workspace, repo)
+	return user, token, true, err
 }
 
 // gitCredentialTimeout bounds one credential helper query.
@@ -244,11 +294,13 @@ const (
 // credential, noninteractively. useHttpPath is forced so helpers see the
 // repository path and can answer per repository. Only the password is used; the helper's
 // username is ignored rather than interpreted as an authentication mode. The
-// helper's stderr and stdout are never echoed. git is never asked to approve
+// helper's stderr and stdout are never echoed. The username is returned for
+// an API token; for a repository access token it is ignored, never read as an
+// authentication mode. git is never asked to approve
 // or reject, so no credential store is written.
-func gitCredentialFill(parent context.Context, workspace, repo string) (string, error) {
+func gitCredentialFill(parent context.Context, workspace, repo string) (string, string, error) {
 	if !bitbucketSlugPart(workspace) || !bitbucketSlugPart(repo) {
-		return "", &bitbucketReadError{"invalid Bitbucket repository slug"}
+		return "", "", &bitbucketReadError{cause: "invalid Bitbucket repository slug"}
 	}
 	ctx, cancel := context.WithTimeout(parent, gitCredentialTimeout)
 	defer cancel()
@@ -261,28 +313,31 @@ func gitCredentialFill(parent context.Context, workspace, repo string) (string, 
 	cmd.Stderr = nil
 	err := cmd.Run()
 	if parent.Err() != nil {
-		return "", parent.Err()
+		return "", "", parent.Err()
 	}
 	if ctx.Err() != nil {
-		return "", &bitbucketReadError{fmt.Sprintf("host read credential unavailable; the git credential helper timed out after %s", gitCredentialTimeout)}
+		return "", "", &bitbucketReadError{cause: fmt.Sprintf("host read credential unavailable; the git credential helper timed out after %s", gitCredentialTimeout)}
 	}
 	if err != nil {
 		// git exits non-zero when no helper had an answer and prompting is off.
-		return "", &bitbucketReadError{bitbucketCauseNoCredential}
+		return "", "", &bitbucketReadError{cause: bitbucketCauseNoCredential}
 	}
-	token := ""
+	user, token := "", ""
 	for _, line := range strings.Split(stdout.String(), "\n") {
 		if value, ok := strings.CutPrefix(line, "password="); ok {
 			token = value
 		}
+		if value, ok := strings.CutPrefix(line, "username="); ok {
+			user = value
+		}
 	}
 	if token == "" {
-		return "", &bitbucketReadError{bitbucketCauseNoCredential}
+		return "", "", &bitbucketReadError{cause: bitbucketCauseNoCredential}
 	}
 	if len(token) > 4096 || strings.ContainsAny(token, "\x00\r\n") {
-		return "", &bitbucketReadError{bitbucketCauseCredentialFail}
+		return "", "", &bitbucketReadError{cause: bitbucketCauseCredentialFail}
 	}
-	return token, nil
+	return user, token, nil
 }
 
 func bitbucketSlugPart(value string) bool {
@@ -300,7 +355,7 @@ func bitbucketSlugPart(value string) bool {
 func splitBitbucketSlug(slug string) (string, string, error) {
 	workspace, repo, ok := strings.Cut(slug, "/")
 	if !ok || !bitbucketSlugPart(workspace) || !bitbucketSlugPart(repo) {
-		return "", "", &bitbucketReadError{"invalid Bitbucket repository slug"}
+		return "", "", &bitbucketReadError{cause: "invalid Bitbucket repository slug"}
 	}
 	return workspace, repo, nil
 }
@@ -344,7 +399,7 @@ func bitbucketReadRun(ctx context.Context, env []string, operation string, args 
 				limited += fmt.Sprintf("; retry-after: %d", seconds)
 			}
 		}
-		return out, &bitbucketReadError{limited}
+		return out, &bitbucketReadError{cause: limited}
 	}
 	return out, err
 }
@@ -417,7 +472,7 @@ func bitbucketReadPRWith(ctx context.Context, slug, number string, bbArgs []stri
 		return nil, err
 	}
 	if _, err := strconv.Atoi(number); err != nil {
-		return nil, &bitbucketReadError{"invalid PR number"}
+		return nil, &bitbucketReadError{cause: "invalid PR number"}
 	}
 	s := bitbucketReadFor(ctx)
 	if s.selection.err != nil {
@@ -449,19 +504,19 @@ func bitbucketReadPRWith(ctx context.Context, slug, number string, bbArgs []stri
 func twgPinPullRequest(data []byte, workspace, repo, number string) error {
 	var facts bitbucketRESTPullRequest
 	if json.Unmarshal(data, &facts) != nil {
-		return &bitbucketReadError{bitbucketCauseInvalidJSON}
+		return &bitbucketReadError{cause: bitbucketCauseInvalidJSON}
 	}
 	if len(facts.Failures) > 0 {
-		return &bitbucketReadError{bitbucketCauseIncomplete}
+		return &bitbucketReadError{cause: bitbucketCauseIncomplete}
 	}
 	if string(bytes.TrimSpace(facts.ID)) != number {
-		return &bitbucketReadError{bitbucketCauseIdentity}
+		return &bitbucketReadError{cause: bitbucketCauseIdentity}
 	}
 	if facts.Destination.Repository == nil || facts.Destination.Repository.FullName == "" {
-		return &bitbucketReadError{bitbucketCauseMissingField}
+		return &bitbucketReadError{cause: bitbucketCauseMissingField}
 	}
 	if !strings.EqualFold(facts.Destination.Repository.FullName, workspace+"/"+repo) {
-		return &bitbucketReadError{bitbucketCauseIdentity}
+		return &bitbucketReadError{cause: bitbucketCauseIdentity}
 	}
 	return nil
 }
@@ -496,7 +551,7 @@ func bitbucketReadPRActivity(ctx context.Context, slug, number string) ([]byte, 
 	}
 	if len(values) >= 200 {
 		// A full page may hide the merge event; never read it as complete.
-		return nil, bitbucketOperationError(operation, &bitbucketReadError{bitbucketCauseIncomplete})
+		return nil, bitbucketOperationError(operation, &bitbucketReadError{cause: bitbucketCauseIncomplete})
 	}
 	for _, raw := range values {
 		var item struct {
@@ -505,7 +560,7 @@ func bitbucketReadPRActivity(ctx context.Context, slug, number string) ([]byte, 
 			} `json:"pull_request"`
 		}
 		if json.Unmarshal(raw, &item) == nil && item.PullRequest != nil && len(item.PullRequest.ID) > 0 && string(bytes.TrimSpace(item.PullRequest.ID)) != number {
-			return nil, bitbucketOperationError(operation, &bitbucketReadError{bitbucketCauseIdentity})
+			return nil, bitbucketOperationError(operation, &bitbucketReadError{cause: bitbucketCauseIdentity})
 		}
 	}
 	return json.Marshal(map[string]any{"activities": values})
@@ -550,7 +605,7 @@ func bitbucketReadPRComments(ctx context.Context, slug, number string, limit int
 		return nil, bitbucketOperationError(operation, err)
 	}
 	if len(values) > limit {
-		return nil, bitbucketOperationError(operation, &bitbucketReadError{bitbucketCauseIncomplete})
+		return nil, bitbucketOperationError(operation, &bitbucketReadError{cause: bitbucketCauseIncomplete})
 	}
 	for _, raw := range values {
 		var item struct {
@@ -559,7 +614,7 @@ func bitbucketReadPRComments(ctx context.Context, slug, number string, limit int
 			} `json:"pullrequest"`
 		}
 		if json.Unmarshal(raw, &item) == nil && item.PullRequest != nil && len(item.PullRequest.ID) > 0 && string(bytes.TrimSpace(item.PullRequest.ID)) != number {
-			return nil, bitbucketOperationError(operation, &bitbucketReadError{bitbucketCauseIdentity})
+			return nil, bitbucketOperationError(operation, &bitbucketReadError{cause: bitbucketCauseIdentity})
 		}
 	}
 	// The bb collection wrapper, so both clients feed one strict parser.
@@ -601,7 +656,7 @@ func bitbucketReadRepo(ctx context.Context, slug string) ([]byte, error) {
 		FullName string `json:"full_name"`
 	}
 	if json.Unmarshal(data, &facts) != nil || !strings.EqualFold(facts.FullName, slug) {
-		return nil, bitbucketOperationError(operation, &bitbucketReadError{bitbucketCauseIdentity})
+		return nil, bitbucketOperationError(operation, &bitbucketReadError{cause: bitbucketCauseIdentity})
 	}
 	return data, nil
 }
@@ -659,7 +714,7 @@ func bitbucketReadPRsByState(ctx context.Context, slug, branch, state string, li
 		return nil, bitbucketOperationError(operation, err)
 	}
 	if len(values) > limit {
-		return nil, bitbucketOperationError(operation, &bitbucketReadError{bitbucketCauseIncomplete})
+		return nil, bitbucketOperationError(operation, &bitbucketReadError{cause: bitbucketCauseIncomplete})
 	}
 	return json.Marshal(map[string]any{"values": values})
 }
@@ -710,7 +765,7 @@ func twgValues(data []byte) ([]json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) > 0 && trimmed[0] == '[' {
 		if json.Unmarshal(trimmed, &list) != nil {
-			return nil, &bitbucketReadError{bitbucketCauseInvalidJSON}
+			return nil, &bitbucketReadError{cause: bitbucketCauseInvalidJSON}
 		}
 		return list, nil
 	}
@@ -722,17 +777,17 @@ func twgValues(data []byte) ([]json.RawMessage, error) {
 		return nil, err
 	}
 	if next, ok := object["next"]; ok && strings.TrimSpace(string(next)) != "null" && strings.TrimSpace(string(next)) != `""` {
-		return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+		return nil, &bitbucketReadError{cause: bitbucketCauseIncomplete}
 	}
 	raw, ok := object["values"]
 	if !ok {
 		raw, ok = object["items"]
 	}
 	if !ok {
-		return nil, &bitbucketReadError{bitbucketCauseMissingField}
+		return nil, &bitbucketReadError{cause: bitbucketCauseMissingField}
 	}
 	if json.Unmarshal(raw, &list) != nil || list == nil {
-		return nil, &bitbucketReadError{bitbucketCauseMalformed}
+		return nil, &bitbucketReadError{cause: bitbucketCauseMalformed}
 	}
 	return list, nil
 }

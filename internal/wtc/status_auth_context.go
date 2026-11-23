@@ -369,16 +369,17 @@ func statusAuthEntry(ctx context.Context, kind, forge, slug string) statusAuthCo
 	if selection.err != nil {
 		return statusAuthContext{scope: base.scope}
 	}
-	if selection.Credential == bitbucketCredentialGit {
+	if selection.hostCredential() {
 		workspace, repo, err := splitBitbucketSlug(slug)
 		if err != nil {
 			return statusAuthContext{scope: base.scope}
 		}
-		token, err := read.repoToken(ctx, workspace, repo)
+		user, token, err := read.repoCredential(ctx, workspace, repo)
 		if err != nil || token == "" {
 			return statusAuthContext{scope: base.scope + ":host-unknown"}
 		}
-		digest := statusAuthKeyedDigest("bitbucket-host-read-v1", strings.ToLower(slug), token)
+		// The exact identity: credential type, user and token.
+		digest := statusAuthKeyedDigest("bitbucket-host-read-v2", selection.Credential, strings.ToLower(slug), user, token)
 		if digest == "" {
 			return statusAuthContext{scope: base.scope + ":host-unknown"}
 		}

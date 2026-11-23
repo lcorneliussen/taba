@@ -261,8 +261,26 @@ export function pullRequestWatch(file, now = Date.now) {
       const c = (seen[key] ??= { agentId, sessionKey, repos: {} });
       c.at = now();
       const lines = [];
+      c.refusals ??= {};
       for (const r of repos) {
         if (!r.path || r.error) continue;
+        const name = r.repo ?? r.project ?? path.basename(r.path);
+        // A refused read is news once per cause (#471): the conversation can
+        // explain it instead of taking the pull request for unenlisted. A
+        // transient failure (network, timeout, rate limit) is no news and
+        // does not reset that; a successful read after a refusal is news once.
+        const refusal = r.pullRequestRefusal;
+        if (refusal) {
+          if (refusal.access && c.refusals[r.path] !== refusal.cause) {
+            c.refusals[r.path] = refusal.cause;
+            lines.push(`${name}: its pull request cannot be read — ${refusal.message}. Its state is unknown until that is fixed.`);
+          }
+          continue;
+        }
+        if (c.refusals[r.path]) {
+          delete c.refusals[r.path];
+          lines.push(`${name}: its pull request can be read again.`);
+        }
         const prev = c.repos[r.path];
         const cur = prFacts(r.pullRequest);
         // Checks that could not be read this time are not a change: keep
@@ -272,7 +290,7 @@ export function pullRequestWatch(file, now = Date.now) {
         // the forge could not be asked this time. (wtc status reports both
         // that and no pull request yet as none.)
         if (!cur && prev) continue;
-        lines.push(...pullRequestChanges(r.repo ?? r.project ?? path.basename(r.path), prev, cur));
+        lines.push(...pullRequestChanges(name, prev, cur));
         c.repos[r.path] = cur;
       }
       save();

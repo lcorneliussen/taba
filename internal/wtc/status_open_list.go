@@ -482,9 +482,9 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 				}
 			}
 			if empty404 {
-				return nil, fmt.Errorf("Bitbucket pipelines API returned %s: %s", response.Status, body)
+				return nil, &bitbucketHTTPError{response.StatusCode, fmt.Sprintf("Bitbucket pipelines API returned %s: %s", response.Status, body)}
 			}
-			return nil, fmt.Errorf("Bitbucket pull request list API returned %s: %s", response.Status, body)
+			return nil, &bitbucketHTTPError{response.StatusCode, fmt.Sprintf("Bitbucket pull request list API returned %s: %s", response.Status, body)}
 		}
 		return raw, nil
 	}

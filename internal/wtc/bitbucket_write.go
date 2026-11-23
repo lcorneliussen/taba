@@ -66,7 +66,7 @@ func selectedBitbucketWrite(root string, rest bool) (bitbucketWriteRoute, error)
 	}
 	selection, err := selectedBitbucketClient(root)
 	if err != nil {
-		return "", &bitbucketReadError{bitbucketSelectionCause(err, selection.Source)}
+		return "", &bitbucketReadError{cause: bitbucketSelectionCause(err, selection.Source)}
 	}
 	if selection.Client == bitbucketClientBB {
 		return bitbucketWriteBB, nil
@@ -127,21 +127,21 @@ func twgWriteResource(out []byte) ([]byte, error) {
 	if raw, ok := top["items"]; ok {
 		var items []json.RawMessage
 		if json.Unmarshal(raw, &items) != nil || len(items) != 1 {
-			return nil, &bitbucketReadError{bitbucketCauseMalformed}
+			return nil, &bitbucketReadError{cause: bitbucketCauseMalformed}
 		}
 		item, err := twgObject(items[0])
 		if err != nil {
 			return nil, err
 		}
 		if strings.TrimSpace(string(item["ok"])) != "true" {
-			return nil, &bitbucketReadError{bitbucketCauseIncomplete}
+			return nil, &bitbucketReadError{cause: bitbucketCauseIncomplete}
 		}
 		out = item["data"]
 	} else if raw, ok := top["data"]; ok {
 		out = raw
 	}
 	if _, err := twgObject(out); err != nil {
-		return nil, &bitbucketReadError{bitbucketCauseMissingField}
+		return nil, &bitbucketReadError{cause: bitbucketCauseMissingField}
 	}
 	return out, nil
 }
