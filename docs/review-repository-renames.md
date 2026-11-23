@@ -41,9 +41,10 @@ Nothing is written, and no intent marker is created, when:
   incomplete: check `gh auth status` and network access and retry.
 
 A redirect, a URL, a repository basename, a PR number or matching commits are
-never treated as identity. Identity checks and review writes (comments, inline
-comments, replies and thread resolution) go to `github.com`, whatever
-`GH_HOST` says; other review reads keep using `gh`'s default host.
+never treated as identity. Identity checks, review writes (comments, inline
+comments, replies and thread resolution) and the thread lookup before resolving
+go to `github.com`, whatever `GH_HOST` says; other review reads keep using
+`gh`'s default host.
 
 ## Uncertain creates
 

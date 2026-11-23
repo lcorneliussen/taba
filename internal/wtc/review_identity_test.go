@@ -209,7 +209,7 @@ func TestReviewPostRenameRefusals(t *testing.T) {
 }
 
 // A create whose outcome is unknown, such as one that failed with the redirect
-// before this change, keeps blocking reposts after a verified rename: the
+// under the old name, keeps blocking reposts after a verified rename: the
 // marker refuses the create before any write and is left as is.
 func TestReviewPostUncertainCreateSurvivesRename(t *testing.T) {
 	f := newReviewIdentityFixture(t, "R_widget")
