@@ -294,7 +294,8 @@ sleep 1`)
 		stillEvicted("api")
 	})
 
-	// Restore all, one repository after another: web's snapshot expired, api's did not.
+	// Expire web's snapshot; api's stays. (Restore all's sequencing is the Control
+	// UI's and is covered by its unit tests; here each repository is restored in turn.)
 	snapshot := g.worktreeRecord(ids["web"]).str("snapshotRef")
 	g.sh("git -C /home/node/repos/web update-ref -d " + snapshot)
 

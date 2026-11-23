@@ -32,6 +32,17 @@ export function classifyRestoreFailure(error) {
   return { kind: "unknown", message: "Native restore did not confirm a result", mutation: "unknown" };
 }
 
+// Refusals the host makes before the native handler runs, recognised by
+// structure rather than wording: the native operation cannot have started.
+export function refusedBeforeEffects(error) {
+  const code = String(error?.details?.code ?? "");
+  if (error?.details?.mutationAccepted === false || code === "MISSING_SCOPE" || code.startsWith("AUTH_")) return true;
+  if (error?.code === "INVALID_REQUEST" && /^unknown method: /.test(String(error?.message ?? ""))) return true;
+  // The SDK refuses before dispatching; these carry no gateway error code.
+  return error?.code === undefined && /^(?:Gateway method dispatch is reserved|In-process gateway dispatch requires an authenticated plugin request scope)/.test(String(error?.message ?? ""))
+    || error?.code === "ERR_MODULE_NOT_FOUND" || error?.code === "ERR_PACKAGE_PATH_NOT_EXPORTED";
+}
+
 const sanitize = (error) => String(error?.message ?? error ?? "").replace(/\s+/g, " ").trim().slice(-600);
 
 export function registerCheckoutRestore(api, { collectionOf, collectionIdentity, getSessionEntry, worktreeOf, worktreeRecovery, run, onSettled = () => {}, dispatch = nativeDispatch, probe = probeNativeDispatch }) {
@@ -95,8 +106,7 @@ export function registerCheckoutRestore(api, { collectionOf, collectionIdentity,
       const classified = classifyRestoreFailure(failure);
       // A refusal before effects changed nothing; anything else is reconciled
       // against what the native service now records, and never replayed.
-      if (failure.details?.mutationAccepted === false || ["capability", "permission", "authentication"].includes(classified.kind))
-        return { status: "failed", ...classified, mutation: "none", detail: sanitize(failure) };
+      if (refusedBeforeEffects(failure)) return { status: "failed", ...classified, mutation: "none", detail: sanitize(failure) };
       let after;
       try { after = (await records()).find(r => r.id === id); } catch { after = undefined; }
       if (verified(after)) return { status: "restored", message: "Checkout restored from its saved snapshot (confirmed after an unclear reply)", mutation: "applied", detail: sanitize(failure) };

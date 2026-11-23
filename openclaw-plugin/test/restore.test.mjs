@@ -1,12 +1,13 @@
 // Checkout restoration as an authenticated Gateway method (#494). The native
-// dispatcher is replaced by a recording fake here; the contract with a real
-// OpenClaw Gateway is covered by internal/openclaw/restore_integration_test.go.
+// dispatcher is replaced by a recording fake here. The contract with a real
+// OpenClaw Gateway is exercised by internal/openclaw/restore_integration_test.go,
+// an opt-in Docker test (build tag openclaw_integration) that CI does not run.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { classifyRestoreFailure, registerCheckoutRestore, RESTORE_METHOD } from "../restore.js";
+import { classifyRestoreFailure, refusedBeforeEffects, registerCheckoutRestore, RESTORE_METHOD } from "../restore.js";
 
 const parent = "agent:main:dashboard:task", owner = "agent:main:subagent:api";
 
@@ -241,4 +242,25 @@ test("failure classification keeps the four person-facing causes apart", () => {
   assert.equal(classifyRestoreFailure(new Error("gateway connect failed: GatewayClientRequestError: unauthorized")).kind, "authentication");
   assert.equal(classifyRestoreFailure(new Error("worktree w is not restorable")).kind, "snapshot");
   assert.equal(classifyRestoreFailure(new Error("socket closed")).kind, "unknown");
+});
+
+test("only structured pre-handler refusals skip reconciliation, never matching words", async () => {
+  assert.equal(refusedBeforeEffects({ code: "INVALID_REQUEST", message: "missing scope: operator.admin", details: { code: "MISSING_SCOPE" } }), true);
+  assert.equal(refusedBeforeEffects({ code: "INVALID_REQUEST", message: "unauthorized", details: { code: "AUTH_UNAUTHORIZED" } }), true);
+  assert.equal(refusedBeforeEffects({ code: "INVALID_REQUEST", message: "unknown method: worktrees.restore" }), true);
+  assert.equal(refusedBeforeEffects({ code: "UNAVAILABLE", message: "x", details: { mutationAccepted: false } }), true);
+  assert.equal(refusedBeforeEffects(new Error("In-process gateway dispatch requires an authenticated plugin request scope (method: worktrees.restore).")), true);
+  for (const message of ["git checkout: permission denied", "Error: unauthorized write to index", "worktree snapshot copy failed: not authorized"])
+    assert.equal(refusedBeforeEffects({ code: "UNAVAILABLE", message }), false, message);
+  // A native failure worded like a permission problem is read back, not trusted.
+  let listed = 0;
+  const { state, call } = setup({ dispatch: (method, params, s) => {
+    if (method === "worktrees.list") { listed++; return { ok: true, payload: { worktrees: [s.record] } }; }
+    return { ok: false, error: { code: "UNAVAILABLE", message: "Error: git checkout-index: permission denied" } };
+  } });
+  const out = await call();
+  assert.equal(listed, 2, "the native record is read again after an effectful failure");
+  assert.equal(out.payload.status, "failed");
+  assert.match(out.payload.message, /still evicted/);
+  assert.equal(restores(state), 1);
 });

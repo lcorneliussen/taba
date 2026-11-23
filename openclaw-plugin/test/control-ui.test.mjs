@@ -2953,6 +2953,8 @@ test("a recorded snapshot the gateway cannot restore is not offered as Restore",
     await settle();
     assert.ok(![...host.all()].some(n=>n.tagName==="BUTTON"&&!n.disabled&&/^Restore/.test(n.textContent)),"no enabled Restore promises recovery");
     assert.ok([...host.all()].some(n=>(n.title??"").includes("cannot restore checkouts from Collection")),"the row says why");
+    assert.ok(texts(host).some(t=>t.includes("Snapshot saved")),"a saved snapshot is not labelled as a missing checkout");
+    assert.ok(!texts(host).some(t=>t==="No checkout"));
     assert.ok(!calls.some(c=>c.method==="wtc.checkout.restore"&&c.sessionKey===key),"nothing is dispatched");
   }finally{view.dispose();}
 });
