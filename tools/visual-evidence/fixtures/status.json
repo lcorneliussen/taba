@@ -77,7 +77,7 @@
           },
           "facts": [],
           "keys": [],
-          "assert": {"contains": ["merged", "landing unknown", "inspect branch"], "same_row": [["#42", "merged"]], "aligned": []}
+          "assert": {"contains": ["merged?", "Synthetic change", "landing unknown; inspect branch"], "same_row": [["#42", "merged?", "Synthetic change", "landing unknown; inspect branch"]], "aligned": []}
         }
       ]
     },
@@ -97,7 +97,7 @@
           },
           "facts": [],
           "keys": [],
-          "assert": {"contains": ["merged", "landing unknown", "inspect branch"], "same_row": [["#42", "merged"]], "aligned": []}
+          "assert": {"contains": ["merged?", "Synth"], "same_row": [["#42", "merged?", "Synth"]], "aligned": []}
         }
       ]
     },
@@ -117,7 +117,7 @@
           },
           "facts": [],
           "keys": [],
-          "assert": {"contains": ["merged", "landing unknown", "inspect branch"], "same_row": [["#42", "merged"]], "aligned": []}
+          "assert": {"contains": ["merged?", "Synth"], "same_row": [["#42", "merged?", "Synth"]], "aligned": []}
         }
       ]
     },
@@ -137,7 +137,7 @@
           },
           "facts": [],
           "keys": [],
-          "assert": {"contains": ["merged", "landing unknown", "inspect branch"], "same_row": [["#42", "merged"]], "aligned": []}
+          "assert": {"contains": ["merged?", "Synth"], "same_row": [["#42", "merged?", "Synth"]], "aligned": []}
         }
       ]
     }

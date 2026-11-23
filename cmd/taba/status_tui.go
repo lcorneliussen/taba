@@ -1864,6 +1864,13 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		state := "open"
 		merged := statusTUIMergedPR(row)
+		retained := row.OnBranch && (row.State == "MERGED" || merged)
+		if title := statusTUISafe(row.Title); retained && title != "" {
+			// One line per PR: the title leads; STATE carries the landing state
+			// (unless a merge conflict takes precedence) and the full explanation
+			// follows only where it fits. Help repeats it for every retained branch.
+			label = title + " · " + row.LandingLabel()
+		}
 		closed := !merged && confirmedClosed && row.Freshness != "unavailable"
 		if closed {
 			state = strings.ToLower(row.State)
@@ -1878,7 +1885,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 				case "unknown":
 					state = "unknown"
 					if row.State == "MERGED" || merged {
-						state = "merged"
+						state = "merged?"
 					}
 				}
 			}
@@ -1907,6 +1914,10 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		if mark := wtc.StatusPRFreshnessMark(row.Freshness, row.ObservedAt, time.Now()); mark != "" && !merged {
 			if closed {
 				label = mark + " " + label
+			} else if retained {
+				// The merge is not confirmed, so no landing outcome is shown, but
+				// the row still warns that the worktree remains on its branch.
+				state = "⚠ " + mark
 			} else {
 				state = mark
 			}
@@ -1948,15 +1959,6 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 			position[0](len(lines), row)
 		}
 		lines = append(lines, line+title)
-		if row.OnBranch && (row.State == "MERGED" || merged) && row.Landing != nil && row.Landing.State == "unknown" &&
-			!strings.Contains(ansi.Strip(title), row.LandingLabel()) {
-			for _, detail := range strings.Split(ansi.Wrap(row.LandingLabel(), max(1, width), ""), "\n") {
-				if styled {
-					detail = statusTUIStyle(detail, statusToneWarning)
-				}
-				lines = append(lines, detail)
-			}
-		}
 	}
 	if len(snapshot.PRs) == 0 {
 		lines = append(lines, "(none enlisted)")
@@ -2111,14 +2113,14 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
 			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
-			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up.",
+			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, r:age refreshing, never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up; still on a merged branch: ⚠ catch-up fully landed or no landing record, ⚠ extra follow-up work, merged? landing unknown; ⚠ before a freshness mark: still on a merged branch whose merge is not currently confirmed (details below).",
 		}
 		for _, row := range m.snapshot.PRs {
 			if row.Archived && !m.showArchived {
 				continue
 			}
 			help = append(help, statusTUISafe(wtc.StatusPRObservationDetail(statusTUIPresentationRow(row, time.Now()))))
-			if row.OnBranch && row.Landing != nil {
+			if row.OnBranch && (row.State == "MERGED" || statusTUIMergedPR(row)) {
 				help = append(help, row.LandingLabel())
 			}
 		}
