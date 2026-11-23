@@ -318,32 +318,47 @@ Dots collapse multiple raw states. A hidden column, clipped `…`, missing
 observation and known failure are distinct. Widen the terminal or inspect
 logs/JSON for detail. Color supports the text and position; it does not replace them.
 
-`?` explains the view; arrows, Page Up/Down and the wheel scroll; `a` toggles
-archived PRs; `q` quits. Available repository, branch, PR and build targets
-use terminal hyperlinks. Modifier-click follows the terminal's convention;
-ordinary TUI targets act when the button is released on the same row and cell
-where it was pressed, so a drag never opens a link. `--no-click` disables
-ordinary TUI targets, not native links or wheel scrolling. `NO_COLOR` keeps
+`?` explains the view; arrows, Page Up/Down and Home/End scroll; `a` toggles
+archived PRs; `q` quits. Repository, branch, PR and build cells are terminal
+hyperlinks that open with the terminal's modifier-click. `NO_COLOR` keeps
 links; `TERM=dumb` uses plain text.
 
-### Selecting and copying
+### Mouse, selection and copying
 
-The live view may report mouse input for the wheel, click targets and hover
-text, and it draws only the rows that fit. To select text, press `v`. The
-selection view leaves the live screen, turns mouse reporting off and writes the
-complete current output, including rows outside the viewport, to the
-terminal's normal screen with the time it shows. Select, scroll and copy with
-the terminal or multiplexer as usual; in a multiplexer pane its own copy mode
-works too. That output stays as it is while you select. Enter, `q` or `v`
-returns to the live view; Ctrl+C quits.
+By default the live view does not capture the mouse. Dragging and
+double-clicking select text with the terminal or multiplexer as in any other
+program, and its normal copy shortcut copies. That selection covers the rows on
+screen: the live view uses the alternate screen, which has no scrollback, and
+a terminal may drop a selection when the cells under it are redrawn.
+
+For the wheel, status asks the terminal whether it translates the wheel into
+arrow keys on the alternate screen (DEC mode 1007, alternate scroll). If the
+terminal reports the mode off, status turns it on, so each wheel step arrives as
+↑/↓ and moves one row; status turns it off again when it exits or hands the
+terminal to the selection view. A terminal that already has the mode on, or
+that does not answer, is left unchanged; there the wheel follows the
+terminal's own setting, and the keys always scroll.
+
+`--mouse` captures the mouse instead, as before: the wheel scrolls in the
+view (three rows per step), repository, branch, PR and build cells and the
+refresh marker act on a left-button release on the cell where the button was
+pressed (a drag never opens a link), and LOCAL marks show runtime text on
+hover. Native selection then needs the terminal's selection modifier (for
+example Shift- or Option-drag). `--no-click` disables those click targets,
+not native links or wheel scrolling.
+
+To copy rows outside the view, press `v`. The selection view leaves the live
+screen and writes the complete current output, including rows outside the
+viewport, to the terminal's normal screen with the time it shows. Select,
+scroll and copy with the terminal or multiplexer; in a multiplexer pane its
+own copy mode works too. That output stays as it is while you select. Enter,
+`q` or `v` returns to the live view; Ctrl+C quits.
 
 Refreshes already running continue meanwhile. Returning shows their results
 with their original observation times; neither opening the selection view nor
 copying reads the forge or starts another refresh. The written output remains
 in the terminal's scrollback after you return, within the terminal's own
-scrollback and clipboard limits. Terminal-specific modifier selection (for
-example Shift- or Option-drag) also works in many terminals, but only for the
-visible rows.
+scrollback and clipboard limits.
 
 Repository JSON facts expose `comparison_ref` and, for registered repositories,
 `development_base`. These fields reflect a collection override when one is set.

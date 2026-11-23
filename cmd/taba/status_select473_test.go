@@ -106,7 +106,8 @@ func TestStatus473SelectionViewIsDiscoverableAndExplicit(t *testing.T) {
 		}
 	}
 	help := statusTUIModel{width: 100, height: 60, showHelp: true}
-	if text := ansi.Strip(help.View().Content); !strings.Contains(text, "v select/copy") || !strings.Contains(text, "click release") {
+	if text := ansi.Strip(help.View().Content); !strings.Contains(text, "v select/copy") || !strings.Contains(text, "drag selects") ||
+		!strings.Contains(text, "--mouse") || !strings.Contains(text, "click-release") {
 		t.Fatalf("help does not explain selection and link activation: %s", text)
 	}
 }

@@ -130,6 +130,7 @@ type statusTUIModel struct {
 	errorText         string
 	hover             string
 	press             statusTUIPress
+	mouseCapture      bool // --mouse: in-app wheel, click targets and hover text
 }
 
 // statusTUIPress is a left-button press waiting for its release. Targets act
@@ -517,10 +518,11 @@ func (m *statusTUIModel) focusLogTail() {
 }
 
 func (m statusTUIModel) Init() tea.Cmd {
+	query := m.altScrollQuery()
 	if m.watcherPending {
-		return tea.Batch(m.resourceTick(), statusRegisterWatcher(m.context, m.uiContext, m.uiCancel))
+		return tea.Batch(query, m.resourceTick(), statusRegisterWatcher(m.context, m.uiContext, m.uiCancel))
 	}
-	cmds := []tea.Cmd{m.resourceTick(), statusTUIRefreshContext(m.uiContext, m.context, m.all, m.procs, m.noFetch, m.fetchAge)}
+	cmds := []tea.Cmd{query, m.resourceTick(), statusTUIRefreshContext(m.uiContext, m.context, m.all, m.procs, m.noFetch, m.fetchAge)}
 	if m.context != nil && !m.all && !m.procs {
 		cmds = append(cmds, m.runtimeTick())
 	}
@@ -874,6 +876,10 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, statusOpenURL(press.target)
+	case tea.ModeReportMsg:
+		if msg.Mode == statusAltScrollMode {
+			return m, statusAltScrollReport(msg.Value)
+		}
 	case statusSelectionDoneMsg:
 		if msg.err != nil {
 			m.errorText = "selection view: " + msg.err.Error()
@@ -2162,8 +2168,8 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			mode = "Waiting for status watcher; cached actions unavailable."
 		}
 		help := []string{keys, mode,
-			"↗ link: modifier-click; PR/TEST/PROD: click release (a drag never opens); ↑/↓ or wheel scroll; PgUp/PgDn page; Home/End",
-			"v select/copy: shows the full output on the terminal's normal screen with mouse capture off; select, scroll and copy with the terminal or multiplexer, then Enter, q or v returns. Refresh continues meanwhile. --no-click only disables click targets.",
+			"Mouse: drag selects and copies the visible rows with the terminal or multiplexer. ↗ links open with the terminal's modifier-click. The wheel scrolls where the terminal turns it into ↑/↓; otherwise use ↑/↓, PgUp/PgDn, Home/End. --mouse captures the mouse for in-app wheel, click-release targets and runtime hover text (then use the terminal's selection modifier).",
+			"v select/copy: shows the full output, including rows outside the view, on the terminal's normal screen; select, scroll and copy there, then Enter, q or v returns. Refresh continues meanwhile.",
 			"PR signals, left to right: C checks · M mergeability · R reviews. ? toggles this help.",
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
@@ -2325,11 +2331,13 @@ func (m statusTUIModel) View() tea.View {
 	view := tea.NewView(strings.Join(visible, "\n"))
 	view.AltScreen = true
 	view.ReportFocus = os.Getenv("TERM") != "dumb"
-	if os.Getenv("TERM") != "dumb" && (m.refreshing || v.limit > 0 || visibleLink && !m.noClick) {
+	// Without --mouse the view requests no mouse reporting: drag selection
+	// stays with the terminal or multiplexer, and links stay OSC 8 hyperlinks.
+	if m.mouseCapture && os.Getenv("TERM") != "dumb" && (m.refreshing || v.limit > 0 || visibleLink && !m.noClick) {
 		view.MouseMode = tea.MouseModeCellMotion
 	}
 	// Hover text for the LOCAL marks needs motion without a pressed button.
-	if os.Getenv("TERM") != "dumb" && !m.procs && !m.showLog && !m.showNext && statusTUIRepoLayout(m.snapshot, width).showRuntime {
+	if m.mouseCapture && os.Getenv("TERM") != "dumb" && !m.procs && !m.showLog && !m.showNext && statusTUIRepoLayout(m.snapshot, width).showRuntime {
 		view.MouseMode = tea.MouseModeAllMotion
 	}
 	return view
@@ -2353,9 +2361,9 @@ func statusRegisterWatcher(c *wtc.Context, ctx context.Context, cancel context.C
 	}
 }
 
-func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, interval, background, fetchAge time.Duration, ctx context.Context, cancel context.CancelFunc) statusTUIModel {
+func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick, mouse bool, interval, background, fetchAge time.Duration, ctx context.Context, cancel context.CancelFunc) statusTUIModel {
 	c = c.WithStatusContext(ctx)
-	model := statusTUIModel{context: c, uiContext: ctx, uiCancel: cancel, watcherPending: true, all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, fetchAge: fetchAge, interval: interval, background: background, refreshing: true}
+	model := statusTUIModel{context: c, uiContext: ctx, uiCancel: cancel, watcherPending: true, all: all, procs: procs, reposOnly: reposOnly, noFetch: noFetch, noClick: noClick, mouseCapture: mouse, fetchAge: fetchAge, interval: interval, background: background, refreshing: true}
 	model.startedAt = time.Now()
 	model.progressStep = "Registering status watcher"
 	if !all && !procs {
@@ -2378,12 +2386,12 @@ func newStatusTUIModel(c *wtc.Context, all, procs, reposOnly, noFetch, noClick b
 	return model
 }
 
-func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick bool, interval, background, fetchAge time.Duration) error {
+func runStatusTUI(c *wtc.Context, all, procs, reposOnly, noFetch, noClick, mouse bool, interval, background, fetchAge time.Duration) error {
 	if !term.IsTerminal(os.Stdin.Fd()) || !term.IsTerminal(os.Stdout.Fd()) {
 		return fmt.Errorf("status TUI requires a terminal")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := runStatusProgram(newStatusTUIModel(c, all, procs, reposOnly, noFetch, noClick, interval, background, fetchAge, ctx, cancel), ctx, cancel)
+	_, err := runStatusProgram(newStatusTUIModel(c, all, procs, reposOnly, noFetch, noClick, mouse, interval, background, fetchAge, ctx, cancel), ctx, cancel)
 	return err
 }
 
@@ -2405,7 +2413,11 @@ func runStatusProgram(model tea.Model, ctx context.Context, cancel context.Cance
 	// re-measures the cached view before skipping the write, so this stays
 	// below the renderer's default sixty.
 	// Input and collector work run independently of this cadence.
-	final, err := tea.NewProgram(model, tea.WithContext(ctx), tea.WithFPS(statusFrameRate)).Run()
+	// Alternate scroll is set only after the terminal reported it reset; this
+	// returns it to that state on every return, including Bubble Tea's
+	// recovered panics, SIGINT/SIGTERM and cancellation.
+	defer statusAltScrollRestore()
+	final, err := tea.NewProgram(model, append([]tea.ProgramOption{tea.WithContext(ctx), tea.WithFPS(statusFrameRate)}, statusProgramOptions...)...).Run()
 	interrupted := ctx.Err() != nil
 	if start, ok := final.(statusStartupModel); ok && start.err != nil {
 		return final, start.err

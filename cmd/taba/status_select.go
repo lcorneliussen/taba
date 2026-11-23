@@ -57,6 +57,12 @@ func (v *statusSelectionView) Run() error {
 	if v.stdout == nil {
 		v.stdout = os.Stdout
 	}
+	// Alternate scroll set by status is off while the terminal is released
+	// and back on before Bubble Tea restores the live view.
+	if statusAltScrollOwned.Load() {
+		_, _ = io.WriteString(v.stdout, statusAltScrollReset)
+		defer io.WriteString(v.stdout, statusAltScrollSet) //nolint:errcheck
+	}
 	if _, err := io.WriteString(v.stdout, v.text); err != nil {
 		return err
 	}

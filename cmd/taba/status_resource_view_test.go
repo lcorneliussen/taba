@@ -22,7 +22,7 @@ func TestStatusResourceNamedViewKeepsInvokingDevAuthority(t *testing.T) {
 	defer cancel()
 	for _, tc := range []struct{ cwd, want string }{{invoking.Collection, invoking.Collection}, {t.TempDir(), ""}} {
 		t.Chdir(tc.cwd)
-		m := newStatusTUIModel(viewed, false, false, false, true, true, time.Minute, 5*time.Minute, time.Hour, ctx, cancel)
+		m := newStatusTUIModel(viewed, false, false, false, true, true, false, time.Minute, 5*time.Minute, time.Hour, ctx, cancel)
 		if m.devCollection != tc.want {
 			t.Errorf("viewed collection changed invoking authority: got %q want %q", m.devCollection, tc.want)
 		}

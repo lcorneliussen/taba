@@ -157,11 +157,12 @@ func TestStatus473RefreshDuringSelectionKeepsCaptureAndObservations(t *testing.T
 func TestStatus473MouseCaptureFlagsStayBounded(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	short := statusTUIModel{width: 100, height: 40, snapshot: wtc.StatusSnapshot{Collection: "plain"}}
+	short.mouseCapture = true
 	if mode := short.View().MouseMode; mode != tea.MouseModeNone {
-		t.Fatalf("idle view without links, overflow or hover captures the mouse: %v", mode)
+		t.Fatalf("--mouse view without links, overflow or hover captures the mouse: %v", mode)
 	}
 	overflow := statusOverflowModel()
-	overflow.noClick = true
+	overflow.noClick, overflow.mouseCapture = true, true
 	if mode := overflow.View().MouseMode; mode != tea.MouseModeCellMotion {
 		t.Fatalf("overflow view must keep wheel input without hover motion: %v", mode)
 	}
