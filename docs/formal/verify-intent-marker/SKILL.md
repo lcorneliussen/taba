@@ -146,6 +146,9 @@ Line numbers are at that commit.
 - A person removes a marker only after confirming what the earlier attempt
   did and that its process has ended. Removing it sooner can repeat the
   effect, and the model does not include it.
+- Retirement removes `.wtc-agent-start.pending` with the collection
+  (`removeRetiredGeneratedFiles`, `internal/wtc/retire.go`). It closes the
+  agent pane first, so no run of that intent remains.
 - Open's `Done` reads the pane after the run that held the marker has
   settled; an applied start shows its agent in the pane by then. An agent
   that exits later is a new intent, not a repeat.
