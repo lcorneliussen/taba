@@ -377,9 +377,20 @@ test("refusal news is keyed by read identity and cause, unknown identities stay 
   // A result that finished before the newest one is fenced out, whatever it says.
   assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:04:30Z")), []);
   assert.deepEqual(watch.observe("main", "s", refused("2026-11-23T10:00:30Z", "k:gamma")), []);
+  // Fractions of a second order by instant, not by text: 10:05:00.5Z is
+  // newer than 10:05:00Z although it sorts before it as a string.
+  assert.equal(watch.observe("main", "s", refused("2026-11-23T10:05:00.5Z", "k:delta")).length, 1);
   // Recovery is news once.
   assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:06:00Z")), ["app: its pull request can be read again."]);
   assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:07:00Z")), []);
+});
+
+test("a fence later than now (the clock stepped back) does not mute a checkout (#471)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), file = path.join(dir, "pull-requests.json");
+  writeFileSync(file, JSON.stringify({ "main s": { agentId: "main", sessionKey: "s", at: Date.now(), repos: { "/w/app": { number: 7, url: "u", state: "open", draft: false, checks: "success" } }, refusals: {}, observed: { "/w/app": Date.parse("2999-01-01T00:00:00Z") } } }));
+  const watch = pullRequestWatch(file);
+  const now = new Date().toISOString();
+  assert.equal(watch.observe("main", "s", [{ path: "/w/app", repo: "app", pullRequest: null, pullRequestRefusal: { cause: "forbidden", access: true, message: "m", readIdentity: "k:alpha", observedAt: now } }]).length, 1);
 });
 
 test("a refusal kept by an older version is not announced again after an upgrade (#471)", () => {

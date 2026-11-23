@@ -269,9 +269,12 @@ export function pullRequestWatch(file, now = Date.now) {
         const name = r.repo ?? r.project ?? path.basename(r.path);
         // A result older than one already seen for this checkout (a read
         // still in flight when a newer one finished) is not news (#471).
-        const observedAt = r.pullRequestRefusal?.observedAt ?? r.pullRequest?.observedAt;
-        if (observedAt) {
-          if (c.observed[r.path] && observedAt < c.observed[r.path]) continue;
+        // Instants are compared, not strings (RFC 3339 fractions vary in
+        // width); a fence later than now (the clock stepped back) is dropped.
+        const observedAt = Date.parse(r.pullRequestRefusal?.observedAt ?? r.pullRequest?.observedAt ?? "");
+        if (Number.isFinite(observedAt)) {
+          const fence = c.observed[r.path];
+          if (Number.isFinite(fence) && fence <= Date.now() && observedAt < fence) continue;
           c.observed[r.path] = observedAt;
         }
         // A refused read is news once per read identity and cause (#471):

@@ -17,8 +17,10 @@ import (
 // UNKNOWN. Messages state what was observed and never assert a reason (an
 // expiry, a missing scope) the HTTP status alone does not show.
 
-// Refusal causes. The access causes are the ones a person must act on; the
-// transient ones (network, timeout, rate-limited) clear on their own.
+// Refusal causes. The access causes are the ones a person must act on. The
+// others are retried later and are not announced: network, timeout,
+// rate-limited, provider-error and incomplete usually clear on their own; tls
+// often needs a fix on the host (certificates, a proxy).
 const (
 	RefusalNoCredential = "no-credential"          // no credential for this repository
 	RefusalUnsupported  = "unsupported-credential" // the configured credential type cannot be used here

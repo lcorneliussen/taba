@@ -77,14 +77,14 @@ var BitbucketPullRequest func(dir, owner, repo, branch string) (*PullRequest, *R
 
 // ReadRefusal is a pull request read that failed, with its classified cause
 // (no-credential, unsupported-credential, unauthorized, forbidden,
-// not-visible, client-unavailable, rate-limited, timeout, network,
-// incomplete, other) and a fixed message for people.
+// not-visible, client-unavailable, rate-limited, timeout, network, tls,
+// provider-error, incomplete, other) and a fixed message for people.
 type ReadRefusal struct {
 	Cause   string `json:"cause"`
 	Status  int    `json:"status,omitempty"`
 	Message string `json:"message"`
 	// Access is true when a person must change access or credentials;
-	// transient causes clear on their own.
+	// the other causes are retried and not announced.
 	Access bool `json:"access"`
 	// ReadIdentity is a non-secret digest of the read context that was
 	// refused; ObservedAt is when the read completed (RFC 3339, UTC).
