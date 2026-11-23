@@ -523,6 +523,7 @@ func TestOpenAgentStartsWithFirstPromptRecovery(t *testing.T) {
 printf '%s\n' "$*" >> "$OPEN_TEST_CALLS"
 case "$*" in
   *'agent prompt '*) echo agent_prompt_stalled >&2; exit 1 ;;
+  *'pane process-info '*) printf '%s\n' '{"result":{"process_info":{"foreground_process_group_id":1,"foreground_processes":[{"pid":1,"argv":["-zsh"]}]}}}'; exit 0 ;;
 esac
 printf '%s\n' '{"result":{}}'
 `
