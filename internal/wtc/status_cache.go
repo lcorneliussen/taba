@@ -319,10 +319,7 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)
 	}
-	// A completed data publication must finish its ordering receipt in the
-	// pinned namespace even if local selection changed in between. A receipt
-	// contains only request order and cannot lend provider authority elsewhere.
-	if !statusAuthSharedKind(kind) && kind != "since" && !statusAuthSelectionMatches(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return false
 	}
 
@@ -356,7 +353,7 @@ func statusWriteForgeEntryObservedContext(ctx context.Context, kind, forge, slug
 	if tmp.Close() != nil {
 		return false
 	}
-	if !statusAuthSharedKind(kind) && kind != "since" && !statusAuthSelectionMatches(ctx, forge) {
+	if !statusAuthSharedKind(kind) && !statusAuthSelectionMatches(ctx, forge) {
 		return false
 	}
 	return os.Rename(tmp.Name(), path) == nil
