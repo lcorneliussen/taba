@@ -39,7 +39,7 @@ func addServiceCommands(svc *cobra.Command, asJSON *bool) {
 
 The service goes into svc/<repo>.yaml in this collection's runtime home, which is
 never committed; --shared writes the repository's .harness/dekit.tasks.yaml instead,
-for everyone who works on it. The command runs in the repository with the
+for everyone who works on it. A repository's own dekit.yaml is never written. The command runs in the repository with the
 collection environment. Give the variable holding its port with --port-env:
 status then shows its local URL, it counts as ready once the port answers,
 and {{command}} svc tunnel can expose it.`),

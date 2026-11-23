@@ -158,28 +158,22 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 		if identity != nil {
 			canonicalRepo = identity.name
 		}
-		// The repo's committed tasks, then this collection's own additions.
+		// The repo's native dekit.yaml tree and committed tasks, then this
+		// collection's own additions; a path in two of them is an error.
+		sources, err := c.runtimeRepoSources(repo.path, dir, false)
+		if err != nil {
+			return nil, nil, err
+		}
 		tasks := map[string]map[string]any{}
 		source := map[string]string{}
-		for _, path := range []string{runtimeSharedFragment(repo.path), c.runtimeLocalFragment(dir)} {
-			if err := runtimeRegular(path); os.IsNotExist(err) {
-				continue
-			} else if err != nil {
-				return nil, nil, err
-			}
-			fragment, err := runtimeReadFragment(path)
-			if err != nil {
-				return nil, nil, err
-			}
-			for name, task := range fragment.Tasks {
-				if _, dup := tasks[name]; dup {
-					return nil, nil, fmt.Errorf("%s/%s is defined in both %s and %s", dir, name, source[name], path)
-				}
-				tasks[name], source[name] = task, path
-			}
-			for name, resource := range fragment.Resources {
+		declaration := map[string]RuntimeDeclaration{}
+		for name, task := range sources.tasks {
+			tasks[name], source[name], declaration[name] = task.spec, task.source, task.decl
+		}
+		for _, file := range sources.resources {
+			for name, resource := range file.fragment.Resources {
 				if !runtimeResourceName.MatchString(name) || resource.Mark != "" && !regexp.MustCompile(`^[A-Za-z0-9]$`).MatchString(resource.Mark) {
-					return nil, nil, fmt.Errorf("%s: invalid resource %q", path, name)
+					return nil, nil, fmt.Errorf("%s: invalid resource %q", file.path, name)
 				}
 				m.Declared = append(m.Declared, runtimeDeclaredResource{Dir: dir, Repo: canonicalRepo, Name: name, Type: resource.Type, Mark: resource.Mark, Label: resource.Label})
 			}
@@ -195,6 +189,9 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 			}
 			item.Label, _ = task["label"].(string)
 			item.Source = source[local]
+			if decl, ok := declaration[local]; ok {
+				item.Declaration = &decl
+			}
 			if metadata, ok := task["x-wtc"].(map[string]any); ok {
 				for key := range metadata {
 					if key != "url" && key != "url_env" && key != "url_log" && key != "public" && key != "mark" && key != "tunnel" && key != "port_env" {
@@ -375,7 +372,7 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 		}
 	}
 	if len(m.Tasks) == 0 {
-		return nil, nil, fmt.Errorf("no opted-in repositories (.harness/dekit.tasks.yaml)")
+		return nil, nil, fmt.Errorf("no opted-in repositories (dekit.yaml or .harness/dekit.tasks.yaml)")
 	}
 	for _, task := range m.Tasks {
 		for _, dep := range task.Deps {

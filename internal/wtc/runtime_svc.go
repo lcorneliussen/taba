@@ -303,6 +303,13 @@ func (c *Context) RemoveService(service string, shared bool) (RuntimeResult, err
 			others++
 			continue
 		}
+		if task.Source != runtimeSharedFragment(repo.path) && task.Source != c.runtimeLocalFragment(repo.dir) {
+			file := "dekit.yaml"
+			if task.Declaration != nil {
+				file = task.Declaration.File
+			}
+			return RuntimeResult{}, fmt.Errorf("%s is declared in %s/%s, the repository's own dekit.yaml declarations; edit that file in the repository", task.Path, repo.dir, file)
+		}
 		if task.Source == runtimeSharedFragment(repo.path) && !shared {
 			return RuntimeResult{}, fmt.Errorf("%s comes from %s, which the repository commits; pass --shared to remove it there", task.Path, task.Source)
 		}

@@ -43,6 +43,9 @@ type RuntimeItem struct {
 	// Source is the task file the task comes from: the repo's committed one or
 	// this collection's local one.
 	Source string `json:"source,omitempty"`
+	// Declaration is the declaring file, relative to its repository or
+	// collection; unlike Source, it never names a tunnel policy.
+	Declaration *RuntimeDeclaration `json:"declaration,omitempty"`
 	// PortEnv names the variable holding a service's local port.
 	PortEnv string `json:"port_env,omitempty"`
 	// Type is what a resource is, such as postgres.
