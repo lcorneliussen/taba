@@ -406,10 +406,9 @@ command, the change is applied by restarting the runner only when the runner
 reports dekit 0.10.0 and its binary path resolves to the pinned file.
 Otherwise it is refused before the generated config is written: a dekit 0.10.3
 runner was observed to restart without importing it, and other versions are
-unverified. Use `down`/`up` to
-apply it. If the runner changes after that check, the config is already
-written and is not rolled back; the error says so, and a later render does not
-retry the change.
+unverified. Use `down`/`up` to apply it. If the runner changes after that
+check, the config is already written and is not rolled back; the error says
+so, and a later render does not retry the change.
 
 `taba retire` verifies the target runner stopped, clears its saved definitions,
 and runs strict resource teardown **before removing any worktree**. An
