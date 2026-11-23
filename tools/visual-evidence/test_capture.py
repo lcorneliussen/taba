@@ -74,9 +74,15 @@ class FixtureTest(unittest.TestCase):
                 tested += 1
                 checks = frame["assert"]
                 with self.subTest(layout=case["name"], phase=frame["phase"]):
-                    good = f"#{merged['number']} {merged['repo']} merged\nlanding unknown; inspect branch"
+                    # One table line per PR: the merged-but-unknown STATE and the
+                    # title share the row; a wrapped explanation line is not a pass.
+                    row = checks["same_row"][0]
+                    self.assertIn(f"#{merged['number']}", row)
+                    self.assertIn("merged?", row)
+                    good = " ".join(row)
                     self.assertEqual(capture.check_frame(good, case["columns"], case["rows"], checks)[1], [])
-                    for bad in (good.replace("merged", "unknown"), good.replace("landing unknown; inspect branch", "")):
+                    split = " ".join(row[:2]) + "\n" + " ".join(row[2:])
+                    for bad in (good.replace("merged?", "merged"), good.replace("merged?", "unknown"), split):
                         self.assertTrue(capture.check_frame(bad, case["columns"], case["rows"], checks)[1])
         self.assertGreater(tested, 0)
 
