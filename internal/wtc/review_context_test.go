@@ -41,6 +41,15 @@ case "${MUTATE:-}" in
   extra) printf 'x' > "$bundle/scratch.txt" ;;
   unreadable) printf '{}' > "$bundle/manifest.json"; chmod 000 "$repo/feature.go" ;;
 esac
+# Non-regular entries at allowed output paths: a link to a valid file outside
+# the bundle, or a FIFO.
+place() {
+  rm -f "$2"
+  case "$1" in
+    link) printf '%s\n' "$3" > "$TMPDIR/outside-$(basename "$2")"; ln -s "$TMPDIR/outside-$(basename "$2")" "$2" ;;
+    fifo) mkfifo "$2" ;;
+  esac
+}
 if [ "$id" = lead ] && [ "${MUTATE:-}" = drop-finding ]; then rm -f "$bundle/findings/code.json"; fi
 # Another writer changes the caller's bundle while the run is in progress.
 if [ -n "${CALLER_BUNDLE:-}" ] && [ "$id" != lead ]; then printf 'concurrent\n' > "$CALLER_BUNDLE/findings/$id.json"; fi
@@ -51,9 +60,20 @@ observe() {
 if [ "$id" = lead ]; then
   printf '**Local review: pass**\n\n%s\n' "$(observe)" > "$bundle/summary.md"
   printf 'pass\n' > "$bundle/verdict"
+  case "${MUTATE:-}" in
+    link-summary) place link "$bundle/summary.md" '**Local review: pass**' ;;
+    fifo-summary) place fifo "$bundle/summary.md" ;;
+  esac
   exit 0
 fi
 printf '{"concern":"%s","status":"ok","notes":"%s","findings":[]}\n' "$id" "$(observe)" > "$bundle/findings/$id.json"
+case "${MUTATE:-}" in
+  link-finding) place link "$bundle/findings/$id.json" "{\"concern\":\"$id\",\"status\":\"ok\",\"findings\":[]}" ;;
+  fifo-finding) place fifo "$bundle/findings/$id.json" ;;
+  # Invalid findings send the runner down its error path, which writes .raw.
+  link-raw) printf '{' > "$bundle/findings/$id.json"; ln -s "${OUTSIDE_RAW:?}" "$bundle/findings/$id.raw" ;;
+  fifo-raw) printf '{' > "$bundle/findings/$id.json"; mkfifo "$bundle/findings/$id.raw" ;;
+esac
 `
 
 type reviewSentinelFixture struct {
@@ -269,11 +289,22 @@ func TestPublicReviewRunsOutsideCollectionContext(t *testing.T) {
 }
 
 func TestPublicReviewRefusesUnexpectedWrites(t *testing.T) {
-	for _, mode := range []string{"manifest", "source", "extra", "drop-finding"} {
+	for _, mode := range []string{"manifest", "source", "extra", "drop-finding", "link-finding", "fifo-finding", "link-summary", "fifo-summary", "link-raw", "fifo-raw"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newReviewSentinelFixture(t)
 			t.Setenv("MUTATE", mode)
-			t.Setenv("WTC_REVIEW_ENV", "MUTATE")
+			// A link target outside the bundle that the runner must not write.
+			outside := filepath.Join(t.TempDir(), "outside.raw")
+			if err := os.WriteFile(outside, []byte("original\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("OUTSIDE_RAW", outside)
+			t.Cleanup(func() {
+				if body, _ := os.ReadFile(outside); string(body) != "original\n" {
+					t.Errorf("runner wrote through a reviewer link: %q", body)
+				}
+			})
+			t.Setenv("WTC_REVIEW_ENV", "MUTATE,OUTSIDE_RAW")
 			bundle := f.bundle(t)
 			manifestBefore, err := os.ReadFile(filepath.Join(bundle.Dir, "manifest.json"))
 			if err != nil {
@@ -285,6 +316,9 @@ func TestPublicReviewRefusesUnexpectedWrites(t *testing.T) {
 			got, err := f.c.RunReviewBundle(bundle.Dir, reviewSentinelOptions)
 			if err == nil || !strings.Contains(err.Error(), "outside its outputs") {
 				t.Fatalf("unexpected write was accepted: %+v %v", got, err)
+			}
+			if (strings.HasPrefix(mode, "link-") || strings.HasPrefix(mode, "fifo-")) && !strings.Contains(err.Error(), "(not a regular file)") {
+				t.Fatalf("non-regular output was not rejected as such: %v", err)
 			}
 			manifestAfter, _ := os.ReadFile(filepath.Join(bundle.Dir, "manifest.json"))
 			if string(manifestAfter) != string(manifestBefore) {

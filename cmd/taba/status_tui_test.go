@@ -257,7 +257,7 @@ func TestStatusTUILinksColorsAndClickTargets(t *testing.T) {
 	buildURL := "https://example.invalid/build/42"
 	passed := "SUCCESS"
 	merged := "MERGED"
-	model := statusTUIModel{width: 100, height: 24, snapshot: wtc.StatusSnapshot{Collection: "fixture",
+	model := statusTUIModel{mouseCapture: true, width: 100, height: 24, snapshot: wtc.StatusSnapshot{Collection: "fixture",
 		Repos: []wtc.StatusRepo{{Dir: "widget", BranchDisplay: "feature", Tree: "clean",
 			PR:  &wtc.StatusPRFacts{Number: "7", URL: prURL, Checks: "SUCCESS"},
 			Tip: &wtc.StatusBuild{Checks: &passed, URL: &buildURL}}},
@@ -281,7 +281,7 @@ func TestStatusTUILinksColorsAndClickTargets(t *testing.T) {
 	if got := model.buildClickTarget(1, 7); got != prURL {
 		t.Fatalf("PR list row click = %q", got)
 	}
-	branchOnly := statusTUIModel{width: 80, height: 16, snapshot: wtc.StatusSnapshot{Collection: "fixture",
+	branchOnly := statusTUIModel{mouseCapture: true, width: 80, height: 16, snapshot: wtc.StatusSnapshot{Collection: "fixture",
 		Repos: []wtc.StatusRepo{{Dir: "widget", BranchDisplay: "feature", PR: &wtc.StatusPRFacts{Number: "7", URL: prURL}}}}}
 	if branchOnly.View().MouseMode != tea.MouseModeCellMotion || branchOnly.buildClickTarget(statusTUIRepoLayout(branchOnly.snapshot, 80).prStart(), 3) != prURL {
 		t.Fatal("discovered branch PR did not enable its ordinary click target")
@@ -401,7 +401,7 @@ func TestStatusTUIMouseModeRequiresVisibleValidTarget(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	valid := "https://example.invalid/pull/7"
 	merged := "MERGED"
-	model := statusTUIModel{width: 80, height: 16, snapshot: wtc.StatusSnapshot{Collection: "fixture",
+	model := statusTUIModel{mouseCapture: true, width: 80, height: 16, snapshot: wtc.StatusSnapshot{Collection: "fixture",
 		PRs: []wtc.StatusPRRow{{Repo: "widget", Number: "7", URL: &valid, Merge: &merged, Archived: true}}}}
 	if model.View().MouseMode != tea.MouseModeNone {
 		t.Fatal("hidden archived PR captured mouse input")
@@ -441,7 +441,7 @@ func TestStatusTUIClickTargetExcludesFooterAndOffscreenPR(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	first := "https://example.invalid/pull/7"
 	second := "https://example.invalid/pull/8"
-	m := statusTUIModel{width: 80, height: 10, snapshot: wtc.StatusSnapshot{Collection: "fixture",
+	m := statusTUIModel{mouseCapture: true, width: 80, height: 10, snapshot: wtc.StatusSnapshot{Collection: "fixture",
 		Repos: []wtc.StatusRepo{{Dir: "widget"}},
 		PRs:   []wtc.StatusPRRow{{Repo: "widget", Number: "7", URL: &first}, {Repo: "widget", Number: "8", URL: &second}}}}
 	if m.View().MouseMode != tea.MouseModeCellMotion || m.buildClickTarget(2, 7) != first {
@@ -1269,7 +1269,7 @@ func TestStatusTUIModelShowsCachedRowsAndControls(t *testing.T) {
 
 func TestStatusTUIRefreshLogUpdatesWhileCollectorRuns(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
-	model := statusTUIModel{snapshot: wtc.StatusSnapshot{Collection: "fixture"}, width: 80, height: 16}
+	model := statusTUIModel{mouseCapture: true, snapshot: wtc.StatusSnapshot{Collection: "fixture"}, width: 80, height: 16}
 	model.startRefresh()
 	events := make(chan tea.Msg)
 	updated, next := model.Update(statusProgressMsg{message: "Checked pull requests 2/4", at: model.startedAt.Add(2 * time.Second), events: events})
@@ -1279,7 +1279,8 @@ func TestStatusTUIRefreshLogUpdatesWhileCollectorRuns(t *testing.T) {
 		t.Fatalf("refresh progress was not visible or clickable: %s", model.View().Content)
 	}
 	refreshAt := runewidth.StringWidth(strings.Split(model.headerLine(), "refreshing")[0])
-	updated, _ = model.Update(tea.MouseClickMsg{X: refreshAt, Y: 0})
+	updated, _ = model.Update(tea.MouseClickMsg{X: refreshAt, Y: 0, Button: tea.MouseLeft})
+	updated, _ = updated.Update(tea.MouseReleaseMsg{X: refreshAt, Y: 0, Button: tea.MouseLeft})
 	model = updated.(statusTUIModel)
 	if !model.showLog || !strings.Contains(model.View().Content, "2s  Checked pull requests 2/4") {
 		t.Fatalf("refresh click did not open log: %s", model.View().Content)
@@ -1373,7 +1374,7 @@ func TestStatusTUIClicksOnlyBuildCells(t *testing.T) {
 	tipURL, prodURL := "https://example.invalid/build/7", "https://example.invalid/build/8"
 	snapshot := wtc.StatusSnapshot{Collection: "fixture", Repos: []wtc.StatusRepo{{Dir: "widget", BranchDisplay: "topic",
 		Tip: &wtc.StatusBuild{Branch: "main", URL: &tipURL}, Prod: &wtc.StatusBuild{Branch: "prod", URL: &prodURL}}}}
-	m := statusTUIModel{snapshot: snapshot, width: 80, height: 20}
+	m := statusTUIModel{mouseCapture: true, snapshot: snapshot, width: 80, height: 20}
 	if m.View().MouseMode != tea.MouseModeCellMotion {
 		t.Fatal("build URLs did not enable mouse input")
 	}
@@ -1548,6 +1549,7 @@ func TestStatusTUIOverflowRefreshAnchorAndResize(t *testing.T) {
 func TestStatusTUIOverflowNoClickAndWrappedLog(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	m := statusOverflowModel()
+	m.mouseCapture = true // --mouse: wheel input stays in the app
 	m.noClick = true
 	if m.View().MouseMode == tea.MouseModeNone {
 		t.Fatal("--no-click disabled overflow wheel input")

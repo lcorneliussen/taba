@@ -32,7 +32,7 @@ with the same validated value.
 | `WTC_STATUS_WATCH_BG` | `300` | redraw interval while it is not; `0` uses the focused one always |
 | `WTC_FORGE_CACHE_AGE` | `90` | seconds a PR's forge answer is reused across every status pane |
 | `WTC_STATUS_FOCUS_EVERY` | `10` | ticks (≈seconds) between focus checks while waiting; the check spawns herdr |
-| `WTC_STATUS_NO_CLICK` | `no` | `yes` → no mouse capture, no constant redraw |
+| `WTC_STATUS_NO_CLICK` | `no` | `yes` → no click targets in `status --mouse` |
 | `WTC_TWG_SITE` | — | Atlassian site emitted as `TWG_SITE` into `.env.collection` (→ Tool identity) |
 
 It holds defaults, not credentials — but it lives in the control root because
