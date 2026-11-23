@@ -189,7 +189,7 @@ func TestStatusHosted435NativeConfirmedBranchWarningSurvivesAge(t *testing.T) {
 			current.PRs[0].DisplayTitle = "MERGED — landing unknown; inspect branch"
 			lines := statusTUIPRLines(current, width, false, false)
 			text := strings.ToLower(strings.Join(lines, "\n"))
-			if !strings.Contains(text, "merged") || !strings.Contains(text, "landing unknown") || strings.Contains(text, "d:") {
+			if !strings.Contains(text, "merged?") || strings.Contains(text, "d:") {
 				t.Fatal(text)
 			}
 			for _, line := range lines {
@@ -315,10 +315,10 @@ func TestStatusHosted435NativeCanonicalMergedBranchWarning(t *testing.T) {
 					t.Fatalf("repo/PR native sections disagree: %s", plain)
 				}
 				if wantWarning {
-					if !snapshot.PRs[0].OnBranch || !strings.Contains(prs, "landing unknown") || snapshot.PRs[0].Landing == nil || snapshot.PRs[0].Landing.State != "unknown" || strings.Contains(prs, "fully landed") {
+					if !snapshot.PRs[0].OnBranch || !strings.Contains(prs, "merged?") || snapshot.PRs[0].Landing == nil || snapshot.PRs[0].Landing.State != "unknown" || strings.Contains(prs, "fully landed") {
 						t.Fatalf("historical branch warning erased or falsely landed: %s", plain)
 					}
-				} else if snapshot.PRs[0].OnBranch || strings.Contains(prs, "landing unknown") {
+				} else if snapshot.PRs[0].OnBranch || strings.Contains(prs, "merged?") || strings.Contains(prs, "landing unknown") {
 					t.Fatalf("warning transferred to different local association: %s", plain)
 				}
 				if dir := os.Getenv("WTC_HOSTED435_FRAME_DIR"); dir != "" {
