@@ -271,8 +271,11 @@ export function pullRequestWatch(file, now = Date.now) {
         // still in flight when a newer one finished) is not news (#471).
         // Instants are compared, not strings (RFC 3339 fractions vary in
         // width); a fence later than now (the clock stepped back) is dropped.
-        const observedAt = Date.parse(r.pullRequestRefusal?.observedAt ?? r.pullRequest?.observedAt ?? "");
-        if (Number.isFinite(observedAt)) {
+        // pullRequestRead is set for every completed Bitbucket read: a pull
+        // request, a refusal, or none found.
+        const observedAt = Date.parse(r.pullRequestRead?.observedAt ?? r.pullRequestRefusal?.observedAt ?? r.pullRequest?.observedAt ?? "");
+        const fresh = Number.isFinite(observedAt);
+        if (fresh) {
           const fence = c.observed[r.path];
           if (Number.isFinite(fence) && fence <= Date.now() && observedAt < fence) continue;
           c.observed[r.path] = observedAt;
@@ -297,6 +300,9 @@ export function pullRequestWatch(file, now = Date.now) {
           continue;
         }
         if (c.refusals[r.path]) {
+          // Only a read known to be newer clears a refusal: a result without
+          // its completion time could be older than the refusal.
+          if (!fresh) continue;
           delete c.refusals[r.path];
           lines.push(`${name}: its pull request can be read again.`);
         }

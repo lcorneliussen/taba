@@ -371,8 +371,12 @@ credential or key) is `u:` plus a digest of the client selection only, which
 never equals a `k:` identity. PR news tells the conversation once
 per read identity and access cause — not per poll, not again after a restart
 or a transient failure in between — again when another read identity is
-refused (a rotated or switched credential), and once when reads work again. A
-result that completed before one already seen for the checkout is ignored.
+refused (a rotated or switched credential), and once when reads work again. Every
+completed Bitbucket read (a pull request, a refusal, or none found) also sets
+the checkout's `pullRequestRead {readIdentity, observedAt}`. A result that
+completed before one already seen for the checkout is ignored, and only a
+read known to be newer clears a refusal: a late, older read or one without its
+completion time never announces a recovery.
 Only the digest and the cause are kept. `taba status` records `observation_reason:
 bitbucket-<cause>` for an access refusal. Messages are fixed text naming the
 credential type, never a value, response or stderr.

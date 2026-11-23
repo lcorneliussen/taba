@@ -337,10 +337,13 @@ test("checks that could not be read are no news, and a later read is not announc
 test("a refused pull request read is news once per cause, survives restarts and transient failures, and its recovery once (#471)", () => {
   const file = path.join(mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), "pull-requests.json");
   const pr = { number: 7, url: "u", state: "open", draft: false, checks: "success" };
-  const ok = [{ path: "/w/app", repo: "app", pullRequest: pr }];
-  const refused = (cause, access = true) => [{ path: "/w/app", repo: "app", pullRequest: null, pullRequestRefusal: { cause, access, message: `Bitbucket read refused (${cause})` } }];
+  // Each completed read is newer than the one before.
+  let tick = Date.parse("2026-11-23T10:00:00Z");
+  const read = () => ({ readIdentity: "k:alpha", observedAt: new Date(tick += 1000).toISOString() });
+  const ok = () => [{ path: "/w/app", repo: "app", pullRequest: pr, pullRequestRead: read() }];
+  const refused = (cause, access = true) => [{ path: "/w/app", repo: "app", pullRequest: null, pullRequestRefusal: { cause, access, message: `Bitbucket read refused (${cause})` }, pullRequestRead: read() }];
   const watch = pullRequestWatch(file);
-  assert.deepEqual(watch.observe("main", "s", ok), []);
+  assert.deepEqual(watch.observe("main", "s", ok()), []);
   // Access removed: told once, not per poll, not after a restart.
   assert.deepEqual(watch.observe("main", "s", refused("not-visible")), ["app: its pull request cannot be read — Bitbucket read refused (not-visible). Its state is unknown until that is fixed."]);
   assert.deepEqual(watch.observe("main", "s", refused("not-visible")), []);
@@ -351,8 +354,8 @@ test("a refused pull request read is news once per cause, survives restarts and 
   // Another cause is news once.
   assert.deepEqual(watch.observe("main", "s", refused("unauthorized")), ["app: its pull request cannot be read — Bitbucket read refused (unauthorized). Its state is unknown until that is fixed."]);
   // Recovery is news once; the pull request itself did not change.
-  assert.deepEqual(watch.observe("main", "s", ok), ["app: its pull request can be read again."]);
-  assert.deepEqual(watch.observe("main", "s", ok), []);
+  assert.deepEqual(watch.observe("main", "s", ok()), ["app: its pull request can be read again."]);
+  assert.deepEqual(watch.observe("main", "s", ok()), []);
   // Revoked again: told again.
   assert.deepEqual(watch.observe("main", "s", refused("not-visible")).length, 1);
 });
@@ -383,6 +386,33 @@ test("refusal news is keyed by read identity and cause, unknown identities stay 
   // Recovery is news once.
   assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:06:00Z")), ["app: its pull request can be read again."]);
   assert.deepEqual(watch.observe("main", "s", pr("2026-11-23T10:07:00Z")), []);
+});
+
+test("every completed read carries its freshness: stale results never clear a newer state or announce a false recovery (#471)", () => {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), "pull-requests.json");
+  const read = (at, identity = "k:alpha") => ({ readIdentity: identity, observedAt: at });
+  const none = (at, identity) => [{ path: "/w/app", repo: "app", pullRequest: null, pullRequestRead: read(at, identity) }];
+  const refused = (at, identity = "k:alpha") => [{ path: "/w/app", repo: "app", pullRequest: null, pullRequestRefusal: { cause: "forbidden", access: true, message: "refused", readIdentity: identity, observedAt: at }, pullRequestRead: read(at, identity) }];
+  const watch = pullRequestWatch(file);
+  // Repeated empty reads: no news.
+  assert.deepEqual(watch.observe("main", "s", none("2026-11-23T10:00:00Z")), []);
+  assert.deepEqual(watch.observe("main", "s", none("2026-11-23T10:00:30Z")), []);
+  // Old empty, new refusal, delivered out of order: the refusal is news once
+  // and the late empty read neither clears it nor announces a recovery.
+  assert.equal(watch.observe("main", "s", refused("2026-11-23T10:02:00Z")).length, 1);
+  assert.deepEqual(watch.observe("main", "s", none("2026-11-23T10:01:00Z")), []);
+  assert.deepEqual(watch.observe("main", "s", refused("2026-11-23T10:03:00Z")), []);
+  // A result without its completion time never clears a refusal.
+  assert.deepEqual(watch.observe("main", "s", [{ path: "/w/app", repo: "app", pullRequest: null }]), []);
+  assert.deepEqual(watch.observe("main", "s", refused("2026-11-23T10:03:30Z")), []);
+  // Identity switch: the other identity's refusal is news once.
+  assert.equal(watch.observe("main", "s", refused("2026-11-23T10:04:00Z", "k:beta")).length, 1);
+  // True recovery, exactly once.
+  assert.deepEqual(watch.observe("main", "s", none("2026-11-23T10:05:00Z", "k:beta")), ["app: its pull request can be read again."]);
+  assert.deepEqual(watch.observe("main", "s", none("2026-11-23T10:06:00Z", "k:beta")), []);
+  // Old refusal arriving after a newer empty read: fenced, no news, not kept.
+  assert.deepEqual(watch.observe("main", "s", refused("2026-11-23T10:05:30Z", "k:gamma")), []);
+  assert.deepEqual(watch.observe("main", "s", none("2026-11-23T10:07:00Z", "k:beta")), []);
 });
 
 test("a fence later than now (the clock stepped back) does not mute a checkout (#471)", () => {

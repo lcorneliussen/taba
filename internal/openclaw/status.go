@@ -67,13 +67,25 @@ type CheckoutStatus struct {
 	// PullRequestRefusal says why the branch's pull request could not be
 	// read this time (#471); PullRequest is then unknown, not absent.
 	PullRequestRefusal *ReadRefusal `json:"pullRequestRefusal,omitempty"`
+	// PullRequestRead says which read context made this checkout's
+	// Bitbucket pull request read and when it completed, for every outcome:
+	// a pull request, a refusal, or none found (#471). News uses it to drop a
+	// result older than one already seen.
+	PullRequestRead *ReadFreshness `json:"pullRequestRead,omitempty"`
+}
+
+// ReadFreshness is the non-secret read identity and completion time (RFC
+// 3339, UTC) of one completed read.
+type ReadFreshness struct {
+	ReadIdentity string `json:"readIdentity"`
+	ObservedAt   string `json:"observedAt"`
 }
 
 // BitbucketPullRequest reads a Bitbucket checkout's pull request; the taba
 // command sets it to its Bitbucket reader (#471). A nil pull request with a
 // nil refusal means the branch has none; a refusal says why it could not be
 // read, which is never shown as "no pull request".
-var BitbucketPullRequest func(dir, owner, repo, branch string) (*PullRequest, *ReadRefusal)
+var BitbucketPullRequest func(dir, owner, repo, branch string) (*PullRequest, *ReadRefusal, *ReadFreshness)
 
 // ReadRefusal is a pull request read that failed, with its classified cause
 // (no-credential, unsupported-credential, unauthorized, forbidden,
@@ -289,7 +301,7 @@ func checkoutStatus(path string, pullRequests bool) CheckoutStatus {
 		s.PullRequest = gitHubPullRequest(top, origin, s.Branch)
 	}
 	if pullRequests && origin.Forge == ForgeBitbucket && s.Branch != "" && BitbucketPullRequest != nil {
-		s.PullRequest, s.PullRequestRefusal = BitbucketPullRequest(top, origin.Owner, origin.Repo, s.Branch)
+		s.PullRequest, s.PullRequestRefusal, s.PullRequestRead = BitbucketPullRequest(top, origin.Owner, origin.Repo, s.Branch)
 	}
 	if origin.Forge == ForgeBitbucket {
 		if gitDir, err := git(top, "rev-parse", "--absolute-git-dir"); err == nil {
