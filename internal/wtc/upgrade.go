@@ -54,6 +54,10 @@ type UpgradeResult struct {
 	// it could not be written; the upgrade itself still succeeded.
 	RootSelection      *RootSelectionReport `json:"root_selection,omitempty"`
 	RootSelectionError string               `json:"root_selection_error,omitempty"`
+	// Doctor is the target release's advisory diagnostics for this
+	// collection after the pin was written and installed; it is planned on a
+	// dry run and never changes the upgrade's own result.
+	Doctor *UpgradeDoctor `json:"doctor,omitempty"`
 }
 
 // CompatibilityRange is the harness range a pin implies: the pinned release up
@@ -184,6 +188,16 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 			return result, fmt.Errorf("pin updated, but the new release was not installed: %w", err)
 		}
 		c.upgradeRootSelection(&result)
+		if result.NotInstalled {
+			result.Doctor = &UpgradeDoctor{Status: "unavailable", Version: result.To, Collection: c.Collection,
+				Reason: "mise not found; the target release is not installed, so diagnostics did not run"}
+		} else {
+			doctor := c.upgradeDoctor(c, result.To)
+			result.Doctor = &doctor
+		}
+	} else {
+		result.Doctor = &UpgradeDoctor{Status: "planned", Version: result.To, Collection: c.Collection,
+			Reason: "a real upgrade runs the installed target's read-only doctor here"}
 	}
 	result.Notes, result.NotesSource, err = upgradeNotes(c.Collection, from, to, opt.DryRun)
 	if err != nil && !opt.DryRun {
