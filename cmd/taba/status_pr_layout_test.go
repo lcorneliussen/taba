@@ -239,3 +239,32 @@ func TestStatusPRLayoutScrollSelectionGeometry(t *testing.T) {
 		}
 	}
 }
+
+// A retained branch whose merge is not confirmed (stale, deferred or
+// unavailable, no merge signal) keeps its freshness mark in STATE, so the
+// landing outcome is never shown as current. The row must still say, in STATE
+// and at every width, that the worktree remains on a merged PR's branch.
+func TestStatusPRLayoutUnconfirmedRetainedKeepsBranchWarning(t *testing.T) {
+	old := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	for _, freshness := range []string{"stale", "deferred", "unavailable"} {
+		for _, landing := range []string{"", "landed", "follow-up", "unknown"} {
+			t.Run(freshness+"/"+landing, func(t *testing.T) {
+				row := wtc.StatusPRRow{Repo: "widget", Number: "7", State: "MERGED", OnBranch: true,
+					Freshness: freshness, ObservedAt: old, Title: "Synthetic readable title"}
+				if landing != "" {
+					row.Landing = &wtc.StatusLanding{State: landing}
+				}
+				mark := wtc.StatusPRFreshnessMark(freshness, old, time.Now())
+				for _, width := range statusPRLayoutWidths {
+					for _, styled := range []bool{false, true} {
+						lines := assertOnePRLinePerRow(t, wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{row}}, width, styled)
+						state, _ := statusPRLayoutCell(t, lines, width, row)
+						if state != "⚠ "+mark {
+							t.Errorf("width=%d styled=%v: STATE %q, want %q", width, styled, state, "⚠ "+mark)
+						}
+					}
+				}
+			})
+		}
+	}
+}

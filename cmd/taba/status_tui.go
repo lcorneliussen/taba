@@ -1912,6 +1912,10 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		if mark := wtc.StatusPRFreshnessMark(row.Freshness, row.ObservedAt, time.Now()); mark != "" && !merged {
 			if closed {
 				label = mark + " " + label
+			} else if retained {
+				// The merge is not confirmed, so no landing outcome is shown, but
+				// the row still warns that the worktree remains on its branch.
+				state = "⚠ " + mark
 			} else {
 				state = mark
 			}
@@ -2107,7 +2111,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
 			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
-			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, r:age refreshing, never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up; still on a merged branch: ⚠ catch-up fully landed or no landing record, ⚠ extra follow-up work, merged? landing unknown (details below).",
+			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, r:age refreshing, never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up; still on a merged branch: ⚠ catch-up fully landed or no landing record, ⚠ extra follow-up work, merged? landing unknown; ⚠ before a freshness mark: still on a merged branch whose merge is not currently confirmed (details below).",
 		}
 		for _, row := range m.snapshot.PRs {
 			if row.Archived && !m.showArchived {
