@@ -509,3 +509,62 @@ func TestRootSelectionFindsANonMainDefaultBranch(t *testing.T) {
 		t.Fatalf("unhelpful probe error: %+v", check)
 	}
 }
+
+// A nested project with its own .bare is a project boundary: an ancestor's
+// generated root selection must not stand in for it.
+func TestFindProjectRootStopsAtANearerProject(t *testing.T) {
+	outer := newWorkspaceFixture(t)
+	if _, err := syncFromCollection(t, outer, RootSyncOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(outer.Workspace, "nested")
+	if err := os.MkdirAll(filepath.Join(nested, ".bare"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, start := range []string{nested, filepath.Join(nested, ".bare")} {
+		if root, ok := FindProjectRoot(start); ok {
+			t.Errorf("%s resolved to ancestor project %s", start, root)
+		}
+	}
+	if root, ok := FindProjectRoot(filepath.Join(outer.Workspace, ".bare")); !ok || !sameCanonicalPath(root, outer.Workspace) {
+		t.Errorf("own root not found: %q %v", root, ok)
+	}
+	// Once the nested project has its own selection, it is found first.
+	fixtureFile(t, filepath.Join(nested, RootSelectionFile), readRoot(t, outer.Workspace), 0644)
+	if root, ok := FindProjectRoot(nested); !ok || !sameCanonicalPath(root, nested) {
+		t.Errorf("nested root not found: %q %v", root, ok)
+	}
+}
+
+// A checkout that fails after git created its folder, registration and branch
+// leaves none of them behind; a branch that existed before is kept.
+func TestNewCollectionAtRootCleansUpFailedHarnessCheckout(t *testing.T) {
+	c := newWorkspaceFixture(t)
+	root := c.Workspace
+	if _, err := syncFromCollection(t, c, RootSyncOptions{Create: true}); err != nil {
+		t.Fatal(err)
+	}
+	owner := filepath.Join(root, ".bare", "agent-harness.git")
+	fixtureGit(t, "--git-dir="+owner, "branch", "kept", "origin/main")
+	fixtureFile(t, filepath.Join(owner, "hooks", "post-checkout"), "#!/bin/sh\nexit 1\n", 0755)
+	for _, tc := range []struct {
+		slug, branch string
+		keepBranch   bool
+	}{{"detached", "", false}, {"fresh", "fresh-topic", false}, {"existing", "kept", true}} {
+		if _, _, err := NewCollectionAtRoot(root, NewOptions{Slug: tc.slug, Branch: tc.branch}); err == nil {
+			t.Fatalf("%s: failing checkout accepted", tc.slug)
+		}
+		if _, err := os.Lstat(filepath.Join(root, tc.slug)); !os.IsNotExist(err) {
+			t.Errorf("%s: failed checkout left the collection folder: %v", tc.slug, err)
+		}
+		if list := fixtureGit(t, "--git-dir="+owner, "worktree", "list", "--porcelain"); strings.Contains(list, filepath.Join(tc.slug, "harness")) {
+			t.Errorf("%s: failed checkout left a worktree registration:\n%s", tc.slug, list)
+		}
+		if tc.branch != "" && gitRefExists(owner, "refs/heads/"+tc.branch) != tc.keepBranch {
+			t.Errorf("%s: branch %s present=%v, want %v", tc.slug, tc.branch, !tc.keepBranch, tc.keepBranch)
+		}
+	}
+	if fixtureGit(t, "--git-dir="+owner, "rev-parse", "kept") != fixtureGit(t, "--git-dir="+owner, "rev-parse", "origin/main") {
+		t.Error("existing branch moved")
+	}
+}

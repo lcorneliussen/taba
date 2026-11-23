@@ -487,8 +487,10 @@ func (c *Context) refreshRootSelection() {
 	_, _ = SyncRootSelection(RootSyncOptions{Root: c.Workspace})
 }
 
-// FindProjectRoot returns the nearest enclosing directory with a generated
-// root selection, which records the project's harness source.
+// FindProjectRoot returns the nearest enclosing project root with a generated
+// root selection, which records the project's harness source. A directory
+// with its own .bare is a project boundary: when it has no generated file,
+// no ancestor's selection stands in for it.
 func FindProjectRoot(start string) (string, bool) {
 	dir, err := canonicalPath(start)
 	if err != nil {
@@ -497,6 +499,9 @@ func FindProjectRoot(start string) (string, bool) {
 	for {
 		if recorded, _, err := readRootSelection(dir); err == nil && recorded != nil {
 			return dir, true
+		}
+		if info, err := os.Lstat(filepath.Join(dir, ".bare")); err == nil && info.IsDir() {
+			return "", false
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -597,15 +602,21 @@ func NewCollectionAtRoot(root string, opt NewOptions) (NewResult, *Context, erro
 	harness := filepath.Join(target, "harness")
 	args := rootHarnessWorktreeArgs(owner, harness, opt.Branch, start)
 	createdBranch := len(args) > 3 && args[3] == "-b"
+	// cleanup undoes only what this call created: the new folder, the
+	// checkout and registration inside it, and a branch that did not exist
+	// before. It never prunes or force-removes other worktrees or branches.
 	cleanup := func() {
-		_, _ = gitOutput("--git-dir="+owner, "worktree", "remove", "--force", harness)
-		if createdBranch {
+		if registeredWorktree(owner, harness) {
+			_, _ = gitOutput("--git-dir="+owner, "worktree", "remove", "--force", harness)
+		}
+		if createdBranch && gitRefExists(owner, "refs/heads/"+opt.Branch) && !branchCheckedOut(owner, opt.Branch) {
 			_, _ = gitOutput("--git-dir="+owner, "branch", "-D", opt.Branch)
 		}
+		_ = os.RemoveAll(harness)
 		_ = os.Remove(target)
 	}
 	if _, err := gitOutput(args...); err != nil {
-		_ = os.Remove(target)
+		cleanup()
 		return result, nil, err
 	}
 	trustWorktreeMise(harness)
@@ -653,6 +664,29 @@ func gitRefExists(owner, ref string) bool {
 func containsName(names []string, name string) bool {
 	for _, candidate := range names {
 		if candidate == name {
+			return true
+		}
+	}
+	return false
+}
+
+// registeredWorktree reports whether owner has a worktree registered at path.
+func registeredWorktree(owner, path string) bool {
+	return worktreeListHas(owner, "worktree ", path)
+}
+
+// branchCheckedOut reports whether a worktree of owner has branch checked out.
+func branchCheckedOut(owner, branch string) bool {
+	return worktreeListHas(owner, "branch ", "refs/heads/"+branch)
+}
+
+func worktreeListHas(owner, prefix, value string) bool {
+	list, err := gitOutput("--git-dir="+owner, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(list, "\n") {
+		if rest, ok := strings.CutPrefix(line, prefix); ok && (rest == value || prefix == "worktree " && sameCanonicalPath(rest, value)) {
 			return true
 		}
 	}

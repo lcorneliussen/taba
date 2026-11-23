@@ -62,7 +62,7 @@ At a root with a generated selection, `taba new <slug> [repo ...]` accepts the
 same arguments and options as in a collection. It validates the recorded
 harness owner, fetches it, checks out the new collection's harness at the
 project source, and creates the rest of the collection from that checkout. It
-reads no other collection. If creation fails before anything other than that
+reads no other collection. The nearest folder with its own `.bare/` is the project; a generated file in an enclosing folder never stands in for a nearer project without one. If creation fails before anything other than that
 harness checkout exists, the checkout and folder are removed. A PR collection
 for the harness itself must be created from a collection.
 
