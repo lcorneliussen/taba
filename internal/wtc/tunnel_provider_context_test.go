@@ -3,7 +3,6 @@ package wtc
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -134,7 +133,7 @@ func TestTunnelCleanupCredentialRotationNeverTurnsForeign404IntoAbsence(t *testi
 					t.Fatal("raw credential entered journal")
 				}
 				if rotation == "after-positive-lookup" && (deleted != 0 || wrong != 0) {
-					t.Fatal(fmt.Sprintf("rotated credential reached deletion (%d)", deleted))
+					t.Fatalf("rotated credential reached deletion (%d)", deleted)
 				}
 				if rotation != "positive-rebind" {
 					// The explicit lost-response reconciliation path must not

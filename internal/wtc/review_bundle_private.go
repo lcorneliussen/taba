@@ -238,7 +238,7 @@ func archiveReviewCommit(owner, sha, dest string) error {
 			if err := os.MkdirAll(path, 0755); err != nil {
 				return abort(err)
 			}
-		case tar.TypeReg, tar.TypeRegA:
+		case tar.TypeReg:
 			file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, os.FileMode(header.Mode)&0777)
 			if err != nil {
 				return abort(err)
