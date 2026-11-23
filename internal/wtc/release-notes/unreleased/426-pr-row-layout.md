@@ -5,4 +5,5 @@
   landing metadata before the title. STATE shows `⚠ catch-up` (fully landed),
   `⚠ extra` (follow-up work) or `merged?` (landing unknown). The full
   explanation follows the title where it fits and is always shown in `?` help.
-  ([#426](https://github.com/lcorneliussen/taba/issues/426)).
+  ([#426](https://github.com/lcorneliussen/taba/issues/426),
+  [#465](https://github.com/lcorneliussen/taba/pull/465)).
