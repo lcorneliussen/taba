@@ -864,51 +864,47 @@ test("fallback repository identity accepts supported SSH origins without credent
   for (const url of ["https://elsewhere.invalid/team/repo", "https://github.com.evil.invalid/team/repo", "file:///github.com/team/repo", "https://github.com/team/../repo", "garbage"]) assert.deepEqual(repositoryOrigin(url), {});
 });
 
-test("recovery requires a matching native record and admin action; status never restores", async () => {
-  const actions = new Map(), commands = [], dir = mkdtempSync(path.join(os.tmpdir(), "taba-restore-"));
+for (const gatewayMethods of [true, false]) test(`status never restores; restoration is an admin Gateway method, never a host CLI (gateway methods: ${gatewayMethods})`, async () => {
+  const actions = new Map(), methods = new Map(), commands = [], dir = mkdtempSync(path.join(os.tmpdir(), "taba-restore-"));
   const owner = "agent:main:subagent:api", parent = "agent:main:dashboard:task";
   const entry = { parentSessionKey: parent, label: "task api", projectId: "api", workspaceDir: path.join(dir, "api"), worktree: { id: "w-api", repoRoot: path.join(dir,"clone"), branch: "openclaw/task" } };
-  let record = { id: "w-api", path: entry.workspaceDir, repoRoot: entry.worktree.repoRoot, branch: entry.worktree.branch, ownerKind: "session", ownerId: owner, removedAt: 1000, snapshotRef: "refs/openclaw/snapshots/w-api" };
-  let restores = 0, release, hold = false, failRestore = false;
+  const record = { id: "w-api", path: entry.workspaceDir, repoRoot: entry.worktree.repoRoot, branch: entry.worktree.branch, ownerKind: "session", ownerId: owner, removedAt: 1000, snapshotRef: "refs/openclaw/snapshots/w-api" };
   plugin.register({ pluginConfig: {}, runtime: {
     state: { resolveStateDir: () => dir },
     agent: { session: { listSessionEntriesAsync: async () => [{sessionKey:parent,entry:{}},{sessionKey:owner,entry}], getSessionEntryAsync: async () => entry } },
     system: { runCommandWithTimeout: async argv => {
       commands.push(argv);
       if (argv[0] === "openclaw" && argv[2] === "list") return { code:0, stdout:JSON.stringify({worktrees:[record]}) };
-      if (argv[0] === "openclaw" && argv[2] === "restore") {
-        restores++; if(failRestore)return {code:1,stderr:"Recorded branch moved; snapshot preserved",stdout:""}; if(hold) await new Promise(r => {release=r});
-        mkdirSync(path.join(entry.workspaceDir,".git"),{recursive:true});
-        return { code:0, stdout:JSON.stringify({...record,removedAt:undefined}) };
-      }
       if(argv[1]==="status") return {code:0,stdout:JSON.stringify({task:{repos:[]}})};
       if(argv[1]==="config") return {code:0,stdout:"https://github.com/example-org/api.git"};
       return {code:0,stdout:"wtc version dev",stderr:""};
     }}
-  },session:{controls:{registerSessionAction:a=>actions.set(a.id,a),registerControlUiDescriptor(){}}},registerHttpRoute(){},on(){},logger:{} });
+  },session:{controls:{registerSessionAction:a=>actions.set(a.id,a),registerControlUiDescriptor(){}}},
+    ...(gatewayMethods ? { registerGatewayMethod:(name,handler,opts)=>methods.set(name,{handler,opts}) } : {}),
+    registerHttpRoute(){},on(){},logger:{} });
+  // Let the dispatcher probe settle: outside a gateway it cannot resolve.
+  await new Promise(setImmediate); await new Promise(r => setTimeout(r, 50));
   const read = () => actions.get("collection").handler({agentId:"main",sessionKey:parent,payload:{}});
   const first = (await read()).result.repos[0];
-  assert.equal(first.recovery.state,"restorable");
   await read();
   assert.equal(commands.filter(a=>a[0]==="openclaw"&&a[2]==="list").length,1,"missing rows share cached native metadata");
-  assert.equal(restores,0);
-  assert.deepEqual(actions.get("restore-checkout").requiredScopes,["operator.admin"]);
-  const act = (sessionKey=parent,key=first.recovery.key) => actions.get("restore-checkout").handler({agentId:"main",sessionKey,payload:{ownerSessionKey:owner,key}});
-  assert.equal((await act("agent:main:other")).ok,false);
-  assert.equal((await act(parent,"stale")).ok,false);
-  const original={...record};
-  for(const change of [{ownerId:"foreign"},{path:"/other"},{repoRoot:"/other"},{branch:"openclaw/other"},{snapshotRef:null},{removedAt:2000}]){
-    record={...original,...change};assert.equal((await act()).ok,false,JSON.stringify(change));
+  if (gatewayMethods) {
+    assert.deepEqual(methods.get("wtc.checkout.restore").opts.scope,"operator.admin");
+    assert.equal(methods.get("wtc.checkout.restore").opts.sessionAccess,undefined);
+    // Outside a gateway the native dispatcher is missing: the snapshot is shown, restore is not promised.
+    assert.equal(first.recovery.state,"snapshot-only");
+    assert.match(first.recovery.reason,/snapshot is recorded.*cannot restore checkouts from Collection/);
+  } else {
+    assert.equal(methods.size,0);
+    assert.equal(first.recovery.state,"snapshot-only");
+    assert.match(first.recovery.reason,/no plugin Gateway methods/);
   }
-  assert.equal(restores,0,"invalid snapshots and ownership must not dispatch restore");
-  record=original;
-  entry.hasActiveRun=true;assert.equal((await act()).ok,false);entry.hasActiveRun=false;
-  failRestore=true;assert.match((await act()).error,/branch moved/);failRestore=false;
-  hold=true;
-  const pending=act();while(!release)await new Promise(setImmediate);
-  assert.equal((await act()).ok,false,"duplicate restore is rejected");
-  release();assert.equal((await pending).ok,true);assert.equal(restores,2);
-  assert.equal((await act()).ok,false,"an existing checkout is never overwritten");
+  // A tab loaded before this change still calls the old action: it is told to reload.
+  assert.deepEqual(actions.get("restore-checkout").requiredScopes,["operator.admin"]);
+  const stale = await actions.get("restore-checkout").handler({agentId:"main",sessionKey:parent,payload:{ownerSessionKey:owner,key:"k"}});
+  assert.equal(stale.ok,false);
+  assert.match(stale.error,/Reload the Collection view/);
+  assert.ok(!commands.some(a=>a[0]==="openclaw"&&a[2]==="restore"),"never restores through the gateway host's CLI credentials");
 });
 
 for (const failure of ["nonzero", "invalid-json", "nonarray", "timeout"]) test(`native recovery listing ${failure} leaves collection usable; healthy rows do not list`, async () => {
