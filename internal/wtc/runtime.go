@@ -25,6 +25,8 @@ type RuntimeItem struct {
 	DefinitionID        string `json:"definition_id,omitempty"`
 	// runnerStarting distinguishes runner readiness from an observed task state.
 	runnerStarting bool
+	// nativeDeclaration marks a planned task from the dekit.yaml tree.
+	nativeDeclaration bool
 
 	Collection string `json:"collection"`
 	Repo       string `json:"repo"`
@@ -34,15 +36,23 @@ type RuntimeItem struct {
 	Kind       string `json:"kind"`
 	Label      string `json:"label,omitempty"`
 	URL        string `json:"url,omitempty"`
+	// HealthURL is the configured health path at a service's port-derived
+	// URL. Status's answering check looks at it; readiness uses the same URL
+	// through the rendered ready.http.
+	HealthURL string `json:"health_url,omitempty"`
 	// Provider is the tunnel client of an endpoint, such as tailscale.
 	Provider string `json:"provider,omitempty"`
 	// Exposure is how far an endpoint reaches (Exposure* constants), and
 	// ExposureBasis how wtc knows it.
 	Exposure      string `json:"exposure,omitempty"`
 	ExposureBasis string `json:"exposure_basis,omitempty"`
-	// Source is the task file the task comes from: the repo's committed one or
-	// this collection's local one.
+	// Source is the absolute file the task comes from: a repository
+	// declaration file (a configured one, a dekit.yaml or a fragment it loads),
+	// this collection's svc/<repo>.yaml or, for a managed tunnel, its policy.
 	Source string `json:"source,omitempty"`
+	// Declaration is the declaring file, relative to its repository or
+	// collection; unlike Source, it never names a tunnel policy.
+	Declaration *RuntimeDeclaration `json:"declaration,omitempty"`
 	// PortEnv names the variable holding a service's local port.
 	PortEnv string `json:"port_env,omitempty"`
 	// Type is what a resource is, such as postgres.

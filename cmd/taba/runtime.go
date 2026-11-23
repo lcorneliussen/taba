@@ -61,7 +61,8 @@ func addRuntimeCommands(root *cobra.Command, asJSON *bool) {
 		Long: branding.Text(`Services are a repository's long-running processes, such as a web server, with
 their tunnels and resources, run by this collection's dekit runner.
 
-A repository shares services in its committed .harness/dekit.tasks.yaml. {{command}} svc
+A repository shares services in its committed .harness/dekit.tasks.yaml, or natively in
+a root dekit.yaml that a bare dekit up also runs. {{command}} svc
 add and {{command}} svc tunnel write svc/<repo>.yaml in this collection's runtime home unless
 --shared is given; that file is never committed and goes with the collection.
 

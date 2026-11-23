@@ -91,7 +91,8 @@ those with an automatically generated global-login provider command.
 `taba svc down <name>` stops it; `taba svc rm <name>` stops it with its tunnels
 and removes it from its task file while the others keep running. A service
 from the repository's committed file needs `rm --shared`, which is a repository
-change.
+change. A service declared in the repository's `dekit.yaml`, or a file it loads,
+is not removed by `rm`: edit that file in the repository.
 
 ## Beyond taba svc
 

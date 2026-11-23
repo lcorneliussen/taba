@@ -2,7 +2,9 @@ package wtc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,6 +34,7 @@ func (c *Context) ResolveReviewBundle(bundle string, opt ReviewResolveOptions) (
 	if err != nil {
 		return ReviewResolveResult{}, err
 	}
+	manifest.ConfigRoot = c.ConfigRoot
 	worktree, slug, forge, err := c.ReviewRepo(manifest.Repo)
 	if err != nil {
 		return ReviewResolveResult{}, err
@@ -106,7 +109,7 @@ func replyReviewInline(m ReviewManifest, id, body string) error {
 		_, err := reviewGitHubAPI(m.RepoDir, []string{"-X", "POST", fmt.Sprintf("repos/%s/pulls/%s/comments", m.Slug, m.PR), "--input", "-"}, payload)
 		return err
 	}
-	switch route, err := selectedBitbucketWrite("", true); {
+	switch route, err := selectedBitbucketWrite(m.bitbucketControlRoot(), true); {
 	case err != nil:
 		return err
 	case route == bitbucketWriteBroker:
@@ -127,7 +130,7 @@ func replyReviewInline(m ReviewManifest, id, body string) error {
 
 func resolveReviewInline(m ReviewManifest, id, threadID string) error {
 	if m.Forge == "bitbucket" {
-		switch route, err := selectedBitbucketWrite("", false); {
+		switch route, err := selectedBitbucketWrite(m.bitbucketControlRoot(), false); {
 		case err != nil:
 			return err
 		case route == bitbucketWriteBroker:
@@ -215,50 +218,140 @@ func splitReviewSlug(slug string) []string {
 // on a gateway (#471), then records the threads whose resolve was done.
 func (c *Context) resolveReviewBrokered(m ReviewManifest, bundle string, rows []ReviewInlineRecord, opt ReviewResolveOptions) (ReviewResolveResult, error) {
 	result := ReviewResolveResult{}
-	var operations []brokeredOperation
-	var keys []string
-	resolveOf := map[int]int{} // operation index -> row index
-	for i, row := range rows {
-		if row.ID == "" || row.Resolved || opt.Key != "" && row.Key != opt.Key || opt.Concern != "" && row.Concern != opt.Concern || opt.File != "" && row.File != opt.File || opt.Line != 0 && row.Line != opt.Line {
-			continue
-		}
-		id, err := strconv.ParseInt(row.ID, 10, 64)
-		if err != nil || !prNumber.MatchString(row.ID) {
+	selected := func(row ReviewInlineRecord) bool {
+		return row.ID != "" && !row.Resolved && (opt.Key == "" || row.Key == opt.Key) && (opt.Concern == "" || row.Concern == opt.Concern) && (opt.File == "" || row.File == opt.File) && (opt.Line == 0 || row.Line == opt.Line)
+	}
+	for _, row := range rows {
+		if selected(row) && !prNumber.MatchString(row.ID) {
 			return result, fmt.Errorf("invalid inline comment id for %s", row.Key)
 		}
-		if opt.Reply != "" {
-			operations = append(operations, brokeredOperation{Op: "comment.create", Text: opt.Reply, Parent: id})
-		}
-		resolveOf[len(operations)] = i
-		operations = append(operations, brokeredOperation{Op: "comment.resolve", Comment: id})
-		keys = append(keys, row.Key)
 	}
-	if len(operations) == 0 {
+	// Replies already made, by thread: a retry never posts one again.
+	replied := map[string]bool{}
+	plan := func() (operations []brokeredOperation, keys []string) {
+		for _, row := range rows {
+			if !selected(row) {
+				continue
+			}
+			id, _ := strconv.ParseInt(row.ID, 10, 64)
+			if opt.Reply != "" && !replied[row.Key] {
+				operations = append(operations, brokeredOperation{Op: "comment.create", Text: opt.Reply, Parent: id})
+				keys = append(keys, "reply:"+row.Key)
+			}
+			operations = append(operations, brokeredOperation{Op: "comment.resolve", Comment: id})
+			keys = append(keys, row.Key)
+		}
+		return operations, keys
+	}
+	if operations, _ := plan(); len(operations) == 0 {
 		return result, nil
 	}
-	head, err := reviewPRHead(m)
-	if err != nil {
-		return result, fmt.Errorf("cannot verify PR head: %w", err)
-	}
-	intent := "taba-resolve-" + brokeredHash("resolve-v1", bundle, m.PR, head, opt.Reply, strings.Join(keys, "\x00"))
-	receipt, err := brokeredWrites(m.RepoDir, m.Slug, m.PR, head, intent, operations)
+	gitDir, err := worktreeGitDir(m.RepoDir)
 	if err != nil {
 		return result, err
 	}
-	for index, entry := range receipt.Results {
-		row, ok := resolveOf[index]
-		if !ok || entry.Status != "done" {
-			continue
+	// The record of this selection's attempts: each intent and, per
+	// operation index, the thread its resolve belongs to. Receipts are applied
+	// from this record, never from a recomputed plan.
+	selection := brokeredHash("resolve-v2", bundle, m.PR, opt.Reply, opt.Key, opt.Concern, opt.File, strconv.Itoa(opt.Line))
+	recordPath := filepath.Join(bundle, "bitbucket-resolve."+selection+".json")
+	type resolveAttempt struct {
+		Intent string   `json:"intent"`
+		Head   string   `json:"head"`
+		Keys   []string `json:"keys"`
+		// Discarded: the request was removed before anyone confirmed it
+		// (no receipt, no claim), so nothing was written for it.
+		Discarded bool `json:"discarded,omitempty"`
+	}
+	var record struct {
+		Attempts []resolveAttempt `json:"attempts"`
+	}
+	if raw, err := os.ReadFile(recordPath); err == nil && json.Unmarshal(raw, &record) != nil {
+		return result, fmt.Errorf("the brokered resolve record is unreadable; reconcile by reading the pull request")
+	}
+	apply := func(keys []string, receipt *brokeredReceipt) {
+		for index, entry := range receipt.Results {
+			if index >= len(keys) || keys[index] == "" || entry.Status != "done" {
+				continue
+			}
+			if thread, ok := strings.CutPrefix(keys[index], "reply:"); ok {
+				replied[thread] = true
+				continue
+			}
+			for i := range rows {
+				if rows[i].Key == keys[index] && !rows[i].Resolved {
+					rows[i].Resolved, rows[i].Error = true, ""
+					result.Resolved++
+				}
+			}
 		}
-		rows[row].Resolved = true
-		rows[row].Error = ""
-		result.Resolved++
 	}
-	if err := writeInlineRecords(bundle, rows); err != nil {
-		return result, err
+	// One state machine: replay every recorded attempt, then ask for what is
+	// still open. Success is only "nothing left to ask for".
+	for {
+		for i := range record.Attempts {
+			attempt := &record.Attempts[i]
+			if attempt.Discarded {
+				continue
+			}
+			receipt, err := readBrokeredReceipt(gitDir, m.Slug, m.PR, attempt.Intent)
+			if err != nil {
+				return result, err
+			}
+			if receipt == nil {
+				// Claimed without a receipt: the outcome is unknown; never ask again.
+				if err := brokeredStarted(gitDir, attempt.Intent); err != nil {
+					return result, err
+				}
+				// Still waiting for the person.
+				if pending, ok := brokeredPendingRequest(gitDir); ok && pending == attempt.Intent {
+					return result, fmt.Errorf("%w: PR #%s resolves wait for the person to confirm them in the Control UI; run this again afterwards", ErrBitbucketAwaitingConfirmation, m.PR)
+				}
+				// Neither receipt, claim nor request: discarded before it was
+				// confirmed, so nothing was written; it may be asked for again.
+				attempt.Discarded = true
+				if err := writePrivateJSON(recordPath, record); err != nil {
+					return result, err
+				}
+				continue
+			}
+			apply(attempt.Keys, receipt)
+			if err := writeInlineRecords(bundle, rows); err != nil {
+				return result, err
+			}
+			for _, entry := range receipt.Results {
+				if entry.Status == "unknown" {
+					return result, fmt.Errorf("a confirmed Bitbucket resolve for PR #%s has an unknown outcome; reconcile by reading the pull request before asking again", m.PR)
+				}
+			}
+		}
+		operations, keys := plan()
+		if len(operations) == 0 {
+			return result, nil
+		}
+		if len(record.Attempts) >= 20 {
+			return result, fmt.Errorf("too many incomplete Bitbucket resolve attempts for PR #%s; inspect the pull request", m.PR)
+		}
+		head, err := reviewPRHead(m)
+		if err != nil {
+			return result, fmt.Errorf("cannot verify PR head: %w", err)
+		}
+		// Recorded only once its request exists (or its receipt does): a
+		// refused ask leaves nothing behind. Intents are numbered by attempt,
+		// so a record lost after the request was written resumes on the same
+		// intent.
+		intent := fmt.Sprintf("taba-resolve-%s-%d", selection, len(record.Attempts))
+		receipt, err := brokeredWrites(m.RepoDir, m.Slug, m.PR, head, intent, operations)
+		if err != nil && !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+			return result, err
+		}
+		record.Attempts = append(record.Attempts, resolveAttempt{Intent: intent, Head: head, Keys: keys})
+		if saveErr := writePrivateJSON(recordPath, record); saveErr != nil {
+			return result, saveErr
+		}
+		if receipt == nil {
+			return result, err
+		}
+		// A receipt already exists for this attempt: replay it like any other.
 	}
-	if !receipt.Completed {
-		return result, fmt.Errorf("the confirmed Bitbucket resolves stopped early; %d threads resolved", result.Resolved)
-	}
-	return result, nil
 }

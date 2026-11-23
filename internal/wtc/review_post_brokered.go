@@ -152,11 +152,13 @@ func (c *Context) postReviewBrokered(m ReviewManifest, bundle, cid, finalBody st
 		return ReviewPostResult{}, fmt.Errorf("too many incomplete Bitbucket write attempts for this review; inspect the pull request")
 	}
 	requestPath := filepath.Join(gitDir, bitbucketWriteRequestFile)
+	// A claimed intent without a receipt has an unknown outcome, whether or
+	// not its request file is still there.
+	if err := brokeredStarted(gitDir, intent); err != nil {
+		return ReviewPostResult{URL: m.URL}, err
+	}
 	if raw, err := os.ReadFile(requestPath); err == nil {
 		var pending brokeredRequest
-		if err := brokeredStarted(gitDir, intent); err != nil {
-			return ReviewPostResult{URL: m.URL}, err
-		}
 		if json.Unmarshal(raw, &pending) == nil && pending.IntentID == intent {
 			return ReviewPostResult{URL: m.URL}, fmt.Errorf("%w: the review of PR #%s is waiting for the person to confirm it in the Control UI; post again afterwards", ErrBitbucketAwaitingConfirmation, m.PR)
 		}
@@ -281,7 +283,7 @@ func (c *Context) reconcileBrokeredReview(m ReviewManifest, bundle, gitDir, inte
 		return result, fmt.Errorf("%d confirmed Bitbucket writes have an unknown outcome; the review remains pending until they are reconciled by reading the pull request", unknown)
 	}
 	// The request has been carried out; asking again would refuse its intent.
-	_ = os.Remove(filepath.Join(gitDir, bitbucketWriteRequestFile))
+	removeBrokeredRequest(gitDir, intent)
 	if result.CommentID == "" {
 		// An earlier attempt may have recorded the summary.
 		if saved, err := os.ReadFile(filepath.Join(bundle, "comment.id")); err == nil {
@@ -352,7 +354,7 @@ func brokeredWrites(worktree, slug, number, head, intent string, operations []br
 			!strings.EqualFold(receipt.Owner, workspace) || !strings.EqualFold(receipt.Repo, repo) || receipt.PR != pr || len(receipt.Results) != len(operations) {
 			return nil, fmt.Errorf("the Bitbucket write receipt does not match this request; inspect it")
 		}
-		_ = os.Remove(filepath.Join(gitDir, bitbucketWriteRequestFile))
+		removeBrokeredRequest(gitDir, intent)
 		return &receipt, nil
 	}
 	requestPath := filepath.Join(gitDir, bitbucketWriteRequestFile)
@@ -388,4 +390,80 @@ func brokeredStarted(gitDir, intent string) error {
 		return fmt.Errorf("the confirmed Bitbucket writes (%s) were started but left no receipt; their outcome is unknown: reconcile by reading the pull request", intent)
 	}
 	return nil
+}
+
+// removeBrokeredRequest removes the worktree's pending request only when it is
+// the given intent's: a later attempt's request is never removed.
+func removeBrokeredRequest(gitDir, intent string) {
+	path := filepath.Join(gitDir, bitbucketWriteRequestFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var pending brokeredRequest
+	if json.Unmarshal(raw, &pending) == nil && pending.IntentID == intent {
+		_ = os.Remove(path)
+	}
+}
+
+// brokeredAttempts runs short self-contained writes (ready, resolve) under
+// numbered intents of base: each earlier receipt is applied in order; a run
+// that ended failed or stopped is asked for again under the next intent
+// (the plugin carries an intent out once); an unknown outcome stops, to be
+// reconciled by reading the pull request. apply reports whether the writes
+// are complete; operations gives the writes still needed.
+func brokeredAttempts(worktree, slug, number, head, base string, operations func() []brokeredOperation, apply func(*brokeredReceipt) (complete bool, err error)) error {
+	for attempt := 0; attempt < 20; attempt++ {
+		ops := operations()
+		if len(ops) == 0 {
+			return nil
+		}
+		receipt, err := brokeredWrites(worktree, slug, number, head, fmt.Sprintf("%s-%d", base, attempt), ops)
+		if err != nil {
+			return err
+		}
+		complete, err := apply(receipt)
+		if err != nil || complete {
+			return err
+		}
+		for _, entry := range receipt.Results {
+			if entry.Status == "unknown" {
+				return fmt.Errorf("a confirmed Bitbucket write for PR #%s has an unknown outcome; reconcile by reading the pull request before asking again", number)
+			}
+		}
+	}
+	return fmt.Errorf("too many incomplete Bitbucket write attempts for PR #%s; inspect the pull request", number)
+}
+
+// readBrokeredReceipt reads one intent's receipt, checked against the pull
+// request; nil when there is none yet.
+func readBrokeredReceipt(gitDir, slug, number, intent string) (*brokeredReceipt, error) {
+	raw, err := os.ReadFile(filepath.Join(gitDir, bitbucketWriteReceiptsDir, intent+".receipt.json"))
+	if err != nil {
+		return nil, nil
+	}
+	workspace, repo, err := splitBitbucketSlug(slug)
+	if err != nil {
+		return nil, err
+	}
+	var receipt brokeredReceipt
+	if json.Unmarshal(raw, &receipt) != nil || receipt.Version != 1 || receipt.IntentID != intent ||
+		!strings.EqualFold(receipt.Owner, workspace) || !strings.EqualFold(receipt.Repo, repo) || strconv.Itoa(receipt.PR) != number {
+		return nil, fmt.Errorf("the Bitbucket write receipt %s does not match this request; inspect it", intent)
+	}
+	removeBrokeredRequest(gitDir, intent)
+	return &receipt, nil
+}
+
+// brokeredPendingRequest returns the intent of the worktree's pending request.
+func brokeredPendingRequest(gitDir string) (string, bool) {
+	raw, err := os.ReadFile(filepath.Join(gitDir, bitbucketWriteRequestFile))
+	if err != nil {
+		return "", false
+	}
+	var pending brokeredRequest
+	if json.Unmarshal(raw, &pending) != nil {
+		return "", false
+	}
+	return pending.IntentID, true
 }

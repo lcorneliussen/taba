@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"taba.sh/taba/internal/prompts"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -57,8 +58,16 @@ func TestReviewReadyRefusesInReviewModeEvenWhenAuthorized(t *testing.T) {
 
 func TestFirstAgentPromptSaysReviewOnly(t *testing.T) {
 	collection := t.TempDir()
+	render := func(collection, kind string) string {
+		t.Helper()
+		prompt, err := firstAgentPrompt(prompts.Context{Defaults: wtc.PromptDefaults()}, collection, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return prompt.String()
+	}
 	// A collection rendered by a release before the skill rename has only wtc-start.
-	if got := firstAgentPrompt(collection, "claude"); got != "/wtc-start" {
+	if got := render(collection, "claude"); got != "/wtc-start" {
 		t.Fatalf("ordinary prompt = %q", got)
 	}
 	if err := os.MkdirAll(filepath.Join(collection, ".agents", "skills", "taba-start"), 0755); err != nil {
@@ -67,17 +76,17 @@ func TestFirstAgentPromptSaysReviewOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(collection, ".agents", "skills", "taba-start", "SKILL.md"), []byte("start\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got := firstAgentPrompt(collection, "claude"); got != "/taba-start" {
+	if got := render(collection, "claude"); got != "/taba-start" {
 		t.Fatalf("prompt with taba-start rendered = %q", got)
 	}
-	if got := firstAgentPrompt(collection, "codex"); !strings.Contains(got, "taba-start skill (.agents/skills/taba-start/SKILL.md)") {
+	if got := render(collection, "codex"); !strings.Contains(got, "taba-start skill (.agents/skills/taba-start/SKILL.md)") {
 		t.Fatalf("codex prompt = %q", got)
 	}
 	if err := os.WriteFile(filepath.Join(collection, wtc.ReviewModeFile), []byte("{}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	for _, kind := range []string{"claude", "codex"} {
-		if got := firstAgentPrompt(collection, kind); !strings.Contains(got, "review-only") || !strings.Contains(got, "No commits, pushes") {
+		if got := render(collection, kind); !strings.Contains(got, "review-only") || !strings.Contains(got, "No commits, pushes") {
 			t.Fatalf("%s prompt does not say review-only: %q", kind, got)
 		}
 	}

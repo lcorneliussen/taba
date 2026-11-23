@@ -92,7 +92,8 @@ func ClassifyBitbucketRefusal(err error, credential string) BitbucketRefusal {
 		return BitbucketRefusal{Cause: RefusalUnsupported, Message: "the configured Bitbucket read credential cannot be used: " + text}
 	case classified != nil && classified.cause == bitbucketCauseAuth:
 		return BitbucketRefusal{Cause: RefusalUnauthorized, Message: "Bitbucket read refused: " + who + " was not accepted"}
-	case errors.Is(err, exec.ErrNotFound) || strings.Contains(text, "is not installed") || strings.Contains(text, "unsupported TWG version") || strings.Contains(text, bitbucketCauseBranchLookup):
+	case errors.Is(err, exec.ErrNotFound) || strings.Contains(text, "is not installed") || strings.Contains(text, "unsupported TWG version") || strings.Contains(text, bitbucketCauseBranchLookup) ||
+		strings.Contains(text, "Bitbucket client selection unavailable") || strings.Contains(text, "unsupported "+bitbucketClientVariable):
 		return BitbucketRefusal{Cause: RefusalClient, Message: "the Bitbucket client cannot run: " + text}
 	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(text, "timed out"):
 		return BitbucketRefusal{Cause: RefusalTimeout, Message: "Bitbucket read timed out"}

@@ -12,6 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"taba.sh/taba/internal/next"
+	"taba.sh/taba/internal/prompts"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -25,7 +26,7 @@ type statusNextDoneMsg struct {
 type statusNextHandoff struct {
 	owner  *wtc.Context
 	repo   wtc.StatusRepo
-	prompt string
+	prompt prompts.Text
 }
 
 // Keep process boundaries replaceable in tests; state comparison and routing
@@ -230,7 +231,10 @@ func statusNextRunInContext(ctx context.Context, c *wtc.Context, selected wtc.St
 			return failed(fmt.Errorf("this step needs its owner's action"))
 		}
 		skill = renderedSkill(owner.Collection, skill)
-		prompt := fmt.Sprintf("/skill %s %s: %s. Work on this repository only; recheck its state before acting. Carry out only this selected step; report follow-up actions for separate selection.", skill, r.Dir, r.Next.Reason)
+		prompt, err := prompts.Render(owner.Prompts(), "next.step", map[string]string{"skill": skill, "dir": r.Dir, "reason": r.Next.Reason})
+		if err != nil {
+			return failed(err)
+		}
 		if deferHandoff {
 			return statusNextDoneMsg{handoff: &statusNextHandoff{owner: owner, repo: r, prompt: prompt}}
 		}
@@ -238,7 +242,7 @@ func statusNextRunInContext(ctx context.Context, c *wtc.Context, selected wtc.St
 	}
 }
 
-func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt string, run statusNextRunner, contexts ...context.Context) tea.Msg {
+func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt prompts.Text, run statusNextRunner, contexts ...context.Context) tea.Msg {
 	failed := func(err error) tea.Msg { return statusNextDoneMsg{err: err} }
 	ctx := context.Background()
 	if len(contexts) > 0 {
@@ -248,7 +252,7 @@ func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt string, run s
 		return failed(err)
 	}
 	instruction := func(reason string) tea.Msg {
-		return statusNextDoneMsg{text: reason + ". Not sent. Ask the collection's agent: " + prompt}
+		return statusNextDoneMsg{text: reason + ". Not sent. Ask the collection's agent: " + prompt.String()}
 	}
 	// The owning collection's named author pane is the destination. Focus can
 	// point to status, a shell or a reviewer, so it never selects a recipient.
@@ -293,7 +297,7 @@ func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt string, run s
 	if err := ctx.Err(); err != nil {
 		return failed(err)
 	}
-	_, err = run.herdr(session, "agent", "prompt", pane.ID, prompt)
+	_, err = run.herdr(session, "agent", "prompt", pane.ID, prompt.String())
 	result := statusNextDoneMsg{err: err}
 	if err == nil {
 		result.text = "Sent to " + destination + "; completion pending"
@@ -353,9 +357,16 @@ func statusNextBatch(ctx context.Context, c *wtc.Context, targets []wtc.StatusRe
 			if len(current) == 0 {
 				continue
 			}
-			prompt := "/skill wtc Carry out only these selected single steps, sequentially. Recheck current state, ownership and branch policy. Honor publication authority and confirmation requirements; commit steps save local commits only. Do not automatically continue to another step.\n"
+			var steps []string
 			for _, h := range current {
-				prompt += h.prompt + "\n"
+				steps = append(steps, h.prompt.String())
+			}
+			prompt, err := prompts.Render(current[0].owner.Prompts(), "next.batch", map[string]string{"steps": strings.Join(steps, "\n")})
+			if err != nil {
+				for _, h := range current {
+					lines = append(lines, h.repo.Dir+": handoff failed: "+err.Error())
+				}
+				continue
 			}
 			if ctx.Err() != nil {
 				for _, h := range current {
