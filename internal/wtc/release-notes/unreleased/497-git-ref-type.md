@@ -7,4 +7,5 @@
   `origin/<branch>` or fully qualified: a bare `default_ref: main` now fails
   with its value named, instead of following a local branch that fetches never
   move. A sandbox's catch-up merge commit names `refs/remotes/origin/<base>`.
-  ([#497](https://github.com/lcorneliussen/taba/issues/497)).
+  ([#497](https://github.com/lcorneliussen/taba/issues/497),
+  [#506](https://github.com/lcorneliussen/taba/pull/506)).
