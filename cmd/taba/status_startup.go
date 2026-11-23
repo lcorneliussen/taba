@@ -13,10 +13,10 @@ import (
 )
 
 type statusStartupOptions struct {
-	all, procs, reposOnly, noFetch, noClick, click bool
-	reposChanged, noClickChanged                   bool
-	watchSeconds, fetchAgeSeconds                  int
-	incompatible                                   bool
+	all, procs, reposOnly, noFetch, noClick, click, mouse bool
+	reposChanged, noClickChanged                          bool
+	watchSeconds, fetchAgeSeconds                         int
+	incompatible                                          bool
 }
 type statusDiscoveredMsg struct {
 	receiver *wtc.Context
@@ -107,7 +107,7 @@ func (m statusStartupModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if opt.click {
 			opt.noClick = false
 		}
-		next := newStatusTUIModel(msg.receiver, opt.all, opt.procs, opt.reposOnly, opt.noFetch, opt.noClick, time.Duration(seconds)*time.Second, time.Duration(background)*time.Second, time.Duration(opt.fetchAgeSeconds)*time.Second, m.ctx, m.cancel)
+		next := newStatusTUIModel(msg.receiver, opt.all, opt.procs, opt.reposOnly, opt.noFetch, opt.noClick, opt.mouse, time.Duration(seconds)*time.Second, time.Duration(background)*time.Second, time.Duration(opt.fetchAgeSeconds)*time.Second, m.ctx, m.cancel)
 		next.width, next.height = m.width, m.height
 		next.showHelp = m.help
 		if !m.activityAt.IsZero() {
