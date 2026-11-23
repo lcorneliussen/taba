@@ -86,6 +86,8 @@ func (c *Context) upgradeDoctor(receiver *Context, version string) UpgradeDoctor
 		cmd := exec.CommandContext(ctx, mise, args...)
 		cmd.Dir = receiver.Collection
 		cmd.Env = env
+		// A child that outlives a killed mise must not hold the pipes open.
+		cmd.WaitDelay = 5 * time.Second
 		var stdout, stderr limitedBuffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
 		err := cmd.Run()

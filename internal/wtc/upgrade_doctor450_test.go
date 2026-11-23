@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // doctor450Fixture installs a fake mise that selects releases from a fake
@@ -352,5 +353,32 @@ func TestOnlyRolloutRequestsUpgradeDoctor450(t *testing.T) {
 	}
 	if (CatchUpOptions{All: true, InstallTools: true}).UpgradeDoctor {
 		t.Fatal("ordinary catch-up requests diagnostics")
+	}
+}
+
+// Findings are bounded: failing checks only, at most 20, one line each of at
+// most 300 runes; the rest are counted, not listed.
+func TestUpgradeDoctorBoundsFindings450(t *testing.T) {
+	c, bin := upgradeFixture(t)
+	f := newDoctor450Fixture(t, bin)
+	checks := []string{`{"name":"git","ok":true,"detail":"fine"}`, `{"name":"long","ok":false,"detail":"first line\n  second line` + strings.Repeat("é", 400) + `"}`}
+	for i := 0; i < 24; i++ {
+		checks = append(checks, `{"name":"check-`+strconv.Itoa(i)+`","ok":false,"detail":{"n":`+strconv.Itoa(i)+`}}`)
+	}
+	f.release(t, "0.1.12", "0.1.12", `{"ok":true,"data":[`+strings.Join(checks, ",")+`]}`, 0)
+	result, err := c.Upgrade(UpgradeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := result.Doctor
+	if d == nil || d.Status != "warnings" || len(d.Findings) != upgradeDoctorMaxFindings || d.Truncated != 25-upgradeDoctorMaxFindings {
+		t.Fatalf("findings not bounded: %+v", d)
+	}
+	long := d.Findings[0]
+	if long.Name != "long" || utf8.RuneCountInString(long.Detail) != upgradeDoctorMaxDetail || !strings.HasPrefix(long.Detail, "first line second line") || !strings.HasSuffix(long.Detail, "…") {
+		t.Fatalf("detail not bounded to one line: %d runes %q", utf8.RuneCountInString(long.Detail), long.Detail)
+	}
+	if d.Findings[1].Name != "check-0" || d.Findings[1].Detail != "map[n:0]" {
+		t.Fatalf("structured detail: %+v", d.Findings[1])
 	}
 }
