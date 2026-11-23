@@ -86,8 +86,10 @@ type Effect func(ctx context.Context) (Outcome, error)
 
 // Intent is a side effect that must take effect at most once.
 type Intent struct {
-	// Marker is a file that exists from before the first attempt until the
-	// outcome is known. While it exists, no other Do of this intent attempts.
+	// Marker is a file that exists from before the first attempt until an
+	// outcome is recorded or a refusal is known. It stays after an unknown
+	// outcome or a failed Record. While it exists, no other Do of this intent
+	// attempts.
 	Marker string
 	// Done, if set, reports whether an earlier run already achieved the
 	// intent. Do asks while it holds the marker, so a run that began before

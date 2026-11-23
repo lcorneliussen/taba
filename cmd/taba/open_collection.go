@@ -449,7 +449,7 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	err := retry.Intent{Marker: marker, Done: occupied}.Do(context.Background(), retry.Policy{Every: time.Second, Attempts: 15}, start)
 	switch {
 	case errors.Is(err, retry.ErrUnresolved):
-		return fmt.Errorf("an earlier agent start in this collection has no confirmed outcome; inspect pane %s, then remove %s to allow another start", pane, marker)
+		return fmt.Errorf("an agent start in this collection is in progress or has no confirmed outcome; when no taba open is running, inspect pane %s, then remove %s to allow another start", pane, marker)
 	case errors.Is(err, retry.ErrDone):
 		return fmt.Errorf("another open started a process in pane %s meanwhile; no agent start sent", pane)
 	case err != nil:

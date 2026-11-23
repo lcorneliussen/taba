@@ -251,7 +251,7 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 		})
 		switch {
 		case errors.Is(err, retry.ErrUnresolved):
-			return ReviewPostResult{}, fmt.Errorf("cannot start review comment create; reconcile any prior uncertain create (comment.create-pending): %w", err)
+			return ReviewPostResult{}, fmt.Errorf("cannot start review comment create: another review post may be running, or an earlier create is uncertain; when no review post is running, reconcile any prior uncertain create (comment.create-pending): %w", err)
 		case errors.Is(err, retry.ErrDone):
 			return ReviewPostResult{}, fmt.Errorf("another review post created the comment meanwhile; post again to update it")
 		case err != nil:
