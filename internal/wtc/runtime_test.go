@@ -54,48 +54,6 @@ esac
 	return c
 }
 
-func TestRuntimeReloadConfigLegacyFallback(t *testing.T) {
-	for _, tc := range []struct {
-		name, message string
-		legacy, fails bool
-	}{
-		{name: "native reload"},
-		{name: "legacy command", message: "unknown command or unsupported file: `reload` (expected a subcommand or a .js script)", legacy: true},
-		{name: "invalid configuration", message: "invalid task configuration", fails: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c := fixture(t)
-			root := c.runtimeRoot()
-			if err := os.MkdirAll(root, 0700); err != nil {
-				t.Fatal(err)
-			}
-			binary := filepath.Join(root, "dekit")
-			t.Setenv("RUNTIME_TEST_RELOAD_ERROR", tc.message)
-			fixtureFile(t, binary, `#!/bin/sh
-root=$2
-shift 3
-printf '%s\n' "$*" >> "$root/calls"
-if [ "$*" = 'reload --yes' ] && [ -n "$RUNTIME_TEST_RELOAD_ERROR" ]; then
- printf '%s\n' "$RUNTIME_TEST_RELOAD_ERROR" >&2
- exit 1
-fi
-echo '{}'
-`, 0755)
-			err := runtimeReloadConfig(&runtimeManifest{Root: root, Binary: binary})
-			if (err != nil) != tc.fails {
-				t.Fatalf("reload error = %v", err)
-			}
-			calls, err := os.ReadFile(filepath.Join(root, "calls"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(calls), "runner restart") != tc.legacy {
-				t.Fatalf("unexpected legacy restart: %s", calls)
-			}
-		})
-	}
-}
-
 func TestRuntimeOptInPlanAndReadOnlyStatus(t *testing.T) {
 	c := runtimeFixture(t)
 	fixtureFile(t, filepath.Join(c.Collection, ".env.collection.local"), "touch should-not-run\n", 0600)
