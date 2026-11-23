@@ -305,13 +305,16 @@ func addReviewCommands(root *cobra.Command, asJSON *bool) {
 				return fmt.Errorf("review gate closed for %s #%s: %s %s", name, args[0], state.State, state.Verdict)
 			}
 		}
-		var action *exec.Cmd
-		if forge == "github" {
-			action = exec.Command("gh", "pr", "ready", args[0], "--repo", slug)
-		} else {
-			action = exec.Command("bb", "pr", "ready", args[0])
-			action.Dir = worktree
+		if forge != "github" {
+			if err := wtc.BitbucketMarkReady(c.ConfigRoot, worktree, slug, args[0], state.PRHead); err != nil {
+				return err
+			}
+			if *asJSON {
+				return emit(envelope{OK: true, Data: map[string]any{"repo": name, "pr": args[0], "override": authorization != ""}, Summary: "PR marked ready"}, true)
+			}
+			return nil
 		}
+		action := exec.Command("gh", "pr", "ready", args[0], "--repo", slug)
 		if !*asJSON {
 			action.Stdout = os.Stdout
 		}

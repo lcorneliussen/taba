@@ -320,6 +320,43 @@ test("what changed on a pull request, one line each", () => {
   assert.deepEqual(changes(pr, { ...pr, number: 3, url: "u3", draft: false }), ["site: pull request #3 (u3) opened."]);
 });
 
+test("checks that could not be read are no news, and a later read is not announced twice (#471)", () => {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), "pull-requests.json");
+  const look = (checks, state = "open") => [{ path: "/w/app", repo: "app", pullRequest: { number: 7, url: "u", state, draft: false, checks } }];
+  const watch = pullRequestWatch(file);
+  assert.deepEqual(watch.observe("main", "s", look("pending")), []);
+  assert.deepEqual(watch.observe("main", "s", look("success")), ["app: checks passed on #7 (u)."]);
+  // A refresh that could not read checks, then one that reads them again.
+  assert.deepEqual(watch.observe("main", "s", look("unknown")), []);
+  assert.deepEqual(watch.observe("main", "s", look("success")), []);
+  assert.deepEqual(watch.observe("main", "s", look("success")), []);
+  // A Bitbucket pull request declined is closed without merging.
+  assert.deepEqual(watch.observe("main", "s", look("unknown", "closed")), ["app: pull request #7 (u) was closed without merging."]);
+});
+
+test("a refused pull request read is news once per cause, survives restarts and transient failures, and its recovery once (#471)", () => {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), "pull-requests.json");
+  const pr = { number: 7, url: "u", state: "open", draft: false, checks: "success" };
+  const ok = [{ path: "/w/app", repo: "app", pullRequest: pr }];
+  const refused = (cause, access = true) => [{ path: "/w/app", repo: "app", pullRequest: null, pullRequestRefusal: { cause, access, message: `Bitbucket read refused (${cause})` } }];
+  const watch = pullRequestWatch(file);
+  assert.deepEqual(watch.observe("main", "s", ok), []);
+  // Access removed: told once, not per poll, not after a restart.
+  assert.deepEqual(watch.observe("main", "s", refused("not-visible")), ["app: its pull request cannot be read — Bitbucket read refused (not-visible). Its state is unknown until that is fixed."]);
+  assert.deepEqual(watch.observe("main", "s", refused("not-visible")), []);
+  assert.deepEqual(pullRequestWatch(file).observe("main", "s", refused("not-visible")), []);
+  // A network failure in between is no news and does not reset the cause.
+  assert.deepEqual(watch.observe("main", "s", refused("network", false)), []);
+  assert.deepEqual(watch.observe("main", "s", refused("not-visible")), []);
+  // Another cause is news once.
+  assert.deepEqual(watch.observe("main", "s", refused("unauthorized")), ["app: its pull request cannot be read — Bitbucket read refused (unauthorized). Its state is unknown until that is fixed."]);
+  // Recovery is news once; the pull request itself did not change.
+  assert.deepEqual(watch.observe("main", "s", ok), ["app: its pull request can be read again."]);
+  assert.deepEqual(watch.observe("main", "s", ok), []);
+  // Revoked again: told again.
+  assert.deepEqual(watch.observe("main", "s", refused("not-visible")).length, 1);
+});
+
 test("the pull requests seen are kept across restarts, and a failed look is no news", () => {
   const file = path.join(mkdtempSync(path.join(os.tmpdir(), "wtc-watch-")), "pull-requests.json");
   const pr = { number: 2, url: "u", state: "open", draft: true, checks: "none" };

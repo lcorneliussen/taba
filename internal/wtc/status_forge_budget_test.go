@@ -11,7 +11,9 @@ import (
 	"taba.sh/taba/internal/testenv"
 )
 
-func TestMain(m *testing.M) { testenv.Main(m, forgeFixtures) }
+// The network guard comes first: it reads HOME before forgeFixtures moves it,
+// and its check (that no real forge client was launched) runs last (#471).
+func TestMain(m *testing.M) { testenv.Main(m, networkGuardFixture, forgeFixtures) }
 
 func forgeFixtures() (cleanup func() error) {
 	statusTurnOffSharedForgeBudgetAndAudit()
