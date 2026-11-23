@@ -41,6 +41,15 @@ case "${MUTATE:-}" in
   extra) printf 'x' > "$bundle/scratch.txt" ;;
   unreadable) printf '{}' > "$bundle/manifest.json"; chmod 000 "$repo/feature.go" ;;
 esac
+# Non-regular entries at allowed output paths: a link to a valid file outside
+# the bundle, or a FIFO.
+place() {
+  rm -f "$2"
+  case "$1" in
+    link) printf '%s\n' "$3" > "$TMPDIR/outside-$(basename "$2")"; ln -s "$TMPDIR/outside-$(basename "$2")" "$2" ;;
+    fifo) mkfifo "$2" ;;
+  esac
+}
 if [ "$id" = lead ] && [ "${MUTATE:-}" = drop-finding ]; then rm -f "$bundle/findings/code.json"; fi
 # Another writer changes the caller's bundle while the run is in progress.
 if [ -n "${CALLER_BUNDLE:-}" ] && [ "$id" != lead ]; then printf 'concurrent\n' > "$CALLER_BUNDLE/findings/$id.json"; fi
@@ -51,9 +60,17 @@ observe() {
 if [ "$id" = lead ]; then
   printf '**Local review: pass**\n\n%s\n' "$(observe)" > "$bundle/summary.md"
   printf 'pass\n' > "$bundle/verdict"
+  case "${MUTATE:-}" in
+    link-summary) place link "$bundle/summary.md" '**Local review: pass**' ;;
+    fifo-summary) place fifo "$bundle/summary.md" ;;
+  esac
   exit 0
 fi
 printf '{"concern":"%s","status":"ok","notes":"%s","findings":[]}\n' "$id" "$(observe)" > "$bundle/findings/$id.json"
+case "${MUTATE:-}" in
+  link-finding) place link "$bundle/findings/$id.json" "{\"concern\":\"$id\",\"status\":\"ok\",\"findings\":[]}" ;;
+  fifo-finding) place fifo "$bundle/findings/$id.json" ;;
+esac
 `
 
 type reviewSentinelFixture struct {
@@ -269,7 +286,7 @@ func TestPublicReviewRunsOutsideCollectionContext(t *testing.T) {
 }
 
 func TestPublicReviewRefusesUnexpectedWrites(t *testing.T) {
-	for _, mode := range []string{"manifest", "source", "extra", "drop-finding"} {
+	for _, mode := range []string{"manifest", "source", "extra", "drop-finding", "link-finding", "fifo-finding", "link-summary", "fifo-summary"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newReviewSentinelFixture(t)
 			t.Setenv("MUTATE", mode)
@@ -285,6 +302,9 @@ func TestPublicReviewRefusesUnexpectedWrites(t *testing.T) {
 			got, err := f.c.RunReviewBundle(bundle.Dir, reviewSentinelOptions)
 			if err == nil || !strings.Contains(err.Error(), "outside its outputs") {
 				t.Fatalf("unexpected write was accepted: %+v %v", got, err)
+			}
+			if (strings.HasPrefix(mode, "link-") || strings.HasPrefix(mode, "fifo-")) && !strings.Contains(err.Error(), "(not a regular file)") {
+				t.Fatalf("non-regular output was not rejected as such: %v", err)
 			}
 			manifestAfter, _ := os.ReadFile(filepath.Join(bundle.Dir, "manifest.json"))
 			if string(manifestAfter) != string(manifestBefore) {

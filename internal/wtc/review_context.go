@@ -411,7 +411,14 @@ func (x *reviewExecContext) checkPhase(phase string, allowed func(rel string, ex
 	}
 	for rel, sum := range now {
 		before, existed := x.baseline[rel]
-		if (!existed || before != sum) && !allowed(rel, existed, false) {
+		if existed && before == sum {
+			continue
+		}
+		// An allowed path permits a changed regular file only; a link or
+		// special file is unexpected wherever it appears.
+		if !reviewRegularEntry(sum) {
+			unexpected = append(unexpected, "bundle/"+rel+" (not a regular file)")
+		} else if !allowed(rel, existed, false) {
 			unexpected = append(unexpected, "bundle/"+rel)
 		}
 	}
@@ -669,8 +676,9 @@ func reviewLinkEscapes(target string) bool {
 }
 
 // reviewTreeFiles hashes every regular file below root by relative path.
-// Symlinks are recorded by target; other file types are recorded as
-// "special", which no phase allows.
+// Symlinks are recorded by target and other file types as "special"; the
+// phase audit rejects a new or changed entry of either kind at any path,
+// allowed output paths included.
 func reviewTreeFiles(root string) (map[string]string, error) {
 	files := map[string]string{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -821,4 +829,9 @@ func (x *reviewExecContext) returnResults(bundle string) error {
 		}
 	}
 	return nil
+}
+
+// reviewRegularEntry reports whether a reviewTreeFiles entry is a regular file.
+func reviewRegularEntry(sum string) bool {
+	return sum != "special" && !strings.HasPrefix(sum, "link:")
 }

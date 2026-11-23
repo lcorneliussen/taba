@@ -410,6 +410,16 @@ func (c *Context) runReviewConcern(dirs reviewRunDirs, manifest ReviewManifest, 
 	}
 	_, _, output, stats, runErr := runReviewChain(dirs, prompt, spec, opt.Timeout, filepath.Join(dirs.runner, "stats", id+".json"))
 	_ = os.WriteFile(filepath.Join(dirs.runner, ".logs", id+".out"), output, 0644)
+	if dirs.exec != nil {
+		// A link or special file in place of the findings is left as the
+		// reviewer made it, unread and not overwritten (a FIFO would block
+		// both), so the phase audit rejects it.
+		if info, err := os.Lstat(findings); err == nil && !info.Mode().IsRegular() {
+			stats.Status = "error"
+			_ = writeReviewStats(dirs.runner, id, stats)
+			return "ERROR " + id + ": findings is not a regular file\n"
+		}
+	}
 	status := "ok"
 	if runErr == nil {
 		runErr = validateReviewFindings(findings, id)
