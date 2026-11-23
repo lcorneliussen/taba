@@ -243,3 +243,95 @@ func TestBrokeredWritesStartedWithoutReceiptAreReconciledNotAskedAgain(t *testin
 		t.Fatal("the summary create must stay pending")
 	}
 }
+
+// Hosted review findings on 63fa7f4 (#471).
+func TestBitbucketSelectionFollowsTheControlRootEverywhere(t *testing.T) {
+	h := newNoBBHost(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "taba.env"), []byte("TABA_BITBUCKET_TRANSPORT=bb\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Review reads given the collection's control root use its selection.
+	if got := reviewRepositoryAudience(root, t.TempDir(), "bitbucket", "acme/alpha"); got != "unknown" {
+		t.Fatalf("audience = %q", got)
+	}
+	if strings.Contains(h.read(t, h.log), "repo get") {
+		t.Fatal("a review read ignored the control root's bb selection and ran twg")
+	}
+	if !strings.Contains(h.read(t, h.networkLog), "network-tool:bb") {
+		t.Fatal("the review read did not use the selected bb client")
+	}
+	os.WriteFile(h.networkLog, nil, 0o600) // the bb launch above was intended
+	// Writes find the control root through the legacy alias as well.
+	unsetEnv(t, "BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "BITBUCKET_PUBLISH", "TABA_CONFIG_ROOT")
+	t.Setenv("WTC_CONFIG_ROOT", root)
+	if route, err := selectedBitbucketWrite("", true); err != nil || route != bitbucketWriteBB {
+		t.Fatalf("write route = %s, %v", route, err)
+	}
+	// An unreadable or unsupported selection is a client refusal, not transient.
+	for _, err := range []error{
+		&bitbucketReadError{cause: bitbucketSelectionCause(errBitbucketClientDefaults, "taba.env")},
+		&bitbucketReadError{cause: bitbucketSelectionCause(errBitbucketClientSelection, "environment")},
+	} {
+		if refusal := ClassifyBitbucketRefusal(err, ""); refusal.Cause != RefusalClient || !refusal.Access() {
+			t.Fatalf("%v -> %+v", err, refusal)
+		}
+	}
+}
+
+func TestBrokeredReadyAndResolveAskAgainAfterAFailedReceipt(t *testing.T) {
+	f := newBrokeredFixture(t)
+	// Ready: refused once, asked again under the next intent, then done.
+	if err := BitbucketMarkReady("", f.m.RepoDir, "acme/alpha", "7", "aaaaaaaaaaaa"); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("ready = %v", err)
+	}
+	first := f.request(t)
+	f.receipt(t, first.IntentID, false, "failed")
+	if err := BitbucketMarkReady("", f.m.RepoDir, "acme/alpha", "7", "aaaaaaaaaaaa"); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("ready after a failed receipt = %v", err)
+	}
+	second := f.request(t)
+	if second.IntentID == first.IntentID {
+		t.Fatal("a failed ready must be asked again under a new intent")
+	}
+	f.receipt(t, second.IntentID, true, "done")
+	if err := BitbucketMarkReady("", f.m.RepoDir, "acme/alpha", "7", "aaaaaaaaaaaa"); err != nil {
+		t.Fatalf("ready after confirmation = %v", err)
+	}
+
+	// Resolve: one of two threads failed; only that one is asked for again.
+	rows := []ReviewInlineRecord{{Key: "k1", File: "a.go", Line: 3, ID: "901"}, {Key: "k2", File: "b.go", Line: 4, ID: "902"}}
+	if err := writeInlineRecords(f.bundle, rows); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), ReviewResolveOptions{}); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("resolve = %v", err)
+	}
+	r1 := f.request(t)
+	if len(r1.Operations) != 2 {
+		t.Fatalf("first resolve request = %+v", r1)
+	}
+	f.receipt(t, r1.IntentID, false, "done:901", "failed")
+	if _, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), ReviewResolveOptions{}); !errors.Is(err, ErrBitbucketAwaitingConfirmation) {
+		t.Fatalf("resolve after a partial receipt = %v", err)
+	}
+	r2 := f.request(t)
+	if r2.IntentID == r1.IntentID || len(r2.Operations) != 1 || r2.Operations[0].Comment != 902 {
+		t.Fatalf("follow-up resolve request = %+v", r2)
+	}
+	if got := readInlineRecords(f.bundle); !got[0].Resolved || got[1].Resolved {
+		t.Fatalf("rows after the partial receipt = %+v", got)
+	}
+	f.receipt(t, r2.IntentID, true, "done:902")
+	result, err := f.c.resolveReviewBrokered(f.m, f.bundle, readInlineRecords(f.bundle), ReviewResolveOptions{})
+	if err != nil || result.Resolved != 1 || !readInlineRecords(f.bundle)[1].Resolved {
+		t.Fatalf("final resolve = %+v, %v", result, err)
+	}
+	// An unknown outcome stops instead of asking again.
+	g := newBrokeredFixture(t)
+	BitbucketMarkReady("", g.m.RepoDir, "acme/alpha", "7", "aaaaaaaaaaaa")
+	g.receipt(t, g.request(t).IntentID, false, "unknown")
+	if err := BitbucketMarkReady("", g.m.RepoDir, "acme/alpha", "7", "aaaaaaaaaaaa"); err == nil || !strings.Contains(err.Error(), "unknown outcome") {
+		t.Fatalf("ready after an unknown receipt = %v", err)
+	}
+}

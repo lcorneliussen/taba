@@ -96,7 +96,7 @@ func reviewPRHead(manifest ReviewManifest) (string, error) {
 	if manifest.Forge == "github" {
 		out, err = reviewForgeCommand(manifest.RepoDir, "gh", []string{"pr", "view", manifest.PR, "--repo", manifest.Slug, "--json", "headRefOid"}, nil)
 	} else if manifest.Forge == "bitbucket" {
-		out, err = bitbucketReadPRWith(bitbucketReadOperation(context.Background(), ""), manifest.Slug, manifest.PR, reviewBBPRArgs(manifest.Slug, manifest.PR))
+		out, err = bitbucketReadPRWith(bitbucketReadOperation(context.Background(), manifest.ConfigRoot), manifest.Slug, manifest.PR, reviewBBPRArgs(manifest.Slug, manifest.PR))
 	} else {
 		return "", fmt.Errorf("unknown forge %q", manifest.Forge)
 	}
@@ -132,6 +132,7 @@ func (c *Context) PostReviewBundle(bundle string, opt ReviewPostOptions) (Review
 	if err != nil {
 		return ReviewPostResult{}, err
 	}
+	manifest.ConfigRoot = c.ConfigRoot
 	worktree, slug, forge, err := c.ReviewRepo(manifest.Repo)
 	if err != nil {
 		return ReviewPostResult{}, err
@@ -297,7 +298,7 @@ func postReviewComment(m ReviewManifest, cid, body string) (ReviewPostResult, er
 		}
 		return ReviewPostResult{CommentID: strconv.FormatInt(result.ID, 10), URL: result.HTMLURL}, nil
 	}
-	switch route, err := selectedBitbucketWrite("", true); {
+	switch route, err := selectedBitbucketWrite(m.ConfigRoot, true); {
 	case err != nil:
 		return ReviewPostResult{}, err
 	case route == bitbucketWriteBroker:
@@ -646,7 +647,7 @@ func postReviewInlineWith(m ReviewManifest, bundle string, queue *[]reviewInline
 						}
 					}
 				}
-			} else if route, routeErr := selectedBitbucketWrite("", true); routeErr != nil || route == bitbucketWriteBroker || route == bitbucketWriteTWG {
+			} else if route, routeErr := selectedBitbucketWrite(m.ConfigRoot, true); routeErr != nil || route == bitbucketWriteBroker || route == bitbucketWriteTWG {
 				var result ReviewPostResult
 				err := routeErr
 				switch {

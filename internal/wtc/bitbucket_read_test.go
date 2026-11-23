@@ -202,7 +202,7 @@ func TestBitbucketReadsWithoutBBUseTWGByDefault(t *testing.T) {
 	if _, err := parseBitbucketBundleComments(comments); err != nil {
 		t.Fatalf("TWG comments must satisfy the strict bundle parser: %v", err)
 	}
-	if got := reviewRepositoryAudience(t.TempDir(), "bitbucket", "acme/alpha"); got != "private" {
+	if got := reviewRepositoryAudience("", t.TempDir(), "bitbucket", "acme/alpha"); got != "private" {
 		t.Fatalf("audience = %q", got)
 	}
 	if _, err := BitbucketReadOpenPRs("", "acme/alpha", "feature", 100); err != nil {
