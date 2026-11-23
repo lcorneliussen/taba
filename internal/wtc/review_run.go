@@ -86,8 +86,9 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (ReviewRu
 	return c.RunReviewBundleContext(context.Background(), bundle, opt)
 }
 
-// errReviewInterrupted marks a run its caller cancelled. It wraps the context
-// error, so errors.Is(err, context.Canceled) holds for it.
+// errReviewInterrupted marks a run its caller cancelled. The error also wraps
+// the context's cause: context.Canceled for a plain cancel, or the signal for
+// a signal context.
 var errReviewInterrupted = errors.New("review run interrupted")
 
 // RunReviewBundleContext runs a review that stops when ctx is done: no further
@@ -281,8 +282,10 @@ launch:
 			mu.Unlock()
 		}(id, path)
 	}
-	// Every launched reviewer has stopped and been waited for here, so an
-	// isolated context is removed only after its processes are gone.
+	// Every launched reviewer's leader has been waited for and its process
+	// group swept here, so an isolated context is removed only after that. A
+	// descendant that left its group is not waited for; the context or stage
+	// fences what it writes.
 	wg.Wait()
 	var auditErr error
 	if dirs.exec != nil {
@@ -487,7 +490,12 @@ func copyReviewStage(bundle, stage string) error {
 		}
 		switch {
 		case d.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm()|0700)
+			// Modes are set explicitly: the umask must not make the copy
+			// differ from the bundle it is compared with on return.
+			if err := os.MkdirAll(target, 0700); err != nil {
+				return err
+			}
+			return os.Chmod(target, info.Mode().Perm()|0700)
 		case d.Type()&fs.ModeSymlink != 0:
 			link, err := os.Readlink(path)
 			if err != nil {
@@ -499,7 +507,10 @@ func copyReviewStage(bundle, stage string) error {
 			if err != nil {
 				return err
 			}
-			return os.WriteFile(target, data, info.Mode().Perm())
+			if err := os.WriteFile(target, data, 0600); err != nil {
+				return err
+			}
+			return os.Chmod(target, info.Mode().Perm())
 		}
 		return nil
 	})
@@ -868,9 +879,10 @@ func launchReviewAgent(parent context.Context, dirs reviewRunDirs, prompt, agent
 
 // stopReviewGroup kills what remains of a stopped reviewer's process group
 // right after Wait has returned. It signals only the group this runner created
-// for cmd, by the leader's pid: Linux and macOS do not hand out a pid that is
-// still the id of a process group with live members, so while any member is
-// left the id names this group. Once the group is empty the signal finds
+// for cmd, by the leader's pid. While any member of that group is alive the
+// id names this group: Linux keeps a pid allocated while any task still uses
+// it as a group id, and the macOS (XNU) pid allocator skips ids of existing
+// process groups and sessions. Once the group is empty the signal finds
 // nothing (ESRCH), unless in the moment since Wait the pid space wrapped and a
 // new process made itself a group leader under that id. A descendant that
 // left the group (setsid, setpgid) is not the runner's to stop and is not

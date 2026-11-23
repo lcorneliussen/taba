@@ -133,7 +133,7 @@ func newReview487Fixture(t *testing.T, public bool) review487Fixture {
 
 var review487Options = ReviewRunOptions{Strong: "test:", Standard: "test:", Fast: "test:", Lead: "test:", Parallel: 1}
 
-// waitFor polls a read-only condition within a bounded deadline.
+// review487WaitFor polls a read-only condition within a bounded deadline.
 func review487WaitFor(t *testing.T, what string, within time.Duration, done func() bool) {
 	t.Helper()
 	err := retry.Poll(context.Background(), retry.Policy{Every: 10 * time.Millisecond, Within: within}, func(context.Context) (bool, error) {

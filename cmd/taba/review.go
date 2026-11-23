@@ -153,7 +153,8 @@ func addReviewCommands(root *cobra.Command, asJSON *bool) {
 		}
 		// While reviewers run, an interrupt, termination or hangup stops
 		// them and their process groups before this command returns. A
-		// second signal after that falls back to the default action.
+		// further signal during that bounded stop is absorbed; once the run
+		// has returned, signals take their default action again.
 		runCtx, stopSignals := reviewRunSignalContext(cmd.Context())
 		result, runErr := c.RunReviewBundleContext(runCtx, args[0], wtc.ReviewRunOptions{Strong: strong, Standard: standard, Fast: fast, Lead: lead, Parallel: parallel, Timeout: time.Duration(timeout) * time.Second, Only: ids})
 		stopSignals()
