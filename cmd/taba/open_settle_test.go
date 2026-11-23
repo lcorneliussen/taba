@@ -1,19 +1,19 @@
 package main
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
 
 // countSettleSleeps replaces settle pacing with a counter for one test.
 func countSettleSleeps(t *testing.T) *int {
 	t.Helper()
 	count := 0
-	previous := openSettleSleep
-	openSettleSleep = func(time.Duration) { count++ }
-	t.Cleanup(func() { openSettleSleep = previous })
+	previous := openSettlePause
+	openSettlePause = func(context.Context) error { count++; return nil }
+	t.Cleanup(func() { openSettlePause = previous })
 	return &count
 }
 

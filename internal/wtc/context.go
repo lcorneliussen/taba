@@ -82,6 +82,9 @@ type Config struct {
 	Runtime struct {
 		Backend string `toml:"backend"`
 		Binary  string `toml:"binary"`
+		// Declarations and HealthPath: see runtime_paths.go.
+		Declarations []string `toml:"declarations"`
+		HealthPath   string   `toml:"health_path"`
 	} `toml:"runtime"`
 	Status struct {
 		// ReturnMerged lets a status refresh return a clean worktree whose

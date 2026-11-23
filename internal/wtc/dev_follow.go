@@ -532,7 +532,7 @@ func EnsureDevFollow(ctx context.Context, collection string) (DevFollowState, er
 		select {
 		case <-ctx.Done():
 			return state, ctx.Err()
-		case <-time.After(150 * time.Millisecond):
+		case <-time.After(150 * time.Millisecond): //nolint:forbidigo // A quiet period inside one build pass.
 		}
 		quiet, err := devFingerprint(ctx, state.Source)
 		if err != nil {

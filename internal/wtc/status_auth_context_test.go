@@ -463,24 +463,23 @@ func TestStatusAuth441CommittedOrderingReceiptStaysWithPinnedContext(t *testing.
 	t.Setenv("GH_TOKEN", "synthetic-A")
 	ctx := statusAuthOperation(context.Background())
 	started := time.Now()
-	// Model the publication boundary: data committed, ordering receipt next.
-	if !statusWriteForgeEntryObservedContext(ctx, "probe", "github.com", "example/widget", "7", []byte("newer synthetic observation"), started) {
-		t.Fatal("data publication failed")
+	// Model the publication boundary: ordering receipt committed, data next.
+	if !statusWriteForgeEntryObservedContext(ctx, "since", "github.com", "example/widget", "probe:7", []byte(fmt.Sprint(started.UnixNano())), time.Time{}) {
+		t.Fatal("ordering receipt failed")
 	}
 	t.Setenv("GH_TOKEN", "synthetic-B")
-	if !statusWriteForgeEntryObservedContext(ctx, "since", "github.com", "example/widget", "probe:7", []byte(fmt.Sprint(started.UnixNano())), time.Time{}) {
-		t.Fatal("context switch interrupted committed ordering receipt")
+	if statusWriteForgeEntryObservedContext(ctx, "probe", "github.com", "example/widget", "7", []byte("newer synthetic observation"), started) {
+		t.Fatal("data published after the context switched")
 	}
 	if _, ok := statusForgeEntrySince("probe", "github.com", "example/widget", "7"); ok {
 		t.Fatal("ordering receipt crossed into B")
 	}
 	t.Setenv("GH_TOKEN", "synthetic-A")
 	if statusWriteForgeEntrySince("probe", "github.com", "example/widget", "7", []byte("older synthetic observation"), started.Add(-time.Second)) {
-		t.Fatal("late older writer replaced committed observation after switching back")
+		t.Fatal("late older writer passed the committed receipt after switching back")
 	}
-	raw, _ := statusReadForgeEntryAny("probe", "github.com", "example/widget", "7")
-	if string(raw) != "newer synthetic observation" {
-		t.Fatal("ordering lost across credential switch")
+	if raw, ok := statusReadForgeEntryAny("probe", "github.com", "example/widget", "7"); ok {
+		t.Fatalf("ordering lost across credential switch: %s", raw)
 	}
 }
 
