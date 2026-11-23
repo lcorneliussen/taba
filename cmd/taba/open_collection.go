@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/prompts"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -445,16 +445,23 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	if _, err := os.Stat(filepath.Join(target.Collection, "HANDOFF.md")); err != nil {
 		return nil
 	}
-	prompt := firstAgentPrompt(target.Collection, kind)
-	if _, err := openHerdr(opt.Session, "agent", "prompt", pane, prompt, "--wait", "--until", "working", "--timeout", "20000"); err == nil {
+	prompt, err := firstAgentPrompt(target.Prompts(), target.Collection, kind)
+	if err != nil {
+		return fmt.Errorf("agent started, but first prompt was not rendered: %w", err)
+	}
+	return openPromptAgent(opt.Session, pane, prompt)
+}
+
+func openPromptAgent(session, pane string, prompt prompts.Text) error {
+	if _, err := openHerdr(session, "agent", "prompt", pane, prompt.String(), "--wait", "--until", "working", "--timeout", "20000"); err == nil {
 		return nil
 	} else if !strings.Contains(err.Error(), "agent_prompt_stalled") {
 		return fmt.Errorf("agent started, but first prompt was not taken: %w", err)
 	}
-	if _, err := openHerdr(opt.Session, "agent", "send-keys", pane, "enter"); err != nil {
+	if _, err := openHerdr(session, "agent", "send-keys", pane, "enter"); err != nil {
 		return fmt.Errorf("first prompt was not taken: %w", err)
 	}
-	if _, err := openHerdr(opt.Session, "agent", "wait", pane, "--until", "working", "--timeout", "10000"); err != nil {
+	if _, err := openHerdr(session, "agent", "wait", pane, "--until", "working", "--timeout", "10000"); err != nil {
 		return fmt.Errorf("first prompt was not taken: %w", err)
 	}
 	return nil
@@ -544,14 +551,17 @@ func renderedSkill(collection, name string) string {
 
 // firstAgentPrompt starts the agent of a new collection on its launch note,
 // and says so up front when the collection only reviews someone else's PR.
-func firstAgentPrompt(collection, kind string) string {
-	skill := startSkill(collection)
-	prompt := "Run the " + skill + " skill (.agents/skills/" + skill + "/SKILL.md): read HANDOFF.md at the collection root, then start."
+func firstAgentPrompt(ctx prompts.Context, collection, kind string) (prompts.Text, error) {
+	skill := map[string]string{"skill": startSkill(collection)}
+	prompt, err := prompts.Render(ctx, "launch.first-agent", skill)
 	if kind == "claude" {
-		prompt = "/" + skill
+		prompt, err = prompts.Render(ctx, "launch.first-agent-slash", skill)
+	}
+	if err != nil {
+		return prompt, err
 	}
 	if _, ok := wtc.ReadReviewMode(collection); ok {
-		prompt += branding.Text(" This collection is review-only: produce and post the review, nothing else. No commits, pushes, thread resolution or `{{command}} review ready`.")
+		return prompts.Render(ctx, "launch.first-agent-review", map[string]string{"start": prompt.String()})
 	}
-	return prompt
+	return prompt, nil
 }

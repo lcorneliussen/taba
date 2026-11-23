@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/prompts"
 )
 
 type ReviewRunOptions struct {
@@ -150,8 +151,12 @@ func (c *Context) RunReviewBundle(bundle string, opt ReviewRunOptions) (_ Review
 	if _, err := writeReviewChecks(bundle, manifest); err != nil {
 		return ReviewRunResult{}, err
 	}
-	concernTemplate = []byte(reviewCheckPrompt(string(concernTemplate)))
-	leadTemplate = []byte(reviewCheckPrompt(string(leadTemplate)))
+	checks, err := prompts.Render(c.reviewPrompts(manifest), "review.checks-suffix", nil)
+	if err != nil {
+		return ReviewRunResult{}, err
+	}
+	concernTemplate = []byte(reviewCheckPrompt(string(concernTemplate), checks))
+	leadTemplate = []byte(reviewCheckPrompt(string(leadTemplate), checks))
 	for _, dir := range []string{"findings", ".logs", ".prompts", "stats"} {
 		if err := os.MkdirAll(filepath.Join(bundle, dir), 0755); err != nil {
 			return ReviewRunResult{}, err
@@ -677,6 +682,15 @@ func launchReviewAgent(dirs reviewRunDirs, prompt, agent, model string, timeout 
 
 // reviewPromptTemplate returns the harness override for a private bundle, or the
 // embedded default when the bundle is public or the harness has no override.
+// A public bundle never carries project prompt overrides (#221).
+func (c *Context) reviewPrompts(manifest ReviewManifest) prompts.Context {
+	ctx := c.Prompts()
+	if manifest.Public {
+		ctx.Audience = prompts.Public
+	}
+	return ctx
+}
+
 func (c *Context) reviewPromptTemplate(manifest ReviewManifest, name string) ([]byte, error) {
 	if !manifest.Public {
 		body, err := os.ReadFile(filepath.Join(c.Harness, "review", "prompts", name))

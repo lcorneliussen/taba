@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"taba.sh/taba/internal/prompts"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -57,6 +58,14 @@ func TestReviewReadyRefusesInReviewModeEvenWhenAuthorized(t *testing.T) {
 
 func TestFirstAgentPromptSaysReviewOnly(t *testing.T) {
 	collection := t.TempDir()
+	firstAgentPrompt := func(collection, kind string) string {
+		t.Helper()
+		prompt, err := firstAgentPrompt(prompts.Context{Defaults: wtc.PromptDefaults()}, collection, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return prompt.String()
+	}
 	// A collection rendered by a release before the skill rename has only wtc-start.
 	if got := firstAgentPrompt(collection, "claude"); got != "/wtc-start" {
 		t.Fatalf("ordinary prompt = %q", got)
