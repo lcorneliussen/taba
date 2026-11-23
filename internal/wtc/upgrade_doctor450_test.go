@@ -92,8 +92,8 @@ const doctor450Clean = `{"ok":true,"data":[{"name":"registry","ok":true,"detail"
 const doctor450Warn = `{"ok":true,"data":[{"name":"git","ok":true,"detail":"/usr/bin/git"},{"name":"named-tunnels","ok":false,"detail":"1 of 1 definitions do not resolve; declare x-wtc.port_env on widget/web"}],"summary":"collection diagnostics"}`
 const doctor450Fail = `{"ok":false,"data":[{"name":"compatibility","ok":false,"detail":"requires >=0.2,<0.3; running 0.1.12"}],"summary":"collection diagnostics"}`
 
-// The reproduction: a real upgrade installs the target and must then run the
-// target release's doctor in this collection, after the env and install.
+// A real upgrade installs the target, then runs that release's doctor in this
+// collection after the install and the version check.
 func TestUpgradeRunsTargetDoctorAfterInstall450(t *testing.T) {
 	c, bin := upgradeFixture(t)
 	f := newDoctor450Fixture(t, bin)
