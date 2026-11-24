@@ -272,6 +272,17 @@ status reports deferred or unavailable observations instead of dispatching
 without shared accounting. The same rule applies to background and one-shot
 status reads; it does not increase provider limits.
 
+Ordinary Bitbucket reads (lists, checks, builds, PR details) share the budget
+with the confirmation queue without starving behind it. Queued confirmations
+keep first-in, first-out order and hold back one token each, never the whole
+burst, so a full bucket always admits an ordinary read. Once ordinary reads have
+waited longer than one full refill, confirmations leave the last token for them,
+which admits at most one ordinary read per refill window. The burst, refill rate
+and cooldowns are unchanged, and ordinary reads compete among themselves first
+come. A deferred PR that was never observed shows its checks as `UNKNOWN`, not
+pending, and names the actual refusal reason and the earliest retry time instead
+of only `never-observed`.
+
 Quit cancels discovery and watcher waits, selected PR/build provider reads,
 the read-only build hook, guarded retirement Git reads, and queued
 cache/admission waits. Snapshot publication

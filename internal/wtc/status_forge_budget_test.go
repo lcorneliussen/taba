@@ -199,7 +199,9 @@ func TestStatusBuildBudgetIsNotAnErrorCell(t *testing.T) {
 	}
 }
 
-func TestStatusPullRequestBudgetIsPending(t *testing.T) {
+// A skipped read is deferred with its real reason; its checks are unknown,
+// never a fabricated PENDING (#424).
+func TestStatusPullRequestBudgetIsDeferred(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\nexit 2\n"), 0755); err != nil {
@@ -208,7 +210,7 @@ func TestStatusPullRequestBudgetIsPending(t *testing.T) {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	statusForgeCool("github.com", time.Minute)
 	detail := statusEnrichRecord(PRRecord{Number: "7", Title: "Waiting"}, "example/widget", "github.com")
-	if detail.State == "UNKNOWN" || detail.Checks != "PENDING" || detail.Title != "Waiting" {
+	if detail.State == "UNKNOWN" || detail.Checks != "UNKNOWN" || detail.Title != "Waiting" || detail.Freshness != "deferred" || detail.Reason != "provider-cooldown" || detail.RetryAt == "" {
 		t.Fatalf("a skipped pull request was shown as unknown: %+v", detail)
 	}
 }
