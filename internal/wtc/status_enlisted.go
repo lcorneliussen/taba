@@ -99,8 +99,10 @@ func statusBBDeclineEventTime(raw []byte) string {
 //
 // An incomplete, malformed or refused read is not cached, and one status
 // operation can complete the same decline on several paths (a detail read,
-// a full confirmation, the collector). statusBBDeclineAttempts keeps such a
-// read to once per operation.
+// a full confirmation, the collector), even concurrently. A decline's read is
+// therefore shared through the operation (statusOperationShared): every path
+// gets the first read's outcome, error included, and a new operation reads
+// again.
 func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail, slug string) statusPRDetail {
 	merged := detail.State == "MERGED" && detail.MergedOn == ""
 	declined := detail.State == "DECLINED" && detail.ClosedAt == ""
@@ -118,20 +120,19 @@ func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail
 			return detail
 		}
 	}
-	operation, _ := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState)
-	attempt := slug + "#" + key
-	if declined && operation != nil {
-		if tried, ok := statusBBDeclineAttempts.Load(attempt); ok && tried == operation.nonce {
-			return detail
-		}
+	read := func() ([]byte, error) {
+		return statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, key, func() ([]byte, error) {
+			return bitbucketReadPRActivity(ctx, slug, detail.Number)
+		})
 	}
-	raw, err := statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, key, func() ([]byte, error) {
-		return bitbucketReadPRActivity(ctx, slug, detail.Number)
-	})
+	var raw []byte
+	var err error
+	if declined {
+		raw, err = statusOperationShared(ctx, "bitbucket-decline-activity\x00"+slug+"\x00"+key, read)
+	} else {
+		raw, err = read()
+	}
 	if err != nil {
-		if declined && operation != nil {
-			statusBBDeclineAttempts.Store(attempt, operation.nonce)
-		}
 		return detail
 	}
 	if merged {
@@ -141,11 +142,6 @@ func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail
 	}
 	return detail
 }
-
-// statusBBDeclineAttempts maps a decline's activity key (slug#number@updated_on)
-// to the operation that last read it without a cacheable result. One entry
-// per key bounds it by the declined PRs observed.
-var statusBBDeclineAttempts sync.Map
 
 func statusString(value string) *string {
 	if value == "" {

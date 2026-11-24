@@ -237,6 +237,44 @@ type statusAuthOperationState struct {
 	mu           sync.Mutex
 	observations map[string]statusAuthObservation
 	gates        map[string]chan struct{}
+	calls        map[string]*statusOperationCall
+}
+
+// statusOperationCall is one keyed read shared by the callers of a status
+// operation.
+type statusOperationCall struct {
+	done chan struct{}
+	raw  []byte
+	err  error
+}
+
+// statusOperationShared runs fetch at most once per key in this status
+// operation: concurrent and later callers in the same operation wait for that
+// call and receive its outcome, error included. The record lives and dies
+// with the operation, so a new operation calls again. Without an operation,
+// fetch runs directly.
+func statusOperationShared(ctx context.Context, key string, fetch func() ([]byte, error)) ([]byte, error) {
+	state, ok := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState)
+	if !ok {
+		return fetch()
+	}
+	state.mu.Lock()
+	call := state.calls[key]
+	if call == nil {
+		call = &statusOperationCall{done: make(chan struct{})}
+		state.calls[key] = call
+		state.mu.Unlock()
+		defer close(call.done)
+		call.raw, call.err = fetch()
+		return call.raw, call.err
+	}
+	state.mu.Unlock()
+	select {
+	case <-call.done:
+		return call.raw, call.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Freeze local selection for one observation. Unknown encrypted credentials can
@@ -255,7 +293,7 @@ func statusAuthOperation(ctx context.Context) context.Context {
 		read = attached.selection
 	}
 	state := &statusAuthOperationState{selection: statusAuthSelection{
-		"github.com": statusResolveAuthContext("github.com"), "bitbucket.org": statusResolveAuthContextWith("bitbucket.org", read)}, nonce: hex.EncodeToString(nonce[:]), observations: map[string]statusAuthObservation{}, gates: map[string]chan struct{}{}}
+		"github.com": statusResolveAuthContext("github.com"), "bitbucket.org": statusResolveAuthContextWith("bitbucket.org", read)}, nonce: hex.EncodeToString(nonce[:]), observations: map[string]statusAuthObservation{}, gates: map[string]chan struct{}{}, calls: map[string]*statusOperationCall{}}
 	ctx = context.WithValue(ctx, statusAuthOperationKey{}, state)
 	if _, ok := ctx.Value(bitbucketReadKey{}).(*bitbucketReadState); ok {
 		return ctx

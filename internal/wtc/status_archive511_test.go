@@ -3,6 +3,7 @@ package wtc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -255,7 +258,7 @@ if [ "$1" = "--version" ]; then echo 1.4.4; exit 0; fi
 printf 'argv:%s\n' "$*" >> "$FAKE_TWG_LOG"
 case "$*" in
 *"pull-requests get"*) body=view ;;
-*"pull-requests activity"*) body=activity ;;
+*"pull-requests activity"*) body=activity; [ -n "$ARCHIVE511_DELAY" ] && sleep "$ARCHIVE511_DELAY" ;;
 *) echo '{"ok":false,"error":{"code":"UNKNOWN_COMMAND"}}'; exit 2 ;;
 esac
 printf '{"items":[{"input":"4","ok":true,"data":%s}]}' "$(cat "`+dir+`/$body.json")"
@@ -424,6 +427,83 @@ func TestStatusArchive511DeclineReadOncePerOperation(t *testing.T) {
 	}
 	if lists == 0 || archive511TWGReads(t, h, "get") != 1 {
 		t.Fatalf("the list-omitted cached path was not exercised: %d lists, %d PR reads", lists, archive511TWGReads(t, h, "get"))
+	}
+}
+
+// statusOperationShared is the operation-owned single flight behind the
+// once-per-operation decline read: whatever the interleaving, one call per
+// key and operation runs, and every caller in that operation gets its
+// outcome, error included.
+func TestStatusArchive511OperationSharedCall(t *testing.T) {
+	ctx := statusAuthOperation(context.Background())
+	failure := errors.New("incomplete")
+	var calls atomic.Int32
+	release := make(chan struct{})
+	fetch := func() ([]byte, error) {
+		calls.Add(1)
+		<-release
+		return nil, failure
+	}
+	const callers = 16
+	var ready, finished sync.WaitGroup
+	ready.Add(callers)
+	finished.Add(callers)
+	errs := make(chan error, callers)
+	for range callers {
+		go func() {
+			defer finished.Done()
+			ready.Done()
+			_, err := statusOperationShared(ctx, "k", fetch)
+			errs <- err
+		}()
+	}
+	ready.Wait()
+	time.Sleep(20 * time.Millisecond) // let the callers reach the shared call
+	close(release)
+	finished.Wait()
+	close(errs)
+	for err := range errs {
+		if err != failure {
+			t.Fatalf("a caller got %v, not the shared outcome", err)
+		}
+	}
+	if _, err := statusOperationShared(ctx, "k", fetch); err != failure || calls.Load() != 1 {
+		t.Fatalf("%d calls in one operation (later caller got %v); want 1", calls.Load(), err)
+	}
+	if _, err := statusOperationShared(statusAuthOperation(context.Background()), "k", fetch); err != failure || calls.Load() != 2 {
+		t.Fatalf("a new operation must call again: %d calls", calls.Load())
+	}
+	if _, err := statusOperationShared(ctx, "other", fetch); err != failure || calls.Load() != 3 {
+		t.Fatalf("another key must call again: %d calls", calls.Load())
+	}
+	if _, err := statusOperationShared(context.Background(), "k", fetch); err != failure || calls.Load() != 4 {
+		t.Fatalf("without an operation each call runs: %d calls", calls.Load())
+	}
+}
+
+// Concurrent paths of one operation that complete the same decline while its
+// (slow, malformed) activity read is in flight make one read between them.
+func TestStatusArchive511ConcurrentDeclinePathsReadOnce(t *testing.T) {
+	h, _ := archive511TWG(t, archive511Declined, `{"values":"not a list"}`)
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-token")
+	t.Setenv("ARCHIVE511_DELAY", "0.3")
+	declined := statusPRDetail{Number: "4", State: "DECLINED", ClosedOn: "2020-06-01T00:00:00.000000+00:00"}
+	for operation := 1; operation <= 2; operation++ {
+		ctx := statusAuthOperation(context.Background())
+		var paths sync.WaitGroup
+		for range 8 {
+			paths.Add(1)
+			go func() {
+				defer paths.Done()
+				if got := statusBBCompleteMergeTimeContext(ctx, declined, "acme/alpha").ClosedAt; got != "" {
+					t.Errorf("malformed activity dated a decline: %q", got)
+				}
+			}()
+		}
+		paths.Wait()
+		if reads := archive511TWGReads(t, h, "activity"); reads != operation {
+			t.Fatalf("after %d operations of 8 concurrent paths: %d activity reads; want one per operation", operation, reads)
+		}
 	}
 }
 
