@@ -275,17 +275,17 @@ status reads; it does not increase provider limits.
 Ordinary Bitbucket reads (lists, checks, builds, PR details) share the budget
 with the confirmation queue without starving behind it. Queued confirmations
 keep first-in, first-out order and hold back one token each, never the whole
-burst, so a full bucket always admits an ordinary read. A refused ordinary read
-waits in order with the others, keyed by what it reads (a shared-cache read by
-its cache entry, a full-detail audit by its PR). Once the first has waited
-longer than one full refill, confirmations leave the last token for it, which
-admits at most one ordinary read per refill window, in that order. A waiter that
-does not ask again within five minutes of its turn moves to the back. The burst,
-refill rate and cooldowns are unchanged. Reads that are not keyed (paged list
-and check reads, pipeline pages) share one place and compete among themselves
-first come. A deferred PR that was never observed shows its checks as `UNKNOWN`,
-not pending, and names the actual refusal reason and the earliest retry time
-instead of only `never-observed`.
+burst, so with a burst above one a full bucket always admits an ordinary read. A
+refused ordinary read waits in order with the others, keyed by what it reads (a
+shared-cache read by its cache entry, a full-detail audit by its PR). Once the
+first has waited longer than one full refill, confirmations leave the last token
+for it, which admits at most one ordinary read per refill window, in that order.
+A waiter that stops asking for five minutes after its turn opens moves to the
+back. The burst, refill rate and cooldowns are unchanged. Reads that are not
+keyed (paged list and check reads, pipeline pages) share one place and compete
+among themselves first come. A deferred PR that was never observed shows its
+checks as `UNKNOWN`, not pending, and names the actual refusal reason and the
+earliest retry time instead of only `never-observed`.
 
 Quit cancels discovery and watcher waits, selected PR/build provider reads,
 the read-only build hook, guarded retirement Git reads, and queued

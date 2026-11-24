@@ -150,12 +150,13 @@ var (
 	statusAdmissionWait = statusWaitRefresh
 )
 
-// Bitbucket admission contract (#424), all under the one budget lock and
+// Bitbucket admission contract, all under the one budget lock and
 // debiting the one shared bucket, so the burst, refill rate and cooldown are
 // unchanged:
 //
 //   - Confirmations stay FIFO and reserve one token each, but at most
-//     burst-1: a full bucket always has a token an ordinary read may take.
+//     burst-1: with a burst above one, a full bucket always has a token an
+//     ordinary read may take.
 //   - A refused ordinary read joins a FIFO of ordinary waiters, keyed by the
 //     identity of what it reads. Once the head has waited one full refill
 //     (burst*every) since it joined or since the last such turn,
@@ -163,8 +164,9 @@ var (
 //     for another, and the head may take any token. That turn is recorded:
 //     this path yields one ordinary read per window, in waiter order.
 //   - A waiter not seen for statusOrdinaryLifetime is dropped; a head that
-//     does not return within statusPendingLifetime of its turn moves to the
-//     tail, so a dormant waiter delays the others by at most that long.
+//     has not asked again for statusPendingLifetime since its turn opened or
+//     since it last asked, whichever is later, moves to the tail. A dormant
+//     waiter thus delays the others by at most that long.
 //
 // Bound (finite load: waiters retry within statusPendingLifetime, fewer than
 // statusPendingLimit wait): the waiter at position p is admitted within
@@ -263,18 +265,23 @@ func statusSaveOrdinaryWaiters(forge string, waiters statusOrdinaryWaiters) {
 	}
 }
 
-// statusOrdinaryTurn is when the head's turn opens; zero without waiters. A
-// head dormant past its grace moves to the tail first.
+// turn is when the head's turn opens; zero only without waiters. A head
+// quiet past its grace moves to the tail first. A moved head restarts its
+// wait now, so after at most one pass some head's turn lies ahead.
 func (w *statusOrdinaryWaiters) turn(age time.Duration, now time.Time) (time.Time, bool) {
 	moved := false
-	for range w.Queue {
+	for i := 0; i <= len(w.Queue) && len(w.Queue) > 0; i++ {
 		head := w.Queue[0]
 		turn := head.Since
 		if w.Last.After(turn) {
 			turn = w.Last
 		}
 		turn = turn.Add(age)
-		if now.Before(turn.Add(statusPendingLifetime)) || !head.Seen.Before(turn) {
+		quiet := turn
+		if head.Seen.After(quiet) {
+			quiet = head.Seen
+		}
+		if now.Before(quiet.Add(statusPendingLifetime)) {
 			return turn, moved
 		}
 		head.Since, moved = now, true
@@ -377,8 +384,9 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 			}
 		}
 	}
-	// Keep one token per queued confirmation, at most burst-1; spare capacity
-	// remains available to ordinary reads while confirmations keep FIFO order.
+	// Keep one token per queued confirmation, at most burst-1 (all of a
+	// one-token allowance); spare capacity remains available to ordinary
+	// reads while confirmations keep FIFO order.
 	reserve := min(len(queue), max(burst-1, 1))
 	need := 1
 	turnTaken := false
@@ -397,7 +405,7 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 		if tokens < need && (ordinary || admitted) {
 			retry = updated.Add(time.Duration(need-tokens) * every)
 		}
-		// Wait even with an empty FIFO: the next confirmation becomes head at
+		// Register even with an empty FIFO: the next confirmation becomes head at
 		// once and would otherwise win every refill it waits for in the lock.
 		if ordinary && forge == "bitbucket.org" {
 			at := waiters.position(identity)
