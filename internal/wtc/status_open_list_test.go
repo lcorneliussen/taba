@@ -349,7 +349,7 @@ func TestStatusCappedPRCacheRespectsFreshnessAndAllowance(t *testing.T) {
 			fixtureFile(t, filepath.Join(dir, "bb"), "#!/bin/sh\nprintf 'view\\n' >> \"$WTC_TEST_BB_VIEWS\"\ncat \"$WTC_TEST_BB_VIEW\"\nexit "+exit+"\n", 0700)
 			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 			detail := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
-			if detail.State != tc.want || (tc.want == "" && detail.Checks != "PENDING") {
+			if detail.State != tc.want || (tc.want == "" && detail.Checks != "UNKNOWN") {
 				t.Fatalf("unavailable or fresh facts misrepresented: %+v, want state=%q", detail, tc.want)
 			}
 			if count := statusTestFileLines(t, views); count != tc.views {

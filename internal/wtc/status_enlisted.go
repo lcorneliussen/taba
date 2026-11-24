@@ -88,8 +88,9 @@ func statusUnknownDetail(record PRRecord) statusPRDetail {
 	return statusPRDetail{Number: record.Number, State: "UNKNOWN", Freshness: "unavailable", Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: record.Title}
 }
 
+// No provider read happened, so checks are unknown.
 func statusDeferredDetail(record PRRecord) statusPRDetail {
-	return statusPRDetail{Number: record.Number, Freshness: "deferred", Checks: "PENDING", Title: record.Title}
+	return statusPRDetail{Number: record.Number, Freshness: "deferred", Checks: "UNKNOWN", Title: record.Title}
 }
 
 func statusParseForgeDetail(forge string, raw []byte, record PRRecord) (statusPRDetail, error) {

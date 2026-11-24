@@ -20,7 +20,9 @@ func statusDetailObservation(detail statusPRDetail) StatusObservation {
 	if detail.Reason != "" && statusObservationUnavailable(detail.Freshness) {
 		out.Reason, out.RetryAt = detail.Reason, detail.RetryAt
 	}
-	if detail.ObservedAt == "" && (detail.State == "UNKNOWN" || detail.State == "") {
+	// An actual refusal (budget, cooldown) and its retry outrank the generic
+	// never-observed label; the empty ObservedAt still says nothing was seen.
+	if detail.ObservedAt == "" && (detail.State == "UNKNOWN" || detail.State == "") && (detail.Reason == "" || !statusObservationUnavailable(detail.Freshness)) {
 		out.Reason = "never-observed"
 	}
 	return out

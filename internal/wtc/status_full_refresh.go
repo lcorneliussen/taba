@@ -349,7 +349,7 @@ func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, sl
 	if statusForgeCooling(forge) {
 		return nil, errForgeCooling
 	}
-	if !statusTakeForgeTokenForContext(ctx, forge, "") {
+	if !statusTakeForgeTokenForContext(statusOrdinaryRead(ctx, "pr", forge, slug, record.Number), forge, "") {
 		return nil, errForgeBudget
 	}
 	if err := ctx.Err(); err != nil {
