@@ -153,6 +153,13 @@ its last update conservatively, so later updates can delay archival. Missing,
 malformed or future dates stay unarchived. A still-checked-out branch also stays
 unarchived with the existing orphan warning; closure does not establish landing
 or authorize discarding local work. Superseded entries retain their omission rule.
+The archive lists the most recent terminal event first, across repositories:
+the merge time of a merged PR, the provider's closure time of a closed one
+(JSON `closed_at`). Bitbucket reports no decline time, so a declined PR's
+time is unknown; rows with unknown or malformed times follow the dated ones,
+and equal or unknown times keep a stable repository and number order.
+Observation and refresh times never reorder the archive, and sorting makes no
+forge calls.
 
 ## What is detected and supported
 

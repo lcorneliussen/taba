@@ -3,7 +3,10 @@ package wtc
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
+
 	"taba.sh/taba/internal/branding"
 )
 
@@ -12,7 +15,8 @@ func statusClosedObservation(row StatusPRRow) bool {
 }
 
 // StatusPRsByPriority keeps inventory order within each visible group while
-// putting review-ready PRs ahead of drafts and completed work.
+// putting review-ready PRs ahead of drafts and completed work. Archived rows
+// come last, most recent terminal event first (see statusArchiveBefore).
 func StatusPRsByPriority(rows []StatusPRRow) []StatusPRRow {
 	ordered := append([]StatusPRRow(nil), rows...)
 	priority := func(row StatusPRRow) int {
@@ -28,8 +32,56 @@ func StatusPRsByPriority(rows []StatusPRRow) []StatusPRRow {
 		}
 		return 0
 	}
-	sort.SliceStable(ordered, func(i, j int) bool { return priority(ordered[i]) < priority(ordered[j]) })
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Archived != ordered[j].Archived {
+			return ordered[j].Archived
+		}
+		if ordered[i].Archived {
+			return statusArchiveBefore(ordered[i], ordered[j])
+		}
+		return priority(ordered[i]) < priority(ordered[j])
+	})
 	return ordered
+}
+
+// StatusPRTerminalAt is a row's provider-reported terminal event: the merge
+// time of a merged PR, the closure time of a closed or declined one. Missing
+// or unparsable evidence is unknown; observation or refresh time never counts.
+func StatusPRTerminalAt(row StatusPRRow) (time.Time, bool) {
+	event := row.ClosedAt
+	if row.State != "CLOSED" && row.State != "DECLINED" {
+		event = row.MergedOn
+	}
+	if event == nil {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339, *event)
+	return at, err == nil
+}
+
+// statusArchiveBefore orders archived rows by terminal event, newest first,
+// with unknown times last and a stable repository/number tie-break.
+func statusArchiveBefore(a, b StatusPRRow) bool {
+	at, aKnown := StatusPRTerminalAt(a)
+	bt, bKnown := StatusPRTerminalAt(b)
+	if aKnown != bKnown {
+		return aKnown
+	}
+	if aKnown && !at.Equal(bt) {
+		return at.After(bt)
+	}
+	if a.Repo != b.Repo {
+		return a.Repo < b.Repo
+	}
+	an, aErr := strconv.Atoi(a.Number)
+	bn, bErr := strconv.Atoi(b.Number)
+	if aErr == nil && bErr == nil && an != bn {
+		return an < bn
+	}
+	if a.Number != b.Number {
+		return a.Number < b.Number
+	}
+	return a.Slug < b.Slug
 }
 
 var statusGlyphs = map[string]string{

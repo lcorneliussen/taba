@@ -685,7 +685,7 @@ func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent Status
 		}
 		row := StatusPRRow{Repo: record.Repo, Number: detail.Number, State: detail.State, Checks: statusString(detail.Checks),
 			Merge: statusString(detail.Merge), Review: statusString(detail.Review), Title: detail.Title,
-			DisplayTitle: detail.Title, Slug: slug, URL: statusString(url), MergedOn: statusString(detail.MergedOn),
+			DisplayTitle: detail.Title, Slug: slug, URL: statusString(url), MergedOn: statusString(detail.MergedOn), ClosedAt: statusString(detail.ClosedAt),
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
 			// A Bitbucket decline is final, so any observation of it (current,
 			// stale, deferred or unavailable) keeps archive treatment by its
