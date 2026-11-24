@@ -39,7 +39,9 @@ if [ "$REVIEW487_BLOCK" = "$phase" ]; then
       printf "{\"concern\":\"code\",\"status\":\"issues\",\"findings\":[{\"severity\":\"blocker\",\"title\":\"late\"}]}\n" > "$2/findings/code.json"
       printf "**Local review: pass** late\n" > "$2/summary.md"
       printf "pass\n" > "$2/verdict"
-      echo done > "$1/escaped.done"' _ "$ev" "$4" </dev/null >/dev/null 2>&1 &
+      mkdir -p "$(dirname "$3")"
+      printf "{\"input_tokens\":987654321}\n" > "$3"
+      echo done > "$1/escaped.done"' _ "$ev" "$4" "$WTC_REVIEW_STATS_FILE" </dev/null >/dev/null 2>&1 &
   fi
   if [ -n "$REVIEW487_IGNORE_TERM" ]; then
     ( trap '' TERM; sleep 300; echo late > "$ev/late" ) &
@@ -438,10 +440,16 @@ func TestReviewRunEscapedDescendantCannotWriteResults(t *testing.T) {
 			if got, err := os.ReadFile(filepath.Join(f.bundle, "verdict")); err != nil || strings.TrimSpace(string(got)) != "pass" {
 				t.Fatalf("verdict: %q %v", got, err)
 			}
+			if got, err := os.ReadFile(filepath.Join(f.bundle, "stats", "code.json")); err != nil || strings.Contains(string(got), "987") {
+				t.Fatalf("late statistics reached the bundle: %s %v", got, err)
+			}
 			// A third run does not read what the escaped process recreated.
 			again, err := f.c.RunReviewBundle(f.bundle, review487Options)
 			if err != nil || again.Verdict != "pass" || again.Blockers != 0 {
 				t.Fatalf("later run picked up the late write: %+v %v", again, err)
+			}
+			if got, err := os.ReadFile(filepath.Join(f.bundle, "summary.md")); err != nil || strings.Contains(string(got), "987") {
+				t.Fatalf("late statistics reached a later summary: %s %v", got, err)
 			}
 		})
 	}

@@ -219,7 +219,10 @@ func (c *Context) RunReviewBundleContext(ctx context.Context, bundle string, opt
 		if err != nil {
 			return ReviewRunResult{}, err
 		}
-		dirs.bundle = stage.dir
+		// Prompts, logs and statistics live in the stage as well, as they
+		// lived beside the results before: a launcher that finds the bundle
+		// from its prompt's path still writes into the stage.
+		dirs.bundle, dirs.runner = stage.dir, stage.dir
 		defer func() {
 			if finishErr := stage.finish(callerBundle); finishErr != nil && err == nil {
 				err = finishErr
@@ -282,10 +285,11 @@ launch:
 			mu.Unlock()
 		}(id, path)
 	}
-	// Every launched reviewer's leader has been waited for and its process
-	// group swept here, so an isolated context is removed only after that. A
-	// descendant that left its group is not waited for; the context or stage
-	// fences what it writes.
+	// Every launched reviewer's leader has been waited for here, and a
+	// stopped or timed-out reviewer's process group swept, so an isolated
+	// context or stage is removed only after that. A descendant that left its
+	// group, or that a finished reviewer left running, is not waited for; the
+	// context or stage fences what it writes to the paths it was given.
 	wg.Wait()
 	var auditErr error
 	if dirs.exec != nil {
@@ -418,55 +422,84 @@ launch:
 }
 
 // A private run's reviewers work in a per-run copy of the bundle, a stage
-// inside it, so the collection context they load is unchanged. When every
-// reviewer of the run has stopped, the runner returns the run's own changes
-// to the bundle and removes the stage. A process that outlived the run, such
-// as a descendant that left its reviewer's process group, can then write only
-// into a stage that is gone or no longer read: never a result of this run or
-// a later one. This fences the paths a reviewer is given; it is not a sandbox,
-// and such a process can still write wherever its permissions allow.
+// at <bundle>/.taba-run-*/<bundle name>: the working directory keeps the
+// bundle's name and its ancestors, so the collection context reviewers load is
+// unchanged. When every reviewer of the run has stopped, the runner returns
+// the run's own changes and its runner directories to the bundle and removes
+// the stage. A process that outlived the run, such as a descendant that left
+// its reviewer's process group, can then write only into a stage that is gone
+// or no longer read: never a result of this run or a later one. This fences
+// the paths a reviewer is given; it is not a sandbox, and such a process can
+// still write wherever its permissions allow.
 const (
 	reviewStagePrefix = ".taba-run-"
+	// Runs are assumed to end within this age; a stage older than that is
+	// swept as left behind by an interrupted cleanup.
 	reviewStageMaxAge = 24 * time.Hour
 )
 
 type reviewStage struct {
-	dir     string
-	initial map[string]string
+	root, dir string
+	initial   map[string]string
 }
 
 func newReviewStage(bundle string) (*reviewStage, error) {
 	sweepReviewStages(bundle)
-	dir, err := os.MkdirTemp(bundle, reviewStagePrefix)
+	root, err := os.MkdirTemp(bundle, reviewStagePrefix)
 	if err != nil {
 		return nil, fmt.Errorf("review run stage: %w", err)
 	}
-	stage := &reviewStage{dir: dir}
-	if err := copyReviewStage(bundle, dir); err != nil {
-		_ = removeReviewContext(dir)
+	stage := &reviewStage{root: root, dir: filepath.Join(root, filepath.Base(bundle))}
+	if err := copyReviewStage(bundle, stage.dir); err != nil {
+		_ = removeReviewContext(root)
 		return nil, fmt.Errorf("review run stage: %w", err)
 	}
-	if stage.initial, err = reviewTreeFiles(dir); err != nil {
-		_ = removeReviewContext(dir)
+	if stage.initial, err = reviewTreeFiles(stage.dir); err != nil {
+		_ = removeReviewContext(root)
 		return nil, fmt.Errorf("review run stage: %w", err)
 	}
 	return stage, nil
 }
 
-// finish returns the run's changes, then removes the stage. The stage is
-// removed even when returning fails, so nothing written later is read.
+// finish returns the run's changes and runner directories, then removes the
+// stage. The stage is removed even when returning fails, so nothing written
+// later is read. When the results cannot return, an earlier summary and
+// verdict are removed too, as for an untrusted public run, so they cannot be
+// posted for this run.
 func (s *reviewStage) finish(bundle string) error {
 	err := returnReviewTree(s.dir, bundle, s.initial, "review run stage")
-	if removeErr := removeReviewContext(s.dir); removeErr != nil {
+	if err != nil {
+		for _, name := range []string{"summary.md", "verdict"} {
+			if removeErr := os.Remove(filepath.Join(bundle, name)); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+				err = errors.Join(err, removeErr)
+			}
+		}
+	}
+	for _, dir := range reviewRunnerDirs {
+		if _, statErr := os.Lstat(filepath.Join(s.dir, dir)); statErr != nil {
+			continue
+		}
+		if removeErr := os.RemoveAll(filepath.Join(bundle, dir)); removeErr != nil {
+			err = errors.Join(err, removeErr)
+			continue
+		}
+		if copyErr := copyReviewTree(filepath.Join(s.dir, dir), filepath.Join(bundle, dir), nil); copyErr != nil {
+			err = errors.Join(err, fmt.Errorf("review run stage: %w", copyErr))
+		}
+	}
+	if removeErr := removeReviewContext(s.root); removeErr != nil {
 		err = errors.Join(err, fmt.Errorf("review run stage: %w", removeErr))
 	}
 	return err
 }
 
 // copyReviewStage copies the bundle into its stage: directories, regular
-// files and links as they are, without runner directories, poster state or
-// other stages. Special files are left out.
+// files and links as they are, without poster state or other stages. Special
+// files are left out.
 func copyReviewStage(bundle, stage string) error {
+	if err := os.MkdirAll(stage, 0700); err != nil {
+		return err
+	}
 	return filepath.WalkDir(bundle, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -477,7 +510,7 @@ func copyReviewStage(bundle, stage string) error {
 		}
 		rel = filepath.ToSlash(rel)
 		top := strings.SplitN(rel, "/", 2)[0]
-		if containsString(reviewRunnerDirs, top) || containsString(reviewPosterFiles, rel) || strings.HasPrefix(top, reviewStagePrefix) {
+		if containsString(reviewPosterFiles, rel) || strings.HasPrefix(top, reviewStagePrefix) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -517,7 +550,7 @@ func copyReviewStage(bundle, stage string) error {
 }
 
 // sweepReviewStages removes stages an interrupted cleanup left behind, once
-// they are old enough that no run can still be using them.
+// they are older than any run is assumed to last (reviewStageMaxAge).
 func sweepReviewStages(bundle string) {
 	paths, _ := filepath.Glob(filepath.Join(bundle, reviewStagePrefix+"*"))
 	for _, path := range paths {

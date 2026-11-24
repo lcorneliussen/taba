@@ -33,8 +33,9 @@ func newReviewStageBundle(t *testing.T) string {
 	return bundle
 }
 
-// The stage holds the bundle without runner directories, poster state or
-// other stages, keeps links as links, and matches the bundle under any umask.
+// The stage keeps the bundle's name and holds the bundle without poster state
+// or other stages, keeps links as links, matches the bundle under any umask,
+// and returns results and runner directories.
 func TestReviewStageCopiesBundleAndReturnsRunChanges(t *testing.T) {
 	bundle := newReviewStageBundle(t)
 	other := filepath.Join(bundle, reviewStagePrefix+"other")
@@ -47,7 +48,10 @@ func TestReviewStageCopiesBundleAndReturnsRunChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{".logs", "comment.id", filepath.Base(other)} {
+	if filepath.Base(stage.dir) != filepath.Base(bundle) || filepath.Dir(filepath.Dir(stage.dir)) != bundle {
+		t.Fatalf("stage %s is not <bundle>/%s*/<bundle name>", stage.dir, reviewStagePrefix)
+	}
+	for _, rel := range []string{"comment.id", filepath.Base(other)} {
 		if _, err := os.Lstat(filepath.Join(stage.dir, rel)); !os.IsNotExist(err) {
 			t.Fatalf("%s copied into the stage: %v", rel, err)
 		}
@@ -63,13 +67,14 @@ func TestReviewStageCopiesBundleAndReturnsRunChanges(t *testing.T) {
 	}
 	write("findings/code.json", `{"concern":"code"}`+"\n")
 	write("notes.md", "new\n")
+	write(".logs/code.out", "this run's log\n")
 	if err := os.Remove(filepath.Join(stage.dir, "summary.md")); err != nil {
 		t.Fatal(err)
 	}
 	if err := stage.finish(bundle); err != nil {
 		t.Fatalf("finish under a stricter umask than the bundle's: %v", err)
 	}
-	for rel, want := range map[string]string{"findings/code.json": `{"concern":"code"}` + "\n", "notes.md": "new\n", "comment.id": "301\n", ".logs/code.out": "runner log\n"} {
+	for rel, want := range map[string]string{"findings/code.json": `{"concern":"code"}` + "\n", "notes.md": "new\n", "comment.id": "301\n", ".logs/code.out": "this run's log\n"} {
 		if got, err := os.ReadFile(filepath.Join(bundle, rel)); err != nil || string(got) != want {
 			t.Fatalf("%s = %q %v", rel, got, err)
 		}
@@ -77,7 +82,7 @@ func TestReviewStageCopiesBundleAndReturnsRunChanges(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bundle, "summary.md")); !os.IsNotExist(err) {
 		t.Fatalf("removal not returned: %v", err)
 	}
-	if _, err := os.Stat(stage.dir); !os.IsNotExist(err) {
+	if _, err := os.Stat(stage.root); !os.IsNotExist(err) {
 		t.Fatalf("stage not removed: %v", err)
 	}
 	if _, err := os.Stat(other); err != nil {
@@ -106,7 +111,10 @@ func TestReviewStageRefusesConflictsAndIrregularFiles(t *testing.T) {
 		if got, _ := os.ReadFile(filepath.Join(bundle, "findings", "code.json")); string(got) != "outside\n" {
 			t.Fatalf("outside change overwritten: %q", got)
 		}
-		if _, err := os.Stat(stage.dir); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(bundle, "summary.md")); !os.IsNotExist(err) {
+			t.Fatalf("earlier summary left to post for a run whose results did not return: %v", err)
+		}
+		if _, err := os.Stat(stage.root); !os.IsNotExist(err) {
 			t.Fatalf("stage not removed: %v", err)
 		}
 	})
@@ -128,7 +136,7 @@ func TestReviewStageRefusesConflictsAndIrregularFiles(t *testing.T) {
 		if got, _ := os.ReadFile(filepath.Join(bundle, "findings", "code.json")); string(got) != "{}\n" {
 			t.Fatalf("bundle changed through a refused link: %q", got)
 		}
-		if _, err := os.Stat(stage.dir); !os.IsNotExist(err) {
+		if _, err := os.Stat(stage.root); !os.IsNotExist(err) {
 			t.Fatalf("stage not removed: %v", err)
 		}
 	})
