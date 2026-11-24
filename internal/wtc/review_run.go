@@ -483,12 +483,45 @@ func (s *reviewStage) finish(bundle string) error {
 			err = errors.Join(err, removeErr)
 			continue
 		}
-		if copyErr := copyReviewTree(filepath.Join(s.dir, dir), filepath.Join(bundle, dir), nil); copyErr != nil {
+		if copyErr := copyReviewRunnerDir(filepath.Join(s.dir, dir), filepath.Join(bundle, dir)); copyErr != nil {
 			err = errors.Join(err, fmt.Errorf("review run stage: %w", copyErr))
 		}
 	}
 	if removeErr := removeReviewContext(s.root); removeErr != nil {
 		err = errors.Join(err, fmt.Errorf("review run stage: %w", removeErr))
+	}
+	return err
+}
+
+// copyReviewRunnerDir returns a stage's runner directory: its directories and
+// regular files. A link or special file a reviewer left there is neither
+// followed nor allowed to stop the rest from returning; it is reported.
+func copyReviewRunnerDir(src, dest string) error {
+	var irregular []string
+	err := filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, rel)
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, 0755)
+		case d.Type().IsRegular():
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(target, data, 0644)
+		}
+		irregular = append(irregular, filepath.ToSlash(filepath.Join(filepath.Base(src), rel)))
+		return nil
+	})
+	if err == nil && len(irregular) > 0 {
+		err = fmt.Errorf("%s is not a regular file; not returned", strings.Join(irregular, ", "))
 	}
 	return err
 }

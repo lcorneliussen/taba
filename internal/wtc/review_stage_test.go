@@ -170,3 +170,29 @@ func TestReviewStageSweepsOnlyStaleStages(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A link a reviewer leaves in a runner directory is reported, not followed,
+// and does not stop that run's prompts, logs and statistics from returning.
+func TestReviewStageRunnerLinkDoesNotLoseEvidence(t *testing.T) {
+	bundle := newReviewStageBundle(t)
+	stage, err := newReviewStage(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage.dir, ".logs", "code.out"), []byte("this run's log\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/dev/null", filepath.Join(stage.dir, ".logs", "planted")); err != nil {
+		t.Fatal(err)
+	}
+	err = stage.finish(bundle)
+	if err == nil || !strings.Contains(err.Error(), ".logs/planted is not a regular file") {
+		t.Fatalf("finish = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(bundle, ".logs", "code.out")); err != nil || string(got) != "this run's log\n" {
+		t.Fatalf("run log lost: %q %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(bundle, ".logs", "planted")); !os.IsNotExist(err) {
+		t.Fatalf("link returned into the bundle: %v", err)
+	}
+}
