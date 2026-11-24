@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"encoding/json"
+	"math/rand"
 	"regexp"
 	"strings"
 	"testing"
@@ -116,4 +117,68 @@ func TestStatusArchive511MarkdownAndSnapshotRoundTrip(t *testing.T) {
 	if strings.Join(got, " ") != "widget#3 gadget#12 widget#9" {
 		t.Fatalf("markdown archive order: %v", got)
 	}
+}
+
+// statusArchiveBefore must be a strict weak order over valid, malformed and
+// overflowing PR numbers alike, or sorting depends on inventory order.
+func TestStatusArchive511ComparatorIsStrictWeakOrder(t *testing.T) {
+	var rows []StatusPRRow
+	for _, repo := range []string{"gadget", "widget"} {
+		for _, at := range []string{"", "not-a-time", "2020-02-03T10:00:00Z", "2020-03-01T00:00:00Z"} {
+			for _, number := range []string{"2", "10", "02", "1a", "", "-1", "18446744073709551615", "18446744073709551616", "99999999999999999999"} {
+				for _, slug := range []string{"example/a", "example/b"} {
+					row := archive511Row(repo, number, "CLOSED", at)
+					row.Slug = slug
+					rows = append(rows, row)
+				}
+			}
+		}
+	}
+	less := statusArchiveBefore
+	equiv := func(a, b StatusPRRow) bool { return !less(a, b) && !less(b, a) }
+	for _, a := range rows {
+		if less(a, a) {
+			t.Fatalf("irreflexivity: %s#%s", a.Repo, a.Number)
+		}
+		for _, b := range rows {
+			if less(a, b) && less(b, a) {
+				t.Fatalf("asymmetry: %s#%s %s#%s", a.Repo, a.Number, b.Repo, b.Number)
+			}
+			for _, c := range rows {
+				if less(a, b) && less(b, c) && !less(a, c) {
+					t.Fatalf("transitivity: %q < %q < %q", a.Number, b.Number, c.Number)
+				}
+				if equiv(a, b) && equiv(b, c) && !equiv(a, c) {
+					t.Fatalf("equivalence transitivity: %q %q %q", a.Number, b.Number, c.Number)
+				}
+			}
+		}
+	}
+	// Every inventory permutation yields the same archive order.
+	want := archive511Order(StatusPRsByPriority(rows)) + archive511Slugs(StatusPRsByPriority(rows))
+	random := rand.New(rand.NewSource(511))
+	for range 200 {
+		shuffled := append([]StatusPRRow(nil), rows...)
+		random.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
+		ordered := StatusPRsByPriority(shuffled)
+		if got := archive511Order(ordered) + archive511Slugs(ordered); got != want {
+			t.Fatalf("order depends on inventory permutation")
+		}
+	}
+	// Parsed numbers precede unparsed ones within one repository and time.
+	got := archive511Order(StatusPRsByPriority([]StatusPRRow{
+		archive511Row("widget", "1a", "CLOSED", ""), archive511Row("widget", "10", "CLOSED", ""),
+		archive511Row("widget", "99999999999999999999", "CLOSED", ""), archive511Row("widget", "2", "CLOSED", ""),
+	}))
+	if got != "widget#2 widget#10 widget#1a widget#99999999999999999999" {
+		t.Fatalf("parsed before unparsed: %s", got)
+	}
+}
+
+func archive511Slugs(rows []StatusPRRow) string {
+	var out []string
+	for _, row := range rows {
+		out = append(out, row.Slug)
+	}
+	return " " + strings.Join(out, " ")
 }

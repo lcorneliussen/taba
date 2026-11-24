@@ -74,9 +74,14 @@ func statusArchiveBefore(a, b StatusPRRow) bool {
 	if a.Repo != b.Repo {
 		return a.Repo < b.Repo
 	}
-	an, aErr := strconv.Atoi(a.Number)
-	bn, bErr := strconv.Atoi(b.Number)
-	if aErr == nil && bErr == nil && an != bn {
+	// Parsed numbers precede unparsed (malformed or overflowing) ones, so the
+	// numeric and lexical comparisons never mix into a cycle.
+	an, aErr := strconv.ParseUint(a.Number, 10, 64)
+	bn, bErr := strconv.ParseUint(b.Number, 10, 64)
+	if (aErr == nil) != (bErr == nil) {
+		return aErr == nil
+	}
+	if aErr == nil && an != bn {
 		return an < bn
 	}
 	if a.Number != b.Number {
