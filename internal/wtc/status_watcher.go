@@ -101,7 +101,7 @@ func (c *Context) registerStatusWatcherWithEvents(stop func(), watch func(*os.Fi
 		if events != nil {
 			every = 5 * time.Second
 		}
-		ticker := time.NewTicker(every) //nolint:forbidigo // Refreshes on a schedule; repeats no attempt.
+		ticker := time.NewTicker(every) //nolint:forbidigo // Re-checks the lease on a schedule; repeats no attempt.
 		defer ticker.Stop()
 		for {
 			// Also check immediately after installing the notifications, so

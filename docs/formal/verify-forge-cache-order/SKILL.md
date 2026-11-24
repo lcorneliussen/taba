@@ -71,16 +71,30 @@ TLC must report, and the script fails on any other result:
 | `replay-4764f64-parent.cfg` | a writer whose lock failed still publishes, as before 4764f64 | violated |
 | `replay-1b4a2d6-parent.cfg` | the data before the receipt, with the receipt lost, as before 1b4a2d6 | violated |
 
-`VERBOSE=1 tools/formal/forge-cache-order/check.sh main.cfg` prints TLC's own
-output, including the trace of a violation.
-
 ## Read the result
 
-Read every result with the pstack `/statechart` skill. Give it
-`ForgeCacheOrder.tla` and the config. It tells each violation as its shortest
-path in plain words. When the check passes, it draws how the entry moves
-between states. These configs exceed its chart size. For a chart, use a copy of
-a config with one list writer, one locked writer and `MaxRequests = 2`.
+`check.sh` prints one line per config: `ok` when TLC reported what the
+config's `expect` line states, `FAIL` with TLC's whole output when it did not.
+It exits 0 when every config is `ok`, 1 when any is `FAIL`, and 2 when Java is
+missing or the jar does not match its sha256. `VERBOSE=1` also prints TLC's
+output for an `ok` config.
+
+A passing config prints no trace. TLC reports
+`Model checking completed. No error has been found.` and the number of states
+it found. A violation starts with
+`Error: Invariant NoEarlierOverwrite is violated.`, followed by the steps that
+break it as `State 1`, `State 2` and so on. Each state names the action that
+led to it, such as `<ListFetch line …>`, and lists every variable after that
+step. TLC searches breadth first, so the trace is a shortest path to the
+violation. Compare each state with the one before it to see what the action
+changed. To see a trace, run a replay config, which must violate the invariant:
+
+```sh
+VERBOSE=1 tools/formal/forge-cache-order/check.sh replay-9274035-parent.cfg
+```
+
+An external tool that draws or narrates TLC traces is optional. Nothing in this
+guide needs one.
 
 ## Tell a real bug from a modeling error
 
@@ -114,7 +128,7 @@ the replay tests. Fix the model.
    and must hold. The finding's config becomes the replay of the fix's parent:
    set the new constant to the old design, keep the `expect` line, and name it
    `replay-<fix>-parent.cfg`.
-4. Run the check and read the result with `/statechart`.
+4. Run the check and read the result as above.
 5. Update the coverage record. Move the sync commit only after you confirm that
    the model describes the covered code at the new commit.
 
