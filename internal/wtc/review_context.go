@@ -766,17 +766,24 @@ func copyReviewTree(src, dest string, skip []string) error {
 	})
 }
 
-// returnResults applies this run's own changes to the caller's bundle: files
-// that changed in the context since it was copied. A bundle file that changed
-// meanwhile outside the run is never overwritten or removed; that conflict
-// fails the run instead. Runner directories return separately; poster state
-// is never touched.
+// returnResults applies this run's own changes to the caller's bundle; see
+// returnReviewTree.
 func (x *reviewExecContext) returnResults(bundle string) error {
-	now, err := reviewTreeFiles(x.bundle)
+	return returnReviewTree(x.bundle, bundle, x.initial, "public review context")
+}
+
+// returnReviewTree applies a run's own changes from its copy src to the
+// caller's bundle dest: files that changed in src since initial was taken. A
+// bundle file that changed meanwhile outside the run is never overwritten or
+// removed; that conflict fails the run instead. Only regular files return: a
+// link or special file the run left is refused, not followed. Runner
+// directories return separately; poster state is never touched.
+func returnReviewTree(src, dest string, initial map[string]string, label string) error {
+	now, err := reviewTreeFiles(src)
 	if err != nil {
 		return err
 	}
-	have, err := reviewTreeFiles(bundle)
+	have, err := reviewTreeFiles(dest)
 	if err != nil {
 		return err
 	}
@@ -784,14 +791,14 @@ func (x *reviewExecContext) returnResults(bundle string) error {
 		top := strings.SplitN(rel, "/", 2)[0]
 		return containsString(reviewRunnerDirs, top) || containsString(reviewPosterFiles, rel)
 	}
-	var conflicts []string
+	var conflicts, irregular []string
 	changed := map[string]bool{}
 	for rel, sum := range now {
-		if x.initial[rel] != sum {
+		if initial[rel] != sum {
 			changed[rel] = true
 		}
 	}
-	for rel := range x.initial {
+	for rel := range initial {
 		if _, ok := now[rel]; !ok {
 			changed[rel] = true
 		}
@@ -800,26 +807,33 @@ func (x *reviewExecContext) returnResults(bundle string) error {
 		if protected(rel) {
 			continue
 		}
-		if have[rel] != x.initial[rel] {
+		if have[rel] != initial[rel] {
 			conflicts = append(conflicts, rel)
+		}
+		if sum, ok := now[rel]; ok && !reviewRegularEntry(sum) {
+			irregular = append(irregular, rel)
 		}
 	}
 	if len(conflicts) > 0 {
 		sort.Strings(conflicts)
-		return fmt.Errorf("public review context: %s changed in the bundle during the run; results were not copied over it", strings.Join(conflicts, ", "))
+		return fmt.Errorf("%s: %s changed in the bundle during the run; results were not copied over it", label, strings.Join(conflicts, ", "))
+	}
+	if len(irregular) > 0 {
+		sort.Strings(irregular)
+		return fmt.Errorf("%s: %s is not a regular file; results were not returned", label, strings.Join(irregular, ", "))
 	}
 	for rel := range changed {
 		if protected(rel) {
 			continue
 		}
-		path := filepath.Join(bundle, filepath.FromSlash(rel))
+		path := filepath.Join(dest, filepath.FromSlash(rel))
 		if _, ok := now[rel]; !ok {
 			if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 				return err
 			}
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(x.bundle, filepath.FromSlash(rel)))
+		data, err := os.ReadFile(filepath.Join(src, filepath.FromSlash(rel)))
 		if err != nil {
 			return err
 		}
