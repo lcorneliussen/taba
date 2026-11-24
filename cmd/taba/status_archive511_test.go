@@ -260,7 +260,7 @@ esac
 	if err := os.WriteFile(c.PRFile(), []byte("gadget 4 - https://bitbucket.org/example/gadget/pull-requests/4 decline\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for run := 1; run <= 2; run++ {
+	for run := 1; run <= 4; run++ {
 		before := reads("pull-requests activity 4")
 		if _, err := c.StatusForgePreview(); err != nil {
 			t.Fatal(err)
@@ -268,7 +268,9 @@ esac
 		if got := reads("pull-requests activity 4") - before; got != 1 {
 			t.Fatalf("background run %d: %d decline activity reads for a malformed reply; want 1", run, got)
 		}
-		time.Sleep(1100 * time.Millisecond)
+		if run%2 == 0 { // alternate fresh and expired detail caches
+			time.Sleep(1100 * time.Millisecond)
+		}
 	}
 	// A readable log for that decline is dated by a background run.
 	if err := os.WriteFile(activity4, []byte(dated), 0600); err != nil {

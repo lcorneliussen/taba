@@ -96,6 +96,11 @@ func statusBBDeclineEventTime(raw []byte) string {
 // Anywhere else the decline stays unknown and costs no activity read. bb is
 // excluded also because bb pr activity stops at its default page limit
 // without saying so.
+//
+// An incomplete, malformed or refused read is not cached, and one status
+// operation can complete the same decline on several paths (a detail read,
+// a full confirmation, the collector). statusBBDeclineAttempts keeps such a
+// read to once per operation.
 func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail, slug string) statusPRDetail {
 	merged := detail.State == "MERGED" && detail.MergedOn == ""
 	declined := detail.State == "DECLINED" && detail.ClosedAt == ""
@@ -113,10 +118,20 @@ func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail
 			return detail
 		}
 	}
+	operation, _ := ctx.Value(statusAuthOperationKey{}).(*statusAuthOperationState)
+	attempt := slug + "#" + key
+	if declined && operation != nil {
+		if tried, ok := statusBBDeclineAttempts.Load(attempt); ok && tried == operation.nonce {
+			return detail
+		}
+	}
 	raw, err := statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, key, func() ([]byte, error) {
 		return bitbucketReadPRActivity(ctx, slug, detail.Number)
 	})
 	if err != nil {
+		if declined && operation != nil {
+			statusBBDeclineAttempts.Store(attempt, operation.nonce)
+		}
 		return detail
 	}
 	if merged {
@@ -126,6 +141,11 @@ func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail
 	}
 	return detail
 }
+
+// statusBBDeclineAttempts maps a decline's activity key (slug#number@updated_on)
+// to the operation that last read it without a cacheable result. One entry
+// per key bounds it by the declined PRs observed.
+var statusBBDeclineAttempts sync.Map
 
 func statusString(value string) *string {
 	if value == "" {
@@ -592,11 +612,9 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 	// Every path that observes a Bitbucket merge or decline (list, retained,
 	// background or explicit detail) completes its event time from the
 	// activity log, so it can be recorded. An unavailable activity read leaves
-	// the time unknown. A background detail read has already tried to date a
-	// decline, and a failed read is not cached, so only a foreground refresh
-	// dates one here: a run reads a decline's activity at most once.
+	// the time unknown.
 	for _, i := range pending {
-		if identities[i][1] == "bitbucket.org" && !statusObservationUnavailable(details[i].Freshness) && (details[i].State != "DECLINED" || intent == StatusRefreshForeground) {
+		if identities[i][1] == "bitbucket.org" && !statusObservationUnavailable(details[i].Freshness) {
 			details[i] = statusBBCompleteMergeTimeContext(ctx, details[i], identities[i][0])
 		}
 	}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -383,6 +385,45 @@ func TestStatusArchive511TWGDeclineReadBudget(t *testing.T) {
 	cooling.ClosedOn = "2020-08-01T00:00:00.000000+00:00"
 	if got := complete(cooling); got != "" || archive511TWGReads(t, h, "activity") != before {
 		t.Fatalf("a cooling provider was read: %q", got)
+	}
+}
+
+// Several paths in one operation can complete the same decline: with a
+// fresh detail cache, a PR omitted from the open list is completed from the
+// cache and again by its full confirmation. An uncached (malformed) reply is
+// read once per operation all the same; a new operation retries it.
+func TestStatusArchive511DeclineReadOncePerOperation(t *testing.T) {
+	h, _ := archive511TWG(t, archive511Declined, `{"values":"not a list"}`)
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-token")
+	t.Setenv("BB_USERNAME", "synthetic-status-user")
+	t.Setenv("BB_API_TOKEN", "synthetic-status-fixture")
+	lists := 0
+	rest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/repositories/acme/alpha/pullrequests") {
+			t.Errorf("unexpected REST request %s", r.URL.Path)
+		}
+		lists++
+		_, _ = w.Write([]byte(`{"values":[]}`))
+	}))
+	t.Cleanup(rest.Close)
+	previous := statusBBAPI
+	statusBBAPI = rest.URL
+	t.Cleanup(func() { statusBBAPI = previous })
+	record := PRRecord{Repo: "alpha", Number: "4"}
+	for operation := 1; operation <= 3; operation++ {
+		ctx := statusAuthOperation(context.Background())
+		before := archive511TWGReads(t, h, "activity")
+		detail := statusEnrichRecordContext(ctx, record, "acme/alpha", "bitbucket.org")
+		statusBBCompleteMergeTimeContext(ctx, detail, "acme/alpha") // the collector's pass
+		if detail.State != "DECLINED" || detail.ClosedAt != "" {
+			t.Fatalf("operation %d: %+v", operation, detail)
+		}
+		if reads := archive511TWGReads(t, h, "activity") - before; reads != 1 {
+			t.Fatalf("operation %d: %d activity reads; want 1", operation, reads)
+		}
+	}
+	if lists == 0 || archive511TWGReads(t, h, "get") != 1 {
+		t.Fatalf("the list-omitted cached path was not exercised: %d lists, %d PR reads", lists, archive511TWGReads(t, h, "get"))
 	}
 }
 
