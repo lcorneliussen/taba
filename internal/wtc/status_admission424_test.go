@@ -569,12 +569,14 @@ func TestStatusAdmission424FiniteCacheCompetitionWithExpiry(t *testing.T) {
 	if end := statusReadOrdinaryWaiters(forge, clock.now); end.position(dormant) >= 0 {
 		t.Fatal("the dormant waiter outlived its lifetime")
 	}
-	// Every identified waiter: one window per waiter (eight live ones) plus
-	// one dormant grace, plus cache age for an expiring PR. Under saturation
-	// each of N keyed waiters gets one turn per N windows (here 8 x 96 s).
-	window := age + 2*every + poll
+	// Every identified waiter: one cycle per waiter (eight live ones) plus
+	// one dormant grace, plus cache age for an expiring PR. A cycle bounds
+	// one aged turn: the window (a full refill) + one refill + one poll.
+	// Under saturation each of N keyed waiters gets one turn per N turns;
+	// the observed gap here is 8 turns of about 96 s each, not a bound.
+	cycle := age + 2*every + poll
 	for name, longest := range gap {
-		bound := 8*window + statusPendingLifetime
+		bound := 8*cycle + statusPendingLifetime
 		if name[0] == '#' {
 			bound += statusForgeCacheAge()
 		}

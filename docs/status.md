@@ -280,12 +280,15 @@ refused ordinary read waits in order with the others, keyed by what it reads (a
 shared-cache read by its cache entry, a full-detail audit by its PR). Once the
 first has waited longer than one full refill, confirmations leave the last token
 for it, which admits at most one ordinary read per refill window, in that order.
-A waiter that stops asking for five minutes after its turn opens moves to the
-back. The burst, refill rate and cooldowns are unchanged. Reads that are not
-keyed (paged list and check reads, pipeline pages) share one place and compete
-among themselves first come. A deferred PR that was never observed shows its
-checks as `UNKNOWN`, not pending, and names the actual refusal reason and the
-earliest retry time instead of only `never-observed`.
+A waiter that has not asked for five minutes, counted from its turn opening or
+its last request, whichever is later, moves to the back. The burst, refill rate
+and cooldowns are unchanged. Reads that are not keyed (paged list and check
+reads, pipeline pages) share one place and compete among themselves first come.
+This holds while waiters keep asking and the queues stay bounded; clients from
+older releases share the budget but not the waiting order, and can still delay
+ordinary reads. A deferred PR that was never observed shows its checks as
+`UNKNOWN` (`·` in the interactive view), not pending, and names the actual
+refusal reason and the earliest retry time instead of only `never-observed`.
 
 Quit cancels discovery and watcher waits, selected PR/build provider reads,
 the read-only build hook, guarded retirement Git reads, and queued
