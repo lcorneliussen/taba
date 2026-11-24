@@ -169,14 +169,23 @@ printf '%s' '{"number":9,"state":"CLOSED","title":"closure","closedAt":"2020-02-
 if [ "$1" = "--version" ]; then echo 1.4.4; exit 0; fi
 echo "$*" >> "` + log + `"
 case "$*" in
-*"pull-requests get 4 "*) printf '%s' '` + pr("4", "DECLINED") + `';;
+*"pull-requests get 4 "*) cat "` + filepath.Join(bin, "pr4.json") + `";;
 *"pull-requests get 5 "*) printf '%s' '` + pr("5", "MERGED") + `';;
-*"pull-requests activity 4 "*) printf '%s' '{"items":[{"input":"4","ok":true,"data":[{"update":{"state":"OPEN","date":"2020-01-01T00:00:00Z"}},{"update":{"state":"DECLINED","date":"2020-01-15T00:00:00.000000+00:00"}},{"update":{"state":"DECLINED","date":"2020-05-01T00:00:00Z"}}]}]}';;
+*"pull-requests activity 4 "*) cat "` + filepath.Join(bin, "activity4.json") + `";;
 *"pull-requests activity 5 "*) printf '%s' '{"items":[{"input":"5","ok":true,"data":[{"update":{"state":"MERGED","date":"2020-01-10T00:00:00Z"}}]}]}';;
 *"pull-requests query"*) echo '{"values":[]}';;
 *) echo '{"ok":false,"error":{"code":"UNKNOWN_COMMAND"}}'; exit 2;;
 esac
 `
+	pr4 := filepath.Join(bin, "pr4.json")
+	if err := os.WriteFile(pr4, []byte(pr("4", "DECLINED")), 0600); err != nil {
+		t.Fatal(err)
+	}
+	activity4 := filepath.Join(bin, "activity4.json")
+	dated := `{"items":[{"input":"4","ok":true,"data":[{"update":{"state":"OPEN","date":"2020-01-01T00:00:00Z"}},{"update":{"state":"DECLINED","date":"2020-01-15T00:00:00.000000+00:00"}},{"update":{"state":"DECLINED","date":"2020-05-01T00:00:00Z"}}]}]}`
+	if err := os.WriteFile(activity4, []byte(dated), 0600); err != nil {
+		t.Fatal(err)
+	}
 	for name, script := range map[string]string{"gh": gh, "twg": twg} {
 		if err := os.WriteFile(filepath.Join(bin, name), []byte(script), 0700); err != nil {
 			t.Fatal(err)
@@ -235,5 +244,42 @@ esac
 			t.Fatalf("refresh %d: a recorded merge read its activity again", refresh)
 		}
 		time.Sleep(1100 * time.Millisecond) // past WTC_FORGE_CACHE_AGE
+	}
+
+	// A background collection completes a decline inside its detail read; the
+	// collector must not read it again. A malformed reply is not cached, so
+	// each run retries it exactly once.
+	// A later decline (new updated_on) whose log is malformed.
+	redeclined := strings.Replace(pr("4", "DECLINED"), "2020-06-01T", "2020-07-01T", 1)
+	if err := os.WriteFile(pr4, []byte(redeclined), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(activity4, []byte(`{"items":[{"input":"4","ok":true,"data":{"values":"not a list"}}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.PRFile(), []byte("gadget 4 - https://bitbucket.org/example/gadget/pull-requests/4 decline\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for run := 1; run <= 2; run++ {
+		before := reads("pull-requests activity 4")
+		if _, err := c.StatusForgePreview(); err != nil {
+			t.Fatal(err)
+		}
+		if got := reads("pull-requests activity 4") - before; got != 1 {
+			t.Fatalf("background run %d: %d decline activity reads for a malformed reply; want 1", run, got)
+		}
+		time.Sleep(1100 * time.Millisecond)
+	}
+	// A readable log for that decline is dated by a background run.
+	if err := os.WriteFile(activity4, []byte(dated), 0600); err != nil {
+		t.Fatal(err)
+	}
+	before := reads("pull-requests activity 4")
+	snapshot, err := c.StatusForgePreview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.PRs) != 1 || snapshot.PRs[0].ClosedAt == nil || *snapshot.PRs[0].ClosedAt != "2020-01-15T00:00:00Z" || reads("pull-requests activity 4")-before > 1 {
+		t.Fatalf("background run did not date the decline in one read: %+v after %d reads", snapshot.PRs, reads("pull-requests activity 4")-before)
 	}
 }

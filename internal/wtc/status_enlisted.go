@@ -592,9 +592,11 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 	// Every path that observes a Bitbucket merge or decline (list, retained,
 	// background or explicit detail) completes its event time from the
 	// activity log, so it can be recorded. An unavailable activity read leaves
-	// the time unknown.
+	// the time unknown. A background detail read has already tried to date a
+	// decline, and a failed read is not cached, so only a foreground refresh
+	// dates one here: a run reads a decline's activity at most once.
 	for _, i := range pending {
-		if identities[i][1] == "bitbucket.org" && !statusObservationUnavailable(details[i].Freshness) {
+		if identities[i][1] == "bitbucket.org" && !statusObservationUnavailable(details[i].Freshness) && (details[i].State != "DECLINED" || intent == StatusRefreshForeground) {
 			details[i] = statusBBCompleteMergeTimeContext(ctx, details[i], identities[i][0])
 		}
 	}
