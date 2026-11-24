@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"math/rand"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func archive511Row(repo, number, state, at string) StatusPRRow {
@@ -185,14 +187,19 @@ func archive511Slugs(rows []StatusPRRow) string {
 	return " " + strings.Join(out, " ")
 }
 
-func archive511Activity(updates ...string) string {
+func archive511Entries(updates ...string) string {
 	var out []string
 	for _, update := range updates {
 		state, date, _ := strings.Cut(update, "@")
 		out = append(out, `{"pull_request":{"id":4},"update":{"state":"`+state+`","date":"`+date+`"}}`)
 	}
 	out = append(out, `{"pull_request":{"id":4},"comment":{"id":1}}`, `{"pull_request":{"id":4},"approval":{"date":"2020-09-01T00:00:00Z"}}`)
-	return `{"activities":[` + strings.Join(out, ",") + `]}`
+	return "[" + strings.Join(out, ",") + "]"
+}
+
+// archive511Activity is an activity log as bitbucketReadPRActivity returns it.
+func archive511Activity(updates ...string) string {
+	return `{"activities":` + archive511Entries(updates...) + `}`
 }
 
 // The decline time is the activity update that entered the current DECLINED
@@ -224,8 +231,121 @@ func TestStatusArchive511BitbucketDeclineEventTime(t *testing.T) {
 	}
 }
 
-// archive511FakeBB serves one Bitbucket PR and its activity log and records
-// every bb call.
+const archive511Declined = `{"id":4,"state":"DECLINED","title":"x","updated_on":"2020-06-01T00:00:00.000000+00:00","destination":{"branch":{"name":"main"},"repository":{"full_name":"acme/alpha"}},"source":{"commit":{"hash":"aaaaaaaaaaaa"}}}`
+
+// archive511TWG serves PR 4 and its activity through the default twg client,
+// in TWG's batch envelope, from files a test can replace; it returns that
+// directory. The no-bb host keeps every other tool and request contained.
+func archive511TWG(t *testing.T, view, entries string) (noBBHost, string) {
+	t.Helper()
+	h := newNoBBHost(t)
+	for _, name := range []string{"BB_API_USER", "BB_API_PASS", "BB_USERNAME", "BB_API_TOKEN", "ATLASSIAN_ACCOUNT_EMAIL", "ATLASSIAN_API_TOKEN"} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("TMPDIR", t.TempDir())
+	dir := t.TempDir()
+	fixtureFile(t, filepath.Join(dir, "view.json"), view, 0644)
+	fixtureFile(t, filepath.Join(dir, "activity.json"), entries, 0644)
+	fixtureFile(t, filepath.Join(h.bin, "twg"), `#!/bin/sh
+if [ "$1" = "--version" ]; then echo 1.4.4; exit 0; fi
+printf 'argv:%s\n' "$*" >> "$FAKE_TWG_LOG"
+case "$*" in
+*"pull-requests get"*) body=view ;;
+*"pull-requests activity"*) body=activity ;;
+*) echo '{"ok":false,"error":{"code":"UNKNOWN_COMMAND"}}'; exit 2 ;;
+esac
+printf '{"items":[{"input":"4","ok":true,"data":%s}]}' "$(cat "`+dir+`/$body.json")"
+`, 0755)
+	return h, dir
+}
+
+func archive511TWGReads(t *testing.T, h noBBHost, kind string) int {
+	t.Helper()
+	raw, _ := os.ReadFile(h.log)
+	return strings.Count(string(raw), "pull-requests "+kind+" ")
+}
+
+func TestStatusArchive511TWGDatesDeclineFromActivity(t *testing.T) {
+	h, _ := archive511TWG(t, archive511Declined, archive511Entries("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
+	detail := statusEnrichRecord(PRRecord{Repo: "alpha", Number: "4"}, "acme/alpha", "bitbucket.org")
+	if detail.State != "DECLINED" || detail.ClosedAt != "2020-02-03T10:00:00Z" {
+		t.Fatalf("decline time not read from activity: %+v", detail)
+	}
+	if detail.ClosedOn != "2020-06-01T00:00:00.000000+00:00" || detail.MergedOn != "" {
+		t.Fatalf("archive eligibility or merge time changed: %+v", detail)
+	}
+	if gets, reads := archive511TWGReads(t, h, "get"), archive511TWGReads(t, h, "activity"); gets != 1 || reads != 1 {
+		t.Fatalf("reads: %d PR, %d activity; want one each", gets, reads)
+	}
+}
+
+// The decline's activity read budget. Under a TWG profile the cache is
+// private to one status operation, so each operation reads a declined PR's
+// log once, and only once however many paths complete it. Under a known
+// credential the log is keyed by updated_on and reused past cache expiry
+// until a reopen or re-decline changes updated_on. An incomplete log is
+// never cached as a time.
+func TestStatusArchive511TWGDeclineReadBudget(t *testing.T) {
+	h, dir := archive511TWG(t, archive511Declined, archive511Entries("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
+	t.Setenv("WTC_FORGE_CACHE_AGE", "1")
+	declined := statusPRDetail{Number: "4", State: "DECLINED", ClosedOn: "2020-06-01T00:00:00.000000+00:00"}
+	complete := func(ctx context.Context, detail statusPRDetail) string {
+		return statusBBCompleteMergeTimeContext(ctx, detail, "acme/alpha").ClosedAt
+	}
+	for operation := 1; operation <= 3; operation++ {
+		ctx := statusAuthOperation(context.Background())
+		for range 2 {
+			if got := complete(ctx, declined); got != "2020-02-03T10:00:00Z" {
+				t.Fatalf("profile operation %d: %q", operation, got)
+			}
+		}
+		if reads := archive511TWGReads(t, h, "activity"); reads != operation {
+			t.Fatalf("profile: %d activity reads after %d operations; want one per operation", reads, operation)
+		}
+	}
+
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-token")
+	before := archive511TWGReads(t, h, "activity")
+	if got := complete(statusAuthOperation(context.Background()), declined); got != "2020-02-03T10:00:00Z" {
+		t.Fatalf("known credential: %q", got)
+	}
+	time.Sleep(1100 * time.Millisecond) // past WTC_FORGE_CACHE_AGE
+	for range 3 {
+		if got := complete(statusAuthOperation(context.Background()), declined); got != "2020-02-03T10:00:00Z" {
+			t.Fatalf("expired cache entry for an unchanged decline: %q", got)
+		}
+	}
+	if reads := archive511TWGReads(t, h, "activity") - before; reads != 1 {
+		t.Fatalf("known credential: %d activity reads across expiry; want 1", reads)
+	}
+	// Reopened and declined again: updated_on moves, so the earlier log is not reused.
+	fixtureFile(t, filepath.Join(dir, "activity.json"),
+		archive511Entries("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z", "OPEN@2020-03-01T00:00:00Z", "DECLINED@2020-04-01T00:00:00Z"), 0644)
+	again := declined
+	again.ClosedOn = "2020-04-01T00:00:00.000000+00:00"
+	if got := complete(statusAuthOperation(context.Background()), again); got != "2020-04-01T00:00:00Z" {
+		t.Fatalf("re-decline dated by an earlier log: %q", got)
+	}
+	if reads := archive511TWGReads(t, h, "activity") - before; reads != 2 {
+		t.Fatalf("re-decline: %d activity reads; want 2", reads)
+	}
+	// A full page may hide the decline: unknown, and not cached as a time.
+	full := make([]string, 200)
+	for i := range full {
+		full[i] = "DECLINED@2020-04-01T00:00:00Z"
+	}
+	fixtureFile(t, filepath.Join(dir, "activity.json"), archive511Entries(full...), 0644)
+	page := declined
+	page.ClosedOn = "2020-07-01T00:00:00.000000+00:00"
+	for range 2 {
+		if got := complete(statusAuthOperation(context.Background()), page); got != "" {
+			t.Fatalf("incomplete activity dated a decline: %q", got)
+		}
+	}
+}
+
+// archive511FakeBB serves one Bitbucket PR and its activity log through the
+// deprecated bb client and records every bb call.
 func archive511FakeBB(t *testing.T, view, activity string) string {
 	t.Helper()
 	t.Setenv("TMPDIR", t.TempDir())
@@ -253,40 +373,22 @@ func archive511Reads(t *testing.T, calls, kind string) int {
 	return strings.Count(string(raw), "pr "+kind+" ")
 }
 
-func TestStatusArchive511BitbucketDeclineReadsActivityOnce(t *testing.T) {
-	view := `{"id":4,"state":"DECLINED","title":"x","updated_on":"2020-06-01T00:00:00.000000+00:00"}`
-	calls := archive511FakeBB(t, view, archive511Activity("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
-	record := PRRecord{Repo: "widget", Number: "4"}
-	for range 2 {
-		detail := statusEnrichRecord(record, "example/widget", "bitbucket.org")
-		if detail.State != "DECLINED" || detail.ClosedAt != "2020-02-03T10:00:00Z" {
-			t.Fatalf("decline time not read from activity: %+v", detail)
-		}
-		if detail.ClosedOn != "2020-06-01T00:00:00.000000+00:00" || detail.MergedOn != "" {
-			t.Fatalf("archive eligibility or merge time changed: %+v", detail)
-		}
-	}
-	if views, activities := archive511Reads(t, calls, "view"), archive511Reads(t, calls, "activity"); views == 0 || activities > views {
-		t.Fatalf("activity reads = %d for %d PR reads; want at most one each", activities, views)
-	}
-}
-
-func TestStatusArchive511BitbucketOtherStatesKeepTheirTimes(t *testing.T) {
-	for _, tc := range []struct{ name, view, activity, mergedOn, closedAt string }{
-		{"open costs no read", `{"id":4,"state":"OPEN","title":"x","source":{"commit":{"hash":"abc"}}}`, archive511Activity("DECLINED@2020-02-03T10:00:00Z"), "", ""},
-		{"merged keeps its merge time", `{"id":4,"state":"MERGED","title":"x","updated_on":"2020-06-01T00:00:00Z"}`,
-			archive511Activity("OPEN@2020-01-01T00:00:00Z", "MERGED@2020-02-03T10:00:00Z"), "2020-02-03T10:00:00Z", ""},
-		{"reopen in log stays unknown", `{"id":4,"state":"DECLINED","title":"x","updated_on":"2020-06-01T00:00:00Z"}`,
-			archive511Activity("DECLINED@2020-02-03T10:00:00Z", "OPEN@2020-03-01T00:00:00Z"), "", ""},
+// bb pr activity stops at its default page limit without saying so, so under
+// bb a decline stays unknown and costs no read; merges keep their behaviour.
+func TestStatusArchive511BBKeepsDeclineUnknown(t *testing.T) {
+	for _, tc := range []struct{ name, view, mergedOn string }{
+		{"declined", `{"id":4,"state":"DECLINED","title":"x","updated_on":"2020-06-01T00:00:00Z"}`, ""},
+		{"open", `{"id":4,"state":"OPEN","title":"x","source":{"commit":{"hash":"abc"}}}`, ""},
+		{"merged", `{"id":4,"state":"MERGED","title":"x","updated_on":"2020-06-01T00:00:00Z"}`, "2020-02-03T10:00:00Z"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			calls := archive511FakeBB(t, tc.view, tc.activity)
+			calls := archive511FakeBB(t, tc.view, archive511Activity("OPEN@2020-01-01T00:00:00Z", "MERGED@2020-02-03T10:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
 			detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: "4"}, "example/widget", "bitbucket.org")
-			if detail.MergedOn != tc.mergedOn || detail.ClosedAt != tc.closedAt {
+			if detail.MergedOn != tc.mergedOn || detail.ClosedAt != "" {
 				t.Fatalf("times: %+v", detail)
 			}
-			if n := archive511Reads(t, calls, "activity"); detail.State == "OPEN" && n != 0 {
-				t.Fatalf("an open PR read its activity %d times", n)
+			if reads := archive511Reads(t, calls, "activity"); (tc.mergedOn == "") != (reads == 0) {
+				t.Fatalf("%d activity reads for a %s PR", reads, tc.name)
 			}
 		})
 	}

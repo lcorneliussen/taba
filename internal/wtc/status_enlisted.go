@@ -18,7 +18,7 @@ import (
 // statusBBActivityLog is the activity log bitbucketReadPRActivity returns.
 // TWG documents update.state and update.date on each entry of its
 // chronological activity list ("twg help describe 'bitbucket pull-requests
-// activity'"), as do the public Bitbucket Cloud activity values bb returns.
+// activity'"); bb output is assumed to carry the same Bitbucket Cloud values.
 type statusBBActivityLog struct {
 	Activities []struct {
 		Update struct {
@@ -83,13 +83,34 @@ func statusBBDeclineEventTime(raw []byte) string {
 // It shares the single-flight, cached and rate-limited activity read; other
 // states and known times cost no read, and an unavailable read leaves the
 // time unknown.
+//
+// A decline, unlike a merge, is not persisted and can be reopened, so its log
+// is keyed by the PR's updated_on (ClosedOn), which any reopen or re-decline
+// changes. A log cached under that key dates the decline at any age without
+// another read; where the cache is operation-private (a TWG profile) each
+// status operation reads once. Under bb a decline stays unknown: bb pr
+// activity stops at its default page limit and its JSON does not say whether
+// it did, so a complete log cannot be told from a truncated one.
 func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail, slug string) statusPRDetail {
 	merged := detail.State == "MERGED" && detail.MergedOn == ""
 	declined := detail.State == "DECLINED" && detail.ClosedAt == ""
 	if !merged && !declined {
 		return detail
 	}
-	raw, err := statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, detail.Number, func() ([]byte, error) {
+	key := detail.Number
+	if declined {
+		if bitbucketReadFor(ctx).selection.Client == bitbucketClientBB {
+			return detail
+		}
+		if detail.ClosedOn != "" {
+			key += "@" + detail.ClosedOn
+			if raw, ok := statusReadForgeEntryAnyContext(ctx, "activity", "bitbucket.org", slug, key); ok {
+				detail.ClosedAt = statusBBDeclineEventTime(raw)
+				return detail
+			}
+		}
+	}
+	raw, err := statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, key, func() ([]byte, error) {
 		return bitbucketReadPRActivity(ctx, slug, detail.Number)
 	})
 	if err != nil {
