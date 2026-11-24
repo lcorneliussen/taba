@@ -71,8 +71,10 @@ func Revision(s string) string {
 	return s
 }
 
-// valid applies the rules of git check-ref-format that Parse's input could
-// break.
+// valid applies some rules of git check-ref-format: enough to refuse the
+// malformed names Parse sees in practice, not all of them. It checks ".lock"
+// only at the end of the whole name, so Git itself refuses a name such as
+// refs/heads/a.lock/b when it is used.
 func valid(name string) bool {
 	if strings.Contains(name, "..") || strings.Contains(name, "@{") || strings.Contains(name, "//") ||
 		strings.HasSuffix(name, "/") || strings.HasSuffix(name, ".") || strings.HasSuffix(name, ".lock") {

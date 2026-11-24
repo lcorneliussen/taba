@@ -14,7 +14,9 @@ import "github.com/quasilyte/go-ruleguard/dsl"
 // local, remote and qualified forms. internal/gitref builds every ref.
 //
 // gogrep matches a literal in a list only at a fixed position, so each list
-// position is a pattern of its own.
+// position is a pattern of its own. The patterns cover positions 0 to 9 of a
+// call or composite literal; a ref literal at position 10 or later is not
+// flagged.
 func gitRefLiteral(m dsl.Matcher) {
 	m.Match(
 		`$s + $_`, `$_ + $s`,
