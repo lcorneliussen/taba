@@ -11,9 +11,9 @@ steps update this file in the same change that moves an operation.
 
 | Client | Role | Account it acts as |
 |---|---|---|
-| TWG CLI (`twg`) | default client for every Bitbucket read | the user's own TWG profile, or the host read credential for one repository (see below) |
-| `bb` CLI | deprecated: reads only when selected explicitly; review writes until they migrate | the `bb` CLI's own login |
-| direct REST (`api.bitbucket.org/2.0`) | status lists, check evidence, summary/inline comment writes | the host read credential for one repository, else credentials from the environment or the `bb` config file (read as a file; `bb` is not run); see [status-auth-cache.md](status-auth-cache.md) |
+| TWG CLI (`twg`) | default client for every Bitbucket read, and the default review write route (see [Writes](#writes)) | reads: the user's own TWG profile, or the host read credential for one repository (see below); writes: the user's own TWG profile only |
+| `bb` CLI | deprecated: reads and review writes only when selected explicitly | the `bb` CLI's own login |
+| direct REST (`api.bitbucket.org/2.0`) | status lists, check evidence; summary, inline and reply comment writes when explicit REST credentials are set | reads: the host read credential for one repository, else credentials from the environment, else the deprecated `bb` config-file fallback (read as a file; `bb` is not run); see [status-auth-cache.md](status-auth-cache.md). Writes: only the explicit environment credentials named under [Writes](#writes) |
 
 The clients can act as **different accounts**. Taba therefore never treats
 them as interchangeable:
@@ -24,16 +24,19 @@ them as interchangeable:
 - A read may only fall back to another client where the two are proven to act
   as the same actor with the same permissions, or the user explicitly chose
   that route. No such fallback exists today.
-- Writes (not migrated yet) will pin provider, repository, PR, head, actor and
-  client, persist known IDs before acknowledging, and keep an ambiguous result
-  pending until reconciled; they are never retried through another client.
-  The existing summary-comment create-intent and receipt guards stay in force.
+- A write takes one route, chosen before anything is sent (see
+  [Writes](#writes)). A failed or uncertain write is never retried, through
+  the same route or another; an ambiguous result stays pending until
+  reconciled. The summary-comment create-intent, saved-id and receipt guards
+  apply to every route.
 
 ## Selecting the client
 
 `TABA_BITBUCKET_TRANSPORT` (legacy alias `WTC_BITBUCKET_TRANSPORT`) selects
-the client for **migrated** operations only. It is resolved when each
-operation runs, with the same precedence as the TWG site default:
+the client for adapter reads, catch-up, and review writes that neither a
+gateway nor explicit REST credentials route first (see [Writes](#writes)).
+It is resolved when each operation runs, with the same precedence as the TWG
+site default:
 
 1. the process environment, when set — even set empty;
 2. the machine defaults file in the control root (`taba.env`, or legacy
@@ -46,7 +49,7 @@ operation fails as unavailable instead of falling back to the default.
 | Value | Effect |
 |---|---|
 | unset, empty, `twg` | TWG — the default since #471 |
-| `bb` | the deprecated `bb` client, for one more release |
+| `bb` | the deprecated `bb` client, kept for compatibility until its removal ([#127](https://github.com/lcorneliussen/taba/issues/127)) |
 | anything else | the operation fails as unavailable with a fixed diagnostic; no client runs |
 
 The default changed from `bb` to `twg` once, at the release that carries
@@ -251,8 +254,10 @@ authentication and authorization failures.
 
 ## Operation inventory
 
-State of `main` at contract version 1. `bb` = `bb` CLI, REST = direct HTTP.
-"Budget" is the shared status request allowance and cooldown.
+State of `main` at contract version 3. `bb` = `bb` CLI, REST = direct HTTP.
+"Budget" is the shared status request allowance and cooldown. Write rows list
+the routes in the order of [Writes](#writes); a gateway route is a confirmed
+plugin write and is left out.
 
 | Area | Operation | R/W | Client | Bounds and guards |
 |---|---|---|---|---|
@@ -270,10 +275,11 @@ State of `main` at contract version 1. `bb` = `bb` CLI, REST = direct HTTP.
 | Review | review status gate | R | adapter (PR, comments) | 30 s each; trusts only exact comment ids and `#comment-<n>` links |
 | Open review | PR discovery by branch | R | adapter | 15 s; reaching the limit is an error |
 | Catch-up | enlisted PR state | R | `twg` (default) or `bb pr view` (selected) | 30 s; no budget, no cache; strict decoding and identity pinning with TWG only |
-| Review | summary comment create/update | W | REST, else `bb pr comments add/edit` | create-intent file, saved id, receipt; a missing, conflicting or malformed id stays pending |
-| Review | inline comment create | W | REST, else `bb pr comments add` | marker-key de-duplication; fail closed when prior comments are unreadable |
-| Review | inline reply and resolve | W | REST reply / `bb pr comments reply`; `bb pr comments resolve` | no automatic retry |
-| Review | mark ready | W | `bb pr ready` | gated by review status |
+| Review | summary comment create/update | W | REST (explicit credentials), else `twg … comment create/update` (default) or `bb pr comments add/edit` (selected) | create-intent file, saved id, receipt; a missing, conflicting or malformed id stays pending |
+| Review | inline comment create | W | REST (explicit credentials), else `twg … comment create --path --line` (default) or `bb pr comments add --file --line-to` (selected) | marker-key de-duplication; fail closed when prior comments are unreadable |
+| Review | inline reply | W | REST (explicit credentials), else `twg … comment create --reply-to` (default) or `bb pr comments reply` (selected) | no automatic retry |
+| Review | inline resolve | W | `twg … comment resolve` (default) or `bb pr comments resolve` (selected); REST credentials are not used | no automatic retry |
+| Review | mark ready | W | `twg … update --ready` (default) or `bb pr ready` (selected); REST credentials are not used | gated by review status |
 | OpenClaw | repository search, branch list, clone | R | plugin REST and git with the person's own plugin login | 15–60 s; one page |
 | OpenClaw | publication | W | delegated to the gateway's Bitbucket plugin | receipt written first; only the local enlistment is retried |
 
@@ -288,26 +294,32 @@ summary comment id is read back; neither added a Bitbucket operation.
 
 ## Writes
 
-A write takes one route, chosen before anything is sent, and is never
-retried through another:
+Review writes have migrated: TWG is the default route, and `bb` writes only
+when selected explicitly. A write takes one route, chosen before anything is
+sent from the first row that applies, and is never retried, through the same
+route or another:
 
 | Where | Route |
 |---|---|
 | A gateway that keeps logins away from commands (`BITBUCKET_PUBLISH=gateway`) | a request for the Bitbucket plugin's confirmed pull request writes; the person confirms on the Collection card |
-| Explicit `BB_API_USER`/`BB_API_PASS` or `BB_USERNAME`/`BB_API_TOKEN` | the existing REST comment writes |
+| Explicit `BB_API_USER`/`BB_API_PASS` or `BB_USERNAME`/`BB_API_TOKEN` in the environment | REST comment writes: summary create/update, inline create and reply. Resolve and mark ready fall through to the next rows |
 | `TABA_BITBUCKET_TRANSPORT=bb` | the deprecated `bb` client |
 | otherwise | the person's own TWG login: `pull-requests comment create/update/resolve`, `pull-requests update --ready` |
 
-The host read credential is never used for a write. Existing create-intent,
-saved-id and receipt guards apply to every route.
+Only those two explicit pairs select the REST write route. Taba never uses
+its other read credentials for a write: not `ATLASSIAN_ACCOUNT_EMAIL`/
+`ATLASSIAN_API_TOKEN`, not the token it reads from the `bb` config file, and
+not the host read credential. The `bb` route writes with whatever login the
+`bb` CLI itself has. Existing create-intent, saved-id and receipt guards apply
+to every route.
 
 ### Gateway writes
 
-On a gateway, `review post` (summary), `review resolve` and `review ready`
-write `bitbucket-pr-writes.json` into the worktree's git directory: a closed
-set of operations (`comment.create` with optional `inline`/`parent`,
-`comment.update`, `comment.resolve`, `pr.ready`, `pr.update`) for one pull
-request and head, under an intent id derived from the review. The command
+On a gateway, `review post` (summary and inline comments), `review resolve`
+and `review ready` write `bitbucket-pr-writes.json` into the worktree's git
+directory: a closed set of operations (`comment.create` with optional
+`inline`/`parent`, `comment.update`, `comment.resolve`, `pr.ready`,
+`pr.update`) for one pull request and head, under an intent id derived from the review. The command
 reports that the writes await confirmation. The Collection card shows
 **Confirm Bitbucket writes…** for that checkout; the Bitbucket plugin
 (`pr-writes`, then `pr-writes-confirm`, openclaw-bitbucket with #33) shows
@@ -395,5 +407,7 @@ Refused reads) for the credential type it names. The rows are advisory.
 ## Next steps
 
 Live provider acceptance of the TWG write and list shapes and of the plugin's
-un-draft and resolve endpoints; removal of the deprecated `bb` client after
-one release.
+un-draft and resolve endpoints; removal of the deprecated `bb` client and of
+the `bb` config-file credential fallback, tracked in
+[#127](https://github.com/lcorneliussen/taba/issues/127). Until then both stay
+in place.
