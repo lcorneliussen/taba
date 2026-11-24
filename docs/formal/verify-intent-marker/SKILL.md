@@ -71,18 +71,33 @@ TLC must report, and the script fails on any other result:
 | `replay-d396c59-agent-start.cfg` | no marker for the agent start, as before #498 | violated |
 | `record-after-release.cfg` | marker removed before comment.id is saved | violated |
 
-`VERBOSE=1 tools/formal/intent-marker/check.sh main-review-post.cfg` prints
-TLC's own output, including the trace of a violation. Put a scratch config in
-`tools/formal/intent-marker/`: TLC does not find a config in another
-directory.
+Put a scratch config in `tools/formal/intent-marker/`: TLC does not find a
+config in another directory.
 
 ## Read the result
 
-Read every result with the pstack `/statechart` skill. Give it
-`IntentMarker.tla` and the config. It tells each violation as its shortest
-path in plain words. When the check passes, it draws how the runs and the
-marker move between states. For a chart, use a copy of a main config with two
-runs and `MaxAttempts = 2`.
+`check.sh` prints one line per config: `ok` when TLC reported what the
+config's `expect` line states, `FAIL` with TLC's whole output when it did not.
+It exits 0 when every config is `ok`, 1 when any is `FAIL`, and 2 when Java is
+missing or the jar does not match its sha256. `VERBOSE=1` also prints TLC's
+output for an `ok` config.
+
+A passing config prints no trace. TLC reports
+`Model checking completed. No error has been found.` and the number of states
+it found. A violation starts with `Error: Invariant AtMostOnce is violated.`,
+followed by the steps that break it as `State 1`, `State 2` and so on. Each
+state names the action that led to it, such as `<Claim line …>`, and lists
+every variable after that step. TLC searches breadth first, so the trace is a
+shortest path to the violation. Compare each state with the one before it to
+see what the action changed. To see a trace, run a replay config, which must
+violate the invariant:
+
+```sh
+VERBOSE=1 tools/formal/intent-marker/check.sh replay-22001b7-parent.cfg
+```
+
+An external tool that draws or narrates TLC traces is optional. Nothing in this
+guide needs one.
 
 ## Tell a real bug from a modeling error
 
@@ -109,7 +124,7 @@ that the replay tests. Fix the model.
 1. Change the action that the coverage record maps to the changed code.
 2. When the change adds a design choice, add a constant for it and a config
    that sets it. Give the config an `expect` line.
-3. Run the check and read the result with `/statechart`.
+3. Run the check and read the result as above.
 4. Update the coverage record. Move the sync commit only after you confirm
    that the model describes the covered code at the new commit.
 
