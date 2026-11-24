@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
 	"strconv"
@@ -154,28 +156,58 @@ var (
 //
 //   - Confirmations stay FIFO and reserve one token each, but at most
 //     burst-1: a full bucket always has a token an ordinary read may take.
-//   - A refused ordinary read records when ordinary reads started waiting.
-//     Once that wait is older than one full refill (burst*every),
+//   - A refused ordinary read joins a FIFO of ordinary waiters, keyed by the
+//     identity of what it reads. Once the head has waited one full refill
+//     (burst*every) since it joined or since the last such turn,
 //     confirmations leave the last token for it, without waiting in the lock
-//     for another, and the next ordinary read may take any token. Admitting
-//     it clears the mark: this path yields one ordinary read per window.
-//   - The mark expires after statusOrdinaryLifetime, so a waiter that never
-//     returns parks at most one token for that long.
+//     for another, and the head may take any token. That turn is recorded:
+//     this path yields one ordinary read per window, in waiter order.
+//   - A waiter not seen for statusOrdinaryLifetime is dropped; a head that
+//     does not return within statusPendingLifetime of its turn moves to the
+//     tail, so a dormant waiter delays the others by at most that long.
 //
-// Bound (finite load: some ordinary reader retries within the lifetime):
-// ordinary reads as a class get a token within age + one refill + their retry
-// interval, however many confirmations arrive. Among themselves they stay
-// first come, as before. Confirmations lose at most one token per aging
-// window to that path, otherwise only tokens left above their reserve.
-// With a one-token allowance (WTC_FORGE_MIN_INTERVAL) nothing can be held:
-// an aged ordinary read gets a turn only when it finds the token unspent.
-// Released clients share the bucket and FIFO but not the mark; they stay at
-// least as conservative for ordinary reads and may take the held token.
+// Bound (finite load: waiters retry within statusPendingLifetime, fewer than
+// statusPendingLimit wait): the waiter at position p is admitted within
+// (p+1) * (window + one refill + its retry interval), plus the grace of any
+// dormant waiter ahead, however many confirmations arrive. Confirmations lose
+// at most one token per window to this path, otherwise only tokens left above
+// their reserve. Reads that name no identity share one place in the FIFO and
+// among themselves stay first come. With a one-token allowance
+// (WTC_FORGE_MIN_INTERVAL) nothing can be held: the head gets a turn only
+// when it finds the token unspent. Released clients share the bucket and the
+// confirmation FIFO but not the waiters; they stay at least as conservative
+// for ordinary reads and may take the held token.
 const statusOrdinaryLifetime = 2 * statusPendingLifetime
 
 func statusOrdinaryAge(forge string) time.Duration {
 	burst, every := statusForgeAllowance(forge)
 	return time.Duration(max(burst, 1)) * every
+}
+
+type statusOrdinaryIdentityKey struct{}
+
+// statusOrdinaryRead names what an ordinary read fetches, so it keeps its own
+// place among ordinary waiters. The digest carries no credential data.
+func statusOrdinaryRead(ctx context.Context, kind, forge, slug, key string) context.Context {
+	return context.WithValue(ctx, statusOrdinaryIdentityKey{}, statusConfirmationKey("ordinary\x00"+kind+"\x00"+forge+"\x00"+slug+"\x00"+key))
+}
+
+func statusOrdinaryIdentity(ctx context.Context) string {
+	if identity, _ := ctx.Value(statusOrdinaryIdentityKey{}).(string); identity != "" {
+		return identity
+	}
+	return statusConfirmationKey("ordinary")
+}
+
+type statusOrdinaryWaiter struct {
+	Key   string    `json:"key"`
+	Since time.Time `json:"since"`
+	Seen  time.Time `json:"seen"`
+}
+
+type statusOrdinaryWaiters struct {
+	Last  time.Time              `json:"last,omitzero"`
+	Queue []statusOrdinaryWaiter `json:"queue"`
 }
 
 // A sibling of the shared budget file, like its lock: same scope, no new
@@ -184,20 +216,80 @@ func statusOrdinaryWaitPath(forge string) string {
 	return statusForgeStatePath("budget", forge) + ".ordinary"
 }
 
-func statusOrdinaryWaitingSince(forge string, now time.Time) time.Time {
-	raw, err := os.ReadFile(statusOrdinaryWaitPath(forge))
+// Never follow a symlink or trust unbounded, corrupt or future state.
+func statusReadOrdinaryWaiters(forge string, now time.Time) statusOrdinaryWaiters {
+	var saved statusOrdinaryWaiters
+	path := statusOrdinaryWaitPath(forge)
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
-		return time.Time{}
+		return saved
 	}
-	nanos, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
-	if err != nil {
-		return time.Time{}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 65536 {
+		return saved
 	}
-	since := time.Unix(0, nanos)
-	if since.After(now) || now.Sub(since) >= statusOrdinaryLifetime {
-		return time.Time{}
+	raw, err := io.ReadAll(io.LimitReader(file, 65537))
+	if err != nil || json.Unmarshal(raw, &saved) != nil || len(saved.Queue) > statusPendingLimit {
+		return statusOrdinaryWaiters{}
 	}
-	return since
+	if saved.Last.After(now) {
+		saved.Last = time.Time{}
+	}
+	waiters := statusOrdinaryWaiters{Last: saved.Last}
+	seen := map[string]bool{}
+	for _, item := range saved.Queue {
+		if len(item.Key) != 64 || seen[item.Key] || item.Since.After(now) || item.Seen.After(now) || now.Sub(item.Seen) >= statusOrdinaryLifetime {
+			continue
+		}
+		if _, err := hex.DecodeString(item.Key); err != nil {
+			continue
+		}
+		seen[item.Key] = true
+		waiters.Queue = append(waiters.Queue, item)
+	}
+	return waiters
+}
+
+// Best effort: a lost write only delays the aged path.
+func statusSaveOrdinaryWaiters(forge string, waiters statusOrdinaryWaiters) {
+	if len(waiters.Queue) == 0 && waiters.Last.IsZero() {
+		os.Remove(statusOrdinaryWaitPath(forge))
+		return
+	}
+	if raw, err := json.Marshal(waiters); err == nil {
+		_ = os.WriteFile(statusOrdinaryWaitPath(forge), raw, 0600)
+	}
+}
+
+// statusOrdinaryTurn is when the head's turn opens; zero without waiters. A
+// head dormant past its grace moves to the tail first.
+func (w *statusOrdinaryWaiters) turn(age time.Duration, now time.Time) (time.Time, bool) {
+	moved := false
+	for range w.Queue {
+		head := w.Queue[0]
+		turn := head.Since
+		if w.Last.After(turn) {
+			turn = w.Last
+		}
+		turn = turn.Add(age)
+		if now.Before(turn.Add(statusPendingLifetime)) || !head.Seen.Before(turn) {
+			return turn, moved
+		}
+		head.Since, moved = now, true
+		w.Queue = append(w.Queue[1:], head)
+	}
+	return time.Time{}, moved
+}
+
+func (w *statusOrdinaryWaiters) position(key string) int {
+	for i, item := range w.Queue {
+		if item.Key == key {
+			return i
+		}
+	}
+	return -1
 }
 
 // statusTakeForgeTokenRetry is statusTakeForgeTokenForContext that also says
@@ -242,15 +334,23 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 		return false, time.Time{}
 	}
 	ordinary := confirmation == ""
-	// The ordinary-waiter mark only exists beside the Bitbucket FIFO; it is
-	// read even when the queue is empty so an ordinary admission clears it.
-	var waiting time.Time
+	age := statusOrdinaryAge(forge)
+	// Ordinary waiters exist only beside the Bitbucket FIFO; they are read
+	// even when it is empty so a waiter keeps its place.
+	var waiters statusOrdinaryWaiters
+	var turn time.Time
+	dirty := false
 	if forge == "bitbucket.org" {
-		waiting = statusOrdinaryWaitingSince(forge, now)
+		waiters = statusReadOrdinaryWaiters(forge, now)
+		turn, dirty = waiters.turn(age, now)
 	}
-	aged := len(queue) > 0 && !waiting.IsZero() && !now.Before(waiting.Add(statusOrdinaryAge(forge)))
-	// A one-token allowance cannot hold a token back; there an aged ordinary
-	// read only competes for the token instead of waiting behind the FIFO.
+	identity := ""
+	if ordinary {
+		identity = statusOrdinaryIdentity(ctx)
+	}
+	aged := len(queue) > 0 && len(waiters.Queue) > 0 && !turn.IsZero() && !now.Before(turn)
+	// A one-token allowance cannot hold a token back; there the head only
+	// competes for the token instead of waiting behind the FIFO.
 	hold := 0
 	if aged && burst > 1 {
 		hold = 1
@@ -281,8 +381,12 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 	// remains available to ordinary reads while confirmations keep FIFO order.
 	reserve := min(len(queue), max(burst-1, 1))
 	need := 1
+	turnTaken := false
 	if ordinary {
-		admitted = tokens > reserve || aged && tokens >= 1
+		admitted = tokens > reserve
+		if !admitted && aged && tokens >= 1 && waiters.Queue[0].Key == identity {
+			admitted, turnTaken = true, true
+		}
 	} else {
 		need += hold
 	}
@@ -293,17 +397,27 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 		if tokens < need && (ordinary || admitted) {
 			retry = updated.Add(time.Duration(need-tokens) * every)
 		}
-		// Mark even with an empty FIFO: the next confirmation becomes head at
+		// Wait even with an empty FIFO: the next confirmation becomes head at
 		// once and would otherwise win every refill it waits for in the lock.
 		if ordinary && forge == "bitbucket.org" {
-			if waiting.IsZero() {
-				// Best effort: a lost mark only delays the aged path.
-				waiting = now
-				_ = os.WriteFile(statusOrdinaryWaitPath(forge), []byte(strconv.FormatInt(now.UnixNano(), 10)), 0600)
+			at := waiters.position(identity)
+			if at < 0 && len(waiters.Queue) < statusPendingLimit {
+				waiters.Queue = append(waiters.Queue, statusOrdinaryWaiter{Key: identity, Since: now})
+				at = len(waiters.Queue) - 1
+				if at == 0 {
+					turn, _ = waiters.turn(age, now)
+				}
 			}
-			if due := waiting.Add(statusOrdinaryAge(forge)); due.After(retry) {
-				retry = due
+			if at >= 0 {
+				waiters.Queue[at].Seen, dirty = now, true
+				// Earliest: every waiter ahead takes exactly one window.
+				if due := turn.Add(time.Duration(at) * age); due.After(retry) {
+					retry = due
+				}
 			}
+		}
+		if dirty {
+			statusSaveOrdinaryWaiters(forge, waiters)
 		}
 		return false, retry
 	}
@@ -314,8 +428,16 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 		return false, time.Time{}
 	}
 	saveQueue()
-	if ordinary && !waiting.IsZero() {
-		os.Remove(statusOrdinaryWaitPath(forge))
+	if ordinary {
+		if at := waiters.position(identity); at >= 0 {
+			waiters.Queue, dirty = append(waiters.Queue[:at], waiters.Queue[at+1:]...), true
+		}
+		if turnTaken {
+			waiters.Last, dirty = now, true
+		}
+	}
+	if dirty {
+		statusSaveOrdinaryWaiters(forge, waiters)
 	}
 	tokens--
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil, time.Time{}
@@ -663,7 +785,7 @@ func statusFetchSharedAdmissionContext(ctx context.Context, kind, forge, slug, k
 		return data, false, statusRefusal{}, nil
 	}
 	started := time.Now()
-	raw, live, refused, err := statusWithForgeAdmissionContext(ctx, forge, "", stale, fetch)
+	raw, live, refused, err := statusWithForgeAdmissionContext(statusOrdinaryRead(ctx, kind, forge, slug, key), forge, "", stale, fetch)
 	if err != nil {
 		return nil, false, refused, err
 	}

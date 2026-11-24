@@ -53,9 +53,8 @@ func admission424Tokens(t *testing.T, forge string) string {
 	return string(raw)
 }
 
-func admission424Marked(forge string) bool {
-	_, err := os.Stat(statusOrdinaryWaitPath(forge))
-	return err == nil
+func admission424Marked(forge string, now time.Time) bool {
+	return len(statusReadOrdinaryWaiters(forge, now).Queue) > 0
 }
 
 // Multi-cycle cold-cache reproduction: every cycle the shared bucket has
@@ -160,8 +159,9 @@ func TestStatusAdmission424SustainedContentionStaysFairAndBounded(t *testing.T) 
 	last := map[string]time.Time{}
 	for i, kind := range kinds {
 		last[kind] = start
+		read := statusOrdinaryRead(ctx, kind, forge, "example/widget", "main")
 		actors = append(actors, &admission424Actor{next: start.Add(time.Duration(i) * 10 * time.Second), run: func() (time.Duration, bool) {
-			ok, retry := statusTakeForgeTokenRetry(ctx, forge, "")
+			ok, retry := statusTakeForgeTokenRetry(read, forge, "")
 			if !ok {
 				if waitingSince.IsZero() {
 					waitingSince = clock.now
@@ -217,9 +217,11 @@ func TestStatusAdmission424SustainedContentionStaysFairAndBounded(t *testing.T) 
 	if bound := age + 2*every + ordinaryPoll; maxWait > bound {
 		t.Fatalf("ordinary reads waited %s, bound %s", maxWait, bound)
 	}
-	// The bound is for ordinary reads as a class. Among themselves they stay
-	// first come, as before #424: phase-locked readers can keep one waiting,
-	// so the per-reader gap is logged, not bounded.
+	// Per reader: phase-locked readers rotate through the waiter FIFO, so
+	// each waits at most its position + 1 windows (three readers here).
+	if bound := 3 * (age + 2*every + ordinaryPoll); maxKindGap > bound {
+		t.Fatalf("an ordinary reader went %s without admission, bound %s", maxKindGap, bound)
+	}
 	// Confirmation progress: FIFO, and every token not taken by the bounded
 	// ordinary path (or spent while the dormant head blocked the FIFO).
 	for i := range confirmed {
@@ -293,9 +295,11 @@ func TestStatusAdmission424SparseConfirmationsDoNotWinEveryRefill(t *testing.T) 
 }
 
 // Cold cache, several PRs, FIFO kept saturated by active consumers whose
-// head polls every second: each PR detail is eventually read live exactly
-// once, and until then reports the real refusal with a retry and unknown
-// checks.
+// head polls every second: each PR detail is eventually read live, and until
+// then reports the real refusal with a retry and unknown checks. The cache
+// judges age by the wall clock, which barely moves here, so entries never
+// expire and each PR is read exactly once; ExpiringPRsEachKeepProgressing
+// models expiry.
 func TestStatusAdmission424ColdCachePRsProgressBehindActiveHead(t *testing.T) {
 	const forge, slug, poll = "bitbucket.org", "example/widget", 30 * time.Second
 	foreground424Fixture(t, "exit 0\n")
@@ -377,13 +381,79 @@ func TestStatusAdmission424ColdCachePRsProgressBehindActiveHead(t *testing.T) {
 	}
 }
 
+// The same saturated FIFO with cache expiry modelled: the cache judges age by
+// the wall clock, so once 90 fake seconds pass after a live read its entry is
+// re-dated through the real writer to be expired. A collector that walks its
+// PRs in a fixed order must not hand every turn to its first PR: each PR is
+// re-read within its place in the waiter FIFO.
+func TestStatusAdmission424ExpiringPRsEachKeepProgressing(t *testing.T) {
+	const forge, slug, poll, duration = "bitbucket.org", "example/widget", 30 * time.Second, 30 * time.Minute
+	foreground424Fixture(t, "exit 0\n")
+	clock := admission424FakeClock(t)
+	_, every := statusForgeAllowance(forge)
+	age := statusOrdinaryAge(forge)
+	start := clock.now
+	foreground424Budget(t, forge, 0, start)
+	ctx := context.Background()
+	var actors []*admission424Actor
+	seq := 0
+	var consumer func() *admission424Actor
+	consumer = func() *admission424Actor {
+		key := statusConfirmationKey(fmt.Sprintf("head-%d", seq))
+		seq++
+		statusSavePendingConfirmations(forge, statusQueueConfirmation(statusReadPendingConfirmations(forge, clock.now), key, clock.now))
+		return &admission424Actor{next: clock.now.Add(time.Second), run: func() (time.Duration, bool) {
+			if ok, _ := statusTakeForgeTokenRetry(ctx, forge, key); ok {
+				actors = append(actors, consumer())
+				return 0, true
+			}
+			return time.Second, false
+		}}
+	}
+	for i := 0; i < 12; i++ {
+		actors = append(actors, consumer())
+	}
+	prs := []string{"11", "12", "13", "14", "15"}
+	reads := map[string]int{}
+	last := map[string]time.Time{}
+	maxGap := time.Duration(0)
+	for _, number := range prs {
+		last[number] = start
+	}
+	actors = append(actors, &admission424Actor{next: start, run: func() (time.Duration, bool) {
+		for _, number := range prs {
+			raw := []byte(`{"id":` + number + `,"state":"OPEN"}`)
+			if reads[number] > 0 && !clock.now.Before(last[number].Add(statusForgeCacheAge())) {
+				statusWriteForgeEntryObserved("pr", forge, slug, number, raw, time.Now().Add(-statusForgeCacheAge()-time.Second))
+			}
+			if _, live, _, _ := statusFetchSharedAdmissionContext(ctx, "pr", forge, slug, number, func() ([]byte, error) { return raw, nil }); live {
+				reads[number]++
+				maxGap = max(maxGap, clock.now.Sub(last[number]))
+				last[number] = clock.now
+			}
+		}
+		return poll, false
+	}})
+	admission424Run(clock, start.Add(duration), &actors)
+	for _, number := range prs {
+		maxGap = max(maxGap, clock.now.Sub(last[number]))
+	}
+	t.Logf("reads per PR %v; longest gap %s", reads, maxGap)
+	// Five waiters: each waits at most five windows after its entry expires.
+	if bound := statusForgeCacheAge() + time.Duration(len(prs))*(age+2*every+poll); maxGap > bound {
+		t.Fatalf("a PR went %s without a live read, bound %s", maxGap, bound)
+	}
+}
+
 func TestStatusAdmission424HoldCooldownForegroundAndCancellation(t *testing.T) {
 	const forge = "bitbucket.org"
+	// An anonymous ordinary waiter whose turn has just opened.
 	aged := func(t *testing.T, clock *admission424Clock) {
 		t.Helper()
 		since := clock.now.Add(-statusOrdinaryAge(forge))
-		if err := os.WriteFile(statusOrdinaryWaitPath(forge), []byte(fmt.Sprint(since.UnixNano())), 0600); err != nil {
-			t.Fatal(err)
+		statusSaveOrdinaryWaiters(forge, statusOrdinaryWaiters{Queue: []statusOrdinaryWaiter{{Key: statusOrdinaryIdentity(context.Background()), Since: since, Seen: since}}})
+		if !admission424Marked(forge, clock.now) {
+			t.Fatal("seed waiter")
 		}
 	}
 	t.Run("aged waiter holds the last token, then clears", func(t *testing.T) {
@@ -405,12 +475,66 @@ func TestStatusAdmission424HoldCooldownForegroundAndCancellation(t *testing.T) {
 		if ok, _ := statusTakeForgeTokenRetry(context.Background(), forge, ""); !ok {
 			t.Fatal("aged ordinary waiter not admitted")
 		}
-		if admission424Marked(forge) {
-			t.Fatal("admission left the waiter mark")
+		if waiters := statusReadOrdinaryWaiters(forge, clock.now); len(waiters.Queue) != 0 || !waiters.Last.Equal(clock.now) {
+			t.Fatalf("admission left the waiter or lost its turn: %+v", waiters)
 		}
 		foreground424Budget(t, forge, 1, clock.now)
 		if ok, _ := statusTakeForgeTokenRetry(context.Background(), forge, queue[0].Key); !ok {
 			t.Fatal("head blocked after the waiter was served")
+		}
+	})
+	t.Run("a dormant head moves to the tail after its grace", func(t *testing.T) {
+		foreground424Fixture(t, "exit 0\n")
+		clock := admission424FakeClock(t)
+		admission424Queue(t, forge, 9, clock.now)
+		long := clock.now.Add(-statusOrdinaryAge(forge) - statusPendingLifetime)
+		dormant := statusConfirmationKey("dormant-reader")
+		statusSaveOrdinaryWaiters(forge, statusOrdinaryWaiters{Queue: []statusOrdinaryWaiter{
+			{Key: dormant, Since: long, Seen: long},
+			{Key: statusOrdinaryIdentity(context.Background()), Since: long, Seen: clock.now.Add(-time.Second)},
+		}})
+		foreground424Budget(t, forge, 1, clock.now)
+		if ok, _ := statusTakeForgeTokenRetry(context.Background(), forge, ""); !ok {
+			t.Fatal("a dormant head kept the turn past its grace")
+		}
+		if waiters := statusReadOrdinaryWaiters(forge, clock.now); len(waiters.Queue) != 1 || waiters.Queue[0].Key != dormant {
+			t.Fatalf("dormant waiter lost or kept at head: %+v", waiters)
+		}
+	})
+	t.Run("only the head of the waiters takes the turn", func(t *testing.T) {
+		foreground424Fixture(t, "exit 0\n")
+		clock := admission424FakeClock(t)
+		admission424Queue(t, forge, 9, clock.now)
+		aged(t, clock)
+		foreground424Budget(t, forge, 1, clock.now)
+		other := statusOrdinaryRead(context.Background(), "pr", forge, "example/widget", "9")
+		ok, retry := statusTakeForgeTokenRetry(other, forge, "")
+		if ok || !retry.Equal(clock.now.Add(statusOrdinaryAge(forge))) {
+			t.Fatalf("second waiter overtook the head: ok=%v retry=%s", ok, retry.Sub(clock.now))
+		}
+		if ok, _ := statusTakeForgeTokenRetry(context.Background(), forge, ""); !ok {
+			t.Fatal("head lost its turn to a later waiter")
+		}
+		// One turn per window: the next waiter waits a full window.
+		foreground424Budget(t, forge, 1, clock.now)
+		if ok, _ := statusTakeForgeTokenRetry(other, forge, ""); ok {
+			t.Fatal("second turn within one window")
+		}
+	})
+	t.Run("a released client taking the held token delays the turn one refill", func(t *testing.T) {
+		foreground424Fixture(t, "exit 0\n")
+		clock := admission424FakeClock(t)
+		admission424Queue(t, forge, 9, clock.now)
+		aged(t, clock)
+		// A released head ignores the waiters and spends the held token.
+		foreground424Budget(t, forge, 0, clock.now)
+		ok, retry := statusTakeForgeTokenRetry(context.Background(), forge, "")
+		if ok || !retry.Equal(clock.now.Add(8*time.Second)) {
+			t.Fatalf("after a released spend: ok=%v retry=%s", ok, retry.Sub(clock.now))
+		}
+		clock.now = retry
+		if ok, _ := statusTakeForgeTokenRetry(context.Background(), forge, ""); !ok {
+			t.Fatal("turn not taken at the next refill")
 		}
 	})
 	t.Run("a fresh waiter marks and waits its age", func(t *testing.T) {
@@ -419,24 +543,26 @@ func TestStatusAdmission424HoldCooldownForegroundAndCancellation(t *testing.T) {
 		admission424Queue(t, forge, 9, clock.now)
 		foreground424Budget(t, forge, 3, clock.now)
 		ok, retry := statusTakeForgeTokenRetry(context.Background(), forge, "")
-		if ok || !admission424Marked(forge) || !retry.Equal(clock.now.Add(statusOrdinaryAge(forge))) {
-			t.Fatalf("fresh waiter: ok=%v marked=%v retry=%s", ok, admission424Marked(forge), retry.Sub(clock.now))
+		if ok || !admission424Marked(forge, clock.now) || !retry.Equal(clock.now.Add(statusOrdinaryAge(forge))) {
+			t.Fatalf("fresh waiter: ok=%v marked=%v retry=%s", ok, admission424Marked(forge, clock.now), retry.Sub(clock.now))
 		}
 		clock.now = retry
 		if ok, _ := statusTakeForgeTokenRetry(context.Background(), forge, ""); !ok {
 			t.Fatal("aged waiter not admitted at its retry time")
 		}
 	})
-	t.Run("an expired mark grants nothing", func(t *testing.T) {
+	t.Run("an expired waiter grants nothing", func(t *testing.T) {
 		foreground424Fixture(t, "exit 0\n")
 		clock := admission424FakeClock(t)
 		admission424Queue(t, forge, 9, clock.now)
-		if err := os.WriteFile(statusOrdinaryWaitPath(forge), []byte(fmt.Sprint(clock.now.Add(-statusOrdinaryLifetime).UnixNano())), 0600); err != nil {
-			t.Fatal(err)
+		gone := clock.now.Add(-statusOrdinaryLifetime)
+		statusSaveOrdinaryWaiters(forge, statusOrdinaryWaiters{Queue: []statusOrdinaryWaiter{{Key: statusOrdinaryIdentity(context.Background()), Since: gone, Seen: gone}}})
+		if admission424Marked(forge, clock.now) {
+			t.Fatal("a waiter unseen for its lifetime is still waiting")
 		}
 		foreground424Budget(t, forge, 3, clock.now)
 		if ok, _ := statusTakeForgeTokenRetry(context.Background(), forge, ""); ok {
-			t.Fatal("expired waiter mark admitted an ordinary read")
+			t.Fatal("expired waiter admitted an ordinary read")
 		}
 	})
 	t.Run("one-token allowance holds nothing back", func(t *testing.T) {
@@ -488,7 +614,7 @@ func TestStatusAdmission424HoldCooldownForegroundAndCancellation(t *testing.T) {
 		before := admission424Tokens(t, forge)
 		cancelled, cancel := context.WithCancel(context.Background())
 		cancel()
-		if ok, _ := statusTakeForgeTokenRetry(cancelled, forge, ""); ok || admission424Marked(forge) {
+		if ok, _ := statusTakeForgeTokenRetry(cancelled, forge, ""); ok || admission424Marked(forge, clock.now) {
 			t.Fatal("cancelled ordinary read admitted or marked")
 		}
 		// The head's bounded in-lock refill wait observes cancellation too.
@@ -501,6 +627,29 @@ func TestStatusAdmission424HoldCooldownForegroundAndCancellation(t *testing.T) {
 			t.Fatal("cancellation reordered the FIFO")
 		}
 	})
+}
+
+// The full-detail audit reads by PR number; each PR keeps its own place among
+// ordinary waiters instead of sharing one anonymous turn.
+func TestStatusAdmission424FullDetailAuditsWaitAsTheirOwnPRs(t *testing.T) {
+	const forge, slug = "bitbucket.org", "example/widget"
+	calls := foreground424Fixture(t, "exit 0\n")
+	clock := admission424FakeClock(t)
+	admission424Queue(t, forge, 9, clock.now)
+	foreground424Budget(t, forge, 0, clock.now)
+	for _, number := range []string{"31", "32"} {
+		if _, err := statusFetchPRRawWithRequestContext(context.Background(), PRRecord{Number: number}, slug, forge, nil); !errors.Is(err, errForgeBudget) {
+			t.Fatalf("PR %s audit: %v", number, err)
+		}
+	}
+	waiters := statusReadOrdinaryWaiters(forge, clock.now)
+	want := []string{statusOrdinaryIdentity(statusOrdinaryRead(context.Background(), "pr", forge, slug, "31")), statusOrdinaryIdentity(statusOrdinaryRead(context.Background(), "pr", forge, slug, "32"))}
+	if len(waiters.Queue) != 2 || waiters.Queue[0].Key != want[0] || waiters.Queue[1].Key != want[1] {
+		t.Fatalf("audit waiters %+v", waiters.Queue)
+	}
+	if foreground424Count(calls) != 0 {
+		t.Fatal("refused audit reached the provider")
+	}
 }
 
 // A refused read serves prior bytes under their original observation time:
