@@ -4,7 +4,9 @@
 //
 // Code builds a Ref with LocalBranch or RemoteBranch, and reads one from
 // configuration, a command line or Git output with Parse. Short is for people
-// and configuration files, never for Git.
+// and configuration files, never for Git. Two readers are lenient on purpose:
+// OriginBranch accepts a bare branch name of origin, and Revision passes any
+// revision Parse refuses to Git unchanged, a bare name included.
 package gitref
 
 import (
@@ -54,12 +56,14 @@ func Parse(s string) (Ref, error) {
 
 // OriginBranch is the branch of origin that s names as origin/<branch> or
 // as the bare branch name, the two forms command lines and registries accept
-// for a base. It does not validate the name.
+// for a base. It does not validate the name. A bare name is taken to be a
+// branch of origin; build the Ref to give Git with RemoteBranch.
 func OriginBranch(s string) string { return strings.TrimPrefix(s, "origin/") }
 
 // Revision is what to give Git for a revision read from a command line or
 // configuration: the fully qualified ref when Parse accepts s, else s as
-// given, such as a commit ID or HEAD~1.
+// given, such as a commit ID or HEAD~1. A bare name such as main also reaches
+// Git as given, so Git's search order applies to it: a tag named main wins.
 func Revision(s string) string {
 	if r, err := Parse(s); err == nil {
 		return r.name
