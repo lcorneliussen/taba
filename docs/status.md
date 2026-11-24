@@ -155,17 +155,20 @@ unarchived with the existing orphan warning; closure does not establish landing
 or authorize discarding local work. Superseded entries retain their omission rule.
 The archive lists the most recent terminal event first, across repositories:
 the merge time of a merged PR, the provider's closure time of a closed one
-(JSON `closed_at`). With the default `twg` client, a Bitbucket decline is
-dated by the update that entered its current declined state in the PR's
-activity log, from the same bounded read that dates a Bitbucket merge;
-`updated_on` never stands in. When that log shows a later reopen, has an
-undated state update, fills its 200-entry page or cannot be read, the time is
-unknown. Unlike a merge, a decline time is not recorded: a declined PR costs
-one activity read per status run, or with a known `twg` credential one per
-change to its `updated_on`. Under `bb` a decline stays unknown, because `bb`
-does not report whether its activity list was cut short. Rows with unknown or
-malformed times follow the dated ones, and equal or unknown times keep a
-stable repository and number order.
+(JSON `closed_at`). A Bitbucket decline is dated by the update that entered
+its current declined state in the PR's activity log, from the same bounded
+read that dates a Bitbucket merge; `updated_on` never stands in. Unlike a
+merge, a decline is not recorded and can be reopened, so it is dated only when
+`twg` reads with a known credential (a `TWG_BBC_TOKEN` environment token or a
+host read credential; see [status-auth-cache.md](status-auth-cache.md)). That
+read is cached under the PR's `updated_on` and serves later runs until a
+reopen or re-decline changes `updated_on` or the credential changes. A `twg`
+profile has no local identity and `bb` does not report whether its activity
+list was cut short, so under either a decline stays unknown and costs no
+activity read. The time is also unknown when the log shows a later reopen,
+has an undated state update, fills its 200-entry page or cannot be read.
+Rows with unknown or malformed times follow the dated ones, and equal or
+unknown times keep a stable repository and number order.
 Observation and refresh times never reorder the archive, and sorting makes no
 forge calls.
 

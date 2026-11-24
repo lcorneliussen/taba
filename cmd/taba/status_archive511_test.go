@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"taba.sh/taba/internal/wtc"
 )
@@ -120,10 +121,10 @@ esac
 
 // A Bitbucket decline is dated by its activity-log decline event, not
 // updated_on, and orders against a GitHub closure. This also pins the
-// refresh budget under the default twg client: a merged PR's activity is read
-// once and then persisted, while a declined PR, which has no persisted
-// record, costs one activity read per refresh and never more than its PR
-// reads.
+// refresh budget under twg with a known credential: a merged PR's activity is
+// read once and then recorded, and a declined PR's once per updated_on, even
+// after the response cache expires. A TWG profile, which has no local
+// identity, leaves the decline unknown and reads no activity.
 func TestStatusArchive511CollectorDatesBitbucketDecline(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("TMPDIR", t.TempDir())
@@ -132,6 +133,7 @@ func TestStatusArchive511CollectorDatesBitbucketDecline(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
+	t.Setenv("WTC_FORGE_CACHE_AGE", "1")
 	root := t.TempDir()
 	config := filepath.Join(root, wtc.AdHocConfigDir)
 	if err := os.MkdirAll(config, 0700); err != nil {
@@ -191,29 +193,47 @@ esac
 		raw, _ := os.ReadFile(log)
 		return strings.Count(string(raw), command+" ")
 	}
-	const refreshes = 3
-	for refresh := 1; refresh <= refreshes; refresh++ {
+	collect := func() []string {
+		t.Helper()
 		snapshot, err := c.StatusForegroundSnapshot(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
 		var order []string
 		for _, row := range wtc.StatusPRsByPriority(snapshot.PRs) {
-			at, known := wtc.StatusPRTerminalAt(row)
-			if !row.Archived || !known {
-				t.Fatalf("refresh %d: terminal time lost in collection: %+v", refresh, row)
+			if !row.Archived {
+				t.Fatalf("row left the archive: %+v", row)
 			}
-			order = append(order, row.Repo+"#"+row.Number+"@"+at.Format("2006-01-02"))
+			at := "unknown"
+			if when, known := wtc.StatusPRTerminalAt(row); known {
+				at = when.Format("2006-01-02")
+			}
+			order = append(order, row.Repo+"#"+row.Number+"@"+at)
 		}
+		return order
+	}
+
+	// TWG profile: no identity, so no decline time and no activity read.
+	if got := strings.Join(collect(), " "); got != "widget#9@2020-02-01 gadget#5@2020-01-10 gadget#4@unknown" {
+		t.Fatalf("profile archive order: %s", got)
+	}
+	if reads("pull-requests activity 4") != 0 {
+		t.Fatalf("a TWG profile read decline activity")
+	}
+
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-token")
+	merged := reads("pull-requests activity 5")
+	for refresh := 1; refresh <= 3; refresh++ {
 		// updated_on or the later DECLINED edit would put the decline first.
-		if got := strings.Join(order, " "); got != "widget#9@2020-02-01 gadget#4@2020-01-15 gadget#5@2020-01-10" {
+		if got := strings.Join(collect(), " "); got != "widget#9@2020-02-01 gadget#4@2020-01-15 gadget#5@2020-01-10" {
 			t.Fatalf("refresh %d: collected archive order: %s", refresh, got)
 		}
-		if declined, merged := reads("pull-requests activity 4"), reads("pull-requests activity 5"); declined != refresh || merged != 1 {
-			t.Fatalf("refresh %d: activity reads %d declined, %d merged; want %d and 1", refresh, declined, merged, refresh)
+		if declined, prReads := reads("pull-requests activity 4"), reads("pull-requests get 4"); declined != 1 || prReads < refresh {
+			t.Fatalf("refresh %d: %d decline activity reads for %d PR reads; want one in all", refresh, declined, prReads)
 		}
-		if declined, prReads := reads("pull-requests activity 4"), reads("pull-requests get 4"); declined > prReads {
-			t.Fatalf("refresh %d: %d decline activity reads exceed %d PR reads", refresh, declined, prReads)
+		if reads("pull-requests activity 5") != merged {
+			t.Fatalf("refresh %d: a recorded merge read its activity again", refresh)
 		}
+		time.Sleep(1100 * time.Millisecond) // past WTC_FORGE_CACHE_AGE
 	}
 }

@@ -84,13 +84,18 @@ func statusBBDeclineEventTime(raw []byte) string {
 // states and known times cost no read, and an unavailable read leaves the
 // time unknown.
 //
-// A decline, unlike a merge, is not persisted and can be reopened, so its log
-// is keyed by the PR's updated_on (ClosedOn), which any reopen or re-decline
-// changes. A log cached under that key dates the decline at any age without
-// another read; where the cache is operation-private (a TWG profile) each
-// status operation reads once. Under bb a decline stays unknown: bb pr
-// activity stops at its default page limit and its JSON does not say whether
-// it did, so a complete log cannot be told from a truncated one.
+// A decline, unlike a merge, is not recorded and can be reopened, so it is
+// dated only where one read can serve every later run:
+//   - a known credential context (a TWG environment token or a host read
+//     credential), whose cache is fingerprinted and dies with the credential;
+//     a TWG profile or bb is not one (docs/status-auth-cache.md), and
+//   - a known updated_on (ClosedOn), which keys the log: a reopen or
+//     re-decline changes it, so a log cached for an earlier decline is never
+//     reused, while an unchanged decline reuses its log at any age.
+//
+// Anywhere else the decline stays unknown and costs no activity read. bb is
+// excluded also because bb pr activity stops at its default page limit
+// without saying so.
 func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail, slug string) statusPRDetail {
 	merged := detail.State == "MERGED" && detail.MergedOn == ""
 	declined := detail.State == "DECLINED" && detail.ClosedAt == ""
@@ -99,15 +104,13 @@ func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail
 	}
 	key := detail.Number
 	if declined {
-		if bitbucketReadFor(ctx).selection.Client == bitbucketClientBB {
+		key += "@" + detail.ClosedOn
+		if detail.ClosedOn == "" || bitbucketReadFor(ctx).selection.Client == bitbucketClientBB || !statusEntryKnown(ctx, "activity", "bitbucket.org", slug, key) {
 			return detail
 		}
-		if detail.ClosedOn != "" {
-			key += "@" + detail.ClosedOn
-			if raw, ok := statusReadForgeEntryAnyContext(ctx, "activity", "bitbucket.org", slug, key); ok {
-				detail.ClosedAt = statusBBDeclineEventTime(raw)
-				return detail
-			}
+		if raw, ok := statusReadForgeEntryAnyContext(ctx, "activity", "bitbucket.org", slug, key); ok {
+			detail.ClosedAt = statusBBDeclineEventTime(raw)
+			return detail
 		}
 	}
 	raw, err := statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, key, func() ([]byte, error) {

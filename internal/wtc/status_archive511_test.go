@@ -266,7 +266,16 @@ func archive511TWGReads(t *testing.T, h noBBHost, kind string) int {
 }
 
 func TestStatusArchive511TWGDatesDeclineFromActivity(t *testing.T) {
+	t.Run("host read credential", func(t *testing.T) {
+		archive511TWG(t, archive511Declined, archive511Entries("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
+		t.Setenv("TABA_BITBUCKET_READ_CREDENTIAL", "git-credential")
+		declined := statusPRDetail{Number: "4", State: "DECLINED", ClosedOn: "2020-06-01T00:00:00.000000+00:00"}
+		if got := statusBBCompleteMergeTimeContext(statusAuthOperation(context.Background()), declined, "acme/alpha").ClosedAt; got != "2020-02-03T10:00:00Z" {
+			t.Fatalf("host read credential did not date the decline: %q", got)
+		}
+	})
 	h, _ := archive511TWG(t, archive511Declined, archive511Entries("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-token")
 	detail := statusEnrichRecord(PRRecord{Repo: "alpha", Number: "4"}, "acme/alpha", "bitbucket.org")
 	if detail.State != "DECLINED" || detail.ClosedAt != "2020-02-03T10:00:00Z" {
 		t.Fatalf("decline time not read from activity: %+v", detail)
@@ -279,55 +288,61 @@ func TestStatusArchive511TWGDatesDeclineFromActivity(t *testing.T) {
 	}
 }
 
-// The decline's activity read budget. Under a TWG profile the cache is
-// private to one status operation, so each operation reads a declined PR's
-// log once, and only once however many paths complete it. Under a known
-// credential the log is keyed by updated_on and reused past cache expiry
-// until a reopen or re-decline changes updated_on. An incomplete log is
-// never cached as a time.
+// The decline's activity read budget. A TWG profile has no local identity
+// (docs/status-auth-cache.md), so nothing it reads may serve a later run: its
+// declines stay unknown and cost no activity read. A known credential keys
+// the log by updated_on and reuses it past cache expiry until a reopen or
+// re-decline changes updated_on. Without updated_on, or with an incomplete
+// log, the time stays unknown.
 func TestStatusArchive511TWGDeclineReadBudget(t *testing.T) {
 	h, dir := archive511TWG(t, archive511Declined, archive511Entries("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
 	t.Setenv("WTC_FORGE_CACHE_AGE", "1")
 	declined := statusPRDetail{Number: "4", State: "DECLINED", ClosedOn: "2020-06-01T00:00:00.000000+00:00"}
-	complete := func(ctx context.Context, detail statusPRDetail) string {
-		return statusBBCompleteMergeTimeContext(ctx, detail, "acme/alpha").ClosedAt
+	complete := func(detail statusPRDetail) string {
+		return statusBBCompleteMergeTimeContext(statusAuthOperation(context.Background()), detail, "acme/alpha").ClosedAt
 	}
-	for operation := 1; operation <= 3; operation++ {
-		ctx := statusAuthOperation(context.Background())
-		for range 2 {
-			if got := complete(ctx, declined); got != "2020-02-03T10:00:00Z" {
-				t.Fatalf("profile operation %d: %q", operation, got)
-			}
+	for range 3 {
+		if got := complete(declined); got != "" {
+			t.Fatalf("TWG profile dated a decline: %q", got)
 		}
-		if reads := archive511TWGReads(t, h, "activity"); reads != operation {
-			t.Fatalf("profile: %d activity reads after %d operations; want one per operation", reads, operation)
-		}
+	}
+	if reads := archive511TWGReads(t, h, "activity"); reads != 0 {
+		t.Fatalf("TWG profile: %d activity reads; want none", reads)
 	}
 
 	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-token")
-	before := archive511TWGReads(t, h, "activity")
-	if got := complete(statusAuthOperation(context.Background()), declined); got != "2020-02-03T10:00:00Z" {
+	if got := complete(declined); got != "2020-02-03T10:00:00Z" {
 		t.Fatalf("known credential: %q", got)
 	}
 	time.Sleep(1100 * time.Millisecond) // past WTC_FORGE_CACHE_AGE
 	for range 3 {
-		if got := complete(statusAuthOperation(context.Background()), declined); got != "2020-02-03T10:00:00Z" {
+		if got := complete(declined); got != "2020-02-03T10:00:00Z" {
 			t.Fatalf("expired cache entry for an unchanged decline: %q", got)
 		}
 	}
-	if reads := archive511TWGReads(t, h, "activity") - before; reads != 1 {
+	if reads := archive511TWGReads(t, h, "activity"); reads != 1 {
 		t.Fatalf("known credential: %d activity reads across expiry; want 1", reads)
+	}
+	undated := declined
+	undated.ClosedOn = ""
+	if got := complete(undated); got != "" || archive511TWGReads(t, h, "activity") != 1 {
+		t.Fatalf("a decline without updated_on has no invalidation key: %q", got)
 	}
 	// Reopened and declined again: updated_on moves, so the earlier log is not reused.
 	fixtureFile(t, filepath.Join(dir, "activity.json"),
 		archive511Entries("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z", "OPEN@2020-03-01T00:00:00Z", "DECLINED@2020-04-01T00:00:00Z"), 0644)
 	again := declined
 	again.ClosedOn = "2020-04-01T00:00:00.000000+00:00"
-	if got := complete(statusAuthOperation(context.Background()), again); got != "2020-04-01T00:00:00Z" {
+	if got := complete(again); got != "2020-04-01T00:00:00Z" {
 		t.Fatalf("re-decline dated by an earlier log: %q", got)
 	}
-	if reads := archive511TWGReads(t, h, "activity") - before; reads != 2 {
+	if reads := archive511TWGReads(t, h, "activity"); reads != 2 {
 		t.Fatalf("re-decline: %d activity reads; want 2", reads)
+	}
+	// Another credential is another context: nothing carries over.
+	t.Setenv("TWG_BBC_TOKEN", "rotated-twg-token")
+	if got := complete(again); got != "2020-04-01T00:00:00Z" || archive511TWGReads(t, h, "activity") != 3 {
+		t.Fatalf("rotated credential reused the previous context: %q after %d reads", got, archive511TWGReads(t, h, "activity"))
 	}
 	// A full page may hide the decline: unknown, and not cached as a time.
 	full := make([]string, 200)
@@ -338,7 +353,7 @@ func TestStatusArchive511TWGDeclineReadBudget(t *testing.T) {
 	page := declined
 	page.ClosedOn = "2020-07-01T00:00:00.000000+00:00"
 	for range 2 {
-		if got := complete(statusAuthOperation(context.Background()), page); got != "" {
+		if got := complete(page); got != "" {
 			t.Fatalf("incomplete activity dated a decline: %q", got)
 		}
 	}
@@ -383,6 +398,12 @@ func TestStatusArchive511BBKeepsDeclineUnknown(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := archive511FakeBB(t, tc.view, archive511Activity("OPEN@2020-01-01T00:00:00Z", "MERGED@2020-02-03T10:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
+			// A known bb context: the page limit, not identity, keeps it unknown.
+			t.Setenv("BB_USERNAME", "synthetic-status-user")
+			t.Setenv("BB_API_TOKEN", "synthetic-status-fixture")
+			if !statusEntryKnown(statusAuthOperation(context.Background()), "activity", "bitbucket.org", "example/widget", "4@x") {
+				t.Fatal("fixture must give bb a known context")
+			}
 			detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: "4"}, "example/widget", "bitbucket.org")
 			if detail.MergedOn != tc.mergedOn || detail.ClosedAt != "" {
 				t.Fatalf("times: %+v", detail)
