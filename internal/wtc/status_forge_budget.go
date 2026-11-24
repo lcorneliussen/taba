@@ -254,20 +254,21 @@ func statusReadOrdinaryWaiters(forge string, now time.Time) statusOrdinaryWaiter
 	return waiters
 }
 
-// Best effort: a lost write only delays the aged path.
-func statusSaveOrdinaryWaiters(forge string, waiters statusOrdinaryWaiters) {
+// statusSaveOrdinaryWaiters reports whether the state was written. A lost
+// registration or removal only delays waiters; a lost turn record would let
+// a served head take a second turn, so that admission is refused instead.
+func statusSaveOrdinaryWaiters(forge string, waiters statusOrdinaryWaiters) bool {
 	if len(waiters.Queue) == 0 && waiters.Last.IsZero() {
-		os.Remove(statusOrdinaryWaitPath(forge))
-		return
+		err := os.Remove(statusOrdinaryWaitPath(forge))
+		return err == nil || os.IsNotExist(err)
 	}
-	if raw, err := json.Marshal(waiters); err == nil {
-		_ = os.WriteFile(statusOrdinaryWaitPath(forge), raw, 0600)
-	}
+	raw, err := json.Marshal(waiters)
+	return err == nil && os.WriteFile(statusOrdinaryWaitPath(forge), raw, 0600) == nil
 }
 
 // turn is when the head's turn opens; zero only without waiters. A head
 // quiet past its grace moves to the tail first. A moved head restarts its
-// wait now, so after at most one pass some head's turn lies ahead.
+// wait now, so within len(queue) rotations some head's turn lies ahead.
 func (w *statusOrdinaryWaiters) turn(age time.Duration, now time.Time) (time.Time, bool) {
 	moved := false
 	for i := 0; i <= len(w.Queue) && len(w.Queue) > 0; i++ {
@@ -444,8 +445,8 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 			waiters.Last, dirty = now, true
 		}
 	}
-	if dirty {
-		statusSaveOrdinaryWaiters(forge, waiters)
+	if dirty && !statusSaveOrdinaryWaiters(forge, waiters) && turnTaken {
+		return false, time.Time{}
 	}
 	tokens--
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil, time.Time{}

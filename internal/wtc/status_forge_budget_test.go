@@ -199,8 +199,7 @@ func TestStatusBuildBudgetIsNotAnErrorCell(t *testing.T) {
 	}
 }
 
-// A skipped read is deferred with its real reason; its checks are unknown,
-// never a fabricated PENDING.
+// A skipped read is deferred with its real reason and unknown checks.
 func TestStatusPullRequestBudgetIsDeferred(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	bin := t.TempDir()

@@ -57,7 +57,7 @@ func admission424Marked(forge string, now time.Time) bool {
 	return len(statusReadOrdinaryWaiters(forge, now).Queue) > 0
 }
 
-// Multi-cycle cold-cache reproduction: every cycle the shared bucket has
+// Multi-cycle full-bucket reproduction: every cycle the shared bucket has
 // refilled to its burst (nobody consumed it), and one ordinary read asks for
 // admission. Queues of burst or more must not refuse every cycle.
 func TestStatusAdmission424OrdinaryProgressBehindDormantQueue(t *testing.T) {
@@ -218,7 +218,8 @@ func TestStatusAdmission424SustainedContentionStaysFairAndBounded(t *testing.T) 
 		t.Fatalf("ordinary reads waited %s, bound %s", maxWait, bound)
 	}
 	// Per reader: phase-locked readers rotate through the waiter FIFO, so
-	// each waits at most its position + 1 windows (three readers here).
+	// each waits at most its position + 1 cycles (window + refill + poll;
+	// three readers here).
 	if bound := 3 * (age + 2*every + ordinaryPoll); maxKindGap > bound {
 		t.Fatalf("an ordinary reader went %s without admission, bound %s", maxKindGap, bound)
 	}
@@ -444,7 +445,8 @@ func TestStatusAdmission424ExpiringPRsEachKeepProgressing(t *testing.T) {
 			t.Fatalf("PR %s read %d times in %s", number, reads[number], duration)
 		}
 	}
-	// Five waiters: each waits at most five windows after its entry expires.
+	// Five waiters: each waits at most five cycles (window + refill + poll)
+	// after its entry expires.
 	if bound := statusForgeCacheAge() + time.Duration(len(prs))*(age+2*every+poll); maxGap > bound {
 		t.Fatalf("a PR went %s without a live read, bound %s", maxGap, bound)
 	}
@@ -681,6 +683,20 @@ func TestStatusAdmission424HoldCooldownForegroundAndCancellation(t *testing.T) {
 			t.Fatalf("after a full rotation: ok=%v retry=%s, want +%s", ok, retry.Sub(clock.now), want.Sub(clock.now))
 		}
 	})
+	t.Run("an unrecorded turn is refused, not taken twice", func(t *testing.T) {
+		foreground424Fixture(t, "exit 0\n")
+		clock := admission424FakeClock(t)
+		admission424Queue(t, forge, 9, clock.now)
+		aged(t, clock)
+		foreground424Budget(t, forge, 1, clock.now)
+		before := admission424Tokens(t, forge)
+		if err := os.Chmod(statusOrdinaryWaitPath(forge), 0400); err != nil {
+			t.Fatal(err)
+		}
+		if ok, _ := statusTakeForgeTokenRetry(context.Background(), forge, ""); ok || admission424Tokens(t, forge) != before {
+			t.Fatalf("turn taken without a record: ok=%v budget %q", ok, admission424Tokens(t, forge))
+		}
+	})
 	t.Run("only the head of the waiters takes the turn", func(t *testing.T) {
 		foreground424Fixture(t, "exit 0\n")
 		clock := admission424FakeClock(t)
@@ -811,7 +827,7 @@ func TestStatusAdmission424HoldCooldownForegroundAndCancellation(t *testing.T) {
 }
 
 // The full-detail audit reads by PR number; each PR keeps its own place among
-// ordinary waiters instead of sharing one anonymous turn.
+// ordinary waiters.
 func TestStatusAdmission424FullDetailAuditsWaitAsTheirOwnPRs(t *testing.T) {
 	const forge, slug = "bitbucket.org", "example/widget"
 	calls := foreground424Fixture(t, "exit 0\n")
