@@ -688,8 +688,8 @@ func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent Status
 			DisplayTitle: detail.Title, Slug: slug, URL: statusString(url), MergedOn: statusString(detail.MergedOn), ClosedAt: statusString(detail.ClosedAt),
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
 			// A Bitbucket decline is final, so any observation of it (current,
-			// stale, deferred or unavailable) keeps archive treatment by its
-			// closure time. A GitHub close can be reopened and needs a current
+			// stale, deferred or unavailable) keeps archive treatment once its ClosedOn
+			// date is old enough. A GitHub close can be reopened and needs a current
 			// observation; neither grants actions.
 			Archived: branchRow < 0 &&
 				(detail.State == "MERGED" && statusArchived(detail.MergedOn, time.Now()) ||

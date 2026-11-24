@@ -10,9 +10,10 @@ import (
 	"taba.sh/taba/internal/envcompat"
 )
 
-// statusPRDetail.ClosedOn dates archive eligibility. ClosedAt is only a
-// provider-reported closure event (GitHub closedAt) and orders the archive;
-// Bitbucket's updated_on is not closure evidence, so a decline leaves it empty.
+// statusPRDetail.ClosedOn dates archive eligibility: GitHub closedAt, or
+// Bitbucket updated_on as a conservative stand-in. ClosedAt orders the archive
+// and is set only from GitHub closedAt; updated_on is not a closure event, so a
+// Bitbucket decline has no ClosedAt.
 type statusPRDetail struct {
 	StateSource     string
 	Freshness       string

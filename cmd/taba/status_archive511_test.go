@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -60,5 +63,56 @@ func TestStatusArchive511TUIOrderToggleAndLinks(t *testing.T) {
 	}
 	if got := strings.Join(archive511Positions(shuffled, false), " "); got != "widget#40" {
 		t.Fatalf("toggle off: %s", got)
+	}
+}
+
+// The collector carries GitHub closedAt into the row, so a cached snapshot
+// orders by it without another forge read.
+func TestStatusArchive511CollectorCarriesClosedAt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("WTC_CONFIG_ROOT", "")
+	t.Setenv("TABA_CONFIG_ROOT", "")
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
+	t.Setenv("TABA_FORGE_MIN_INTERVAL", "")
+	root := t.TempDir()
+	config := filepath.Join(root, wtc.AdHocConfigDir)
+	if err := os.MkdirAll(config, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "repos.yml"), []byte("repos:\n  - name: widget\n    remote: https://github.com/example/widget.git\n    default_ref: origin/main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := wtc.OpenCollection(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prs := "widget 9 - https://github.com/example/widget/pull/9 old closure\nwidget 12 - https://github.com/example/widget/pull/12 recent closure\n"
+	if err := os.WriteFile(c.PRFile(), []byte(prs), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	script := `#!/bin/sh
+case "$1 $2" in "pr list") echo '[]'; exit 0;; esac
+case "$3" in
+9) printf '%s' '{"number":9,"state":"CLOSED","title":"old closure","closedAt":"2020-01-06T10:00:00Z"}';;
+12) printf '%s' '{"number":12,"state":"CLOSED","title":"recent closure","closedAt":"2020-03-02T10:00:00Z"}';;
+esac
+`
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	snapshot, err := c.StatusForegroundSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range snapshot.PRs {
+		if !row.Archived || row.ClosedAt == nil {
+			t.Fatalf("closure time lost in collection: %+v", row)
+		}
+	}
+	if got := strings.Join(archive511Positions(snapshot, true), " "); got != "widget#12 widget#9" {
+		t.Fatalf("collected archive order: %s", got)
 	}
 }
