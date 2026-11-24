@@ -162,7 +162,10 @@ merge, a decline is not recorded and can be reopened, so it is dated only when
 `twg` reads with a known credential (a `TWG_BBC_TOKEN` environment token or a
 host read credential; see [status-auth-cache.md](status-auth-cache.md)). That
 read is cached under the PR's `updated_on` and serves later runs until a
-reopen or re-decline changes `updated_on` or the credential changes. A `twg`
+reopen or re-decline changes `updated_on` (assumed from Bitbucket's
+last-update field; not verified against a live provider) or the credential
+changes. An incomplete or malformed reply is not cached: the next status run
+retries it once, within the same request budget and cooldowns. A `twg`
 profile has no local identity and `bb` does not report whether its activity
 list was cut short, so under either a decline stays unknown and costs no
 activity read. The time is also unknown when the log shows a later reopen,

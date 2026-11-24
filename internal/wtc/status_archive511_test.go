@@ -3,6 +3,7 @@ package wtc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -234,8 +235,9 @@ func TestStatusArchive511BitbucketDeclineEventTime(t *testing.T) {
 const archive511Declined = `{"id":4,"state":"DECLINED","title":"x","updated_on":"2020-06-01T00:00:00.000000+00:00","destination":{"branch":{"name":"main"},"repository":{"full_name":"acme/alpha"}},"source":{"commit":{"hash":"aaaaaaaaaaaa"}}}`
 
 // archive511TWG serves PR 4 and its activity through the default twg client,
-// in TWG's batch envelope, from files a test can replace; it returns that
-// directory. The no-bb host keeps every other tool and request contained.
+// in TWG's batch envelope, from files a test can replace. It returns the
+// no-bb host, which keeps every other tool and request contained, and the
+// directory holding those files.
 func archive511TWG(t *testing.T, view, entries string) (noBBHost, string) {
 	t.Helper()
 	h := newNoBBHost(t)
@@ -344,18 +346,43 @@ func TestStatusArchive511TWGDeclineReadBudget(t *testing.T) {
 	if got := complete(again); got != "2020-04-01T00:00:00Z" || archive511TWGReads(t, h, "activity") != 3 {
 		t.Fatalf("rotated credential reused the previous context: %q after %d reads", got, archive511TWGReads(t, h, "activity"))
 	}
-	// A full page may hide the decline: unknown, and not cached as a time.
+	// Undatable, incomplete and malformed replies leave the decline unknown.
+	// An undatable reply is a complete read, cached like any other; an
+	// incomplete (a full page may hide the decline) or malformed one is not
+	// cached, so each later operation retries it once, through the same
+	// shared admission.
 	full := make([]string, 200)
 	for i := range full {
 		full[i] = "DECLINED@2020-04-01T00:00:00Z"
 	}
-	fixtureFile(t, filepath.Join(dir, "activity.json"), archive511Entries(full...), 0644)
-	page := declined
-	page.ClosedOn = "2020-07-01T00:00:00.000000+00:00"
-	for range 2 {
-		if got := complete(page); got != "" {
-			t.Fatalf("incomplete activity dated a decline: %q", got)
+	for i, tc := range []struct {
+		name, entries string
+		reads         int
+	}{
+		{"undatable", archive511Entries("DECLINED@not-a-time"), 1},
+		{"incomplete", archive511Entries(full...), 3},
+		{"malformed", `{"values":"not a list"}`, 3},
+	} {
+		fixtureFile(t, filepath.Join(dir, "activity.json"), tc.entries, 0644)
+		detail := declined
+		detail.ClosedOn = fmt.Sprintf("2020-07-0%dT00:00:00.000000+00:00", i+1)
+		before := archive511TWGReads(t, h, "activity")
+		for range 3 {
+			if got := complete(detail); got != "" {
+				t.Fatalf("%s activity dated a decline: %q", tc.name, got)
+			}
 		}
+		if reads := archive511TWGReads(t, h, "activity") - before; reads != tc.reads {
+			t.Fatalf("%s: %d activity reads over 3 operations; want %d", tc.name, reads, tc.reads)
+		}
+	}
+	// A retry is an ordinary read: a provider cooldown refuses it.
+	statusForgeCool("bitbucket.org", time.Minute)
+	before := archive511TWGReads(t, h, "activity")
+	cooling := declined
+	cooling.ClosedOn = "2020-08-01T00:00:00.000000+00:00"
+	if got := complete(cooling); got != "" || archive511TWGReads(t, h, "activity") != before {
+		t.Fatalf("a cooling provider was read: %q", got)
 	}
 }
 
