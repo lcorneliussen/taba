@@ -3,6 +3,8 @@ package wtc
 import (
 	"encoding/json"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -181,4 +183,111 @@ func archive511Slugs(rows []StatusPRRow) string {
 		out = append(out, row.Slug)
 	}
 	return " " + strings.Join(out, " ")
+}
+
+func archive511Activity(updates ...string) string {
+	var out []string
+	for _, update := range updates {
+		state, date, _ := strings.Cut(update, "@")
+		out = append(out, `{"pull_request":{"id":4},"update":{"state":"`+state+`","date":"`+date+`"}}`)
+	}
+	out = append(out, `{"pull_request":{"id":4},"comment":{"id":1}}`, `{"pull_request":{"id":4},"approval":{"date":"2020-09-01T00:00:00Z"}}`)
+	return `{"activities":[` + strings.Join(out, ",") + `]}`
+}
+
+// The decline time is the activity update that entered the current DECLINED
+// state, never a later edit, a reopen or a guess from an undated update.
+func TestStatusArchive511BitbucketDeclineEventTime(t *testing.T) {
+	for name, tc := range map[string]struct{ log, want string }{
+		"single decline":           {archive511Activity("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00.123456+00:00"), "2020-02-03T10:00:00Z"},
+		"offset normalised to UTC": {archive511Activity("DECLINED@2020-02-03T12:00:00+02:00"), "2020-02-03T10:00:00Z"},
+		"later edit while declined": {archive511Activity("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z", "DECLINED@2020-05-01T00:00:00Z"),
+			"2020-02-03T10:00:00Z"},
+		"reopened and declined again": {archive511Activity("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z", "OPEN@2020-03-01T00:00:00Z", "DECLINED@2020-04-01T00:00:00Z"),
+			"2020-04-01T00:00:00Z"},
+		"out of order": {archive511Activity("DECLINED@2020-04-01T00:00:00Z", "OPEN@2020-01-01T00:00:00Z", "OPEN@2020-03-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z"),
+			"2020-04-01T00:00:00Z"},
+		"reopen after decline": {archive511Activity("DECLINED@2020-02-03T10:00:00Z", "OPEN@2020-03-01T00:00:00Z"), ""},
+		"invalid date":         {archive511Activity("DECLINED@2020-02-03T10:00:00Z", "OPEN@not-a-time"), ""},
+		"missing date":         {archive511Activity("OPEN@2020-01-01T00:00:00Z", "DECLINED@"), ""},
+		"no state update":      {archive511Activity(), ""},
+		"merged only":          {archive511Activity("MERGED@2020-02-03T10:00:00Z"), ""},
+		"malformed":            {`{"activities":[{"update":{"state":7}}]}`, ""},
+		"not json":             {`not json`, ""},
+	} {
+		if got := statusBBDeclineEventTime([]byte(tc.log)); got != tc.want {
+			t.Errorf("%s: decline time = %q, want %q", name, got, tc.want)
+		}
+	}
+	if got := statusBBMergeEventTime([]byte(archive511Activity("OPEN@2020-01-01T00:00:00Z", "MERGED@2020-02-03T10:00:00Z", "MERGED@2020-03-01T00:00:00Z"))); got != "2020-02-03T10:00:00Z" {
+		t.Fatalf("merge time changed: %q", got)
+	}
+}
+
+// archive511FakeBB serves one Bitbucket PR and its activity log and records
+// every bb call.
+func archive511FakeBB(t *testing.T, view, activity string) string {
+	t.Helper()
+	t.Setenv("TMPDIR", t.TempDir())
+	statusHideBitbucketLogin(t)
+	bin := t.TempDir()
+	calls := filepath.Join(bin, "calls")
+	for name, body := range map[string]string{"view": view, "activity": activity} {
+		fixtureFile(t, filepath.Join(bin, name+".json"), body, 0644)
+	}
+	fixtureFile(t, filepath.Join(bin, "bb"), `#!/bin/sh
+echo "$*" >> "`+calls+`"
+case "$*" in
+  *activity*) cat "`+bin+`/activity.json" ;;
+  *view*) cat "`+bin+`/view.json" ;;
+  *) exit 2 ;;
+esac
+`, 0755)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return calls
+}
+
+func archive511Reads(t *testing.T, calls, kind string) int {
+	t.Helper()
+	raw, _ := os.ReadFile(calls)
+	return strings.Count(string(raw), "pr "+kind+" ")
+}
+
+func TestStatusArchive511BitbucketDeclineReadsActivityOnce(t *testing.T) {
+	view := `{"id":4,"state":"DECLINED","title":"x","updated_on":"2020-06-01T00:00:00.000000+00:00"}`
+	calls := archive511FakeBB(t, view, archive511Activity("OPEN@2020-01-01T00:00:00Z", "DECLINED@2020-02-03T10:00:00Z"))
+	record := PRRecord{Repo: "widget", Number: "4"}
+	for range 2 {
+		detail := statusEnrichRecord(record, "example/widget", "bitbucket.org")
+		if detail.State != "DECLINED" || detail.ClosedAt != "2020-02-03T10:00:00Z" {
+			t.Fatalf("decline time not read from activity: %+v", detail)
+		}
+		if detail.ClosedOn != "2020-06-01T00:00:00.000000+00:00" || detail.MergedOn != "" {
+			t.Fatalf("archive eligibility or merge time changed: %+v", detail)
+		}
+	}
+	if views, activities := archive511Reads(t, calls, "view"), archive511Reads(t, calls, "activity"); views == 0 || activities > views {
+		t.Fatalf("activity reads = %d for %d PR reads; want at most one each", activities, views)
+	}
+}
+
+func TestStatusArchive511BitbucketOtherStatesKeepTheirTimes(t *testing.T) {
+	for _, tc := range []struct{ name, view, activity, mergedOn, closedAt string }{
+		{"open costs no read", `{"id":4,"state":"OPEN","title":"x","source":{"commit":{"hash":"abc"}}}`, archive511Activity("DECLINED@2020-02-03T10:00:00Z"), "", ""},
+		{"merged keeps its merge time", `{"id":4,"state":"MERGED","title":"x","updated_on":"2020-06-01T00:00:00Z"}`,
+			archive511Activity("OPEN@2020-01-01T00:00:00Z", "MERGED@2020-02-03T10:00:00Z"), "2020-02-03T10:00:00Z", ""},
+		{"reopen in log stays unknown", `{"id":4,"state":"DECLINED","title":"x","updated_on":"2020-06-01T00:00:00Z"}`,
+			archive511Activity("DECLINED@2020-02-03T10:00:00Z", "OPEN@2020-03-01T00:00:00Z"), "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := archive511FakeBB(t, tc.view, tc.activity)
+			detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: "4"}, "example/widget", "bitbucket.org")
+			if detail.MergedOn != tc.mergedOn || detail.ClosedAt != tc.closedAt {
+				t.Fatalf("times: %+v", detail)
+			}
+			if n := archive511Reads(t, calls, "activity"); detail.State == "OPEN" && n != 0 {
+				t.Fatalf("an open PR read its activity %d times", n)
+			}
+		})
+	}
 }

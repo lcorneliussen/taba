@@ -12,8 +12,9 @@ import (
 
 // statusPRDetail.ClosedOn dates archive eligibility: GitHub closedAt, or
 // Bitbucket updated_on as a conservative stand-in. ClosedAt orders the archive
-// and is set only from GitHub closedAt; updated_on is not a closure event, so a
-// Bitbucket decline has no ClosedAt.
+// and is set only from a closure event: GitHub closedAt, or the decline update
+// in the Bitbucket activity log. updated_on is not a closure event, so a
+// Bitbucket decline without that update has no ClosedAt.
 type statusPRDetail struct {
 	StateSource     string
 	Freshness       string
