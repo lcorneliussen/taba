@@ -156,6 +156,7 @@ type StatusPRRow struct {
 	Base            string         `json:"base,omitempty"`
 	Archived        bool           `json:"archived"`
 	MergedOn        *string        `json:"merged_on"`
+	ClosedAt        *string        `json:"closed_at,omitempty"`
 	Draft           bool           `json:"draft"`
 	OnBranch        bool           `json:"on_branch"`
 	MergeConflicts  []string       `json:"merge_conflicts,omitempty"`

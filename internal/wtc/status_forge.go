@@ -10,6 +10,10 @@ import (
 	"taba.sh/taba/internal/envcompat"
 )
 
+// statusPRDetail.ClosedOn dates archive eligibility: GitHub closedAt, or
+// Bitbucket updated_on as a conservative stand-in. ClosedAt orders the archive
+// and is set only from GitHub closedAt; updated_on is not a closure event, so a
+// Bitbucket decline has no ClosedAt.
 type statusPRDetail struct {
 	StateSource     string
 	Freshness       string
@@ -21,6 +25,7 @@ type statusPRDetail struct {
 	Review          string
 	Title           string
 	ClosedOn        string
+	ClosedAt        string
 	MergedOn        string
 	Base            string
 	MergeCommit     string
@@ -123,6 +128,7 @@ func statusGHDetail(raw []byte, fallback PRRecord) (statusPRDetail, error) {
 		if at, e := time.Parse(time.RFC3339, p.MergedAt); e == nil && !at.After(time.Now()) {
 			d.State = "MERGED"
 		} else {
+			d.ClosedAt = p.ClosedAt
 			d.MergedOn = ""
 			d.MergeCommit = ""
 			if d.Merge == "MERGED" {
