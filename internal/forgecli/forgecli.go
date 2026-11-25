@@ -1,8 +1,8 @@
-// Package forgecli runs the forge command-line clients (gh, bb, twg). A
-// forge call is one of two things, and a *exec.Cmd cannot tell them apart: a
-// read, whose stdout is a body something parses, or a run, whose output goes
-// to a terminal or nowhere. Cmd keeps them apart, and Output is the only way
-// to read stdout.
+// Package forgecli runs the forge command-line clients (gh, bb, twg). A forge
+// call is one of two things, and an exec.Cmd cannot tell them apart: a read,
+// whose stdout is a body something parses, or a run, whose output goes to a
+// terminal or nowhere. Cmd keeps them apart, and Output is the only way to
+// read stdout.
 package forgecli
 
 import (
@@ -73,10 +73,10 @@ func (c *Cmd) Output() ([]byte, error) {
 	return out, runErr
 }
 
-// Run runs the call and writes its stdout to stdout, for a call whose output
-// nothing parses. A nil stdout discards it, as exec does.
-func (c *Cmd) Run(stdout io.Writer) error {
-	return c.run(stdout, c.Stderr)
+// Run runs the call and writes its stdout to w, for a call whose output
+// nothing parses. A nil w discards it, as exec does.
+func (c *Cmd) Run(w io.Writer) error {
+	return c.run(w, c.Stderr)
 }
 
 func (c *Cmd) run(stdout, stderr io.Writer) error {

@@ -32,9 +32,9 @@ func statusRunContext(parent context.Context, timeout time.Duration, run func(*e
 }
 
 // statusOutcome is the result of one bounded child call: the parent's
-// cancellation, the timeout, or the child's own diagnostic. An *exec.ExitError
-// carries stderr alone, which is the only stream worth quoting for a call
-// whose stdout was a body.
+// cancellation, the timeout, or the child's own diagnostic. An exit error from
+// a read of stdout alone carries stderr, which is then the whole diagnostic;
+// otherwise the captured output is quoted, both streams for a combined read.
 func statusOutcome(parent, ctx context.Context, timeout time.Duration, name string, args []string, out []byte, err error) ([]byte, error) {
 	if parent.Err() != nil {
 		return nil, fmt.Errorf("%s: %w", name, parent.Err())
