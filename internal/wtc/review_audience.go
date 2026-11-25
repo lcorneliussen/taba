@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
+
+	"taba.sh/taba/internal/forgecli"
 )
 
 // Audience is fresh forge evidence, never inferred from authentication, the
@@ -18,9 +19,9 @@ func reviewRepositoryAudience(root, worktree, forge, slug string) string {
 	var err error
 	switch forge {
 	case "github":
-		cmd := exec.CommandContext(ctx, "gh", "repo", "view", slug, "--json", "visibility")
+		cmd := forgecli.CommandContext(ctx, "gh", "repo", "view", slug, "--json", "visibility")
 		cmd.Dir = worktree
-		raw, err = forgeOutput(cmd)
+		raw, err = cmd.Output()
 	case "bitbucket":
 		raw, err = bitbucketReadRepo(bitbucketReadOperation(ctx, root), slug)
 	default:

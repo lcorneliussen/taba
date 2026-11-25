@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"taba.sh/taba/internal/forgecli"
 	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/next"
 )
@@ -387,7 +387,7 @@ func (s CheckoutStatus) facts(top string) next.Facts {
 func gitHubPullRequest(dir string, origin Origin, branch string) *PullRequest {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list", "--repo", origin.Owner+"/"+origin.Repo, "--head", branch,
+	cmd := forgecli.CommandContext(ctx, "gh", "pr", "list", "--repo", origin.Owner+"/"+origin.Repo, "--head", branch,
 		"--state", "all", "--limit", "1", "--json", "number,url,state,isDraft,title,statusCheckRollup,mergeable,reviewDecision,mergeCommit,headRefOid")
 	cmd.Dir = dir
 	out, err := cmd.Output()

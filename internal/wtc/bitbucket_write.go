@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/forgecli"
 )
 
 // Bitbucket writes (issue #471).
@@ -94,14 +95,14 @@ func twgWrite(workspace, repo, operation string, args ...string) ([]byte, error)
 	}
 	full := append([]string{"twg"}, args...)
 	full = append(full, "--workspace", workspace, "--repo", repo, "--output", "json", "--output-summary", "none")
-	cmd := exec.CommandContext(ctx, full[0], full[1:]...)
+	cmd := forgecli.CommandContext(ctx, full[0], full[1:]...)
 	cmd.WaitDelay = 200 * time.Millisecond
 	// The person's own environment and TWG's agent defaults; a host read
 	// credential is never in either.
 	cmd.Env = append(os.Environ(), twgChildEnv()...)
 	stderr := &boundedBuffer{limit: 8192}
 	cmd.Stderr = stderr
-	out, err := forgeOutput(cmd)
+	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("%s timed out after %s; its outcome is unknown", operation, bitbucketWriteTimeout)
 	}
@@ -233,10 +234,10 @@ func BitbucketMarkReady(root, worktree, slug, number, head string) error {
 				return done, nil
 			})
 	case bitbucketWriteBB:
-		cmd := exec.Command("bb", "pr", "ready", number)
+		cmd := forgecli.Command("bb", "pr", "ready", number)
 		cmd.Dir = worktree
-		cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
-		return cmd.Run()
+		cmd.Stderr = os.Stderr
+		return cmd.Run(os.Stderr)
 	}
 	_, err = twgWrite(workspace, repo, "twg bitbucket pull-requests update",
 		"bitbucket", "pull-requests", "update", "--pull-request", number, "--ready")

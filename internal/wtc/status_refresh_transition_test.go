@@ -89,7 +89,7 @@ func TestStatus319RefreshProcess(t *testing.T) {
 			fmt.Fprintf(os.Stderr, "HTTP %d Retry-After: %s", response.StatusCode, response.Header.Get("Retry-After"))
 			os.Exit(1)
 		}
-		// Model the real CLI's large stdout behavior. forgeOutput must supply a file.
+		// Model the real CLI's large stdout behavior: forgecli must supply a file.
 		info, _ := os.Stdout.Stat()
 		if !info.Mode().IsRegular() && len(raw) > 65536 {
 			raw = raw[:65536]

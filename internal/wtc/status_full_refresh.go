@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/forgecli"
 )
 
 var statusAuditNote func(string)
@@ -326,9 +327,9 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
 		return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
 	}
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := forgecli.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = 200 * time.Millisecond
-	raw, err := forgeOutput(cmd)
+	raw, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

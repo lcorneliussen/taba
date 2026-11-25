@@ -1,5 +1,5 @@
 // Package fixture holds ref-building lines taken from the parents of past
-// fixes. tools/lint/check-gitref.sh asserts that the gitref rule flags exactly
+// fixes. tools/lint/check-rules.sh asserts that the gitref rule flags exactly
 // the lines marked "want gitref", so the rule keeps catching them.
 package fixture
 

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/forgecli"
 	"taba.sh/taba/internal/gitref"
 )
 
@@ -152,7 +153,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	if opt.PR != "" {
 		var raw []byte
 		if forge == "github" {
-			raw, err = exec.Command("gh", "pr", "view", opt.PR, "--repo", slug, "--json", "title,body,baseRefName,headRefOid,headRefName,url").Output()
+			raw, err = forgecli.Command("gh", "pr", "view", opt.PR, "--repo", slug, "--json", "title,body,baseRefName,headRefOid,headRefName,url").Output()
 		} else {
 			raw, err = bitbucketReadPRWith(bitbucketReadOperation(context.Background(), c.ConfigRoot), slug, opt.PR, reviewBBPRArgs(slug, opt.PR))
 		}

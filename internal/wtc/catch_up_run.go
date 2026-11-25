@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"taba.sh/taba/internal/forgecli"
 	"taba.sh/taba/internal/gitref"
 )
 
@@ -96,9 +97,9 @@ var catchUpForgeTimeout = 30 * time.Second
 func catchUpJSON(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), catchUpForgeTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd := forgecli.CommandContext(ctx, args[0], args[1:]...)
 	cmd.WaitDelay = 200 * time.Millisecond
-	out, err := forgeOutput(cmd)
+	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("%s timed out after %s", args[0], catchUpForgeTimeout)
 	}

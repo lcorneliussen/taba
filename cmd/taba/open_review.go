@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"taba.sh/taba/internal/forgecli"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -21,10 +22,10 @@ type openReviewRange struct {
 	repo, dir, base, head, source string
 }
 
-func openReviewOutput(dir, program string, args ...string) ([]byte, error) {
+func openReviewGitOutput(dir string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, program, args...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	// A missing partial-clone object must not cause an implicit fetch.
 	cmd.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1")
@@ -32,8 +33,20 @@ func openReviewOutput(dir, program string, args ...string) ([]byte, error) {
 }
 
 func openReviewGit(dir string, args ...string) (string, error) {
-	out, err := openReviewOutput(dir, "git", args...)
+	out, err := openReviewGitOutput(dir, args...)
 	return strings.TrimSpace(string(out)), err
+}
+
+func openReviewForge(dir string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := forgecli.CommandContext(ctx, "gh", args...)
+	cmd.Dir = dir
+	// A precaution with no evidence that gh needs it here, since every
+	// argument list below passes --repo: if gh does reach for git, a missing
+	// partial-clone object must not cause an implicit fetch.
+	cmd.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1")
+	return cmd.Output()
 }
 
 func openReviewPinned(repo, dir, base, head, source string) (openReviewRange, error) {
@@ -192,7 +205,7 @@ func openReviewPRRange(c *wtc.Context) (openReviewRange, error) {
 			return openReviewRange{}, errors.New("multiple PRs enlisted for the current branch")
 		}
 		fields := "number,state,headRefName,headRefOid,baseRefOid,headRepository"
-		program, args := "gh", []string{"pr", "list", "--repo", slug, "--head", branch, "--state", "open", "--limit", "100", "--json", fields}
+		args := []string{"pr", "list", "--repo", slug, "--head", branch, "--state", "open", "--limit", "100", "--json", fields}
 		if len(numbers) == 1 {
 			args = []string{"pr", "view", numbers[0], "--repo", slug, "--json", fields}
 		}
@@ -203,7 +216,7 @@ func openReviewPRRange(c *wtc.Context) (openReviewRange, error) {
 		case forge == "bitbucket":
 			data, err = wtc.BitbucketReadOpenPRs(c.ConfigRoot, slug, branch, 100)
 		default:
-			data, err = openReviewOutput(dir, program, args...)
+			data, err = openReviewForge(dir, args...)
 		}
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s: cannot read current PR metadata", repo))
