@@ -11,10 +11,11 @@ import "github.com/quasilyte/go-ruleguard/dsl"
 // arrives (#126, #125), and CombinedOutput puts stderr in the body. internal/
 // forgecli has one read path, a regular file, and keeps stderr separate.
 //
-// The program has to be a literal here, which is how the bypasses in
-// review_checks.go and upgrade.go were written. One (dc7377c) passed it in a
-// parameter, where no rule can see it; a runner that takes a program builds
-// its command in forgecli instead, so it has no pipe to read.
+// The rule matches only a literal program name. A runner that takes its
+// program as a parameter is not flagged, so it builds its command with
+// forgecli, which has no stdout pipe to read.
+// tools/lint/testdata/forgecli holds the lines this rule has to keep
+// catching, with where each came from.
 func forgeChild(m dsl.Matcher) {
 	m.Match(`exec.Command($name, $*_)`, `exec.CommandContext($_, $name, $*_)`).
 		Where(m["name"].Node.Is(`BasicLit`) && m["name"].Text.Matches("^[\"`](gh|bb|twg)[\"`]$")).
