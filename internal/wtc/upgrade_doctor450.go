@@ -25,8 +25,9 @@ import (
 //   - warnings: it ran; optional checks reported findings
 //   - failed: it ran and reported failing required checks, or did not
 //     produce a result
-//   - unavailable: diagnostics did not run (target not installed, executable
-//     reports another version, or the release has no doctor) — not a pass
+//   - unavailable: diagnostics did not run (target not installed, its install
+//     directory holds no runnable taba or wtc, executable reports another
+//     version, or the release has no doctor) — not a pass
 //   - planned: a dry run; nothing was executed
 //   - skipped: no applied transition to diagnose, or the receiving
 //     collection could not be opened
