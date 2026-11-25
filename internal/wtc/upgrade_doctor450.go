@@ -25,8 +25,9 @@ import (
 //   - warnings: it ran; optional checks reported findings
 //   - failed: it ran and reported failing required checks, or did not
 //     produce a result
-//   - unavailable: diagnostics did not run (target not installed, executable
-//     reports another version, or the release has no doctor) — not a pass
+//   - unavailable: diagnostics did not run (target not installed, its install
+//     directory holds no runnable taba or wtc, executable reports another
+//     version, or the release has no doctor) — not a pass
 //   - planned: a dry run; nothing was executed
 //   - skipped: no applied transition to diagnose, or the receiving
 //     collection could not be opened
@@ -65,7 +66,8 @@ var collectionIdentityEnv = []string{"COLLECTION_PORT_BASE",
 // selected through the same mise tool key and committed pin the environment
 // and status reload use, with automatic installs and dev handover off, and
 // its reported version is checked before any diagnostics run. The initiator's
-// generated environment is replaced by the receiver's.
+// generated environment is replaced by the receiver's. The executable run is
+// the one inside the selected release's install directory, never a bare name.
 func (c *Context) upgradeDoctor(receiver *Context, version string) UpgradeDoctor {
 	d := UpgradeDoctor{Version: version, Collection: receiver.Collection}
 	unavailable := func(reason string) UpgradeDoctor {
@@ -97,17 +99,26 @@ func (c *Context) upgradeDoctor(receiver *Context, version string) UpgradeDoctor
 		}
 		return stdout.Bytes(), stderr.Bytes(), err
 	}
-	if out, _, err := run("where", tool); err != nil || strings.TrimSpace(string(out)) == "" {
+	where, _, err := run("where", tool)
+	if err != nil || strings.TrimSpace(string(where)) == "" {
 		return unavailable(fmt.Sprintf("wtc %s is not installed for this collection; diagnostics did not run", version))
 	}
-	out, _, err := run("exec", tool, "--", "wtc", "--version")
+	program, err := installedCLIExecutable(string(where))
+	if err != nil {
+		return unavailable(fmt.Sprintf("wtc %s install %s; diagnostics did not run", version, boundDetail(err.Error())))
+	}
+	// mise exec still selects the release, so the receiver's toolset and env
+	// apply, but it is given the release's own executable: a bare name is
+	// resolved across the whole active toolset, where another tool's `wtc`
+	// (a pre-rename client, say) can come first (#533).
+	out, _, err := run("exec", tool, "--", program, "--version")
 	if err != nil {
 		return unavailable(fmt.Sprintf("the selected wtc %s did not report its version; diagnostics did not run", version))
 	}
 	if reported := reportedCLIVersion(out); reported != version {
 		return unavailable(fmt.Sprintf("the selected executable reports %q, not %s; diagnostics did not run", boundDetail(reported), version))
 	}
-	out, stderr, err := run("exec", tool, "--", "wtc", "doctor", "--json")
+	out, stderr, err := run("exec", tool, "--", program, "doctor", "--json")
 	var envelope struct {
 		OK   *bool            `json:"ok"`
 		Data []map[string]any `json:"data"`
@@ -188,6 +199,23 @@ func (c *Context) upgradeDoctorEnv(receiver *Context) []string {
 	}
 	return append(env, "PWD="+receiver.Collection, DevBuildDisableEnv+"=off", LegacyDevBuildDisableEnv+"=off",
 		"MISE_AUTO_INSTALL=0", "MISE_EXEC_AUTO_INSTALL=0")
+}
+
+// installedCLIExecutable is the release's own executable in the directory
+// `mise where` printed: `taba`, or `wtc` for a release that predates the
+// rename and ships only that. The directory must be one absolute path.
+func installedCLIExecutable(where string) (string, error) {
+	dir := strings.TrimSpace(where)
+	if strings.ContainsAny(dir, "\r\n") || !filepath.IsAbs(dir) {
+		return "", errors.New("location is not one absolute directory")
+	}
+	for _, name := range []string{"taba", "wtc"} {
+		path := filepath.Join(dir, name)
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return path, nil
+		}
+	}
+	return "", errors.New("has no taba or wtc executable")
 }
 
 // readRegularFile reads a generated env file, refusing links and special files.
