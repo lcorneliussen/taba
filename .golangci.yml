@@ -43,14 +43,14 @@ linters:
         # Never fails on darwin or linux.
         - os.Unsetenv
     gocritic:
-      # Only the project's own rules; tools/lint/gitref.go says what they
-      # reject and which constructor to use instead.
+      # Only the project's own rules; each file in tools/lint says what its
+      # rule rejects and which constructor to use instead.
       disable-all: true
       enabled-checks:
         - ruleguard
       settings:
         ruleguard:
-          rules: "${base-path}/tools/lint/gitref.go"
+          rules: "${base-path}/tools/lint/forgecli.go,${base-path}/tools/lint/gitref.go"
           failOn: all
     staticcheck:
       # golangci-lint's default set, plus:
