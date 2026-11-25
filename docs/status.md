@@ -219,7 +219,11 @@ coalesce; a request made during collection runs immediately after that collectio
 Manual Refresh is not delayed by the background interval. A 30-second metadata
 phase budget returns completed live observations alongside deferred deadline
 outcomes for unfinished records; it does not date their old facts as new reads. Recorded/retained
-merges are reused without metadata queries. Bitbucket active-PR checks are
+merges are reused without metadata queries. Never-observed and active PRs are
+read first, in enlistment order; PRs whose last observation is terminal (merged,
+declined, closed or superseded) are rechecked only after them, in explicit and periodic
+refreshes alike, so a deadline defers those rechecks rather than open work. A
+PR without a turn keeps its last observed state, marked deferred. Bitbucket active-PR checks are
 rechecked for the reported commit under the same phase budget, charging each
 page, head-resolution request and redirect separately. Incomplete checks cannot
 claim success or absence; a known failure for that exact head keeps its original
