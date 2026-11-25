@@ -33,6 +33,7 @@ retirement observations have their own sections when available.
 | `✗` in the working-tree column | Git has unmerged paths in this checkout. |
 | `↑2` | Two commits ahead of the upstream, or the development-ref fallback. |
 | `↓1` | One commit behind the development tip or an open PR's base. |
+| `↓1*` / `·*` | The behind count uses a collection-local base override. `?` in the live view lists each override's ref and reason. |
 | `✗3` / `✗` in the behind cell | A local or PR conflict, retaining a nonzero behind count when available. A PR conflict does not imply a dirty checkout. |
 | `[gone]` after the branch | Git reports the configured upstream missing. It does not establish remote preservation of local work. |
 
@@ -405,7 +406,13 @@ scrollback and clipboard limits.
 
 Repository JSON facts expose `comparison_ref` and, for registered repositories,
 `development_base`. These fields reflect a collection override when one is set.
-Normal status shows a bounded override base/reason detail with a full-value hint
-when truncated; Markdown and `repo base show` retain the full reason.
+Repository rows stay one line each. A `*` after the `↓` count marks a count
+taken against the override; an open PR's base replaces the comparison ref and
+then the count is unmarked. The ref and reason are details: `?` in the live view
+lists them once per distinct ref and reason, with any PR comparison ref. Plain
+terminal output adds a blank line and one note line: the number of
+overridden repositories, the `repo base show` command and as many of their
+names as fit the width. Markdown,
+JSON and `repo base show` retain the full reason.
 TEST follows the effective base; PROD keeps the registry mapping above. See
 [repository bases](repository-bases.md).
