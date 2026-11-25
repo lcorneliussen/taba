@@ -12,8 +12,9 @@ import "github.com/quasilyte/go-ruleguard/dsl"
 // forgecli has one read path, a regular file, and keeps stderr separate.
 //
 // The rule matches only a literal program name. A runner that takes its
-// program as a parameter is not flagged, so it builds its command with
-// forgecli, which has no stdout pipe to read.
+// program as a parameter is not flagged, so a body read through one has to
+// come from forgecli by convention; a runner that needs only the exit status,
+// as the sandbox doctor's does, stays on os/exec and discards stdout.
 // tools/lint/testdata/forgecli holds the lines this rule has to keep
 // catching, with where each came from.
 func forgeChild(m dsl.Matcher) {
