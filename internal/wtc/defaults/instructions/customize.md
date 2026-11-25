@@ -84,10 +84,16 @@ branch:
 
 - **GitHub**: the check rollup of the branch's head commit, linked to its
   Actions run, through `gh api graphql`.
-- **Bitbucket**: the newest branch pipeline, through the Bitbucket REST API.
-  Credentials come from `BB_API_USER`/`BB_API_PASS`, `BB_USERNAME`/`BB_API_TOKEN`
-  or `ATLASSIAN_ACCOUNT_EMAIL`/`ATLASSIAN_API_TOKEN`, and otherwise from the
-  `bb` CLI login in `~/.config/bb/config.json`.
+- **Bitbucket**: the newest branch pipeline, through the Bitbucket REST API
+  (not through `twg` or `bb`, so a TWG login alone supplies no build
+  credentials). A host opted into a per-repository read credential
+  (`TABA_BITBUCKET_READ_CREDENTIAL`; see `docs/forges.md`) uses that.
+  Otherwise credentials come from `BB_API_USER`/`BB_API_PASS`,
+  `BB_USERNAME`/`BB_API_TOKEN` or
+  `ATLASSIAN_ACCOUNT_EMAIL`/`ATLASSIAN_API_TOKEN`. Without them, taba falls
+  back to the API token saved by the `bb` CLI in `~/.config/bb/config.json`,
+  read as a file (`bb` itself is not run). That fallback is deprecated with
+  the `bb` client; set one of the variables instead.
 
 Every build carries the commit it ran on. Status uses that commit twice:
 
