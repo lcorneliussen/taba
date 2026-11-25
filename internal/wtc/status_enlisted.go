@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,15 +15,21 @@ import (
 	"taba.sh/taba/internal/envcompat"
 )
 
+// statusBBActivityLog is the activity log bitbucketReadPRActivity returns.
+// TWG documents update.state and update.date on each entry of its
+// chronological activity list ("twg help describe 'bitbucket pull-requests
+// activity'"); bb output is assumed to carry the same Bitbucket Cloud values.
+type statusBBActivityLog struct {
+	Activities []struct {
+		Update struct {
+			State string `json:"state"`
+			Date  string `json:"date"`
+		} `json:"update"`
+	} `json:"activities"`
+}
+
 func statusBBMergeEventTime(raw []byte) string {
-	var log struct {
-		Activities []struct {
-			Update struct {
-				State string `json:"state"`
-				Date  string `json:"date"`
-			} `json:"update"`
-		} `json:"activities"`
-	}
+	var log statusBBActivityLog
 	if json.Unmarshal(raw, &log) != nil {
 		return ""
 	}
@@ -37,15 +44,101 @@ func statusBBMergeEventTime(raw []byte) string {
 	return ""
 }
 
+// statusBBDeclineEventTime is when the PR entered its current DECLINED state:
+// the earliest update of the trailing run of DECLINED updates, ordered by
+// event date, so a reopen and second decline dates by the second decline.
+// The time is unknown when the latest update is in another state or any
+// state update lacks a valid date; updated_on and observation time never
+// stand in.
+func statusBBDeclineEventTime(raw []byte) string {
+	var log statusBBActivityLog
+	if json.Unmarshal(raw, &log) != nil {
+		return ""
+	}
+	type update struct {
+		at       time.Time
+		declined bool
+	}
+	var updates []update
+	for _, activity := range log.Activities {
+		if activity.Update.State == "" {
+			continue
+		}
+		at, err := time.Parse(time.RFC3339Nano, activity.Update.Date)
+		if err != nil {
+			return ""
+		}
+		updates = append(updates, update{at, strings.EqualFold(activity.Update.State, "DECLINED")})
+	}
+	sort.SliceStable(updates, func(i, j int) bool { return updates[i].at.Before(updates[j].at) })
+	declined := ""
+	for i := len(updates) - 1; i >= 0 && updates[i].declined; i-- {
+		declined = updates[i].at.UTC().Format(time.RFC3339)
+	}
+	return declined
+}
+
+// statusBBCompleteMergeTimeContext completes a Bitbucket terminal event time
+// from the activity log: MergedOn of a MERGED PR, ClosedAt of a DECLINED one.
+// It shares the single-flight, cached and rate-limited activity read; other
+// states and known times cost no read, and an unavailable read leaves the
+// time unknown.
+//
+// A decline, unlike a merge, is not recorded and can be reopened, so it is
+// dated only where one read can serve every later run:
+//   - a known credential context (a TWG environment token or a host read
+//     credential), whose cache is fingerprinted and dies with the credential;
+//     a TWG profile or bb is not one (docs/status-auth-cache.md), and
+//   - a known updated_on (ClosedOn), which keys the log: a reopen or
+//     re-decline changes it, so a log cached for an earlier decline is never
+//     reused, while an unchanged decline reuses its log at any age.
+//
+// Anywhere else the decline stays unknown and costs no activity read. bb is
+// excluded also because bb pr activity stops at its default page limit
+// without saying so.
+//
+// An incomplete, malformed or refused read is not cached, and one status
+// operation can complete the same decline on several paths (a detail read,
+// a full confirmation, the collector), even concurrently. A decline's read is
+// therefore shared through the operation (statusOperationShared): every path
+// gets the first read's outcome, error included, and a new operation reads
+// again.
 func statusBBCompleteMergeTimeContext(ctx context.Context, detail statusPRDetail, slug string) statusPRDetail {
-	if detail.State != "MERGED" || detail.MergedOn != "" {
+	merged := detail.State == "MERGED" && detail.MergedOn == ""
+	declined := detail.State == "DECLINED" && detail.ClosedAt == ""
+	if !merged && !declined {
 		return detail
 	}
-	raw, err := statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, detail.Number, func() ([]byte, error) {
-		return bitbucketReadPRActivity(ctx, slug, detail.Number)
-	})
-	if err == nil {
+	key := detail.Number
+	if declined {
+		key += "@" + detail.ClosedOn
+		if detail.ClosedOn == "" || bitbucketReadFor(ctx).selection.Client == bitbucketClientBB || !statusEntryKnown(ctx, "activity", "bitbucket.org", slug, key) {
+			return detail
+		}
+		if raw, ok := statusReadForgeEntryAnyContext(ctx, "activity", "bitbucket.org", slug, key); ok {
+			detail.ClosedAt = statusBBDeclineEventTime(raw)
+			return detail
+		}
+	}
+	read := func() ([]byte, error) {
+		return statusSingleFlightContext(ctx, "activity", "bitbucket.org", slug, key, func() ([]byte, error) {
+			return bitbucketReadPRActivity(ctx, slug, detail.Number)
+		})
+	}
+	var raw []byte
+	var err error
+	if declined {
+		raw, err = statusOperationShared(ctx, "bitbucket-decline-activity\x00"+slug+"\x00"+key, read)
+	} else {
+		raw, err = read()
+	}
+	if err != nil {
+		return detail
+	}
+	if merged {
 		detail.MergedOn = statusBBMergeEventTime(raw)
+	} else {
+		detail.ClosedAt = statusBBDeclineEventTime(raw)
 	}
 	return detail
 }
@@ -512,11 +605,12 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 		c.statusProgress(fmt.Sprintf("Collected pull request facts %d/%d", i+1, len(pending)))
 	}
 	workers.Wait()
-	// Every path that observes a Bitbucket merge (list, retained, background or
-	// explicit detail) completes its merge time from the activity log, so it
-	// can be recorded. An unavailable activity read leaves the time unknown.
+	// Every path that observes a Bitbucket merge or decline (list, retained,
+	// background or explicit detail) completes its event time from the
+	// activity log, so it can be recorded. An unavailable activity read leaves
+	// the time unknown.
 	for _, i := range pending {
-		if identities[i][1] == "bitbucket.org" && details[i].State == "MERGED" && details[i].MergedOn == "" && !statusObservationUnavailable(details[i].Freshness) {
+		if identities[i][1] == "bitbucket.org" && !statusObservationUnavailable(details[i].Freshness) {
 			details[i] = statusBBCompleteMergeTimeContext(ctx, details[i], identities[i][0])
 		}
 	}

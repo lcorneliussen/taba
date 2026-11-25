@@ -46,8 +46,8 @@ func StatusPRsByPriority(rows []StatusPRRow) []StatusPRRow {
 
 // StatusPRTerminalAt is a row's provider-reported terminal event: the merge
 // time of a merged PR, the closure time of a closed or declined one. Missing
-// or unparsable evidence (including every Bitbucket decline) is unknown;
-// observation or refresh time never counts.
+// or unparsable evidence (including a Bitbucket decline its activity log has
+// not dated) is unknown; observation or refresh time never counts.
 func StatusPRTerminalAt(row StatusPRRow) (time.Time, bool) {
 	event := row.ClosedAt
 	if row.State != "CLOSED" && row.State != "DECLINED" {
