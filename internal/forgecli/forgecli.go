@@ -15,17 +15,17 @@ import (
 	"time"
 )
 
-// waitDelay bounds how long Wait waits for the streams of an exited child.
-const waitDelay = 200 * time.Millisecond
-
-// Cmd is one forge CLI call. Dir, Env, Stdin and Stderr mean what the
-// exec.Cmd fields of those names mean; stdout is the package's own, so that a
-// body cannot be read from a pipe.
+// Cmd is one forge CLI call. Dir, Env, Stdin, Stderr and WaitDelay mean what
+// the exec.Cmd fields of those names mean; stdout is the package's own, so
+// that a body cannot be read from a pipe. A WaitDelay bounds the wait for the
+// streams of an exited child, at the cost of an ErrWaitDelay on a call whose
+// body arrived, so each caller keeps the one it chose.
 type Cmd struct {
-	Dir    string
-	Env    []string
-	Stdin  io.Reader
-	Stderr io.Writer
+	Dir       string
+	Env       []string
+	Stdin     io.Reader
+	Stderr    io.Writer
+	WaitDelay time.Duration
 
 	cmd *exec.Cmd
 }
@@ -73,9 +73,14 @@ func (c *Cmd) Output() ([]byte, error) {
 	return out, runErr
 }
 
-// Run runs the call and writes its stdout to w, for a call whose output
-// nothing parses. A nil w discards it, as exec does.
-func (c *Cmd) Run(w io.Writer) error {
+// Run runs the call and sends its stdout to w, for a call whose output
+// nothing parses. A nil w discards it, as exec does. w is a file, a terminal
+// among them, and never a buffer: exec copies any other writer through a
+// pipe, which is what Output exists to avoid.
+func (c *Cmd) Run(w *os.File) error {
+	if w == nil {
+		return c.run(nil, c.Stderr)
+	}
 	return c.run(w, c.Stderr)
 }
 
@@ -85,6 +90,6 @@ func (c *Cmd) run(stdout, stderr io.Writer) error {
 	c.cmd.Stdin = c.Stdin
 	c.cmd.Stderr = stderr
 	c.cmd.Stdout = stdout
-	c.cmd.WaitDelay = waitDelay
+	c.cmd.WaitDelay = c.WaitDelay
 	return c.cmd.Run()
 }

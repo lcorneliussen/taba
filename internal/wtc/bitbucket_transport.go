@@ -645,6 +645,7 @@ func bitbucketCommand(timeout time.Duration, env []string, args ...string) ([]by
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := forgecli.CommandContext(ctx, args[0], args[1:]...)
+	cmd.WaitDelay = 200 * time.Millisecond
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}

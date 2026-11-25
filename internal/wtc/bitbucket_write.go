@@ -96,6 +96,7 @@ func twgWrite(workspace, repo, operation string, args ...string) ([]byte, error)
 	full := append([]string{"twg"}, args...)
 	full = append(full, "--workspace", workspace, "--repo", repo, "--output", "json", "--output-summary", "none")
 	cmd := forgecli.CommandContext(ctx, full[0], full[1:]...)
+	cmd.WaitDelay = 200 * time.Millisecond
 	// The person's own environment and TWG's agent defaults; a host read
 	// credential is never in either.
 	cmd.Env = append(os.Environ(), twgChildEnv()...)

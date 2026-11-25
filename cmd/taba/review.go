@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -327,7 +326,7 @@ func addReviewCommands(root *cobra.Command, asJSON *bool) {
 		}
 		action := forgecli.Command("gh", "pr", "ready", args[0], "--repo", slug)
 		action.Stderr = os.Stderr
-		var progress io.Writer
+		var progress *os.File
 		if !*asJSON {
 			progress = os.Stdout
 		}

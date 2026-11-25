@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeNodeForge puts a bb on PATH that behaves like Node writing --json in one
@@ -69,10 +70,17 @@ func TestOutputCapturesStderrOnFailure(t *testing.T) {
 }
 
 func TestRunWritesStdoutWhereTheCallerSaysAndDiscardsNil(t *testing.T) {
-	var stdout bytes.Buffer
-	cmd := Command("sh", "-c", "echo streamed")
-	if err := cmd.Run(&stdout); err != nil || strings.TrimSpace(stdout.String()) != "streamed" {
-		t.Fatalf("Run did not write stdout: %q, %v", stdout.String(), err)
+	file, err := os.Create(filepath.Join(t.TempDir(), "streamed"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	if err := Command("sh", "-c", "echo streamed").Run(file); err != nil {
+		t.Fatal(err)
+	}
+	wrote, err := os.ReadFile(file.Name())
+	if err != nil || strings.TrimSpace(string(wrote)) != "streamed" {
+		t.Fatalf("Run did not write stdout: %q, %v", wrote, err)
 	}
 	if err := Command("sh", "-c", "echo streamed").Run(nil); err != nil {
 		t.Fatalf("Run with no stdout: %v", err)
@@ -92,6 +100,22 @@ func TestDirEnvAndStdinReachTheChild(t *testing.T) {
 	// macOS resolves the temporary directory through a symlink.
 	if got := strings.Split(string(out), "\n"); !strings.HasSuffix(got[0], dir) || got[1] != "set" || got[2] != "piped in" {
 		t.Fatalf("Dir, Env or Stdin did not reach the child: %q", out)
+	}
+}
+
+// A WaitDelay stops the wait for a stream an exited child's own child still
+// holds. Without one, Output waits for that grandchild; with one it reports
+// exec.ErrWaitDelay. The body is on a file either way, so it still arrives.
+func TestWaitDelayBoundsTheWaitAndKeepsTheBody(t *testing.T) {
+	cmd := Command("sh", "-c", `sh -c 'sleep 1; echo late >&2' & echo body; exit 0`)
+	cmd.WaitDelay = 50 * time.Millisecond
+	start := time.Now()
+	out, err := cmd.Output()
+	if !errors.Is(err, exec.ErrWaitDelay) || time.Since(start) > time.Second {
+		t.Fatalf("WaitDelay did not reach the child: %v after %s", err, time.Since(start))
+	}
+	if strings.TrimSpace(string(out)) != "body" {
+		t.Fatalf("the body was lost: %q", out)
 	}
 }
 

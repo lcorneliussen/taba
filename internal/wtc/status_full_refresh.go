@@ -327,7 +327,9 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
 		return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
 	}
-	raw, err := forgecli.CommandContext(ctx, name, args...).Output()
+	cmd := forgecli.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = 200 * time.Millisecond
+	raw, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

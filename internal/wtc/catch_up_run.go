@@ -97,7 +97,9 @@ var catchUpForgeTimeout = 30 * time.Second
 func catchUpJSON(args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), catchUpForgeTimeout)
 	defer cancel()
-	out, err := forgecli.CommandContext(ctx, args[0], args[1:]...).Output()
+	cmd := forgecli.CommandContext(ctx, args[0], args[1:]...)
+	cmd.WaitDelay = 200 * time.Millisecond
+	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("%s timed out after %s", args[0], catchUpForgeTimeout)
 	}

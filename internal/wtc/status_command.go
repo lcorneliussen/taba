@@ -76,6 +76,8 @@ func statusJSONContext(parent context.Context, args ...string) ([]byte, error) {
 	timeout := 30 * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	out, err := forgecli.CommandContext(ctx, args[0], args[1:]...).Output()
+	cmd := forgecli.CommandContext(ctx, args[0], args[1:]...)
+	cmd.WaitDelay = 200 * time.Millisecond
+	out, err := cmd.Output()
 	return statusOutcome(parent, ctx, timeout, args[0], args[1:], out, err)
 }
