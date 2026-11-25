@@ -35,13 +35,16 @@ case "$1" in
   where)
     v=${2#*@}
     [ -d "$MOCK_TOOLS/$v" ] || { echo "$2 is not installed" >&2; exit 1; }
+    [ -n "$MOCK_WHERE" ] && { printf '%s\n' "$MOCK_WHERE"; exit 0; }
     echo "$MOCK_TOOLS/$v" ;;
   exec)
     v=${2#*@}
     [ "$3" = "--" ] || exit 64
     shift 3
     [ -d "$MOCK_TOOLS/$v" ] || { echo "not installed" >&2; exit 1; }
-    PATH="$MOCK_TOOLS/$v:$PATH" exec "$@" ;;
+    # MOCK_COMPETING is another tool in the active toolset whose bin mise
+    # puts ahead of the selected one when it resolves a bare program name.
+    PATH="${MOCK_COMPETING:+$MOCK_COMPETING:}$MOCK_TOOLS/$v:$PATH" exec "$@" ;;
 esac
 `, 0755)
 	// Ambient PATH copy and the previous release: selecting either is a bug.
@@ -109,13 +112,14 @@ func TestUpgradeRunsTargetDoctorAfterInstall450(t *testing.T) {
 	if strings.Contains(log, "POISON") {
 		t.Fatalf("a non-target executable ran:\n%s", log)
 	}
+	target := filepath.Join(f.tools, "0.1.12", "wtc")
 	install := strings.Index(log, "mise install|")
-	doctor := strings.Index(log, "mise exec "+cliMiseTool+"@0.1.12 -- wtc doctor --json|"+c.Collection)
-	version := strings.Index(log, "mise exec "+cliMiseTool+"@0.1.12 -- wtc --version|"+c.Collection)
+	doctor := strings.Index(log, "mise exec "+cliMiseTool+"@0.1.12 -- "+target+" doctor --json|"+c.Collection)
+	version := strings.Index(log, "mise exec "+cliMiseTool+"@0.1.12 -- "+target+" --version|"+c.Collection)
 	if install < 0 || version < install || doctor < version {
 		t.Fatalf("doctor not run with the installed target after install and version check:\n%s", log)
 	}
-	if !strings.Contains(log, "doctor --json|"+filepath.Join(f.tools, "0.1.12", "wtc")+"|cwd="+c.Collection+"|") || !strings.Contains(log, "|pin=0.1.12") {
+	if !strings.Contains(log, "doctor --json|"+target+"|cwd="+c.Collection+"|") || !strings.Contains(log, "|pin=0.1.12") {
 		t.Fatalf("doctor ran from the wrong executable, directory or pin:\n%s", log)
 	}
 	d := result.Doctor
@@ -155,7 +159,7 @@ func TestUpgradeDoctorIsAdvisoryAndExplicitWhenUnavailable450(t *testing.T) {
 	if err != nil || result.Doctor == nil || result.Doctor.Status != "unavailable" || !strings.Contains(result.Doctor.Reason, "0.1.11") {
 		t.Fatalf("mismatched target not explicit: %+v %v", result.Doctor, err)
 	}
-	if log := f.read(t); strings.Contains(log, "wtc doctor") || strings.Contains(log, "POISON") {
+	if log := f.read(t); strings.Contains(log, "doctor --json") || strings.Contains(log, "POISON") {
 		t.Fatalf("doctor ran with a mismatched executable:\n%s", log)
 	}
 	restore()
@@ -317,7 +321,7 @@ esac
 			t.Fatalf("doctor ran without a transition: %+v", row)
 		}
 	}
-	if strings.Contains(f.read(t), "wtc doctor") {
+	if strings.Contains(f.read(t), "doctor --json") {
 		t.Fatalf("doctor executed on a current harness:\n%s", f.read(t))
 	}
 
@@ -443,5 +447,79 @@ func TestRolloutDoctorFailureIsAdvisory450(t *testing.T) {
 	}
 	if err != nil || report.ExitStatus != 0 {
 		t.Fatalf("advisory failure failed the rollout: %v, exit %d, %+v", err, report.ExitStatus, report.Outcomes)
+	}
+}
+
+// #533: mise exec resolves a bare program name across the whole active
+// toolset, so another tool's `wtc` (a pre-rename 0.1.x client pinned
+// globally) can win over the selected release's. The doctor runs the
+// executable inside the selected release's own install directory instead.
+func TestUpgradeDoctorRunsTheSelectedReleaseNotAnotherToolsWtc533(t *testing.T) {
+	c, bin := upgradeFixture(t)
+	f := newDoctor450Fixture(t, bin)
+	f.release(t, "0.1.12", "0.1.12", doctor450Clean, 0)
+	competing := filepath.Join(filepath.Dir(bin), "competing-tool")
+	fixtureFile(t, filepath.Join(competing, "wtc"), "#!/bin/sh\nprintf 'POISON competing %s\\n' \"$*\" >> \"$MOCK_LOG\"\necho 'wtc version 0.1.39'\n", 0755)
+	t.Setenv("MOCK_COMPETING", competing)
+
+	d := c.upgradeDoctor(c, "0.1.12")
+	log := f.read(t)
+	if d.Status != "ok" || strings.Contains(log, "POISON") {
+		t.Fatalf("another tool's wtc was selected: %+v\n%s", d, log)
+	}
+	target := filepath.Join(f.tools, "0.1.12", "wtc")
+	for _, want := range []string{
+		"mise exec " + cliMiseTool + "@0.1.12 -- " + target + " --version|" + c.Collection,
+		"mise exec " + cliMiseTool + "@0.1.12 -- " + target + " doctor --json|" + c.Collection,
+		"doctor --json|" + target + "|cwd=" + c.Collection + "|",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("missing %q:\n%s", want, log)
+		}
+	}
+}
+
+// A release that ships `taba` runs it; its `wtc` beside it is not needed.
+// A release that ships only `wtc` (before the rename) runs that, as above.
+func TestUpgradeDoctorPrefersTheReleasesTabaExecutable533(t *testing.T) {
+	c, bin := upgradeFixture(t)
+	f := newDoctor450Fixture(t, bin)
+	f.release(t, "0.1.12", "0.1.12", doctor450Clean, 0)
+	dir := filepath.Join(f.tools, "0.1.12")
+	if err := os.Rename(filepath.Join(dir, "wtc"), filepath.Join(dir, "taba")); err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, filepath.Join(dir, "wtc"), "#!/bin/sh\nprintf 'POISON release wtc %s\\n' \"$*\" >> \"$MOCK_LOG\"\nexit 97\n", 0755)
+
+	d := c.upgradeDoctor(c, "0.1.12")
+	log := f.read(t)
+	if d.Status != "ok" || strings.Contains(log, "POISON") || !strings.Contains(log, "doctor --json|"+filepath.Join(dir, "taba")+"|") {
+		t.Fatalf("release's taba not run: %+v\n%s", d, log)
+	}
+}
+
+// Whatever `mise where` names must be an absolute directory holding a
+// regular executable; anything else is unavailable, and nothing runs.
+func TestUpgradeDoctorNeedsAnExecutableInTheInstallDirectory533(t *testing.T) {
+	c, bin := upgradeFixture(t)
+	f := newDoctor450Fixture(t, bin)
+	f.release(t, "0.1.12", "0.1.12", doctor450Clean, 0)
+	dir := filepath.Join(f.tools, "0.1.12")
+	empty := filepath.Join(filepath.Dir(bin), "empty-install")
+	if err := os.MkdirAll(filepath.Join(empty, "wtc"), 0755); err != nil { // a directory, not an executable
+		t.Fatal(err)
+	}
+	notExec := filepath.Join(filepath.Dir(bin), "not-executable")
+	fixtureFile(t, filepath.Join(notExec, "taba"), "#!/bin/sh\nexit 0\n", 0644)
+	for _, where := range []string{"relative/install", dir + "\n" + dir, empty, notExec} {
+		f.reset(t)
+		t.Setenv("MOCK_WHERE", where)
+		d := c.upgradeDoctor(c, "0.1.12")
+		if d.Status != "unavailable" || !strings.Contains(d.Reason, "diagnostics did not run") {
+			t.Fatalf("where %q: %+v", where, d)
+		}
+		if log := f.read(t); strings.Contains(log, "mise exec") || strings.Contains(log, "POISON") {
+			t.Fatalf("where %q ran something:\n%s", where, log)
+		}
 	}
 }
