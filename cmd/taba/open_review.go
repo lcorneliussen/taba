@@ -42,8 +42,9 @@ func openReviewForge(dir string, args ...string) ([]byte, error) {
 	defer cancel()
 	cmd := forgecli.CommandContext(ctx, "gh", args...)
 	cmd.Dir = dir
-	// gh resolves the repository through git here, so it keeps the guards
-	// this call had when one function ran both programs.
+	// A precaution with no evidence that gh needs it here, since every
+	// argument list below passes --repo: if gh does reach for git, a missing
+	// partial-clone object must not cause an implicit fetch.
 	cmd.Env = append(os.Environ(), "GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1")
 	return cmd.Output()
 }

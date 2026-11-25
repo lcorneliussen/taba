@@ -23,9 +23,10 @@ func ForgeCalls(ctx context.Context, pr, slug, number, owner, program string, ar
 		// 6e853e0 put git fetch back on combined output: fetch reports its
 		// progress and its errors on stderr, so a git read is another class.
 		exec.Command("git", "--git-dir="+owner+".git", "fetch", "--prune", "origin"),
-		// dc7377c open_review.go:27 named the program in a parameter, where
-		// no rule can see it. forgecli is what stops that one: a runner that
-		// takes a program builds its command there and has no pipe to read.
+		// A program named in a parameter, as dc7377c open_review.go:27 did,
+		// which no rule can see. Nothing flags this line, and nothing stops
+		// it: a runner like that is kept on forgecli by convention, and the
+		// fixture records the case as accepted.
 		exec.CommandContext(ctx, program, args...),
 	}
 }
