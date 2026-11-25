@@ -16,6 +16,28 @@ settings and `GIT_TRACE*`. Git then reads no system configuration, and a
 global configuration that holds only a fixture identity. Name a new test
 setting `WTC_TEST_*` or `TABA_TEST_*` so that it reaches the tests.
 
+## Dense status tables
+
+The repository, PR and service tables in `taba status` are dense fact tables.
+Rows compete for the same screen space, so new features must follow these rules:
+
+- One item takes one physical line at every width, styled or plain. A row
+  renderer returns a single string (see `statusTUIRepoRow`), never lines.
+- Reasons, errors, policy sources, evidence and recovery guidance do not go
+  under or inside a row. A row shows at most a short state or marker. The full
+  text goes on an explicit detail surface reachable by keyboard (`?` help,
+  `l` log, next actions); Markdown and JSON keep it complete.
+- Names and titles are names and titles, not diagnostic text.
+- A marker must not turn unknown or failure into success, and must have a
+  legend and a plain-text form.
+- A global notice outside a table gets a fixed budget (for example one line in
+  plain output), not one paragraph per item.
+- Metadata must not change row geometry, row-to-item mapping or link targets.
+  `assertStatusDenseSection` in `cmd/taba/repo_base_status_test.go` checks
+  item and line counts and width bounds. Test with many items, long repeated
+  text, narrow, normal and wide widths, and styled and plain output, and check
+  how many items fit the actual viewport.
+
 ## Running a development build in a collection
 
 When a collection has the wtc-cli repository checked out beside the harness,

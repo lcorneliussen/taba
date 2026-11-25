@@ -1265,7 +1265,7 @@ func statusTUIRepoLayout(snapshot wtc.StatusSnapshot, width int) statusRepoLayou
 			l.tree = max(l.tree, runewidth.StringWidth(row.Tree))
 		}
 		l.ahead = max(l.ahead, len(fmt.Sprint(row.Ahead)))
-		l.behind = max(l.behind, runewidth.StringWidth(statusTUIBehind(row)))
+		l.behind = max(l.behind, runewidth.StringWidth(statusTUIBehindCell(row)))
 		if row.PR != nil && row.PR.Number != "" {
 			hasPR = true
 			identifierWidth := ansi.StringWidth(statusTUIPRNumber(row.PR.Number))
@@ -1502,25 +1502,85 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 	return statusTUIFitANSI(cell, width)
 }
 
-// Base descriptions have no position callback: they are text, not action rows.
-func statusTUIBaseDetails(base *wtc.RepositoryBase, width int, styled bool) []string {
-	if base == nil || base.Source != "collection" {
-		return nil
+// statusTUIBaseMarker follows a ↓ count taken against a collection-local base
+// override. The row shows only this marker; the ref and reason are details
+// (? help, plain-output note, Markdown, JSON and `repo base show`).
+const statusTUIBaseMarker = "*"
+
+func statusTUIBaseOverride(row wtc.StatusRepo) bool {
+	return row.DevelopmentBase != nil && row.DevelopmentBase.Source == "collection"
+}
+
+// statusTUIBehindCell is the ↓ cell text. An open PR's base can replace the
+// comparison ref; then the count no longer uses the override and is unmarked.
+func statusTUIBehindCell(row wtc.StatusRepo) string {
+	text := statusTUIBehind(row)
+	if statusTUIBaseOverride(row) && (row.ComparisonRef == "" || row.ComparisonRef == row.DevelopmentBase.EffectiveRef) {
+		text += statusTUIBaseMarker
 	}
-	width = max(1, width)
-	text := "base " + fmt.Sprintf("%q", base.EffectiveRef) + " (collection): " + fmt.Sprintf("%q", base.Reason)
-	lines := strings.Split(ansi.Wrap(statusTUISafe(text), width, ""), "\n")
-	if len(lines) > 3 {
-		lines = append(lines[:2], statusTUIFit("… repo base show", width))
+	return text
+}
+
+// statusTUIBaseOverrideDetails describes collection base overrides for an
+// explicit detail surface. Repositories that share a ref and reason share one
+// entry, so a repeated reason is shown once.
+func statusTUIBaseOverrideDetails(snapshot wtc.StatusSnapshot) []string {
+	type group struct {
+		ref, reason string
+		names       []string
+		comparisons []string
 	}
-	for i, line := range lines {
-		line = statusTUIFit(line, width)
-		if styled {
-			line = statusTUIStyle(line, statusToneDim)
+	var groups []*group
+	byKey := map[[2]string]*group{}
+	for _, row := range snapshot.Repos {
+		if !statusTUIBaseOverride(row) {
+			continue
 		}
-		lines[i] = line
+		key := [2]string{row.DevelopmentBase.EffectiveRef, row.DevelopmentBase.Reason}
+		g := byKey[key]
+		if g == nil {
+			g = &group{ref: key[0], reason: key[1]}
+			byKey[key] = g
+			groups = append(groups, g)
+		}
+		name := statusTUIRepoName(snapshot, row)
+		g.names = append(g.names, name)
+		if row.ComparisonRef != "" && row.ComparisonRef != row.DevelopmentBase.EffectiveRef {
+			g.comparisons = append(g.comparisons, name+" ↓ vs PR base "+fmt.Sprintf("%q", row.ComparisonRef))
+		}
+	}
+	var lines []string
+	for _, g := range groups {
+		text := "Base " + fmt.Sprintf("%q", g.ref) + " (collection) for " + strings.Join(g.names, ", ") + ": " + fmt.Sprintf("%q", g.reason)
+		if len(g.comparisons) > 0 {
+			text += "; " + strings.Join(g.comparisons, "; ")
+		}
+		lines = append(lines, statusTUISafe(text))
 	}
 	return lines
+}
+
+// statusTUIBaseOverrideNote is plain output's single-line pointer to the
+// override details, which a non-interactive table cannot open.
+func statusTUIBaseOverrideNote(snapshot wtc.StatusSnapshot, width int) []string {
+	var names []string
+	for _, row := range snapshot.Repos {
+		if statusTUIBaseOverride(row) {
+			names = append(names, statusTUIRepoName(snapshot, row))
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	text := statusTUIBaseMarker + " collection base override (" + fmt.Sprint(len(names)) + "): " + branding.Text("{{command}} repo base show <repo>") + " · " + strings.Join(names, ", ")
+	return []string{"", statusTUIFit(statusTUISafe(text), max(1, width))}
+}
+
+func statusTUIRepoName(snapshot wtc.StatusSnapshot, row wtc.StatusRepo) string {
+	if snapshot.ShowCollectionColumn {
+		return row.Collection + "/" + row.Dir
+	}
+	return row.Dir
 }
 
 func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, position ...func(int, wtc.StatusRepo)) []string {
@@ -1547,101 +1607,104 @@ func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, pos
 	}
 	lines := []string{header}
 	for _, row := range snapshot.Repos {
-		name := row.Dir
-		if snapshot.ShowCollectionColumn {
-			name = row.Collection + "/" + row.Dir
-		}
-		tree := "·"
-		if row.Conflict {
-			tree = "✗"
-		} else if row.Operation != "" {
-			tree = "⚠"
-		} else if row.Tree != "" && row.Tree != "clean" {
-			tree = row.Tree
-		}
-		nameCell := statusTUIFit(statusTUISafe(name), l.name)
-		branchCell := statusTUIFit(statusTUISafe(row.BranchDisplay), l.branch)
-		prCell := statusTUIRepoPRCell(row.PR, l.pr, styled, l.number)
-		if styled {
-			if target := statusTUIRepoURL(row); target != "" {
-				nameCell = statusTUILinkCell(nameCell, target, statusToneLabel)
-			} else {
-				nameCell = statusTUIStyle(nameCell, statusToneLabel)
-			}
-			if target := statusTUIBranchURL(row); target != "" {
-				tone := statusToneSecondaryLink
-				if row.BranchKind == "detached" {
-					tone = statusToneDim
-				}
-				branchCell = statusTUILinkCell(branchCell, target, tone)
-			} else if row.BranchKind == "detached" {
-				branchCell = statusTUIStyle(branchCell, statusToneDim)
-			}
-		}
-		treeCell := statusTUIFit(tree, l.tree)
-		if styled {
-			if tree == "·" {
-				treeCell = statusTUIStyle(treeCell, statusToneDim)
-			} else if row.Conflict {
-				treeCell = statusTUIStyle(treeCell, statusToneFailure)
-			} else {
-				treeCell = statusTUIStyle(treeCell, statusToneWarning)
-			}
-		}
-		line := nameCell + " " + branchCell
-		if l.showRuntime {
-			line += " " + statusRuntimeCell(statusRuntimeItems(snapshot, row), l.runtime, styled)
-		}
-		line += " " + prCell
-		if l.showTree {
-			line += " " + treeCell
-		}
-		if l.showSync {
-			ahead, behind := "·", statusTUIBehind(row)
-			if row.Ahead > 0 {
-				ahead = fmt.Sprint(row.Ahead)
-			}
-			aheadCell, behindCell := statusTUIFit(ahead, l.ahead), statusTUIFit(behind, l.behind)
-			if styled {
-				if row.Ahead > 0 {
-					aheadCell = statusTUIStyle(aheadCell, statusToneSuccess)
-				} else {
-					aheadCell = statusTUIStyle(aheadCell, statusToneDim)
-				}
-				if row.Conflict || statusTUIPRConflict(row.PR) {
-					behindCell = statusTUIStyle(behindCell, statusToneFailure)
-				} else if row.Behind > 0 {
-					behindCell = statusTUIStyle(behindCell, statusToneWarning)
-				} else {
-					behindCell = statusTUIStyle(behindCell, statusToneDim)
-				}
-			}
-			line += " " + aheadCell + " " + behindCell
-		}
-		if l.showBuilds {
-			tipCell := statusTUIFit(statusTUIBuildCell("T", row.Tip), l.tip)
-			prodCell := statusTUIFit(statusTUIBuildCell("P", row.Prod), l.prod)
-			if styled {
-				tipCell = statusTUIBuildLink(tipCell, row.Tip)
-				prodCell = statusTUIBuildLink(prodCell, row.Prod)
-			}
-			if l.hasTip {
-				line += " " + tipCell
-			}
-			if l.hasProd {
-				line += " " + prodCell
-			}
-		}
 		if len(position) > 0 {
 			position[0](len(lines), row)
 		}
-		lines = append(lines, line)
-		lines = append(lines, statusTUIBaseDetails(row.DevelopmentBase, width, styled)...)
+		lines = append(lines, statusTUIRepoRow(snapshot, l, row, styled))
 	}
 	if len(snapshot.Repos) == 0 {
 		lines = append(lines, "(no worktrees)")
 	}
 	return lines
+}
+
+// statusTUIRepoRow renders one repository as exactly one physical line. Row
+// renderers return a string, not lines: explanations, reasons and diagnostics
+// belong in an explicit detail surface, never beneath the row (#534).
+func statusTUIRepoRow(snapshot wtc.StatusSnapshot, l statusRepoLayout, row wtc.StatusRepo, styled bool) string {
+	name := statusTUIRepoName(snapshot, row)
+	tree := "·"
+	if row.Conflict {
+		tree = "✗"
+	} else if row.Operation != "" {
+		tree = "⚠"
+	} else if row.Tree != "" && row.Tree != "clean" {
+		tree = row.Tree
+	}
+	nameCell := statusTUIFit(statusTUISafe(name), l.name)
+	branchCell := statusTUIFit(statusTUISafe(row.BranchDisplay), l.branch)
+	prCell := statusTUIRepoPRCell(row.PR, l.pr, styled, l.number)
+	if styled {
+		if target := statusTUIRepoURL(row); target != "" {
+			nameCell = statusTUILinkCell(nameCell, target, statusToneLabel)
+		} else {
+			nameCell = statusTUIStyle(nameCell, statusToneLabel)
+		}
+		if target := statusTUIBranchURL(row); target != "" {
+			tone := statusToneSecondaryLink
+			if row.BranchKind == "detached" {
+				tone = statusToneDim
+			}
+			branchCell = statusTUILinkCell(branchCell, target, tone)
+		} else if row.BranchKind == "detached" {
+			branchCell = statusTUIStyle(branchCell, statusToneDim)
+		}
+	}
+	treeCell := statusTUIFit(tree, l.tree)
+	if styled {
+		if tree == "·" {
+			treeCell = statusTUIStyle(treeCell, statusToneDim)
+		} else if row.Conflict {
+			treeCell = statusTUIStyle(treeCell, statusToneFailure)
+		} else {
+			treeCell = statusTUIStyle(treeCell, statusToneWarning)
+		}
+	}
+	line := nameCell + " " + branchCell
+	if l.showRuntime {
+		line += " " + statusRuntimeCell(statusRuntimeItems(snapshot, row), l.runtime, styled)
+	}
+	line += " " + prCell
+	if l.showTree {
+		line += " " + treeCell
+	}
+	if l.showSync {
+		ahead, behind := "·", statusTUIBehindCell(row)
+		if row.Ahead > 0 {
+			ahead = fmt.Sprint(row.Ahead)
+		}
+		aheadCell, behindCell := statusTUIFit(ahead, l.ahead), statusTUIFit(behind, l.behind)
+		if styled {
+			if row.Ahead > 0 {
+				aheadCell = statusTUIStyle(aheadCell, statusToneSuccess)
+			} else {
+				aheadCell = statusTUIStyle(aheadCell, statusToneDim)
+			}
+			if row.Conflict || statusTUIPRConflict(row.PR) {
+				behindCell = statusTUIStyle(behindCell, statusToneFailure)
+			} else if row.Behind > 0 {
+				behindCell = statusTUIStyle(behindCell, statusToneWarning)
+			} else {
+				behindCell = statusTUIStyle(behindCell, statusToneDim)
+			}
+		}
+		line += " " + aheadCell + " " + behindCell
+	}
+	if l.showBuilds {
+		tipCell := statusTUIFit(statusTUIBuildCell("T", row.Tip), l.tip)
+		prodCell := statusTUIFit(statusTUIBuildCell("P", row.Prod), l.prod)
+		if styled {
+			tipCell = statusTUIBuildLink(tipCell, row.Tip)
+			prodCell = statusTUIBuildLink(prodCell, row.Prod)
+		}
+		if l.hasTip {
+			line += " " + tipCell
+		}
+		if l.hasProd {
+			line += " " + prodCell
+		}
+	}
+	return line
 }
 
 // runtimeItemAt returns the service, tunnel or resource whose mark is at a cell.
@@ -2175,6 +2238,10 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
 			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
 			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, r:age refreshing, never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up; still on a merged branch: ⚠ catch-up fully landed or no landing record, ⚠ extra follow-up work, merged? landing unknown; ⚠ before a freshness mark: still on a merged branch whose merge is not currently confirmed (details below).",
+		}
+		if overrides := statusTUIBaseOverrideDetails(m.snapshot); len(overrides) > 0 {
+			help = append(help, "↓ n"+statusTUIBaseMarker+": behind count against a collection base override. Full values: "+branding.Text("{{command}} repo base show <repo>")+".")
+			help = append(help, overrides...)
 		}
 		for _, row := range m.snapshot.PRs {
 			if row.Archived && !m.showArchived {

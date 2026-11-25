@@ -20,6 +20,7 @@ func statusTable(snapshot wtc.StatusSnapshot, reposOnly bool, width int) string 
 	}
 	lines := []string{statusTUIFit(header, width), ""}
 	lines = append(lines, statusTUIRepoLines(snapshot, width, false)...)
+	lines = append(lines, statusTUIBaseOverrideNote(snapshot, width)...)
 	lines = append(lines, statusTUIRuntimeLines(snapshot, width, false)...)
 	if !reposOnly {
 		lines = append(lines, statusTUIPRLines(snapshot, width, false, false)...)
