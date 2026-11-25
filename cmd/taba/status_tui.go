@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/x/term"
 	"github.com/mattn/go-runewidth"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -1503,19 +1504,26 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 }
 
 // statusTUIBaseMarker follows a ↓ count taken against a collection-local base
-// override. The row shows only this marker; the ref and reason are details
-// (? help, plain-output note, Markdown, JSON and `repo base show`).
+// override. The row shows only this marker. The ref and reason are in ? help,
+// Markdown, JSON and `repo base show`; plain output names the repositories.
 const statusTUIBaseMarker = "*"
 
 func statusTUIBaseOverride(row wtc.StatusRepo) bool {
 	return row.DevelopmentBase != nil && row.DevelopmentBase.Source == "collection"
 }
 
-// statusTUIBehindCell is the ↓ cell text. An open PR's base can replace the
-// comparison ref; then the count no longer uses the override and is unmarked.
+// statusTUIComparesOverride reports whether the ↓ count uses the override.
+// An open PR's base can replace the comparison ref (as origin/<branch>); an
+// owner without a remote compares against the local branch of the same name.
+func statusTUIComparesOverride(row wtc.StatusRepo) bool {
+	return statusTUIBaseOverride(row) && (row.ComparisonRef == "" ||
+		gitref.OriginBranch(row.ComparisonRef) == gitref.OriginBranch(row.DevelopmentBase.EffectiveRef))
+}
+
+// statusTUIBehindCell is the ↓ cell text, marked while it uses the override.
 func statusTUIBehindCell(row wtc.StatusRepo) string {
 	text := statusTUIBehind(row)
-	if statusTUIBaseOverride(row) && (row.ComparisonRef == "" || row.ComparisonRef == row.DevelopmentBase.EffectiveRef) {
+	if statusTUIComparesOverride(row) {
 		text += statusTUIBaseMarker
 	}
 	return text
@@ -1545,7 +1553,7 @@ func statusTUIBaseOverrideDetails(snapshot wtc.StatusSnapshot) []string {
 		}
 		name := statusTUIRepoName(snapshot, row)
 		g.names = append(g.names, name)
-		if row.ComparisonRef != "" && row.ComparisonRef != row.DevelopmentBase.EffectiveRef {
+		if !statusTUIComparesOverride(row) {
 			g.comparisons = append(g.comparisons, name+" ↓ vs PR base "+fmt.Sprintf("%q", row.ComparisonRef))
 		}
 	}
@@ -1560,8 +1568,8 @@ func statusTUIBaseOverrideDetails(snapshot wtc.StatusSnapshot) []string {
 	return lines
 }
 
-// statusTUIBaseOverrideNote is plain output's single-line pointer to the
-// override details, which a non-interactive table cannot open.
+// statusTUIBaseOverrideNote is plain output's pointer to the override details,
+// which a non-interactive table cannot open: a blank separator and one line.
 func statusTUIBaseOverrideNote(snapshot wtc.StatusSnapshot, width int) []string {
 	var names []string
 	for _, row := range snapshot.Repos {
@@ -1620,7 +1628,7 @@ func statusTUIRepoLines(snapshot wtc.StatusSnapshot, width int, styled bool, pos
 
 // statusTUIRepoRow renders one repository as exactly one physical line. Row
 // renderers return a string, not lines: explanations, reasons and diagnostics
-// belong in an explicit detail surface, never beneath the row (#534).
+// belong in an explicit detail surface, never beneath the row.
 func statusTUIRepoRow(snapshot wtc.StatusSnapshot, l statusRepoLayout, row wtc.StatusRepo, styled bool) string {
 	name := statusTUIRepoName(snapshot, row)
 	tree := "·"
@@ -2240,7 +2248,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, r:age refreshing, never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up; still on a merged branch: ⚠ catch-up fully landed or no landing record, ⚠ extra follow-up work, merged? landing unknown; ⚠ before a freshness mark: still on a merged branch whose merge is not currently confirmed (details below).",
 		}
 		if overrides := statusTUIBaseOverrideDetails(m.snapshot); len(overrides) > 0 {
-			help = append(help, "↓ n"+statusTUIBaseMarker+": behind count against a collection base override. Full values: "+branding.Text("{{command}} repo base show <repo>")+".")
+			help = append(help, statusTUIBaseMarker+" after a ↓ count: counted against a collection base override. Full values: "+branding.Text("{{command}} repo base show <repo>")+".")
 			help = append(help, overrides...)
 		}
 		for _, row := range m.snapshot.PRs {

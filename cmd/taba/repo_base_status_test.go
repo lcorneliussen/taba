@@ -17,7 +17,7 @@ var statusDenseWidths = []int{24, 40, 54, 60, 72, 80, 100, 120, 200}
 
 var statusOSC8Target = regexp.MustCompile("\x1b]8;[^;\x07\x1b]*;([^\x07\x1b]*)(?:\x07|\x1b\\\\)")
 
-// assertStatusDenseSection is the shared dense-table invariant (#534): a
+// assertStatusDenseSection is the shared dense-table invariant: a
 // section is one heading plus exactly one physical line per item, items occupy
 // consecutive lines, and no line exceeds the width.
 func assertStatusDenseSection(t *testing.T, label string, lines []string, starts []int, items, width int) {
@@ -84,7 +84,7 @@ var statusDenseReasons = []string{
 	"cached\x1b]8;;https://bad.invalid\acontrol\x1b]8;;\a\nreason",
 }
 
-// #534 acceptance: ten repositories with long collection base reasons still
+// Ten repositories with long collection base reasons still
 // take exactly ten item lines, and the reason never reaches the table.
 func TestStatusDenseRepoRows534(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
@@ -135,6 +135,13 @@ func TestStatusDenseBaseMarkerFollowsComparison534(t *testing.T) {
 	row.ComparisonRef = ""
 	if got := statusTUIBehindCell(row); got != "1"+statusTUIBaseMarker {
 		t.Fatalf("legacy snapshot without comparison ref = %q", got)
+	}
+	row.ComparisonRef = "βeta"
+	if got := statusTUIBehindCell(row); got != "1"+statusTUIBaseMarker {
+		t.Fatalf("owner without a remote (local comparison branch) = %q", got)
+	}
+	if details := statusTUIBaseOverrideDetails(wtc.StatusSnapshot{Repos: []wtc.StatusRepo{row}}); len(details) != 1 || strings.Contains(details[0], "PR base") {
+		t.Fatalf("local comparison branch described as a PR base: %q", details)
 	}
 	row.ComparisonRef = "origin/release"
 	if got := statusTUIBehindCell(row); got != "1" {
@@ -209,8 +216,7 @@ func TestStatusDenseBaseDetailsInHelp534(t *testing.T) {
 	}
 }
 
-// Before #534 each override added up to three lines, so a 24-line terminal
-// showed five of ten repositories. All ten now fit the first viewport.
+// Ten overridden repositories fit the first 24-line viewport.
 func TestStatusDenseViewportShowsAllRepos534(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	snapshot := statusDenseBaseFixture(statusDenseReasons[1])
