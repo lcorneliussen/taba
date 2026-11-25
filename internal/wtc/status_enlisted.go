@@ -249,6 +249,12 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 			known.Freshness = "unavailable"
 			return known
 		}
+		if slug != "" && forge != "" {
+			// The last observation keeps the row's known state, deferred (#535).
+			if known, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
+				return refused.apply(known)
+			}
+		}
 		return refused.apply(statusDeferredDetail(record))
 	}
 	defer func() { result = statusObserveDetailContext(ctx, result, slug, forge) }()
@@ -570,37 +576,54 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 	previousNote := statusAuditNote
 	statusAuditNote = func(message string) { c.statusProgress(message) }
 	defer func() { statusAuditNote = previousNote }()
+	// Active and never-observed PRs go first; terminal rechecks start only once
+	// they are done, so a phase deadline defers the rechecks rather than open
+	// work, and the rechecks never compete with it for slots or budget (#535).
+	active, terminal := statusSplitPendingRecords(ctx, pending, records, identities)
 	const parallel = 4
 	limit := make(chan struct{}, parallel)
 	done := make(chan struct{}, len(pending))
 	var workers sync.WaitGroup
-	for _, i := range pending {
-		record := records[i]
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			select {
-			case limit <- struct{}{}:
-			case <-ctx.Done():
-				if intent == StatusRefreshForeground {
-					slug, forge := identities[i][0], identities[i][1]
-					details[i], observations[i] = statusRefreshRecord(ctx, intent, record, slug, forge)
-				} else {
-					details[i], observations[i] = statusFailedPRObservation(statusUnknownDetail(record), ctx.Err())
-				}
-				done <- struct{}{}
-				return
-			}
+	observe := func(wave *sync.WaitGroup, i int, acquired bool) {
+		defer workers.Done()
+		defer wave.Done()
+		if acquired {
 			defer func() { <-limit }()
-			slug, forge := identities[i][0], identities[i][1]
-			if intent == StatusRefreshForeground {
-				details[i], observations[i] = statusRefreshRecord(ctx, intent, record, slug, forge)
-			} else {
-				details[i] = statusEnrichRecordContext(ctx, record, slug, forge)
-			}
-			done <- struct{}{}
-		}()
+		}
+		record, slug, forge := records[i], identities[i][0], identities[i][1]
+		switch {
+		case intent == StatusRefreshForeground:
+			// Past the phase deadline this keeps the last observation, deferred.
+			details[i], observations[i] = statusRefreshRecord(ctx, intent, record, slug, forge)
+		case !acquired:
+			details[i], observations[i] = statusFailedPRObservation(statusLastObservedDetail(ctx, record, slug, forge), ctx.Err())
+		default:
+			details[i] = statusEnrichRecordContext(ctx, record, slug, forge)
+		}
+		done <- struct{}{}
 	}
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		for _, group := range [][]int{active, terminal} {
+			var wave sync.WaitGroup
+			for _, i := range group {
+				// A ready slot never outranks an ended phase.
+				acquired := false
+				if ctx.Err() == nil {
+					select {
+					case limit <- struct{}{}:
+						acquired = true
+					case <-ctx.Done():
+					}
+				}
+				workers.Add(1)
+				wave.Add(1)
+				go observe(&wave, i, acquired)
+			}
+			wave.Wait()
+		}
+	}()
 	for i := range pending {
 		<-done
 		c.statusProgress(fmt.Sprintf("Collected pull request facts %d/%d", i+1, len(pending)))
@@ -621,6 +644,55 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 		}
 	}
 	return details, observations, nil
+}
+
+// statusSplitPendingRecords separates never-observed and active PRs from PRs
+// whose last observation is terminal (merged, declined, closed or superseded),
+// keeping enlistment order within each group. It only reads the forge cache in
+// the operation's credential context; it never reads the provider and never
+// changes what a recheck may conclude, only when the recheck gets its turn.
+func statusSplitPendingRecords(ctx context.Context, pending []int, records []PRRecord, identities [][2]string) (active, terminal []int) {
+	for _, i := range pending {
+		if statusLastObservationTerminal(ctx, records[i], identities[i][0], identities[i][1]) {
+			terminal = append(terminal, i)
+		} else {
+			active = append(active, i)
+		}
+	}
+	return active, terminal
+}
+
+func statusLastObservationTerminal(ctx context.Context, record PRRecord, slug, forge string) bool {
+	if slug == "" || forge == "" {
+		return false
+	}
+	if detail, ok := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge()); ok && detail.State == "MERGED" {
+		return true
+	}
+	detail, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour)
+	if !ok {
+		return false
+	}
+	switch detail.State {
+	case "MERGED", "DECLINED", "CLOSED", "SUPERSEDED":
+		return true
+	}
+	return false
+}
+
+// statusLastObservedDetail is the cached last observation of a PR that got no
+// turn before the phase ended, so its row keeps its known state, marked by the
+// caller as deferred, instead of becoming unknown. Cache reads only.
+func statusLastObservedDetail(ctx context.Context, record PRRecord, slug, forge string) statusPRDetail {
+	if slug != "" && forge != "" {
+		if detail, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
+			return detail
+		}
+		if detail, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
+			return detail
+		}
+	}
+	return statusUnknownDetail(record)
 }
 
 // StatusForgePreview adds enlisted PRs and discovers open PRs on active
