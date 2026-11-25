@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/gitref"
 )
 
 // CatchUpOptions describes one selected collection sweep. Other collections
@@ -82,7 +83,7 @@ type catchUpTarget struct {
 	path            string
 	repo            string
 	owner           string
-	ref             string
+	ref             gitref.Ref
 	developmentBase *RepositoryBase
 	harness         bool
 	// managed records registry membership at inventory time. An unmanaged
@@ -99,23 +100,10 @@ type catchUpTarget struct {
 }
 
 // catchUpLocalRef maps a remote-tracking development ref onto the owner's own
-// branch when the owner has no remote at all. It is fully qualified, so a tag
-// of the same name cannot stand in for the branch.
-func catchUpLocalRef(t catchUpTarget, ref string) string {
+// branch when the owner has no remote at all.
+func catchUpLocalRef(t catchUpTarget, ref gitref.Ref) gitref.Ref {
 	if t.noRemote {
-		return "refs/heads/" + catchUpBranchName(ref)
-	}
-	return ref
-}
-
-// catchUpBranchName is the branch a development ref names, for display and
-// for comparison with a worktree's current branch. It accepts short and
-// qualified, local and origin forms.
-func catchUpBranchName(ref string) string {
-	for _, prefix := range []string{"refs/heads/", "refs/remotes/origin/", "origin/"} {
-		if strings.HasPrefix(ref, prefix) {
-			return strings.TrimPrefix(ref, prefix)
-		}
+		return gitref.LocalBranch(ref.Branch())
 	}
 	return ref
 }
@@ -347,7 +335,7 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 			// which catchUpLocalRef maps to local main for an owner without any
 			// remote. An owner with only other remotes still fails its fetch.
 			repo, repoErr := target.Repository(repoName)
-			ref := "origin/main"
+			ref := gitref.RemoteBranch("origin", "main")
 			var base *RepositoryBase
 			if repoErr == nil {
 				if bases == nil {
@@ -365,7 +353,10 @@ func (c *Context) CatchUpInventory(opt CatchUpOptions) (CatchUpReport, []catchUp
 					}
 					break
 				}
-				ref = resolved.EffectiveRef
+				if ref, err = gitref.Parse(resolved.EffectiveRef); err != nil {
+					report.add("repo", name, repoName, "failed", "development ref: "+err.Error(), "", "", "")
+					continue
+				}
 				base = &resolved
 			}
 			remotes, remoteErr := gitOutputContext(c.resourceContext(), "--git-dir="+owner, "remote")

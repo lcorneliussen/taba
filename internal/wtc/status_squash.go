@@ -12,14 +12,14 @@ type StatusLanding struct {
 
 func statusMergedLanding(row StatusRepo, detail statusPRDetail) *StatusLanding {
 	unknown := &StatusLanding{State: "unknown", Reason: "full landing not established; inspect retained branch"}
-	if row.baseRef == "" {
+	if row.baseRef.IsZero() {
 		return unknown
 	}
-	if catchUpLanded(catchUpTarget{path: row.Worktree}, row.baseRef, catchUpPR{state: "MERGED", mergeCommit: detail.MergeCommit, head: detail.HeadCommit}) {
+	if catchUpLanded(catchUpTarget{path: row.Worktree}, row.baseRef.String(), catchUpPR{state: "MERGED", mergeCommit: detail.MergeCommit, head: detail.HeadCommit}) {
 		return &StatusLanding{State: "landed", Reason: "full landing established; ahead can include residual history"}
 	}
 	if detail.HeadCommit != "" && detail.MergeCommit != "" &&
-		catchUpGitOK(row.Worktree, "merge-base", "--is-ancestor", detail.MergeCommit, row.baseRef) &&
+		catchUpGitOK(row.Worktree, "merge-base", "--is-ancestor", detail.MergeCommit, row.baseRef.String()) &&
 		catchUpGitOK(row.Worktree, "merge-base", "--is-ancestor", detail.HeadCommit, "HEAD") {
 		if n, err := statusCount(row.Worktree, detail.HeadCommit+"..HEAD"); err == nil && n > 0 {
 			return &StatusLanding{State: "follow-up", Reason: "commits after recorded PR head; full landing not established"}

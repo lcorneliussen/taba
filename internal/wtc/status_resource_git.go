@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // Only paths are reusable here; marker existence is checked again each observation.
@@ -425,11 +427,11 @@ func statusResourceOperationFallback(ctx context.Context, t catchUpTarget) strin
 	return ""
 }
 
-func statusResourceCounts(ctx context.Context, path, upstream, base string) (int, int, bool) {
+func statusResourceCounts(ctx context.Context, path string, upstream, base gitref.Ref) (int, int, bool) {
 	if upstream != base {
 		return 0, 0, false
 	}
-	raw, err := statusGitContext(ctx, path, "rev-list", "--left-right", "--count", base+"...HEAD")
+	raw, err := statusGitContext(ctx, path, "rev-list", "--left-right", "--count", base.String()+"...HEAD")
 	fields := strings.Fields(raw)
 	if err != nil || len(fields) != 2 {
 		return 0, 0, false
@@ -439,11 +441,11 @@ func statusResourceCounts(ctx context.Context, path, upstream, base string) (int
 	return ahead, behind, be == nil && ae == nil && behind >= 0 && ahead >= 0
 }
 
-func statusResourceHeads(ctx context.Context, path, base string) (string, string, bool) {
-	if base == "" {
+func statusResourceHeads(ctx context.Context, path string, base gitref.Ref) (string, string, bool) {
+	if base.IsZero() {
 		return "", "", false
 	}
-	raw, err := statusGitContext(ctx, path, "rev-parse", "HEAD", base)
+	raw, err := statusGitContext(ctx, path, "rev-parse", "HEAD", base.String())
 	heads := strings.Fields(raw)
 	if err != nil || len(heads) != 2 || !validCheckHead(heads[0]) || !validCheckHead(heads[1]) {
 		return "", "", false
@@ -580,44 +582,45 @@ func statusResourceGitBinary() (string, string) {
 
 // Upstream binding and its gone marker come from one current ref observation.
 // Unsupported or malformed Git output uses the established separate reads.
-func statusResourceUpstream(ctx context.Context, path, branch string) (string, string, bool) {
-	raw, err := statusGitContext(ctx, path, "for-each-ref", "--format=%(upstream:short)%00%(upstream:track)", "refs/heads/"+branch)
+func statusResourceUpstream(ctx context.Context, path, branch string) (gitref.Ref, string, bool) {
+	raw, err := statusGitContext(ctx, path, "for-each-ref", "--format=%(upstream)%00%(upstream:track)", gitref.LocalBranch(branch).String())
 	if err != nil || strings.ContainsAny(raw, "\r\n") {
-		return "", "", false
+		return gitref.Ref{}, "", false
 	}
 	fields := strings.Split(raw, "\x00")
 	if len(fields) != 2 {
-		return "", "", false
+		return gitref.Ref{}, "", false
 	}
 	if fields[0] == "" && fields[1] == "" {
-		return "", "none", true
+		return gitref.Ref{}, "none", true
 	}
 	if fields[0] == "" {
-		return "", "", false
+		return gitref.Ref{}, "", false
 	}
 	if fields[1] == "[gone]" {
-		return "", "gone", true
+		return gitref.Ref{}, "gone", true
 	}
 	if track := fields[1]; track != "" {
 		if !strings.HasPrefix(track, "[") || !strings.HasSuffix(track, "]") {
-			return "", "", false
+			return gitref.Ref{}, "", false
 		}
 		parts := strings.Split(track[1:len(track)-1], ", ")
 		if len(parts) > 2 {
-			return "", "", false
+			return gitref.Ref{}, "", false
 		}
 		seen := map[string]bool{}
 		for _, part := range parts {
 			words := strings.Fields(part)
 			if len(words) != 2 || (words[0] != "ahead" && words[0] != "behind") || seen[words[0]] {
-				return "", "", false
+				return gitref.Ref{}, "", false
 			}
 			count, err := strconv.Atoi(words[1])
 			if err != nil || count < 0 {
-				return "", "", false
+				return gitref.Ref{}, "", false
 			}
 			seen[words[0]] = true
 		}
 	}
-	return fields[0], "tracking", true
+	upstream, err := gitref.Parse(fields[0])
+	return upstream, "tracking", err == nil
 }

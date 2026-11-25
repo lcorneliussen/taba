@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/next"
 )
 
@@ -80,7 +81,7 @@ type StatusRepo struct {
 	Choices *next.Choices `json:"choices,omitempty"`
 	// baseRef is the ref Behind counts against: the development tip, or an
 	// open pull request's base.
-	baseRef string
+	baseRef gitref.Ref
 }
 
 type StatusPRFacts struct {
@@ -238,7 +239,7 @@ func statusLocalRepo(t catchUpTarget) (StatusRepo, error) {
 func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, error) {
 	dir := filepath.Base(t.path)
 	row := StatusRepo{Collection: t.collection, Dir: dir, Repo: t.repo,
-		Worktree: t.path, Tree: "clean", baseRef: t.ref, ComparisonRef: t.ref, DevelopmentBase: t.developmentBase, RenamedTo: t.renamed}
+		Worktree: t.path, Tree: "clean", baseRef: t.ref, ComparisonRef: t.ref.Short(), DevelopmentBase: t.developmentBase, RenamedTo: t.renamed}
 	remote, err := statusGitContext(ctx, t.path, "remote", "get-url", "origin")
 	if err == nil {
 		row.Slug, row.Forge = catchUpForge(remote)
@@ -262,7 +263,7 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 		row.BranchDisplay = branch
 	} else {
 		row.BranchKind = "detached"
-		row.Branch = catchUpBranchName(t.ref)
+		row.Branch = t.ref.Branch()
 		row.BranchDisplay = "⌂ " + row.Branch
 	}
 	if reviewOnlyWorktree(t.path) {
@@ -272,9 +273,9 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 	upstream := t.ref
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
 	branchBatch := batched && row.BranchKind == "branch" && local.branch == row.Branch
-	trackingBatch := branchBatch && local.tracking && local.upstream == t.ref
+	// Git reports the upstream by its short name.
+	trackingBatch := branchBatch && local.tracking && local.upstream == t.ref.Short()
 	if trackingBatch {
-		upstream = local.upstream
 		row.AheadBasis, row.UpstreamState = "upstream", "tracking"
 	} else if row.BranchKind == "branch" && !(branchBatch && local.noUpstream) {
 		// The upstream probe and fallback share a 60-second bound.
@@ -288,26 +289,28 @@ func statusLocalRepoContext(ctx context.Context, t catchUpTarget) (StatusRepo, e
 			if state == "gone" {
 				row.BranchDisplay += " [gone]"
 			}
-		} else if found, err := statusGitContext(upstreamCtx, t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
-			upstream = found
-			row.AheadBasis, row.UpstreamState = "upstream", "tracking"
-		} else if tracking, err := statusGitContext(upstreamCtx, t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
+		} else if found, err := statusGitContext(upstreamCtx, t.path, "rev-parse", "--symbolic-full-name", "@{u}"); err == nil {
+			if ref, err := gitref.Parse(found); err == nil {
+				upstream = ref
+				row.AheadBasis, row.UpstreamState = "upstream", "tracking"
+			}
+		} else if tracking, err := statusGitContext(upstreamCtx, t.path, "for-each-ref", "--format=%(upstream:track)", gitref.LocalBranch(row.Branch).String()); err == nil && tracking == "[gone]" {
 			row.UpstreamState = "gone"
 			row.BranchDisplay += " [gone]"
 		}
 		stop()
 	}
-	row.AheadRef = upstream
+	row.AheadRef = upstream.Short()
 	if trackingBatch {
 		row.Ahead, row.Behind = local.ahead, local.behind
 	} else if ahead, behind, ok := statusResourceCounts(ctx, t.path, upstream, t.ref); ok {
 		row.Ahead, row.Behind = ahead, behind
 	} else {
-		row.Ahead, err = statusCountContext(ctx, t.path, upstream+"..HEAD")
+		row.Ahead, err = statusCountContext(ctx, t.path, upstream.String()+"..HEAD")
 		if err != nil {
 			return StatusRepo{}, fmt.Errorf("%s ahead count: %w", t.path, err)
 		}
-		row.Behind, err = statusCountContext(ctx, t.path, "HEAD.."+t.ref)
+		row.Behind, err = statusCountContext(ctx, t.path, "HEAD.."+t.ref.String())
 		if err != nil {
 			return StatusRepo{}, fmt.Errorf("%s development-tip count: %w", t.path, err)
 		}
@@ -423,7 +426,7 @@ func statusNextWithHeads(ctx context.Context, snapshot *StatusSnapshot, readHead
 				number, _ := strconv.Atoi(pr.Number)
 				in := pr.MergeCommit != "" && catchUpGitOK(r.Worktree, "merge-base", "--is-ancestor", pr.MergeCommit, "HEAD")
 				f.PR = &next.PR{Number: number, State: "merged", MergedIn: &in}
-				f.NeedsBranch = !catchUpLanded(catchUpTarget{path: r.Worktree}, r.baseRef,
+				f.NeedsBranch = !catchUpLanded(catchUpTarget{path: r.Worktree}, r.baseRef.String(),
 					catchUpPR{state: "MERGED", mergeCommit: pr.MergeCommit})
 				break
 			}
@@ -454,14 +457,14 @@ func statusCurrentHeads(ctx context.Context, r StatusRepo) (string, string, erro
 	}
 	head, _ := statusGitContext(ctx, r.Worktree, "rev-parse", "HEAD")
 	base := ""
-	if r.baseRef != "" {
-		base, _ = statusGitContext(ctx, r.Worktree, "rev-parse", r.baseRef)
+	if !r.baseRef.IsZero() {
+		base, _ = statusGitContext(ctx, r.Worktree, "rev-parse", r.baseRef.String())
 	}
 	return head, base, nil
 }
 
 func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHeadReader) (next.Facts, error) {
-	f := next.Facts{Collection: r.Collection, Repo: r.Repo, Host: next.HostLocal, Base: r.baseRef,
+	f := next.Facts{Collection: r.Collection, Repo: r.Repo, Host: next.HostLocal, Base: r.baseRef.Branch(),
 		Ahead: r.Ahead, Behind: r.Behind, Dirty: r.Changed, InProgress: r.Operation}
 	if r.Repo == "" {
 		f.Repo = r.Dir
@@ -478,9 +481,9 @@ func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHea
 	if err != nil {
 		return f, err
 	}
-	if ctx.Err() == nil && r.Behind > 0 && r.baseRef != "" && f.InProgress == "" {
+	if ctx.Err() == nil && r.Behind > 0 && !r.baseRef.IsZero() && f.InProgress == "" {
 		var ok bool
-		f.MergeConflicts, ok = next.PredictMerge(r.Worktree, r.baseRef)
+		f.MergeConflicts, ok = next.PredictMerge(r.Worktree, r.baseRef.String())
 		f.MergeUnknown = !ok
 	}
 	if pr := r.PR; pr != nil {

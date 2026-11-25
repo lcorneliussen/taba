@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // Frozen independent-read collector oracle; actual Git fixtures compare complete
@@ -19,7 +21,7 @@ import (
 func statusResourceLocalReference(ctx context.Context, t catchUpTarget) (StatusRepo, error) {
 	dir := filepath.Base(t.path)
 	row := StatusRepo{Collection: t.collection, Dir: dir, Repo: t.repo,
-		Worktree: t.path, Tree: "clean", baseRef: t.ref, ComparisonRef: t.ref, DevelopmentBase: t.developmentBase, RenamedTo: t.renamed}
+		Worktree: t.path, Tree: "clean", baseRef: t.ref, ComparisonRef: t.ref.Short(), DevelopmentBase: t.developmentBase, RenamedTo: t.renamed}
 	remote, err := statusGitContext(ctx, t.path, "remote", "get-url", "origin")
 	if err == nil {
 		row.Slug, row.Forge = catchUpForge(remote)
@@ -31,30 +33,31 @@ func statusResourceLocalReference(ctx context.Context, t catchUpTarget) (StatusR
 		row.BranchDisplay = branch
 	} else {
 		row.BranchKind = "detached"
-		row.Branch = catchUpBranchName(t.ref)
+		row.Branch = t.ref.Branch()
 		row.BranchDisplay = "⌂ " + row.Branch
 	}
 	if reviewOnlyWorktree(t.path) {
 		row.ReviewOnly = true
 		row.BranchDisplay += " (review-only)"
 	}
-	upstream := t.ref
+	upstream, aheadRef := t.ref.String(), t.ref.Short()
 	row.AheadBasis, row.UpstreamState = "development-tip", "none"
 	if row.BranchKind == "branch" {
-		if found, err := statusGitContext(ctx, t.path, "rev-parse", "--abbrev-ref", "@{u}"); err == nil {
-			upstream = found
+		// The upstream counts by its full name and shows without refs/remotes/.
+		if found, err := statusGitContext(ctx, t.path, "rev-parse", "--symbolic-full-name", "@{u}"); err == nil {
+			upstream, aheadRef = found, strings.TrimPrefix(strings.TrimPrefix(found, "refs/remotes/"), "refs/heads/")
 			row.AheadBasis, row.UpstreamState = "upstream", "tracking"
 		} else if tracking, err := statusGitContext(ctx, t.path, "for-each-ref", "--format=%(upstream:track)", "refs/heads/"+row.Branch); err == nil && tracking == "[gone]" {
 			row.UpstreamState = "gone"
 			row.BranchDisplay += " [gone]"
 		}
 	}
-	row.AheadRef = upstream
+	row.AheadRef = aheadRef
 	row.Ahead, err = statusCountContext(ctx, t.path, upstream+"..HEAD")
 	if err != nil {
 		return StatusRepo{}, fmt.Errorf("%s ahead count: %w", t.path, err)
 	}
-	row.Behind, err = statusCountContext(ctx, t.path, "HEAD.."+t.ref)
+	row.Behind, err = statusCountContext(ctx, t.path, "HEAD.."+t.ref.String())
 	if err != nil {
 		return StatusRepo{}, fmt.Errorf("%s development-tip count: %w", t.path, err)
 	}
@@ -126,7 +129,7 @@ func TestStatusResourceLocalActualGitComparison(t *testing.T) {
 	check("dirty")
 	fixtureGit(t, "-C", target.path, "update-ref", "-d", "refs/remotes/origin/main")
 	originalRef := target.ref
-	target.ref = "alternate"
+	target.ref = gitref.LocalBranch("alternate")
 	check("gone-upstream-valid-base")
 	target.ref = originalRef
 	check("missing-base")
@@ -850,7 +853,7 @@ func TestStatusResourceUpstreamMalformedFallsBack(t *testing.T) {
 	calls := filepath.Join(bin, "malformed-hits")
 	t.Setenv("RESOURCE_UPSTREAM_MALFORMED_HITS", calls)
 	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
-if [ "$3" = for-each-ref ] && [ "$4" = '--format=%(upstream:short)%00%(upstream:track)' ]; then printf x >> "$RESOURCE_UPSTREAM_MALFORMED_HITS"; printf 'origin/main\000[unsupported]\n'; exit 0; fi
+if [ "$3" = for-each-ref ] && [ "$4" = '--format=%(upstream)%00%(upstream:track)' ]; then printf x >> "$RESOURCE_UPSTREAM_MALFORMED_HITS"; printf 'refs/remotes/origin/main\000[unsupported]\n'; exit 0; fi
 exec /usr/bin/git "$@"
 `, 0700)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

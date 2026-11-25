@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/openclaw"
 	"taba.sh/taba/internal/wtc"
 )
@@ -197,7 +198,7 @@ func addRepoIntents(repos []string, worktree, baseRef, harnessFlag string, separ
 	}
 	// A base names a branch: of origin, or for a worker also one that exists
 	// only in the gateway's clone, such as another worker's.
-	baseFlag := strings.TrimPrefix(baseRef, "origin/")
+	baseFlag := gitref.OriginBranch(baseRef)
 	// A worker works in a collection of its own, task--worker, through the
 	// task's harness but without a worktree of it.
 	task, target := worktree, worktree
@@ -242,9 +243,10 @@ func addRepoIntents(repos []string, worktree, baseRef, harnessFlag string, separ
 	var projects []string
 	for _, add := range adds {
 		arg, branch := add.arg, add.branch
+		// The gateway takes a base by its short name.
 		base := ""
 		if branch != "" {
-			base = "origin/" + branch
+			base = gitref.RemoteBranch("origin", branch).Short()
 		}
 		repo, project, gitURL, err := openclaw.ProjectSource(arg)
 		if err != nil {
@@ -322,7 +324,7 @@ func addRepoIntents(repos []string, worktree, baseRef, harnessFlag string, separ
 					if err := openclaw.RecordBase(dir, target, taskBase); err != nil {
 						return fmt.Errorf("recording %s as the base of %s: %w", taskBase, repo, err)
 					}
-					base = "origin/" + taskBase
+					base = gitref.RemoteBranch("origin", taskBase).Short()
 				}
 				if openclaw.HasBranch(dir, openclaw.Branch(task)) {
 					base = openclaw.Branch(task)
@@ -589,12 +591,12 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 			add.project = reg.projectIDs[entry.Name]
 			add.destination = reg.destinations[entry.Name]
 			if add.branch == "" {
-				ref := entry.DefaultRef
+				branch := gitref.OriginBranch(entry.DefaultRef)
 				if openclaw.GatewayFromEnv(os.Getenv) != nil && add.project != "" {
 					if add.destination == "" {
 						return nil, nil, fmt.Errorf("%s needs a gateway base record; prepare this add-repo plan in the gateway collection session", entry.Name)
 					}
-					ref = "origin/" + add.destination
+					branch = add.destination
 				}
 				if openclaw.GatewayFromEnv(os.Getenv) == nil {
 					folder, err := plannerCollectionFolder(gatewayStateDir(), worktree)
@@ -610,15 +612,15 @@ func harnessRepos(repos []string, worktree, branch, flag string, adHoc, worker b
 						}
 						if base.Source == "collection" {
 							projectDir := openclaw.GatewayProjectDir(gatewayStateDir(), openclaw.ParseOrigin(entry.Remote))
-							desired := strings.TrimPrefix(base.EffectiveRef, "origin/")
+							desired := gitref.OriginBranch(base.EffectiveRef)
 							if worker || projectDir == "" || openclaw.RecordedBase(projectDir, worktree) != desired {
 								return nil, nil, fmt.Errorf("local development base cannot change a gateway publication destination; prepare the destination explicitly in the receiving gateway collection before adding this repository")
 							}
 						}
-						ref = base.EffectiveRef
+						branch = gitref.OriginBranch(base.EffectiveRef)
 					}
 				}
-				add.branch = strings.TrimPrefix(ref, "origin/")
+				add.branch = branch
 			}
 		}
 		url := add.arg
@@ -843,7 +845,7 @@ func readHarnessRegistry(h openclaw.Harness, worktree string) harnessRegistry {
 			r.err = fmt.Errorf("the harness of wtc project %s is not on the gateway yet. Ask the person to add %s with Add repository in the Collection panel, then run this again", h.Name, h.Remote)
 			return r
 		}
-		if data, r.err = openclaw.FileAt(dir, "origin/"+h.Ref, ".harness-repos.yml"); r.err != nil {
+		if data, r.err = openclaw.FileAt(dir, gitref.RemoteBranch("origin", h.Ref).String(), ".harness-repos.yml"); r.err != nil {
 			data, r.err = openclaw.FileAt(dir, h.Ref, ".harness-repos.yml")
 		}
 	}
@@ -936,21 +938,22 @@ func catchUpSummary(result openclaw.CatchUp) string {
 		}
 		return fmt.Sprintf("%s %s", result.Branch, result.Note)
 	}
+	dest := gitref.RemoteBranch("origin", result.Dest).Short()
 	switch {
 	case result.ReturnedToTip:
-		return fmt.Sprintf("returned to origin/%s's tip, detached; %s", result.Dest, result.Note)
+		return fmt.Sprintf("returned to %s's tip, detached; %s", dest, result.Note)
 	case result.Branch == "" && result.Merged:
-		return fmt.Sprintf("detached at origin/%s's tip again: no work of its own, nothing to publish", result.Dest)
+		return fmt.Sprintf("detached at %s's tip again: no work of its own, nothing to publish", dest)
 	case result.Branch == "":
 		return fmt.Sprintf("detached, %s", result.Note)
 	case result.Merged && result.FastForward && result.From == "":
-		return fmt.Sprintf("%s is at origin/%s again: nothing of its own on it, nothing to publish", result.Branch, result.Dest)
+		return fmt.Sprintf("%s is at %s again: nothing of its own on it, nothing to publish", result.Branch, dest)
 	case result.Merged && result.From != "":
 		return fmt.Sprintf("merged %s into %s; the person publishes it with ↑ when the task is ready", result.From, result.Branch)
 	case result.Merged && result.Worker:
-		return fmt.Sprintf("merged origin/%s into %s; it reaches the forge through the task", result.Dest, result.Branch)
+		return fmt.Sprintf("merged %s into %s; it reaches the forge through the task", dest, result.Branch)
 	case result.Merged:
-		return fmt.Sprintf(branding.Text("merged origin/%s into %s; publish to send the merge ({{command}} publish)"), result.Dest, result.Branch)
+		return fmt.Sprintf(branding.Text("merged %s into %s; publish to send the merge ({{command}} publish)"), dest, result.Branch)
 	}
 	return fmt.Sprintf("%s %s", result.Branch, result.Note)
 }
@@ -1141,7 +1144,7 @@ func linkGatewayFolder(name string, repos []openclaw.CheckoutStatus) (string, []
 		}
 		base := r.Base
 		if base == "" {
-			base = "origin/main"
+			base = gitref.RemoteBranch("origin", "main").Short()
 		}
 		linked = append(linked, wtc.LinkedRepo{Name: r.Repo, Remote: strings.TrimSpace(string(remote)), DefaultRef: base, Path: r.Path})
 	}

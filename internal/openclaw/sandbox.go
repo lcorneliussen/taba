@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/gitref"
 	"time"
 )
 
@@ -145,14 +146,14 @@ func AcceptSandboxBranch(dir, commit, bundle string) (Delivery, error) {
 		d.Merges++
 		for _, parent := range hashes[2:] {
 			if !mergedFromOrigin(c.Dir, parent) {
-				return d, fmt.Errorf("merge %.12s merges %.12s, which is on none of origin's branches: a sandbox merges what the gateway fetched (origin/%s)", hashes[0], parent, c.Dest)
+				return d, fmt.Errorf("merge %.12s merges %.12s, which is on none of origin's branches: a sandbox merges what the gateway fetched (%s)", hashes[0], parent, gitref.RemoteBranch("origin", c.Dest).Short())
 			}
 		}
 		if files := conflictMarkers(c.Dir, hashes[0]); len(files) > 0 {
 			return d, fmt.Errorf("merge %.12s still has conflict markers in %s: resolve them, then commit again", hashes[0], strings.Join(files, ", "))
 		}
 	}
-	if _, err := git(c.Dir, "update-ref", "-m", "wtc: the session's branch from its sandbox", "refs/heads/"+d.Branch, commit, head); err != nil {
+	if _, err := git(c.Dir, "update-ref", "-m", "wtc: the session's branch from its sandbox", gitref.LocalBranch(d.Branch).String(), commit, head); err != nil {
 		return d, err
 	}
 	if _, err := git(c.Dir, "read-tree", commit); err != nil {
@@ -178,7 +179,7 @@ func gatewayTrailer(dir, commit string) string {
 }
 
 func mergedFromOrigin(dir, commit string) bool {
-	out, err := git(dir, "for-each-ref", "--count=1", "--contains", commit, "--format=%(refname)", "refs/remotes/origin/")
+	out, err := git(dir, "for-each-ref", "--count=1", "--contains", commit, "--format=%(refname)", gitref.RemotePrefix("origin"))
 	return err == nil && out != ""
 }
 
@@ -343,10 +344,10 @@ func SandboxCatchUpCheckout(dir string, gw SandboxGateway, cont bool) (SandboxCa
 	if err := fetchGateway(top); err != nil {
 		return r, err
 	}
-	gateway := "refs/remotes/" + GatewayRemote + "/" + s.Branch
-	base := "refs/remotes/origin/" + s.Base
-	if !gitOK(top, "rev-parse", "--verify", "--quiet", base) {
-		return r, fmt.Errorf("the gateway has no origin/%s to merge", s.Base)
+	gateway := gitref.RemoteBranch(GatewayRemote, s.Branch).String()
+	base := gitref.RemoteBranch("origin", s.Base)
+	if !gitOK(top, "rev-parse", "--verify", "--quiet", base.String()) {
+		return r, fmt.Errorf("the gateway has no %s to merge", base.Short())
 	}
 	c := &Checkout{Dir: top}
 	if !cont {
@@ -364,13 +365,13 @@ func SandboxCatchUpCheckout(dir string, gw SandboxGateway, cont bool) (SandboxCa
 		if err := stash(top); err != nil {
 			return r, err
 		}
-		if gitOK(top, "merge-base", "--is-ancestor", base, "HEAD") {
-			r.Note = "already contains origin/" + s.Base
-		} else if _, err := git(top, append(identity(top), "merge", "--no-edit", "--quiet", "origin/"+s.Base)...); err != nil {
+		if gitOK(top, "merge-base", "--is-ancestor", base.String(), "HEAD") {
+			r.Note = "already contains " + base.Short()
+		} else if _, err := git(top, append(identity(top), "merge", "--no-edit", "--quiet", base.String())...); err != nil {
 			conflicts, _ := git(top, "diff", "--name-only", "--diff-filter=U")
 			if r.Conflicts = strings.Fields(conflicts); len(r.Conflicts) == 0 {
 				_, _ = git(top, "merge", "--abort")
-				return r, errors.Join(fmt.Errorf("merging origin/%s failed", s.Base), err, unstash(top, &r))
+				return r, errors.Join(fmt.Errorf("merging %s failed", base.Short()), err, unstash(top, &r))
 			}
 			return r, nil
 		} else {
@@ -412,7 +413,7 @@ func SandboxCatchUpCheckout(dir string, gw SandboxGateway, cont bool) (SandboxCa
 		path := bundle.Name()
 		// Everything the gateway has is left out; a branch with nothing
 		// new, as after a fast-forward to the base, needs no bundle.
-		if _, err := git(top, "bundle", "create", "--quiet", path, "HEAD", "^"+gateway, "^"+base); err != nil {
+		if _, err := git(top, "bundle", "create", "--quiet", path, "HEAD", "^"+gateway, "^"+base.String()); err != nil {
 			path = ""
 		}
 		d, err := gw.Deliver(head, path)
@@ -443,7 +444,10 @@ func ConfigureGatewayRemote(dir, url string) error {
 		return err
 	}
 	_, _ = git(dir, "config", "--unset-all", "remote."+GatewayRemote+".fetch")
-	for _, spec := range []string{"+refs/heads/" + BranchPrefix + "*:refs/remotes/" + GatewayRemote + "/" + BranchPrefix + "*", "+refs/remotes/origin/*:refs/remotes/origin/*"} {
+	// The gateway's managed branches, and its remote-tracking refs of origin
+	// under the same names.
+	origin := gitref.RemoteBranch("origin", "*")
+	for _, spec := range []string{gitref.RemoteBranch(GatewayRemote, BranchPrefix+"*").FetchSpec(), gitref.Refspec(origin, origin)} {
 		if _, err := git(dir, "config", "--add", "remote."+GatewayRemote+".fetch", spec); err != nil {
 			return err
 		}

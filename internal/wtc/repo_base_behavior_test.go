@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // Two receivers share owners but keep independent development intent.
@@ -85,17 +87,17 @@ func TestRepositoryBaseCountsAndReturnTip(t *testing.T) {
 	}
 	for _, target := range targets {
 		if target.repo == "widget" {
-			if target.ref != "origin/beta" {
+			if target.ref != gitref.RemoteBranch("origin", "beta") {
 				t.Errorf("catch-up inventory ref=%s want origin/beta", target.ref)
 			}
 			ref, err := receiver.catchUpDefaultRef(target)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ref != "origin/beta" {
+			if ref != gitref.RemoteBranch("origin", "beta") {
 				t.Errorf("post-refresh return tip=%s want origin/beta", ref)
 			}
-			if catchUpLanded(target, ref, catchUpPR{state: "MERGED", head: beta, mergeCommit: beta, base: "beta"}) {
+			if catchUpLanded(target, ref.String(), catchUpPR{state: "MERGED", head: beta, mergeCommit: beta, base: "beta"}) {
 				t.Log("landing established")
 			} else {
 				t.Error("merged beta head incorrectly not landed against receiving base")

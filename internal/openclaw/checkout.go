@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/gitref"
 )
 
 // Checkout is a session's gateway-managed worktree, seen through plain git.
@@ -101,19 +102,7 @@ func openCheckout(dir, dest string, detachedOK bool) (*Checkout, error) {
 		}
 	}
 	if c.Dest == "" {
-		c.Dest = checkedOutBase(top)
-	}
-	if c.Dest == "" {
-		head, _ := git(top, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-		c.Dest = strings.TrimPrefix(head, "origin/")
-	}
-	if c.Dest == "" {
-		for _, candidate := range []string{"main", "master", "develop"} {
-			if gitOK(top, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+candidate) {
-				c.Dest = candidate
-				break
-			}
-		}
+		c.Dest = baseBranch(top)
 	}
 	if c.Dest == "" && !c.Private {
 		return nil, errors.New("cannot tell which branch pull requests go into; pass --dest")
@@ -163,8 +152,8 @@ const publicationMarker = "OpenClaw-Publication:"
 // an ahead remote is ignored; without one, the remote is the only evidence.
 func (c *Checkout) publishedHead() string {
 	branch := c.Branch()
-	remote, _ := git(c.Dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch)
-	if log, err := git(c.Dir, "log", "-g", "-n", "500", "--format=%H%x00%B%x01", "refs/heads/"+branch); err == nil {
+	remote, _ := git(c.Dir, "rev-parse", "--verify", "--quiet", gitref.RemoteBranch("origin", branch).String())
+	if log, err := git(c.Dir, "log", "-g", "-n", "500", "--format=%H%x00%B%x01", gitref.LocalBranch(branch).String()); err == nil {
 		for _, entry := range strings.Split(log, "\x01") {
 			hash, body, _ := strings.Cut(strings.TrimSpace(entry), "\x00")
 			if hash != "" && strings.Contains(body, publicationMarker) {
@@ -282,17 +271,17 @@ func (c *Checkout) PlanPublish(opt PublishOptions) (Plan, error) {
 		}
 		return plan, nil
 	}
-	dest := "refs/remotes/origin/" + c.Dest
-	hasDest := gitOK(c.Dir, "rev-parse", "--verify", "--quiet", dest)
-	if hasDest && !gitOK(c.Dir, "merge-base", "HEAD", dest) {
-		return Plan{}, fmt.Errorf("%s shares no history with origin/%s", branch, c.Dest)
+	dest := gitref.RemoteBranch("origin", c.Dest)
+	hasDest := gitOK(c.Dir, "rev-parse", "--verify", "--quiet", dest.String())
+	if hasDest && !gitOK(c.Dir, "merge-base", "HEAD", dest.String()) {
+		return Plan{}, fmt.Errorf("%s shares no history with %s", branch, dest.Short())
 	}
 	if hasDest {
-		ahead, _ := git(c.Dir, "rev-list", "--count", dest+"..HEAD")
+		ahead, _ := git(c.Dir, "rev-list", "--count", dest.String()+"..HEAD")
 		if ahead == "0" && len(pending) == 0 {
-			return Plan{}, fmt.Errorf("nothing to publish: %s has no commits and no changes beyond origin/%s", branch, c.Dest)
+			return Plan{}, fmt.Errorf("nothing to publish: %s has no commits and no changes beyond %s", branch, dest.Short())
 		}
-		if names, err := git(c.Dir, "diff", "--name-only", dest+"...HEAD"); err == nil {
+		if names, err := git(c.Dir, "diff", "--name-only", dest.String()+"...HEAD"); err == nil {
 			for _, p := range strings.Split(names, "\n") {
 				workflows = workflows || workflowPath(p)
 			}
@@ -356,19 +345,20 @@ func (c *Checkout) CatchUp() (CatchUp, error) {
 }
 
 func (c *Checkout) catchUpClean(result CatchUp) (CatchUp, error) {
-	fetch := append(fetchCredentials(c.Origin), "fetch", "--quiet", "--no-recurse-submodules", "origin", "+refs/heads/"+c.Dest+":refs/remotes/origin/"+c.Dest)
+	dest := gitref.RemoteBranch("origin", c.Dest)
+	fetch := append(fetchCredentials(c.Origin), "fetch", "--quiet", "--no-recurse-submodules", "origin", dest.FetchSpec())
 	if _, err := git(c.Dir, fetch...); err != nil {
 		return result, fmt.Errorf("cannot fetch %s from origin: %w", c.Dest, err)
 	}
 	if c.Detached {
-		return c.forward(result, "refs/remotes/origin/"+c.Dest, "origin/"+c.Dest)
+		return c.forward(result, dest)
 	}
 	if c.Origin.Forge == ForgeGitHub {
 		if pr := gitHubPullRequest(c.Dir, c.Origin, c.Branch()); pr != nil && pr.State == "merged" {
 			return c.returnToTip(result, pr)
 		}
 	}
-	return c.merge(result, "refs/remotes/origin/"+c.Dest, "origin/"+c.Dest)
+	return c.merge(result, dest)
 }
 
 // CatchUpWithTask merges the task's branch into a worker's checkout: a
@@ -384,14 +374,15 @@ func (c *Checkout) CatchUpWithTask() (CatchUp, error) {
 		return result, fmt.Errorf("%s has no branch %s: no task of that name works in this repository", c.Repo, Branch(task))
 	}
 	return c.withCatchUpChanges(result, func() (CatchUp, error) {
-		return c.merge(result, "refs/heads/"+Branch(task), Branch(task))
+		return c.merge(result, gitref.LocalBranch(Branch(task)))
 	})
 }
 
 // forward moves a detached worktree to ref, which must contain it: with no
 // branch there is nothing to merge into, and commits of its own would be
 // left behind.
-func (c *Checkout) forward(result CatchUp, ref, label string) (CatchUp, error) {
+func (c *Checkout) forward(result CatchUp, target gitref.Ref) (CatchUp, error) {
+	ref, label := target.String(), target.Short()
 	if gitOK(c.Dir, "merge-base", "--is-ancestor", ref, "HEAD") {
 		result.Head, _ = git(c.Dir, "rev-parse", "HEAD")
 		result.Note = "already contains " + label
@@ -413,13 +404,13 @@ func (c *Checkout) forward(result CatchUp, ref, label string) (CatchUp, error) {
 
 // HasBranch reports whether the repository at dir has the local branch.
 func HasBranch(dir, branch string) bool {
-	return gitOK(dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch+"^{commit}")
+	return gitOK(dir, "rev-parse", "--verify", "--quiet", gitref.LocalBranch(branch).String()+"^{commit}")
 }
 
 // HasRemoteBranch reports whether the repository at dir has fetched branch
 // from origin.
 func HasRemoteBranch(dir, branch string) bool {
-	return gitOK(dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+branch+"^{commit}")
+	return gitOK(dir, "rev-parse", "--verify", "--quiet", gitref.RemoteBranch("origin", branch).String()+"^{commit}")
 }
 
 // WorkerSeparator joins a task's worktree name and a worker's: worker a of
@@ -487,7 +478,7 @@ func (c *Checkout) MergeFrom(from string) (CatchUp, error) {
 		if err := c.readyToMerge(); err != nil {
 			return result, err
 		}
-		return c.merge(result, "refs/heads/"+from, from)
+		return c.merge(result, gitref.LocalBranch(from))
 	}
 	// Otherwise a wtc worker's short name: openclaw/<collection>--<worker>.
 	name, err := WorkerWorktree(c.Worktree, from)
@@ -495,13 +486,13 @@ func (c *Checkout) MergeFrom(from string) (CatchUp, error) {
 		return result, err
 	}
 	result.From = Branch(name)
-	if !gitOK(c.Dir, "rev-parse", "--verify", "--quiet", "refs/heads/"+result.From+"^{commit}") {
+	if !HasBranch(c.Dir, result.From) {
 		return result, fmt.Errorf("%s has no branch %s: the worker has no worktree of this repository, or has not committed yet", c.Repo, result.From)
 	}
 	if err := c.readyToMerge(); err != nil {
 		return result, err
 	}
-	return c.merge(result, "refs/heads/"+result.From, result.From)
+	return c.merge(result, gitref.LocalBranch(result.From))
 }
 
 func (c *Checkout) readyToMerge() error {
@@ -523,8 +514,9 @@ func (c *Checkout) readyToMerge() error {
 	return nil
 }
 
-// merge merges ref, shown as label, into the checkout.
-func (c *Checkout) merge(result CatchUp, ref, label string) (CatchUp, error) {
+// merge merges target into the checkout.
+func (c *Checkout) merge(result CatchUp, target gitref.Ref) (CatchUp, error) {
+	ref, label := target.String(), target.Short()
 	if gitOK(c.Dir, "merge-base", "--is-ancestor", ref, "HEAD") {
 		result.Head, _ = git(c.Dir, "rev-parse", "HEAD")
 		result.Note = "already contains " + label
@@ -634,13 +626,14 @@ func WorkerRepos(task string, taskDirs, workerDirs []string) []WorkerRepo {
 		case !HasBranch(taskDir, Branch(task)) || w.Branch == "":
 			w.Error = "no branch to compare"
 		default:
-			n, err := git(taskDir, "rev-list", "--count", "refs/heads/"+Branch(task)+"..refs/heads/"+w.Branch)
+			taskRef, workerRef := gitref.LocalBranch(Branch(task)).String(), gitref.LocalBranch(w.Branch).String()
+			n, err := git(taskDir, "rev-list", "--count", taskRef+".."+workerRef)
 			if err != nil {
 				w.Error = err.Error()
 			} else {
 				w.ToMerge, _ = strconv.Atoi(n)
 			}
-			if n, err := git(taskDir, "rev-list", "--count", "refs/heads/"+w.Branch+"..refs/heads/"+Branch(task)); err == nil {
+			if n, err := git(taskDir, "rev-list", "--count", workerRef+".."+taskRef); err == nil {
 				w.Behind, _ = strconv.Atoi(n)
 			}
 		}

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // commitHarnessPin changes the pin in the synthetic harness origin and fetches
@@ -387,7 +389,7 @@ func TestNewCollectionAtRootRemovesInterruptedCreation(t *testing.T) {
 	if _, _, err := NewCollectionAtRoot(root, NewOptions{Slug: "branched", Branch: "topic", Repos: []string{"not-registered"}}); err == nil {
 		t.Fatal("unknown repository accepted")
 	}
-	if gitRefExists(filepath.Join(root, ".bare", "agent-harness.git"), "refs/heads/topic") {
+	if gitRefExists(filepath.Join(root, ".bare", "agent-harness.git"), gitref.LocalBranch("topic")) {
 		t.Fatal("interrupted creation left the branch it created")
 	}
 	if _, _, err := NewCollectionAtRoot(root, NewOptions{Slug: "bad/name"}); err == nil {
@@ -560,7 +562,7 @@ func TestNewCollectionAtRootCleansUpFailedHarnessCheckout(t *testing.T) {
 		if list := fixtureGit(t, "--git-dir="+owner, "worktree", "list", "--porcelain"); strings.Contains(list, filepath.Join(tc.slug, "harness")) {
 			t.Errorf("%s: failed checkout left a worktree registration:\n%s", tc.slug, list)
 		}
-		if tc.branch != "" && gitRefExists(owner, "refs/heads/"+tc.branch) != tc.keepBranch {
+		if tc.branch != "" && gitRefExists(owner, gitref.LocalBranch(tc.branch)) != tc.keepBranch {
 			t.Errorf("%s: branch %s present=%v, want %v", tc.slug, tc.branch, !tc.keepBranch, tc.keepBranch)
 		}
 	}

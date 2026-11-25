@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/next"
 )
 
@@ -17,7 +18,7 @@ func TestStatusNextFromALocalRow(t *testing.T) {
 	// tested in next and on the gateway.
 	none := t.TempDir()
 	branch := func(fields StatusRepo) StatusRepo {
-		fields.Repo, fields.BranchKind, fields.Branch, fields.baseRef, fields.Worktree = "api", "branch", "12-paging", "origin/main", none
+		fields.Repo, fields.BranchKind, fields.Branch, fields.baseRef, fields.Worktree = "api", "branch", "12-paging", gitref.RemoteBranch("origin", "main"), none
 		return fields
 	}
 	for _, tc := range []struct {
@@ -77,7 +78,7 @@ func TestStatusSnapshotNextAndRetainedMergedWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, r := range snapshot.Repos {
-		if r.Dir == "harness" && (r.baseRef == "" || r.Next == nil || r.Next.Step != "push") {
+		if r.Dir == "harness" && (r.baseRef.IsZero() || r.Next == nil || r.Next.Step != "push") {
 			t.Fatalf("local snapshot dropped next: %+v", r)
 		}
 	}
@@ -164,7 +165,7 @@ func TestStatusNextUsesPullRequestBase(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, r := range snapshot.Repos {
-				if r.Dir == "harness" && (r.baseRef != "origin/release" || r.Next == nil || r.Next.Step != "merge") {
+				if r.Dir == "harness" && (r.baseRef != gitref.RemoteBranch("origin", "release") || r.Next == nil || r.Next.Step != "merge") {
 					t.Fatalf("did not predict against the PR's base: %+v", r)
 				}
 			}

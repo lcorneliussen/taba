@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // Counts against a different development base still require their own read.
@@ -16,7 +18,7 @@ func TestStatusResourceTrackingWholeRows(t *testing.T) {
 	git := func(args ...string) string { return fixtureGit(t, append([]string{"-C", c.Harness}, args...)...) }
 	git("switch", "-qc", "topic")
 	git("branch", "--set-upstream-to=origin/main")
-	target := catchUpTarget{path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: "origin/main"}
+	target := catchUpTarget{path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: gitref.RemoteBranch("origin", "main")}
 	bin := t.TempDir()
 	calls := filepath.Join(bin, "calls")
 	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh
@@ -66,9 +68,9 @@ exec /usr/bin/git "$@"
 	check("suppressed-counts", false)
 	t.Setenv("RESOURCE_SUPPRESS_COUNTS", "")
 	git("update-ref", "-d", "refs/remotes/origin/main")
-	target.ref = "alternate"
+	target.ref = gitref.LocalBranch("alternate")
 	check("gone-valid-distinct-base", false)
-	target.ref = "origin/main"
+	target.ref = gitref.RemoteBranch("origin", "main")
 	check("missing-base", false)
 	git("update-ref", "refs/remotes/origin/main", "HEAD")
 	check("changed-base", true)
@@ -126,22 +128,18 @@ func TestStatusResourceTrackingAmbiguousRef(t *testing.T) {
 	git("branch", "--set-upstream-to=origin/main")
 	git("-c", "user.name=Synthetic", "-c", "user.email=synthetic@example.invalid", "commit", "--allow-empty", "-qm", "Synthetic ahead")
 	git("tag", "origin/main", "HEAD")
-	target := catchUpTarget{path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: "origin/main"}
+	target := catchUpTarget{path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: gitref.RemoteBranch("origin", "main")}
+	// A tag named origin/main does not stand in for the upstream: status
+	// counts against refs/remotes/origin/main however Git treats ambiguity.
 	for _, ambiguity := range []string{"true", "false"} {
 		git("config", "core.warnAmbiguousRefs", ambiguity)
 		got, ge := statusLocalRepoContext(context.Background(), target)
 		want, we := statusResourceLocalReference(context.Background(), target)
-		if (ge == nil) != (we == nil) || !reflect.DeepEqual(got, want) {
+		if ge != nil || we != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("ambiguity%v got%+v/%v want%+v/%v", ambiguity, got, ge, want, we)
 		}
-		if ambiguity == "true" {
-			if ge == nil || ge.Error() != we.Error() || !strings.Contains(ge.Error(), "is ambiguous") {
-				t.Fatalf("ambiguous reference lost the existing unknown/error outcome: %v/%v", ge, we)
-			}
-			continue
-		}
-		if ge != nil || got.Ahead != 1 || got.Behind != 0 || got.AheadRef != "remotes/origin/main" {
-			t.Fatal("ambiguous comparison fixture lost distinct counts", got)
+		if got.Ahead != 1 || got.Behind != 0 || got.AheadRef != "origin/main" {
+			t.Fatalf("ambiguity%v: a tag stood in for the upstream: %+v", ambiguity, got)
 		}
 	}
 }
@@ -150,7 +148,7 @@ func TestStatusResourceNoUpstreamWholeRows(t *testing.T) {
 	c := newWorkspaceFixture(t)
 	git := func(args ...string) string { return fixtureGit(t, append([]string{"-C", c.Harness}, args...)...) }
 	git("switch", "-qc", "topic")
-	target := catchUpTarget{path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: "origin/main"}
+	target := catchUpTarget{path: c.Harness, collection: filepath.Base(c.Collection), repo: "agent-harness", ref: gitref.RemoteBranch("origin", "main")}
 	bin := t.TempDir()
 	calls := filepath.Join(bin, "calls")
 	fixtureFile(t, filepath.Join(bin, "git"), `#!/bin/sh

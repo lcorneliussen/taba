@@ -13,6 +13,7 @@ import (
 
 	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/gitref"
 )
 
 // statusBBActivityLog is the activity log bitbucketReadPRActivity returns.
@@ -328,7 +329,7 @@ func (c *Context) statusLocalMergeEvidence(rows []StatusRepo, records []PRRecord
 				continue
 			}
 			out[i] = "upstream-gone"
-			if row.ComparisonRef != "" && catchUpGitOK(row.Worktree, "merge-base", "--is-ancestor", "HEAD", row.ComparisonRef) {
+			if !row.baseRef.IsZero() && catchUpGitOK(row.Worktree, "merge-base", "--is-ancestor", "HEAD", row.baseRef.String()) {
 				out[i] += "; head in " + row.ComparisonRef
 			}
 			break
@@ -933,7 +934,7 @@ func (c *Context) statusReturnMerged(snapshot *StatusSnapshot, records []PRRecor
 				break
 			}
 			t := targets[0]
-			tip, err := catchUpGit(t.path, "rev-parse", "--verify", t.ref+"^{commit}")
+			tip, err := catchUpGit(t.path, "rev-parse", "--verify", t.ref.String()+"^{commit}")
 			if err != nil {
 				break
 			}
@@ -955,7 +956,7 @@ func (c *Context) statusReturnMerged(snapshot *StatusSnapshot, records []PRRecor
 			if outcome != "updated" {
 				break
 			}
-			c.statusProgress(fmt.Sprintf("Returned %s to %s after its PR merged: %s", dir, t.ref, reason))
+			c.statusProgress(fmt.Sprintf("Returned %s to %s after its PR merged: %s", dir, t.ref.Short(), reason))
 			if updated, err := statusLocalRepoContext(c.resourceContext(), t); err == nil {
 				updated.Runtime = row.Runtime // Services are untouched by the move.
 				if row.Behind != 0 {
@@ -980,15 +981,16 @@ func statusPRBase(snapshot *StatusSnapshot, index int, base string) {
 	if !catchUpGitOK(r.Worktree, "check-ref-format", "--branch", base) {
 		return
 	}
-	behind, err := statusCount(r.Worktree, "HEAD..origin/"+base)
+	ref := gitref.RemoteBranch("origin", base)
+	behind, err := statusCount(r.Worktree, "HEAD.."+ref.String())
 	if err != nil {
 		return
 	}
 	if r.Behind > 0 {
 		snapshot.StaleCount--
 	}
-	r.Behind, r.baseRef = behind, "origin/"+base
-	r.ComparisonRef = r.baseRef
+	r.Behind, r.baseRef = behind, ref
+	r.ComparisonRef = ref.Short()
 	if behind > 0 {
 		snapshot.StaleCount++
 	}

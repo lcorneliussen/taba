@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // Completed rounds belong to the worktree, outside the checkout. Their PRs
@@ -89,13 +91,14 @@ func (c *Checkout) rememberCompleted(pr PullRequest) error {
 // itself is retained, including after a squash merge. Extra commits must be
 // moved to a new branch by the agent before anything leaves this branch.
 func (c *Checkout) returnToTip(result CatchUp, pr *PullRequest) (CatchUp, error) {
-	ref := "refs/remotes/origin/" + c.Dest
+	dest := gitref.RemoteBranch("origin", c.Dest)
+	ref := dest.String()
 	if !gitOK(c.Dir, "merge-base", "--is-ancestor", "HEAD", ref) {
 		if pr.MergeCommit == "" || !gitOK(c.Dir, "merge-base", "--is-ancestor", pr.MergeCommit, ref) ||
 			pr.Head == "" || !gitOK(c.Dir, "merge-base", "--is-ancestor", pr.Head, "HEAD") {
-			return result, fmt.Errorf("#%d was merged, but its work is not proven on origin/%s: keep this branch and put any follow-up work on a new branch first", pr.Number, c.Dest)
+			return result, fmt.Errorf("#%d was merged, but its work is not proven on %s: keep this branch and put any follow-up work on a new branch first", pr.Number, dest.Short())
 		}
-		work, err := c.hasFollowUpWork(pr, ref)
+		work, err := c.hasFollowUpWork(pr, dest)
 		if err != nil {
 			return result, err
 		}
@@ -116,7 +119,7 @@ func (c *Checkout) returnToTip(result CatchUp, pr *PullRequest) (CatchUp, error)
 		return result, err
 	}
 	if _, err := git(c.Dir, "checkout", "--quiet", "--no-overwrite-ignore", "--detach", ref); err != nil {
-		return result, fmt.Errorf("returning to origin/%s's tip: %w", c.Dest, err)
+		return result, fmt.Errorf("returning to %s's tip: %w", dest.Short(), err)
 	}
 	result.Branch, result.ReturnedToTip = "", true
 	result.Head, _ = git(c.Dir, "rev-parse", "HEAD")
@@ -126,12 +129,12 @@ func (c *Checkout) returnToTip(result CatchUp, pr *PullRequest) (CatchUp, error)
 
 // hasFollowUpWork is shared by status and execution: resolution edits in a
 // merge are work too, even when there are no new one-parent commits.
-func (c *Checkout) hasFollowUpWork(pr *PullRequest, base string) (bool, error) {
-	commits, err := git(c.Dir, "rev-list", "--parents", "HEAD", "^"+pr.Head, "^"+base)
+func (c *Checkout) hasFollowUpWork(pr *PullRequest, base gitref.Ref) (bool, error) {
+	commits, err := git(c.Dir, "rev-list", "--parents", "HEAD", "^"+pr.Head, "^"+base.String())
 	if err != nil {
 		return false, err
 	}
-	return commits != "" && !c.onlyBaseMerges(commits, base), nil
+	return commits != "" && !c.onlyBaseMerges(commits, base.String()), nil
 }
 
 func (c *Checkout) onlyBaseMerges(commits, base string) bool {

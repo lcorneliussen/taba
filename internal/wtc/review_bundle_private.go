@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/gitref"
 )
 
 func reviewDownstreamNames(repo Repo) []string {
@@ -156,9 +157,9 @@ func (c *Context) snapshotReviewRepository(dir, kind, name string) (bool, error)
 		oldRef = repo.DefaultRef
 	}
 	if oldRef == "" {
-		oldRef = "origin/main"
+		oldRef = gitref.RemoteBranch("origin", "main").Short()
 	}
-	oldSHA, err := reviewBareRef(owner, oldRef)
+	oldSHA, err := reviewBareRef(owner, gitref.Revision(oldRef))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, branding.Text("{{command}}: warning: %s %s ref %s unavailable; snapshot skipped\n"), kind, name, oldRef)
 		return false, nil

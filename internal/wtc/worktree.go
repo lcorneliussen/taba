@@ -14,6 +14,7 @@ import (
 
 	"taba.sh/taba/internal/branding"
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/gitref"
 )
 
 func gitOutput(args ...string) (string, error) {
@@ -215,7 +216,7 @@ func (c *Context) ensureBare(repo Repo) (string, error) {
 		if _, err := gitOutput("clone", "--bare", repo.Remote, bare); err != nil {
 			return "", err
 		}
-		if _, err := gitOutput("--git-dir="+bare, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+		if _, err := gitOutput("--git-dir="+bare, "config", "remote.origin.fetch", gitref.RemoteBranch("origin", "*").FetchSpec()); err != nil {
 			return "", err
 		}
 	} else if err != nil {
@@ -353,10 +354,13 @@ func (c *Context) AddWorktree(name, directory, destination, branch string) error
 	if err != nil {
 		return err
 	}
-	ref := base.EffectiveRef
+	ref, err := gitref.Parse(base.EffectiveRef)
+	if err != nil {
+		return fmt.Errorf("%s development tip: %w", name, err)
+	}
 	requireBase := func() error {
-		if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", ref); err != nil {
-			return fmt.Errorf("%s development tip %s is unavailable: %w", name, ref, err)
+		if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", ref.String()); err != nil {
+			return fmt.Errorf("%s development tip %s is unavailable: %w", name, ref.Short(), err)
 		}
 		return nil
 	}
@@ -371,20 +375,20 @@ func (c *Context) AddWorktree(name, directory, destination, branch string) error
 		if err := requireBase(); err != nil {
 			return err
 		}
-		args = append(args, "--detach", path, ref)
+		args = append(args, "--detach", path, ref.String())
 	} else {
 		if _, err := gitOutput("check-ref-format", "--branch", branch); err != nil {
 			return fmt.Errorf("invalid branch %q: %w", branch, err)
 		}
-		if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", "refs/heads/"+branch); err == nil {
+		if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", gitref.LocalBranch(branch).String()); err == nil {
 			args = append(args, path, branch)
-		} else if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", "refs/remotes/origin/"+branch); err == nil {
-			args = append(args, "-b", branch, path, "origin/"+branch)
+		} else if remote := gitref.RemoteBranch("origin", branch); gitRefExists(bare, remote) {
+			args = append(args, "-b", branch, path, remote.String())
 		} else {
 			if err := requireBase(); err != nil {
 				return err
 			}
-			args = append(args, "-b", branch, path, ref)
+			args = append(args, "-b", branch, path, ref.String())
 		}
 	}
 	if _, err := gitOutput(args...); err != nil {
@@ -421,7 +425,7 @@ func (c *Context) AddPRWorktree(name, directory, destination, branch, number, ex
 	if err != nil {
 		return result, err
 	}
-	ref := "refs/remotes/wtc-pr/" + number
+	ref := gitref.RemoteBranch("wtc-pr", number).String()
 	if _, err := gitOutput("--git-dir="+bare, "fetch", "origin", "+refs/pull/"+number+"/head:"+ref); err != nil {
 		return result, fmt.Errorf("fetch PR head #%s: %w", number, err)
 	}
@@ -441,11 +445,11 @@ func (c *Context) AddPRWorktree(name, directory, destination, branch, number, ex
 			return result, err
 		}
 	}
-	trackingRef := "refs/remotes/" + remote + "/" + branch
-	if _, err := gitOutput("--git-dir="+bare, "fetch", remote, "+refs/heads/"+branch+":"+trackingRef); err != nil {
+	tracking := gitref.RemoteBranch(remote, branch)
+	if _, err := gitOutput("--git-dir="+bare, "fetch", remote, tracking.FetchSpec()); err != nil {
 		return result, fmt.Errorf("fetch pushable PR branch from %s: %w", remote, err)
 	}
-	trackingHead, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", trackingRef)
+	trackingHead, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", tracking.String())
 	if err != nil || !strings.EqualFold(trackingHead, expectedSHA) {
 		return result, fmt.Errorf("PR source branch changed while creating collection; expected %s, fetched %s", expectedSHA, trackingHead)
 	}
@@ -459,8 +463,8 @@ func (c *Context) AddPRWorktree(name, directory, destination, branch, number, ex
 	if err != nil {
 		return result, err
 	}
-	branchOccupied := strings.Contains("\n"+occupied+"\n", "\nbranch refs/heads/"+branch+"\n")
-	localHead, localErr := gitOutput("--git-dir="+bare, "rev-parse", "--verify", "refs/heads/"+branch)
+	branchOccupied := strings.Contains("\n"+occupied+"\n", "\nbranch "+gitref.LocalBranch(branch).String()+"\n")
+	localHead, localErr := gitOutput("--git-dir="+bare, "rev-parse", "--verify", gitref.LocalBranch(branch).String())
 	useAlternate := branchOccupied || localErr == nil && !strings.EqualFold(localHead, expectedSHA)
 	if useAlternate {
 		// A branch may be checked out in only one worktree. Keep the review
@@ -472,7 +476,7 @@ func (c *Context) AddPRWorktree(name, directory, destination, branch, number, ex
 			if suffix > 0 {
 				candidate = fmt.Sprintf("%s-%d", base, suffix+1)
 			}
-			if _, err := gitOutput("--git-dir="+bare, "rev-parse", "--verify", "refs/heads/"+candidate); err != nil {
+			if !gitRefExists(bare, gitref.LocalBranch(candidate)) {
 				result.LocalBranch = candidate
 				break
 			}
@@ -482,7 +486,7 @@ func (c *Context) AddPRWorktree(name, directory, destination, branch, number, ex
 	if localErr == nil && !useAlternate {
 		args = append(args, path, branch)
 	} else {
-		args = append(args, "-b", result.LocalBranch, path, remote+"/"+branch)
+		args = append(args, "-b", result.LocalBranch, path, tracking.String())
 	}
 	if _, err := gitOutput(args...); err != nil {
 		return result, err

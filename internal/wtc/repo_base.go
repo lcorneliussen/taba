@@ -16,6 +16,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"golang.org/x/sys/unix"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // RepositoryBase separates receiving-local development intent from registry
@@ -74,19 +76,19 @@ func normalizeRepoBase(ref string) (string, error) {
 }
 
 func normalizeRepoBaseContext(ctx context.Context, ref string) (string, error) {
-	branch := strings.TrimPrefix(ref, "origin/")
+	branch := gitref.OriginBranch(ref)
 	if len(branch) == 40 || len(branch) == 64 {
 		if _, err := hex.DecodeString(branch); err == nil {
 			return "", fmt.Errorf("base must name a branch, not a commit ID")
 		}
 	}
-	if branch == "" || strings.HasPrefix(branch, "-") || strings.HasPrefix(branch, "refs/") || strings.HasPrefix(branch, "origin/") || strings.ContainsAny(branch, " \t\r\n@^~:?\\*[\x00") {
+	if branch == "" || strings.HasPrefix(branch, "-") || strings.HasPrefix(branch, "refs/") || gitref.OriginBranch(branch) != branch || strings.ContainsAny(branch, " \t\r\n@^~:?\\*[\x00") {
 		return "", fmt.Errorf("base must be a branch name or origin/<branch>")
 	}
 	if _, err := gitOutputContext(ctx, "check-ref-format", "--branch", branch); err != nil {
 		return "", fmt.Errorf("invalid development branch")
 	}
-	return "origin/" + branch, nil
+	return gitref.RemoteBranch("origin", branch).Short(), nil
 }
 func validateBaseReason(reason string) error {
 	if !utf8.ValidString(reason) || strings.TrimSpace(reason) == "" || len(reason) > 1024 || strings.ContainsFunc(reason, unicode.IsControl) {
@@ -274,10 +276,10 @@ func retainedAliasBase(repo Repo, store repoBaseStore) (string, bool) {
 func repositoryBaseFacts(repo Repo, store repoBaseStore, external bool) RepositoryBase {
 	result := RepositoryBase{Repository: repo.Name, RegistryRef: repo.DefaultRef, EffectiveRef: repo.DefaultRef, Source: "registry", ProductionRef: repo.ProductionRef, ReleaseRef: repo.ReleaseRef}
 	if result.EffectiveRef == "" {
-		result.EffectiveRef = "origin/main"
+		result.EffectiveRef = gitref.RemoteBranch("origin", "main").Short()
 		result.Source = "fallback"
 		if external {
-			result.EffectiveRef = "origin/HEAD"
+			result.EffectiveRef = gitref.RemoteBranch("origin", "HEAD").Short()
 		}
 	}
 	if entry, ok := store.Repos[repo.Name]; ok && !external {

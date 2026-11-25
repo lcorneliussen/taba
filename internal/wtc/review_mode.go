@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 // ReviewModeFile marks a collection created to review someone else's PR. In
@@ -202,17 +204,18 @@ func verifyReviewPushLock(worktree string) error {
 // rewrote the branch. Commits that exist only here stop it, since review mode
 // writes none. The base branch is fetched too, since catch-up is skipped.
 func followReviewHead(collection, worktree, forge, pr, branch, base, expected string) error {
-	ref := "refs/remotes/wtc-pr/" + pr
+	pull := gitref.RemoteBranch("wtc-pr", pr)
+	ref := pull.String()
 	source := "+refs/pull/" + pr + "/head:" + ref
 	if forge == "bitbucket" {
 		if branch == "" {
 			return fmt.Errorf("PR source branch unknown")
 		}
-		source = "+refs/heads/" + branch + ":" + ref
+		source = gitref.Refspec(gitref.LocalBranch(branch), pull)
 	}
 	fetch := []string{"-C", worktree, "fetch", "origin", source}
 	if base != "" {
-		fetch = append(fetch, "+refs/heads/"+base+":refs/remotes/origin/"+base)
+		fetch = append(fetch, gitref.RemoteBranch("origin", base).FetchSpec())
 	}
 	if _, err := gitOutput(fetch...); err != nil {
 		return err

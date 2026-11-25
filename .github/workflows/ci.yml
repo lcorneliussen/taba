@@ -18,6 +18,8 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
+      - name: The gitref rule still flags the past ref bugs
+        run: tools/lint/check-gitref.sh
   test:
     runs-on: ubuntu-latest
     steps:

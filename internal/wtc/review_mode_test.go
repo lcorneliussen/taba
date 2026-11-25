@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"taba.sh/taba/internal/gitref"
 )
 
 func TestReviewModeCollectionCannotPushAndFollowsPRHead(t *testing.T) {
@@ -81,15 +83,15 @@ func TestReviewModeCollectionCannotPushAndFollowsPRHead(t *testing.T) {
 	if _, err := target.ResolveReviewBundle(filepath.Join(r.Collection, "any-bundle"), ReviewResolveOptions{}); err == nil || !strings.Contains(err.Error(), "belongs to the PR author") {
 		t.Fatalf("resolve ran in review mode: %v", err)
 	}
-	row, err := statusLocalRepo(catchUpTarget{collection: filepath.Base(r.Collection), path: worktree, repo: "widget", ref: "origin/main"})
+	row, err := statusLocalRepo(catchUpTarget{collection: filepath.Base(r.Collection), path: worktree, repo: "widget", ref: gitref.RemoteBranch("origin", "main")})
 	if err != nil || !row.ReviewOnly || !strings.HasSuffix(row.BranchDisplay, "(review-only)") {
 		t.Fatalf("status does not show review mode: %+v %v", row, err)
 	}
 
 	before := fixtureGit(t, "-C", worktree, "rev-parse", "HEAD")
 	tip := fixtureGit(t, "-C", worktree, "rev-parse", "origin/main")
-	reconcile := catchUpTarget{collection: filepath.Base(r.Collection), path: worktree, repo: "widget", ref: "origin/main"}
-	if outcome, reason := target.catchUpReconcile(reconcile, "origin/main", tip, catchUpPR{state: "OPEN"}, CatchUpOptions{}); outcome != "current" || !strings.Contains(reason, "review-only") {
+	reconcile := catchUpTarget{collection: filepath.Base(r.Collection), path: worktree, repo: "widget", ref: gitref.RemoteBranch("origin", "main")}
+	if outcome, reason := target.catchUpReconcile(reconcile, reconcile.ref, tip, catchUpPR{state: "OPEN"}, CatchUpOptions{}); outcome != "current" || !strings.Contains(reason, "review-only") {
 		t.Fatalf("catch-up would update the review worktree: %s %s", outcome, reason)
 	}
 	if got := fixtureGit(t, "-C", worktree, "rev-parse", "HEAD"); got != before {

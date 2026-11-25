@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/gitref"
 )
 
 type ReviewBundleOptions struct {
@@ -85,14 +86,15 @@ func checkoutReviewBranch(worktree, branch string) error {
 	if _, err := reviewGit(worktree, "fetch", "origin", branch); err != nil {
 		fmt.Fprintf(os.Stderr, branding.Text("{{command}}: warning: could not fetch PR branch %s before checkout\n"), branch)
 	}
-	if _, err := reviewGit(worktree, "show-ref", "--verify", "refs/heads/"+branch); err == nil {
+	if _, err := reviewGit(worktree, "show-ref", "--verify", gitref.LocalBranch(branch).String()); err == nil {
 		_, err = reviewGit(worktree, "switch", "--merge", branch)
 		return err
 	}
-	if _, err := reviewGit(worktree, "show-ref", "--verify", "refs/remotes/origin/"+branch); err != nil {
+	remote := gitref.RemoteBranch("origin", branch)
+	if _, err := reviewGit(worktree, "show-ref", "--verify", remote.String()); err != nil {
 		return fmt.Errorf("PR branch is not available locally")
 	}
-	_, err := reviewGit(worktree, "switch", "--merge", "-c", branch, "--track", "origin/"+branch)
+	_, err := reviewGit(worktree, "switch", "--merge", "-c", branch, "--track", remote.String())
 	return err
 }
 
@@ -264,7 +266,7 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 	}
 	baseRef := opt.Base
 	if baseRef == "" && prBase != "" {
-		baseRef = "origin/" + prBase
+		baseRef = gitref.RemoteBranch("origin", prBase).Short()
 	}
 
 	var developmentBase *RepositoryBase
@@ -290,13 +292,13 @@ func (c *Context) BuildReviewBundle(opt ReviewBundleOptions) (ReviewBundle, erro
 		}
 	}
 	if baseRef == "" {
-		baseRef = "origin/main"
+		baseRef = gitref.RemoteBranch("origin", "main").Short()
 	}
 
-	if _, err := reviewRef(worktree, baseRef); err != nil {
+	if _, err := reviewRef(worktree, gitref.Revision(baseRef)); err != nil {
 		return ReviewBundle{}, fmt.Errorf("base ref %q not found: %w", baseRef, err)
 	}
-	baseBytes, err := reviewGit(worktree, "merge-base", baseRef, headSHA)
+	baseBytes, err := reviewGit(worktree, "merge-base", gitref.Revision(baseRef), headSHA)
 	if err != nil {
 		return ReviewBundle{}, err
 	}

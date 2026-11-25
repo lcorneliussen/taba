@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/prompts"
 )
 
@@ -352,7 +353,7 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 	case opt.Review:
 		branchNote, err = prompts.Render(ctx, "launch.branch-review", map[string]string{"primary_dir": primaryDir(primary, harnessRepo)})
 	case opt.PR != "":
-		push := "git -C " + shellQuote(primaryDir(primary, harnessRepo)) + " push " + shellQuote(result.PushRemote) + " " + shellQuote("HEAD:refs/heads/"+result.IntendedBranch)
+		push := "git -C " + shellQuote(primaryDir(primary, harnessRepo)) + " push " + shellQuote(result.PushRemote) + " " + shellQuote("HEAD:"+gitref.LocalBranch(result.IntendedBranch).String())
 		branchNote, err = prompts.Render(ctx, "launch.branch-pr", map[string]string{"push_command": push})
 	case opt.Branch != "":
 		branchNote, err = prompts.Render(ctx, "launch.branch-explicit", nil)
