@@ -4,12 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"taba.sh/taba/internal/forgecli"
 	"taba.sh/taba/internal/gitref"
 	"taba.sh/taba/internal/prompts"
 )
@@ -91,7 +91,7 @@ func (c *Context) NewCollection(opt NewOptions) (NewResult, error) {
 			return result, fmt.Errorf("PR collection requires a GitHub repository remote")
 		}
 		slug := strings.TrimSuffix(strings.TrimPrefix(url, "https://github.com/"), "/pull/"+parts[1])
-		output, err := exec.Command("gh", "pr", "view", parts[1], "--repo", slug, "--json", "headRefName,headRefOid,headRepository,isCrossRepository,title").Output()
+		output, err := forgecli.Command("gh", "pr", "view", parts[1], "--repo", slug, "--json", "headRefName,headRefOid,headRepository,isCrossRepository,title").Output()
 		if err != nil {
 			return result, fmt.Errorf("resolve PR head: %w", err)
 		}

@@ -7,9 +7,13 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"taba.sh/taba/internal/forgecli"
 )
 
 // Status refreshes must complete even when a forge or remote stops replying.
+// statusCommand is for local tools: it reads stdout and stderr together, so a
+// forge body, which is parsed, goes through statusJSON instead.
 func statusCommand(timeout time.Duration, name string, args ...string) ([]byte, error) {
 	return statusRun(timeout, (*exec.Cmd).CombinedOutput, name, args...)
 }
@@ -24,6 +28,14 @@ func statusRunContext(parent context.Context, timeout time.Duration, run func(*e
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.WaitDelay = 200 * time.Millisecond
 	out, err := run(cmd)
+	return statusOutcome(parent, ctx, timeout, name, args, out, err)
+}
+
+// statusOutcome is the result of one bounded child call: the parent's
+// cancellation, the timeout, or the child's own diagnostic. An *exec.ExitError
+// carries stderr alone, which is the only stream worth quoting for a call
+// whose stdout was a body.
+func statusOutcome(parent, ctx context.Context, timeout time.Duration, name string, args []string, out []byte, err error) ([]byte, error) {
 	if parent.Err() != nil {
 		return nil, fmt.Errorf("%s: %w", name, parent.Err())
 	}
@@ -48,7 +60,7 @@ func statusGit(path string, args ...string) (string, error) {
 
 // statusJSON reads forge JSON from stdout alone, so stderr cannot corrupt it.
 func statusJSON(args ...string) ([]byte, error) {
-	return statusRun(30*time.Second, forgeOutput, args[0], args[1:]...)
+	return statusJSONContext(context.Background(), args...)
 }
 
 func statusCommandContext(ctx context.Context, timeout time.Duration, name string, args ...string) ([]byte, error) {
@@ -60,6 +72,10 @@ func statusGitContext(ctx context.Context, path string, args ...string) (string,
 		return strings.TrimSpace(string(out)), err
 	})
 }
-func statusJSONContext(ctx context.Context, args ...string) ([]byte, error) {
-	return statusRunContext(ctx, 30*time.Second, forgeOutput, args[0], args[1:]...)
+func statusJSONContext(parent context.Context, args ...string) ([]byte, error) {
+	timeout := 30 * time.Second
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	out, err := forgecli.CommandContext(ctx, args[0], args[1:]...).Output()
+	return statusOutcome(parent, ctx, timeout, args[0], args[1:], out, err)
 }

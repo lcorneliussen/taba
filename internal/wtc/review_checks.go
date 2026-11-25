@@ -3,10 +3,10 @@ package wtc
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"taba.sh/taba/internal/forgecli"
 	"taba.sh/taba/internal/prompts"
 )
 
@@ -29,7 +29,7 @@ func collectReviewChecks(m ReviewManifest) headCheckEvidence {
 		return evidence
 	}
 	raw, _, err := statusWithForgeBudget("github.com", nil, func() ([]byte, error) {
-		return exec.Command("gh", "pr", "view", m.PR, "--repo", m.Slug, "--json", "headRefOid,statusCheckRollup").Output()
+		return forgecli.Command("gh", "pr", "view", m.PR, "--repo", m.Slug, "--json", "headRefOid,statusCheckRollup").Output()
 	})
 	if err != nil {
 		return evidence

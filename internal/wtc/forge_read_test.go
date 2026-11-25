@@ -2,7 +2,6 @@ package wtc
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,26 +40,6 @@ fi
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-func TestFakeLargeBBReproducesPipeCap(t *testing.T) {
-	fakeLargeBB(t, map[string]string{"view": `{"state":"OPEN"}`})
-	piped, err := exec.Command("bb", "pr", "view", "1", "--json").Output()
-	if err != nil || len(piped) != 65536 {
-		t.Fatalf("fake bb did not cap the pipe: %d bytes, %v", len(piped), err)
-	}
-	full, err := forgeOutput(exec.Command("bb", "pr", "view", "1", "--json"))
-	if err != nil || len(full) <= 65536 || strings.Contains(string(full), "stderr") {
-		t.Fatalf("forgeOutput lost or mixed the body: %d bytes, %v", len(full), err)
-	}
-}
-
-func TestForgeOutputKeepsStderrOnFailure(t *testing.T) {
-	_, err := forgeOutput(exec.Command("sh", "-c", "echo out; echo broken >&2; exit 3"))
-	exitErr, ok := err.(*exec.ExitError)
-	if !ok || strings.TrimSpace(string(exitErr.Stderr)) != "broken" {
-		t.Fatalf("stderr was not kept: %v", err)
-	}
 }
 
 func TestStatusErrorsQuoteTheRightStream(t *testing.T) {

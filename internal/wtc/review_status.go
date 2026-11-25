@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"taba.sh/taba/internal/forgecli"
 )
 
 type ReviewStatus struct {
@@ -302,9 +304,9 @@ func (c *Context) GetReviewStatus(repo, number string, trusted bool) (ReviewStat
 	pr, _ := strconv.Atoi(number)
 	var head, comments []byte
 	if forge == "github" {
-		head, err = exec.Command("gh", "pr", "view", number, "--repo", slug, "--json", "headRefOid").Output()
+		head, err = forgecli.Command("gh", "pr", "view", number, "--repo", slug, "--json", "headRefOid").Output()
 		if err == nil {
-			comments, err = exec.Command("gh", "pr", "view", number, "--repo", slug, "--json", "comments").Output()
+			comments, err = forgecli.Command("gh", "pr", "view", number, "--repo", slug, "--json", "comments").Output()
 		}
 	} else {
 		ctx := bitbucketReadOperation(context.Background(), c.ConfigRoot)

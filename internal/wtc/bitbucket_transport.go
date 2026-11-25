@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/forgecli"
 )
 
 // Bitbucket transport selection and normalized reads (issue #127).
@@ -643,12 +644,11 @@ func twgComplete(object map[string]json.RawMessage) error {
 func bitbucketCommand(timeout time.Duration, env []string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.WaitDelay = 200 * time.Millisecond
+	cmd := forgecli.CommandContext(ctx, args[0], args[1:]...)
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
-	out, err := forgeOutput(cmd)
+	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		return out, fmt.Errorf("%s timed out after %s", commandLabel(args[0]), timeout)
 	}

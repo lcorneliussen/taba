@@ -15,6 +15,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/forgecli"
 )
 
 // cliReleaseRepo is the GitHub repository that publishes wtc releases, and
@@ -157,7 +158,7 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 	if opt.Version != "" {
 		// Checked before anything is written, so a typo leaves no pin behind
 		// that mise cannot install.
-		if err := exec.Command("gh", "api", "repos/"+cliReleaseRepo+"/releases/tags/v"+result.To, "--jq", ".tag_name").Run(); err != nil {
+		if err := forgecli.Command("gh", "api", "repos/"+cliReleaseRepo+"/releases/tags/v"+result.To, "--jq", ".tag_name").Run(nil); err != nil {
 			return result, fmt.Errorf(branding.Text("{{command}} %s is not a published release (checked with gh): %w"), result.To, err)
 		}
 	}
@@ -331,7 +332,7 @@ func upgradeNotes(dir string, from, to *semver.Version, dryRun bool) ([]ReleaseN
 }
 
 func latestCLIRelease() (string, error) {
-	out, err := exec.Command("gh", "api", "repos/"+cliReleaseRepo+"/releases/latest", "--jq", ".tag_name").Output()
+	out, err := forgecli.Command("gh", "api", "repos/"+cliReleaseRepo+"/releases/latest", "--jq", ".tag_name").Output()
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve the latest wtc release with gh; pass --version: %w", err)
 	}
@@ -342,7 +343,7 @@ func latestCLIRelease() (string, error) {
 // including to, oldest first. Prereleases are skipped unless one is the
 // target itself, so `--version <v>-rc.N` finds its own notes.
 func publishedReleaseNotes(from, to *semver.Version) ([]ReleaseNote, error) {
-	out, err := exec.Command("gh", "api", "--paginate", "repos/"+cliReleaseRepo+"/releases?per_page=100",
+	out, err := forgecli.Command("gh", "api", "--paginate", "repos/"+cliReleaseRepo+"/releases?per_page=100",
 		"--jq", ".[] | {tag_name, body, draft, prerelease}").Output()
 	if err != nil {
 		return nil, fmt.Errorf("cannot read published wtc releases with gh: %w", err)

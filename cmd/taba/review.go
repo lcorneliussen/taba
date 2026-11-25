@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/forgecli"
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -323,12 +325,13 @@ func addReviewCommands(root *cobra.Command, asJSON *bool) {
 			}
 			return nil
 		}
-		action := exec.Command("gh", "pr", "ready", args[0], "--repo", slug)
-		if !*asJSON {
-			action.Stdout = os.Stdout
-		}
+		action := forgecli.Command("gh", "pr", "ready", args[0], "--repo", slug)
 		action.Stderr = os.Stderr
-		if err := action.Run(); err != nil {
+		var progress io.Writer
+		if !*asJSON {
+			progress = os.Stdout
+		}
+		if err := action.Run(progress); err != nil {
 			return err
 		}
 		if *asJSON {

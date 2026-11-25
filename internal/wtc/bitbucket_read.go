@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"taba.sh/taba/internal/envcompat"
+	"taba.sh/taba/internal/forgecli"
 )
 
 // Bitbucket reads without bb (issue #471).
@@ -360,14 +361,13 @@ func bitbucketReadRun(ctx context.Context, env []string, operation string, args 
 	}
 	child, cancel := context.WithTimeout(ctx, bitbucketReadTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(child, args[0], args[1:]...)
-	cmd.WaitDelay = 200 * time.Millisecond
+	cmd := forgecli.CommandContext(child, args[0], args[1:]...)
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
 	stderr := &boundedBuffer{limit: 8192}
 	cmd.Stderr = stderr
-	out, err := forgeOutput(cmd)
+	out, err := cmd.Output()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -21,6 +20,7 @@ import (
 	"time"
 
 	"taba.sh/taba/internal/branding"
+	"taba.sh/taba/internal/forgecli"
 	"taba.sh/taba/internal/retry"
 )
 
@@ -69,14 +69,14 @@ func readReviewManifest(bundle string) (ReviewManifest, error) {
 }
 
 func reviewForgeCommand(worktree, name string, args []string, input []byte) ([]byte, error) {
-	cmd := exec.Command(name, args...)
+	cmd := forgecli.Command(name, args...)
 	cmd.Dir = worktree
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if input != nil {
 		cmd.Stdin = bytes.NewReader(input)
 	}
-	out, err := forgeOutput(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
