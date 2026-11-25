@@ -410,7 +410,9 @@ Repository rows stay one line each. A `*` after the `↓` count marks a count
 taken against the override; an open PR's base replaces the comparison ref and
 then the count is unmarked. The ref and reason are details: `?` in the live view
 lists them once per distinct ref and reason, with any PR comparison ref. Plain
-terminal output adds one line naming the overridden repositories. Markdown,
+terminal output adds a blank line and one note line: the number of
+overridden repositories, the `repo base show` command and as many of their
+names as fit the width. Markdown,
 JSON and `repo base show` retain the full reason.
 TEST follows the effective base; PROD keeps the registry mapping above. See
 [repository bases](repository-bases.md).

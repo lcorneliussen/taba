@@ -1512,9 +1512,12 @@ func statusTUIBaseOverride(row wtc.StatusRepo) bool {
 	return row.DevelopmentBase != nil && row.DevelopmentBase.Source == "collection"
 }
 
-// statusTUIComparesOverride reports whether the ↓ count uses the override.
-// An open PR's base can replace the comparison ref (as origin/<branch>); an
-// owner without a remote compares against the local branch of the same name.
+// statusTUIComparesOverride reports whether the ↓ count uses the override:
+//   - no comparison_ref (older snapshots): the count used the development
+//     base, which is the override;
+//   - origin/<override branch>, or the override branch itself as a local
+//     branch for an owner without a remote: it uses the override;
+//   - any other ref is an open PR's base, which replaced the comparison.
 func statusTUIComparesOverride(row wtc.StatusRepo) bool {
 	return statusTUIBaseOverride(row) && (row.ComparisonRef == "" ||
 		gitref.OriginBranch(row.ComparisonRef) == gitref.OriginBranch(row.DevelopmentBase.EffectiveRef))

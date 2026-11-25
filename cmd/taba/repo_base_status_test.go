@@ -53,7 +53,7 @@ func statusDenseLinkTargets(lines []string) []string {
 }
 
 // statusDenseBaseFixture is ten synthetic repositories that all carry a
-// collection-local base override with the same long reason.
+// collection-local base override with the caller's reason.
 func statusDenseBaseFixture(reason string) wtc.StatusSnapshot {
 	snapshot := wtc.StatusSnapshot{Collection: "fixture"}
 	for i := range 10 {
@@ -84,8 +84,8 @@ var statusDenseReasons = []string{
 	"cached\x1b]8;;https://bad.invalid\acontrol\x1b]8;;\a\nreason",
 }
 
-// Ten repositories with long collection base reasons still
-// take exactly ten item lines, and the reason never reaches the table.
+// Ten repositories with a shared collection base reason (short, long, or with
+// terminal controls) take exactly ten item lines; the reason never reaches the table.
 func TestStatusDenseRepoRows534(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	for _, reason := range statusDenseReasons {
@@ -260,6 +260,9 @@ func TestStatusDensePlainAndStructuredOutput534(t *testing.T) {
 		if notes != 1 || strings.Contains(table, "Coordinated") || strings.Contains(table, "\x1b") {
 			t.Fatalf("width %d: plain output notes=%d:\n%s", width, notes, table)
 		}
+	}
+	if note := statusTUIBaseOverrideNote(snapshot, 80); len(note) != 2 || ansi.StringWidth(note[1]) > 80 || !strings.Contains(note[1], "(10)") || !strings.Contains(note[1], "repo base show") {
+		t.Fatalf("80-column note lost its count or command: %q", note)
 	}
 	if note := statusTUIBaseOverrideNote(snapshot, 200); len(note) != 2 || !strings.Contains(note[1], "repo base show <repo>") || !strings.Contains(note[1], "(10)") {
 		t.Fatalf("plain note = %q", note)
