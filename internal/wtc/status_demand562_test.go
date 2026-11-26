@@ -456,3 +456,48 @@ func TestStatusDemand562ExplicitRefreshRepairsAMergeAfterReopen(t *testing.T) {
 		t.Fatalf("recorded merge: %+v", row)
 	}
 }
+
+// A recorded decline carries its dates and is archived by them, and a pass
+// that gets no turn for it (here an explicit refresh whose phase has already
+// ended) still shows it, even where no cached observation exists.
+func TestStatusDemand562RecordedDeclineDatesAndDeferredPasses(t *testing.T) {
+	d := newDemand562(t, 1, map[string]map[string]string{"example/r1": {"12": "DECLINED"}})
+	demand562Unknown(t)
+	pane := d.panes[0]
+	registry := filepath.Join(pane.Collection, ".wtc-prs")
+	raw, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureFile(t, registry, string(raw)+"# declined-pr r1 12 2026-11-02T10:00:00Z 2026-11-02T09:59:00Z\n", 0600)
+	row := demand562Row(t, d.pass()[0], "r1", "12")
+	if row.State != "DECLINED" || row.Freshness != "recorded" || !row.Archived || row.ClosedAt == nil || *row.ClosedAt != "2026-11-02T09:59:00Z" {
+		t.Fatalf("recorded decline row: %+v closed_at=%v", row, row.ClosedAt)
+	}
+	snapshot, err := pane.statusForgePreviewWithIntent(pane.resourceContext(), StatusRefreshForeground, false, true, time.Nanosecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := demand562Row(t, snapshot, "r1", "12"); row.State != "DECLINED" || !row.Archived {
+		t.Fatalf("deferred pass dropped the recorded decline: %+v", row)
+	}
+	// The background paths that give a PR no turn: a cancelled operation and
+	// a slot that never came.
+	records, err := pane.ListPRs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, detail := range map[string]statusPRDetail{
+		"cancelled": statusEnrichRecordMetadataContext(cancelled, records[0], "example/r1", "bitbucket.org"),
+		"no turn":   statusLastObservedDetail(context.Background(), records[0], "example/r1", "bitbucket.org"),
+	} {
+		if detail.State != "DECLINED" || detail.ClosedOn != "2026-11-02T10:00:00Z" {
+			t.Fatalf("%s: %+v", name, detail)
+		}
+	}
+	if got := d.reads("view", "r1", "12"); got != 0 {
+		t.Fatalf("recorded decline read %d times", got)
+	}
+}

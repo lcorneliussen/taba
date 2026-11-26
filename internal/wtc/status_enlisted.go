@@ -256,6 +256,10 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 			known.Freshness = "unavailable"
 			return known
 		}
+		if record.DeclinedOn != "" && forge == "bitbucket.org" {
+			// Recorded like a merge: no read is needed to show it.
+			return statusRecordedDeclineDetail(record)
+		}
 		if slug != "" && forge != "" {
 			// The last observation keeps the row's known state, deferred (#535).
 			if known, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
@@ -718,6 +722,9 @@ func statusLastObservedDetail(ctx context.Context, record PRRecord, slug, forge 
 		if detail, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
 			return detail
 		}
+		if record.DeclinedOn != "" && forge == "bitbucket.org" {
+			return statusRecordedDeclineDetail(record)
+		}
 		if detail, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
 			return detail
 		}
@@ -897,10 +904,11 @@ func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent Status
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
 			// A Bitbucket decline holds until the PR is seen open again (a
 			// reopened PR returns to the open list, which ends the decline), so
-			// any observation of it (current, stale, deferred, unavailable or
-			// recorded) keeps archive treatment once its ClosedOn date is old
-			// enough. A GitHub close is not followed that way and needs a current
-			// observation; neither grants actions.
+			// a DECLINED row keeps archive treatment once its ClosedOn date is
+			// old enough, whatever its freshness: recorded, live, or the last
+			// cached observation of a deferred or unavailable pass. A GitHub
+			// close is not followed that way and needs a current observation;
+			// neither grants actions.
 			Archived: branchRow < 0 &&
 				(detail.State == "MERGED" && statusArchived(detail.MergedOn, time.Now()) ||
 					(detail.State == "DECLINED" || detail.State == "CLOSED" && !statusObservationUnavailable(detail.Freshness)) && statusArchived(detail.ClosedOn, time.Now())),

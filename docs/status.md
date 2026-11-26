@@ -227,7 +227,7 @@ for it but the repository's shared open list. Bitbucket can reopen a declined
 PR, and a reopened PR is open again, so a current open list that carries the
 PR (even a capped one) shows it open and removes the record; a failed list,
 one served stale after a refused read, or a provider cooldown keeps the
-recorded decline. `r` still rereads it by number, and is the only repair
+recorded decline, and so does a pass that gives the PR no turn. `r` still rereads it by number, and is the only repair
 when a PR was reopened and merged without any current list seeing it open.
 GitHub closures are not recorded. A by-number read of a PR missing from its
 open list also counts as that PR's full-refresh check, so another pane does
