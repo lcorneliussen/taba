@@ -97,9 +97,10 @@ func statusMarkObservedDetail(forge, slug string, detail statusPRDetail) {
 	}
 }
 
-// statusFirstObservationDue reports whether a PR still needs its first read:
-// nothing marks it observed and nothing in this credential context holds an
-// observation of it. Cache reads only.
+// statusFirstObservationDue reports whether a Bitbucket PR still needs its
+// first read: it has no recorded merge, nothing marks it observed, and this
+// credential context holds neither a detail observation nor a retained merge
+// of it. Other forges never take first turns. Cache reads only.
 func statusFirstObservationDue(ctx context.Context, record PRRecord, slug, forge string) bool {
 	if forge != "bitbucket.org" || slug == "" || record.MergedOn != "" {
 		return false

@@ -190,7 +190,7 @@ func TestStatusAdmission548NeverObservedPRBehindReleasedPanes(t *testing.T) {
 // most one turn per gap, so confirmations keep progressing, and every first
 // read still lands within its bounded share.
 func TestStatusAdmission548FirstReadsShareIsBounded(t *testing.T) {
-	// Ninety turns at least one 16 s gap apart need at least 24 fake minutes
+	// Ninety turns at least one 16 s gap apart need at least 89 gaps (23m44s)
 	// (observed: about 33, as turns also wait for refills and polls).
 	const forge, duration = "bitbucket.org", 45 * time.Minute
 	foreground424Fixture(t, "exit 0\n")

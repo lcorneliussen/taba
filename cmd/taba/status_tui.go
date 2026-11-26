@@ -320,7 +320,8 @@ func statusTUIWaitingRetry(snapshot wtc.StatusSnapshot, at time.Time, interval t
 }
 
 // refreshNoLaterThanWaiting keeps a scheduled pass no later than the waiting
-// rows' retry; a view that refreshes only once (no interval) is left alone.
+// rows' retry; a view with neither a focused nor a background interval (it
+// refreshes only once) is left alone.
 func (m statusTUIModel) refreshNoLaterThanWaiting(next time.Time) time.Time {
 	if m.waitingRetry.IsZero() || m.interval <= 0 && m.background <= 0 || !next.IsZero() && !m.waitingRetry.Before(next) {
 		return next
