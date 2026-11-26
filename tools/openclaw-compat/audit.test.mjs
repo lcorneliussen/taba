@@ -113,3 +113,51 @@ test('CLI exit 0/1, strict warnings and removed members work from any cwd', t =>
   const r = run(); assert.equal(r.status, 1);
   assert.equal(JSON.parse(r.stdout).findings[0].severity, 'error');
 });
+
+test('unrelated property names, labels and bindings are not alias references', () => {
+  const source = `const { old: foo } = api.runtime.agent.session;
+    other.foo; const obj = { foo: 1, foo() {} };
+    const { foo: bar } = other;
+    function container(foo) {};
+    foo: for (;;) { break foo; }
+    const actual = {foo};`;
+  const r = inventory(source);
+  const refs = r.uses.filter(u => u.kind === 'symbol' && u.surface === 'api.runtime.agent.session.old');
+  assert.equal(refs.length, 1); assert.equal(refs[0].line, 6);
+  assert(r.uses.some(u => u.kind === 'binding' && u.surface === 'api.runtime.agent.session.old'));
+});
+
+test('scoped SDK names, .js suffixes and type surface names normalize consistently', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.host, 'package.json'), JSON.stringify({version:'2026.11.10', exports:{'./plugin-sdk':'./root.js','./plugin-sdk/current':'./current.js'}}));
+  const records = [
+    {code:'api-alias',status:'deprecated',surfaces:['OpenClawPluginApi.old']},
+    {code:'runtime-alias',status:'deprecated',surfaces:['PluginRuntime.agent.old']},
+    {code:'sdk-symbol',status:'removed',surfaces:['openclaw/plugin-sdk/current.old']},
+  ];
+  fs.writeFileSync(path.join(f.compat,'registry-records.ts'), `export const PLUGIN_COMPAT_RECORDS=${JSON.stringify(records)};`);
+  fs.writeFileSync(path.join(f.plugin,'index.js'), `import '@openclaw/plugin-sdk';
+    import {old as unused} from '@openclaw/plugin-sdk/current.js';
+    api.old(); api.runtime.agent.old();`);
+  const r=assess(f.host,[f.plugin]);
+  assert(!r.findings.some(x=>x.code==='missing-sdk-subpath'));
+  for(const code of records.map(x=>x.code)) assert(r.findings.some(x=>x.code===code),code);
+});
+
+test('unsupported registry forms, malformed records and plugin syntax exit incomplete', t => {
+  const f=fixture(t), registry=path.join(f.compat,'registry-records.ts');
+  const run=()=>spawnSync(process.execPath,[cli,'--host',f.host,'--plugin',f.plugin],{encoding:'utf8'});
+  const cases = [
+    ['export const PLUGIN_COMPAT_RECORDS=new Array();', /Unsupported registry expression/],
+    ['function f(){while(true){}} export const PLUGIN_COMPAT_RECORDS=f();', /Unsupported registry statement/],
+    ['export const PLUGIN_COMPAT_RECORDS=[{get code(){return "x"}}];', /Unsupported registry object member/],
+    ['export const PLUGIN_COMPAT_RECORDS=[{code:"x",surfaces:[]}];', /Malformed or duplicate/],
+    ['const r={code:"x",status:"removed",surfaces:[]}; export const PLUGIN_COMPAT_RECORDS=[r,r];', /Malformed or duplicate/],
+  ];
+  for(const [source,message] of cases){
+    fs.writeFileSync(registry,source);const r=run();assert.equal(r.status,2);assert.match(r.stderr,message);
+  }
+  fs.writeFileSync(registry,'export const PLUGIN_COMPAT_RECORDS=[];');
+  fs.writeFileSync(path.join(f.plugin,'index.js'),'function {');
+  const r=run();assert.equal(r.status,2);assert.match(r.stderr,/Cannot parse/);
+});

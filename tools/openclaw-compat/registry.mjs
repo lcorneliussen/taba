@@ -1,4 +1,4 @@
-// Read OpenClaw's data declarations; never import or evaluate its JavaScript.
+// Interpret a restricted TypeScript data AST; never import host or plugin modules.
 import fs from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';

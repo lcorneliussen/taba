@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { readRegistry } from './registry.mjs';
 
-const normalize = s => s.replace(/^@openclaw\/plugin-sdk\//, 'openclaw/plugin-sdk/').replace(/\.js$/, '').replace(/^OpenClawPluginApi\./, 'api.').replace(/^PluginRuntime\./, 'api.runtime.');
+const normalize = s => s.replace(/^@openclaw\/plugin-sdk(?=\/|$)/, 'openclaw/plugin-sdk').replace(/\.js$/, '').replace(/^OpenClawPluginApi\./, 'api.').replace(/^PluginRuntime\./, 'api.runtime.');
 const sdk = s => /^@?openclaw(?:\/plugin-sdk(?:\/|$)|$)/.test(s);
 
 export function inventory(source, filename = 'index.js') {
@@ -37,7 +37,10 @@ export function inventory(source, filename = 'index.js') {
       if (spec && sdk(spec)) {
         add('import', spec, n);
         const named = n.importClause?.namedBindings;
-        if (named && ts.isNamedImports(named)) for (const el of named.elements) bindings.set(el.name.text, normalize(spec) + '.' + (el.propertyName?.text ?? el.name.text));
+        if (named && ts.isNamedImports(named)) for (const el of named.elements) {
+          const surface = normalize(spec) + '.' + (el.propertyName?.text ?? el.name.text);
+          bindings.set(el.name.text, surface); add('symbol', surface, el);
+        }
         if (named && ts.isNamespaceImport(named)) bindings.set(named.name.text, normalize(spec));
       }
     }
@@ -62,6 +65,18 @@ export function inventory(source, filename = 'index.js') {
     }
     if (!changed) break;
   }
+  for (const d of declarations) if (ts.isObjectBindingPattern(d.name)) {
+    const base = chain(d.initializer);
+    if (base) for (const e of d.name.elements) if (!e.dotDotDotToken && ts.isIdentifier(e.name)) add('binding', base + '.' + (e.propertyName?.text ?? e.name.text), e);
+  }
+  function reference(n) {
+    const p = n.parent;
+    if (p.name === n && !ts.isShorthandPropertyAssignment(p)) return false;
+    if (ts.isBindingElement(p) && (p.name === n || p.propertyName === n)) return false;
+    if (ts.isImportSpecifier(p) || ts.isImportClause(p) || ts.isNamespaceImport(p) || ts.isExportSpecifier(p)) return false;
+    if ((ts.isLabeledStatement(p) || ts.isBreakStatement(p) || ts.isContinueStatement(p)) && p.label === n) return false;
+    return true;
+  }
   function visit(n) {
     if (ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) {
       const surface = chain(n);
@@ -69,7 +84,7 @@ export function inventory(source, filename = 'index.js') {
       if (surface) add('member', surface, n);
       if (ts.isElementAccessExpression(n) && !ts.isStringLiteral(n.argumentExpression) && chain(n.expression)) gaps.push({ file: filename, line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1, reason: 'Computed API member; check manually.' });
     }
-    if (ts.isIdentifier(n) && (sdk(bindings.get(n.text) ?? '') || (bindings.get(n.text) ?? '').startsWith('api.')) && !ts.isImportSpecifier(n.parent) && !ts.isNamespaceImport(n.parent)) add('symbol', bindings.get(n.text), n);
+    if (ts.isIdentifier(n) && (sdk(bindings.get(n.text) ?? '') || (bindings.get(n.text) ?? '').startsWith('api.')) && reference(n)) add('symbol', bindings.get(n.text), n);
     if (ts.isCallExpression(n) && n.arguments[0] && ((ts.isPropertyAccessExpression(n.expression) && ['request', 'call', 'dispatch'].includes(n.expression.name.text)) || (ts.isIdentifier(n.expression) && n.expression.text === 'dispatch')) && ts.isStringLiteral(n.arguments[0])) add('rpc', n.arguments[0].text, n);
     ts.forEachChild(n, visit);
   }
