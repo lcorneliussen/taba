@@ -11,7 +11,8 @@ config file (`taba.toml`, or `wtc.toml` in older harnesses), registry, and agent
 
 - Put shared collection config and CLI lifecycle hooks in the harness. Check in
   an exact version pin (`.taba-version`, or `.wtc-cli-version`); add other
-  generated mise tools under `[mise.tools]` in the config file.
+  generated mise tools under `[mise.tools]` and mise settings under
+  `[mise.settings]` in the config file.
 - Put application setup and cleanup in that application's `harness:init` and
   `harness:teardown` mise tasks or `.harness/init.sh` and
   `.harness/teardown.sh`. Keep them safe to rerun.
