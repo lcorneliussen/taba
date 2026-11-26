@@ -10,13 +10,16 @@ import (
 
 // #548: many status panes, most of them released clients, share one
 // Bitbucket bucket. A PR that no view has observed yet must still get a
-// bounded first read. Every test drives the real admission function under its
-// real lock and shared files on the fake decision clock of the #424 tests;
-// no provider is contacted.
+// bounded first read. Current-client reads go through the real admission
+// function; released-client reads go through admission548Released below. Both
+// use the real budget lock and shared files on the fake decision clock of the
+// #424 tests; no provider is contacted.
 
-// admission548Released is the released (0.2.7-0.2.9) admission decision,
-// kept here verbatim but for the clock seams, so mixed-version contention can
-// be replayed against the current client. Released clients know the
+// admission548Released models the released (0.2.7-0.2.9) Bitbucket
+// admission decision, following v0.2.9's statusTakeForgeTokenForContext with
+// the clock seams; it leaves out the GitHub branch and the cooldown recheck
+// after the refill wait, which no test here exercises. It lets mixed-version
+// contention be replayed against the current client. Released clients know the
 // confirmation FIFO and foreground leases, take any token above one per
 // queued confirmation for ordinary reads, and let the FIFO head wait in the
 // budget lock for the next refill. They know neither ordinary waiters, held
@@ -191,7 +194,8 @@ func TestStatusAdmission548NeverObservedPRBehindReleasedPanes(t *testing.T) {
 // read still lands within its bounded share.
 func TestStatusAdmission548FirstReadsShareIsBounded(t *testing.T) {
 	// Ninety turns at least one 16 s gap apart need at least 89 gaps (23m44s)
-	// (observed: about 33, as turns also wait for refills and polls).
+	// (observed in this run: about 33 minutes, as turns also wait for
+	// refills and polls).
 	const forge, duration = "bitbucket.org", 45 * time.Minute
 	foreground424Fixture(t, "exit 0\n")
 	clock := admission424FakeClock(t)

@@ -319,9 +319,10 @@ func statusTUIWaitingRetry(snapshot wtc.StatusSnapshot, at time.Time, interval t
 	return due
 }
 
-// refreshNoLaterThanWaiting keeps a scheduled pass no later than the waiting
-// rows' retry; a view with neither a focused nor a background interval (it
-// refreshes only once) is left alone.
+// refreshNoLaterThanWaiting keeps a scheduled pass no later than
+// m.waitingRetry: the earliest waiting row's retry, but not before the floor
+// statusTUIWaitingRetry applies. A view with neither a focused nor a
+// background interval (it refreshes only once) is left alone.
 func (m statusTUIModel) refreshNoLaterThanWaiting(next time.Time) time.Time {
 	if m.waitingRetry.IsZero() || m.interval <= 0 && m.background <= 0 || !next.IsZero() && !m.waitingRetry.Before(next) {
 		return next
