@@ -172,6 +172,20 @@ func statusSaveFirstWaiters(forge string, waiters statusFirstWaiters) bool {
 	return err == nil && os.WriteFile(statusFirstWaitPath(forge), raw, 0600) == nil
 }
 
+// statusForgetFirstWaiter drops key from the first-observation waiters;
+// caller holds the budget lock. A lost removal only delays others by the
+// waiter's exclusive refill until it ages out.
+func statusForgetFirstWaiter(forge, key string, now time.Time) {
+	waiters := statusReadFirstWaiters(forge, now)
+	for i := range waiters.Queue {
+		if waiters.Queue[i].Key == key {
+			waiters.Queue = append(waiters.Queue[:i], waiters.Queue[i+1:]...)
+			statusSaveFirstWaiters(forge, waiters)
+			return
+		}
+	}
+}
+
 // register keeps key's place (or adds it at the tail) and notes that it asked.
 func (w *statusFirstWaiters) register(key string, now time.Time) int {
 	for i := range w.Queue {

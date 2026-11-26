@@ -967,7 +967,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusSelectionCommand(m.selectionView(time.Now()))
 		}
 		if m.interval > 0 && !m.resourceObserved(time.Now()) {
-			m.nextRefresh = time.Now().Add(m.interval)
+			m.nextRefresh = m.refreshNoLaterThanWaiting(time.Now().Add(m.interval))
 		}
 		m.focused = true
 		m.observedUntil = time.Now().Add(time.Minute)

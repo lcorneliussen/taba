@@ -475,6 +475,11 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 	if dirty && !statusSaveOrdinaryWaiters(forge, waiters) && turnTaken {
 		return false, time.Time{}
 	}
+	if first := statusFirstObservationIdentity(ctx); first != "" && forge == "bitbucket.org" {
+		// Admitted through its ordinary or confirmation place: it no longer
+		// waits for a first turn, so it cannot hold a turn's exclusive refill.
+		statusForgetFirstWaiter(forge, first, now)
+	}
 	tokens--
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens, updated.UnixNano())), 0600) == nil, time.Time{}
 }

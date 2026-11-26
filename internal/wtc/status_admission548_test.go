@@ -164,10 +164,10 @@ func TestStatusAdmission548NeverObservedPRBehindReleasedPanes(t *testing.T) {
 			if admittedAt < 0 {
 				t.Fatalf("never-observed PR not read in %s behind released panes", duration)
 			}
-			// The first turn opens at once; the read waits at most one refill
-			// in the lock for it, plus one more if a released head took the
-			// refill first, and asks again at most one 30 s pass later. The
-			// first ask comes 20 s into the run.
+			// Bound: one first-observation gap (the turn may have just been
+			// taken), two refills (one waited for in the lock, one more if a
+			// released head took the refill first) and one 30 s pass between
+			// asks; the 20 s slack is the first ask's delay into the run.
 			if bound := statusFirstObservationGap(forge) + 2*every + 30*time.Second; admittedAt > bound+20*time.Second {
 				t.Fatalf("never-observed PR waited %s, bound %s", admittedAt, bound)
 			}
@@ -190,7 +190,8 @@ func TestStatusAdmission548NeverObservedPRBehindReleasedPanes(t *testing.T) {
 // most one turn per gap, so confirmations keep progressing, and every first
 // read still lands within its bounded share.
 func TestStatusAdmission548FirstReadsShareIsBounded(t *testing.T) {
-	// Ninety first reads need ninety turns: about 36 fake minutes.
+	// Ninety turns at least one 16 s gap apart need at least 24 fake minutes
+	// (observed: about 33, as turns also wait for refills and polls).
 	const forge, duration = "bitbucket.org", 45 * time.Minute
 	foreground424Fixture(t, "exit 0\n")
 	clock := admission424FakeClock(t)
@@ -440,5 +441,72 @@ func TestStatusAdmission548TurnWaitFailures(t *testing.T) {
 				t.Fatal("refused read recorded a turn")
 			}
 		})
+	}
+}
+
+// In a credential context whose observations stay private to each status
+// operation (here: no Bitbucket API credential, so the context is unknown),
+// the next operation cannot see the PR's observation, so only the shared
+// observed mark ends its first turns. Both writers set it: periodic
+// enrichment and the explicit refresh.
+func TestStatusAdmission548ObservedMarkEndsFirstTurnsInPrivateContexts(t *testing.T) {
+	const forge, slug = "bitbucket.org", "example/widget"
+	for _, intent := range []StatusRefreshIntent{StatusRefreshBackground, StatusRefreshForeground} {
+		t.Run(map[StatusRefreshIntent]string{StatusRefreshBackground: "periodic", StatusRefreshForeground: "explicit"}[intent], func(t *testing.T) {
+			refresh535Provider(t, []string{"90"})
+			t.Setenv("BB_USERNAME", "")
+			t.Setenv("BB_API_TOKEN", "")
+			c := refresh535Collection(t, forge, nil, []string{"90"})
+			records, err := c.ListPRs()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if statusEntryKnown(statusAuthOperation(context.Background()), "pr", forge, slug, "90") {
+				t.Fatal("fixture context is verifiable; this test needs a private one")
+			}
+			foreground424Budget(t, forge, 8, time.Now())
+			details, _, err := c.statusEnrichRecordsWithIntent(context.Background(), intent, records, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if details[0].State != "DRAFT" || statusObservationUnavailable(details[0].Freshness) {
+				t.Fatalf("not observed: %+v", details[0])
+			}
+			next := statusAuthOperation(context.Background())
+			if _, seen := statusReadForgeEntryAnyContext(next, "pr", forge, slug, "90"); seen {
+				t.Fatal("observation leaked out of its private operation")
+			}
+			if statusFirstObservationDue(next, records[0], slug, forge) {
+				t.Fatal("observed PR still asks for first turns in a private context")
+			}
+		})
+	}
+}
+
+// A first read admitted through its ordinary place leaves the first-turn
+// waiters, so it cannot hold a later turn's exclusive refill.
+func TestStatusAdmission548OrdinaryAdmissionLeavesFirstWaiters(t *testing.T) {
+	const forge = "bitbucket.org"
+	foreground424Fixture(t, "exit 0\n")
+	clock := admission424FakeClock(t)
+	if !statusSaveFirstWaiters(forge, statusFirstWaiters{Last: clock.now}) {
+		t.Fatal("seed turn")
+	}
+	foreground424Budget(t, forge, 0, clock.now)
+	read := admission548First("1")
+	if ok, _ := statusTakeForgeTokenRetry(read, forge, ""); ok {
+		t.Fatal("admitted from an empty bucket")
+	}
+	if got := len(statusReadFirstWaiters(forge, clock.now).Queue); got != 1 {
+		t.Fatalf("refused first read not waiting: %d waiters", got)
+	}
+	// Inside the gap, with no confirmations queued, the ordinary path admits it.
+	clock.now = clock.now.Add(time.Second)
+	foreground424Budget(t, forge, 2, clock.now)
+	if ok, _ := statusTakeForgeTokenRetry(read, forge, ""); !ok {
+		t.Fatal("ordinary path refused with spare tokens")
+	}
+	if got := len(statusReadFirstWaiters(forge, clock.now).Queue); got != 0 {
+		t.Fatalf("admitted read still waits for a first turn: %d waiters", got)
 	}
 }

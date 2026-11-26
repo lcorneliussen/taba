@@ -159,3 +159,22 @@ func TestStatus548WaitingRetrySurvivesFocusChanges(t *testing.T) {
 		t.Fatalf("observed row still scheduled early: next refresh in %s", m.nextRefresh.Sub(at))
 	}
 }
+
+// The waiting-row floor is 30 s or the focused interval, whichever is longer.
+func TestStatus548WaitingRetryFloor(t *testing.T) {
+	at := time.Now()
+	snapshot := wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{refresh548Row("4", "", "deferred", "", "", false)}}
+	for _, tc := range []struct{ interval, want time.Duration }{
+		{0, 30 * time.Second},
+		{5 * time.Second, 30 * time.Second},
+		{30 * time.Second, 30 * time.Second},
+		{45 * time.Second, 45 * time.Second},
+	} {
+		if got := statusTUIWaitingRetry(snapshot, at, tc.interval).Sub(at); got != tc.want {
+			t.Errorf("interval %s: floor %s, want %s", tc.interval, got, tc.want)
+		}
+	}
+	if !statusTUIWaitingRetry(wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{refresh548Row("4", "OPEN", "deferred", at.UTC().Format(time.RFC3339Nano), "", false)}}, at, time.Second).IsZero() {
+		t.Error("a row with an observation is not waiting")
+	}
+}
