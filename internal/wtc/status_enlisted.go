@@ -183,13 +183,13 @@ func statusUnknownDetail(record PRRecord) statusPRDetail {
 	return statusPRDetail{Number: record.Number, State: "UNKNOWN", Freshness: "unavailable", Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: record.Title}
 }
 
-// No provider read happened, so checks are unknown.
 // statusRecordedDeclineDetail is a Bitbucket decline from the PR registry.
 func statusRecordedDeclineDetail(record PRRecord) statusPRDetail {
 	return statusPRDetail{Number: record.Number, State: "DECLINED", Checks: "NONE", Merge: "UNKNOWN", Review: "none",
 		Title: record.Title, ClosedOn: record.DeclinedOn, ClosedAt: record.DeclinedAt, Freshness: "recorded", StateSource: "registry"}
 }
 
+// No provider read happened, so checks are unknown.
 func statusDeferredDetail(record PRRecord) statusPRDetail {
 	return statusPRDetail{Number: record.Number, Freshness: "deferred", Checks: "UNKNOWN", Title: record.Title}
 }
@@ -279,11 +279,14 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 	}
 	if record.DeclinedOn != "" && forge == "bitbucket.org" {
 		// A recorded decline costs no PR read (#562). Bitbucket can reopen a
-		// declined PR, and a reopened PR is open again: only a complete,
-		// current open list that carries it overrides the record. A failed,
-		// stale or capped list keeps the record.
-		listed, truncated, current, err := statusOpenPRsCurrentContext(ctx, forge, slug)
-		if item, ok := listed[record.Number]; err == nil && current && !truncated && ok {
+		// declined PR, and a reopened PR is open again: a current open list
+		// that carries it overrides the record, even when the list was capped
+		// (presence is evidence; only absence from a capped list is not). A
+		// failed list, or one served stale after a refused read (which may
+		// predate the decline), keeps the record. A PR reopened and merged
+		// with no current list seeing it open stays declined until `r`.
+		listed, _, current, err := statusOpenPRsCurrentContext(ctx, forge, slug)
+		if item, ok := listed[record.Number]; err == nil && current && ok {
 			return statusEnrichListedContext(ctx, record, slug, forge, item)
 		}
 		statusForgetConfirmation(forge, slug+"#"+record.Number)

@@ -224,10 +224,11 @@ merges are reused without metadata queries. A Bitbucket decline is recorded
 in `.wtc-prs` (`# declined-pr repo number updated-on [declined-at]`) the
 first time a pass observes it, and later background refreshes read nothing
 for it but the repository's shared open list. Bitbucket can reopen a declined
-PR, and a reopened PR is open again, so a complete, current open list that
-carries the PR shows it open and removes the record; a failed, stale or
-capped list, or a provider cooldown, keeps the recorded decline. `r` still
-rereads it by number. GitHub closures are not recorded. A by-number read of a
+PR, and a reopened PR is open again, so a current open list that carries the
+PR (even a capped one) shows it open and removes the record; a failed list,
+one served stale after a refused read, or a provider cooldown keeps the
+recorded decline. `r` still rereads it by number, and is the only repair
+when a PR was reopened and merged without any current list seeing it open. GitHub closures are not recorded. A by-number read of a
 PR missing from its open list also counts as that PR's full-refresh check,
 so another pane does not repeat it. Never-observed and active PRs are
 read first, in enlistment order; PRs whose last observation is terminal (merged,

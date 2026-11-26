@@ -34,7 +34,7 @@ type PRRecord struct {
 	DeclinedAt string `json:"declined_at,omitempty"`
 }
 
-const prHeader = "# Local PR enlistment for this collection (not committed; dies with retire).\n# Format: repo  number  [branch]  [url]  [title…]\n# Final merges: # merged-pr repo number merged-at checks\n# Merge commits: # merged-commit repo number sha [base]\n# Merged heads: # merged-head repo number merge-sha head-sha\n# Bitbucket declines: # declined-pr repo number declined-on [declined-at]\n# Manage: wtc pr enlist|unlist|list\n"
+const prHeader = "# Local PR enlistment for this collection (not committed; dies with retire).\n# Format: repo  number  [branch]  [url]  [title…]\n# Final merges: # merged-pr repo number merged-at checks\n# Merge commits: # merged-commit repo number sha [base]\n# Merged heads: # merged-head repo number merge-sha head-sha\n# Bitbucket declines: # declined-pr repo number updated-on [declined-at]\n# Manage: wtc pr enlist|unlist|list\n"
 
 var prNumber = regexp.MustCompile(`^[0-9]+$`)
 var prRepoName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -466,7 +466,7 @@ type statusDeclineUpdate struct {
 
 // recordDeclinedPRs records Bitbucket declines observed by this pass, so
 // background refresh does not read them again, and removes the record of a
-// PR observed open again. bitbucket[i] reports whether records[i] is a
+// PR observed open or merged since. bitbucket[i] reports whether records[i] is a
 // Bitbucket PR; other forges are left alone (a GitHub close is not read from
 // an open list here).
 func (c *Context) recordDeclinedPRs(records []PRRecord, details []statusPRDetail, bitbucket []bool) (recorded, cleared int, err error) {
@@ -492,7 +492,9 @@ func (c *Context) recordDeclinedPRs(records []PRRecord, details []statusPRDetail
 			if on != record.DeclinedOn || at != "" && at != record.DeclinedAt {
 				updates[key] = statusDeclineUpdate{DeclinedOn: on, DeclinedAt: at}
 			}
-		case "OPEN", "DRAFT":
+		case "OPEN", "DRAFT", "MERGED":
+			// Open again, or merged after a reopen (seen by an explicit
+			// refresh): the recorded decline no longer holds.
 			if record.DeclinedOn != "" {
 				updates[key] = statusDeclineUpdate{}
 			}

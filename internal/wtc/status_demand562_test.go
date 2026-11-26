@@ -28,8 +28,9 @@ type demand562 struct {
 	lists  map[string]int // slug -> open-list page reads
 	other  map[string]int // REST path kind -> reads
 	open   map[string]map[string]bool
-	// failLists makes every open-list read fail.
-	failLists bool
+	// failLists makes every open-list read fail; capLists makes every list
+	// run past its page limit, so it is read as capped.
+	failLists, capLists bool
 }
 
 const demand562Head = "1111111111111111111111111111111111111111"
@@ -134,6 +135,13 @@ func (d *demand562) serve(w http.ResponseWriter, r *http.Request) {
 			if open {
 				values = append(values, demand562Detail(number, "OPEN"))
 			}
+		}
+		if d.capLists {
+			var page int
+			fmt.Sscanf(r.URL.Query().Get("page"), "%d", &page)
+			values = append(values, demand562Detail(fmt.Sprint(900+page), "OPEN"))
+			fmt.Fprintf(w, `{"values":[%s],"next":%q}`, strings.Join(values, ","), fmt.Sprintf("%s/repositories/%s/pullrequests?page=%d", d.server.URL, slug, page+1))
+			return
 		}
 		fmt.Fprintf(w, `{"values":[%s]}`, strings.Join(values, ","))
 	case strings.Contains(path, "/statuses"):
@@ -369,4 +377,44 @@ func TestStatusDemand562RecordedDeclineSurvivesListFailureAndCooldown(t *testing
 	if got := d.reads("view", "r1", "12"); got != reads {
 		t.Fatalf("recorded decline read again: %d reads, had %d", got, reads)
 	}
+}
+
+// Presence on a current list proves a PR open even when the list was capped;
+// a list served stale after a refused read may predate the decline and does
+// not override it.
+func TestStatusDemand562RecordedDeclineListEvidence(t *testing.T) {
+	t.Run("capped", func(t *testing.T) {
+		d := newDemand562(t, 1, map[string]map[string]string{"example/r1": {"12": "DECLINED"}})
+		d.pass()
+		d.setPR("example/r1", "12", "OPEN")
+		d.capLists = true
+		d.advance(91 * time.Second)
+		if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "OPEN" {
+			t.Fatalf("capped current list carrying the PR: %+v", row)
+		}
+		if records, err := d.panes[0].ListPRs(); err != nil || records[0].DeclinedOn != "" {
+			t.Fatalf("record kept: %+v %v", records, err)
+		}
+	})
+	t.Run("stale", func(t *testing.T) {
+		d := newDemand562(t, 1, map[string]map[string]string{"example/r1": {"12": "OPEN"}})
+		d.pass()
+		// A decline recorded after the list was read (for example by `r`).
+		registry := filepath.Join(d.panes[0].Collection, ".wtc-prs")
+		raw, err := os.ReadFile(registry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixtureFile(t, registry, string(raw)+"# declined-pr r1 12 2026-11-20T10:00:00Z\n", 0600)
+		d.advance(91 * time.Second)
+		t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
+		statusTakeForgeToken("bitbucket.org")
+		views := d.reads("view", "r1", "12")
+		if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "DECLINED" || row.Freshness != "recorded" {
+			t.Fatalf("stale list overrode the recorded decline: %+v", row)
+		}
+		if d.reads("view", "r1", "12") != views {
+			t.Fatal("recorded decline was read")
+		}
+	})
 }

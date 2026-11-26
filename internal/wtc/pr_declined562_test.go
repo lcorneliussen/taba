@@ -38,6 +38,16 @@ func TestRecordedDeclinesInThePRRegistry(t *testing.T) {
 	if recorded, _, err := c.recordDeclinedPRs(records[:1], []statusPRDetail{statusRecordedDeclineDetail(records[0])}, []bool{true}); err != nil || recorded != 0 {
 		t.Fatalf("registry detail re-recorded: %d %v", recorded, err)
 	}
+	// A merge seen after a reopen (by `r`) drops the recorded decline.
+	if _, cleared, err := c.recordDeclinedPRs(records[:1], []statusPRDetail{{State: "MERGED", Freshness: "live"}}, []bool{true}); err != nil || cleared != 1 {
+		t.Fatalf("merge did not clear the decline: %d %v", cleared, err)
+	}
+	if records, err = c.ListPRs(); err != nil || records[0].DeclinedOn != "" {
+		t.Fatalf("decline kept after merge: %+v %v", records, err)
+	}
+	if _, _, err := c.recordDeclinedPRs(records[:1], details[:1], []bool{true}); err != nil {
+		t.Fatal(err)
+	}
 	// Unlisting drops the decline with the PR.
 	if err := c.UnlistPR("r1", "12"); err != nil {
 		t.Fatal(err)
