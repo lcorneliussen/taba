@@ -222,7 +222,7 @@ func statusAuthReadFile(path string) ([]byte, bool) {
 }
 
 func statusAuthSharedKind(kind string) bool {
-	return kind == "budget" || kind == "cool" || kind == "pending" || kind == "identity-schedule-v1"
+	return kind == "budget" || kind == "cool" || kind == "pending" || kind == "identity-schedule-v1" || kind == statusObservedMarkKind
 }
 
 type statusAuthOperationKey struct{}

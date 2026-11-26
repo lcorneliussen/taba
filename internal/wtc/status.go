@@ -170,6 +170,9 @@ type StatusPRRow struct {
 
 	ObservationReason string `json:"observation_reason,omitempty"`
 	RetryAt           string `json:"retry_at,omitempty"`
+	// PriorNotReused says that this view held an earlier observation of the
+	// same PR that this snapshot's credential context cannot reuse (#548).
+	PriorNotReused bool `json:"prior_not_reused,omitempty"`
 	// LocalMergeEvidence reports local Git hints (a gone upstream, a head
 	// contained in the development tip) in JSON. It schedules a provider read
 	// only when the open list is served stale; it is never a forge state and
@@ -506,7 +509,13 @@ func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHea
 // StatusPreferNewerObservations protects presentation from an older collector
 // completion. It never grants local action authority from retained UI facts.
 func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnapshot {
+	samePR := func(row, old StatusPRRow) bool {
+		return row.Repo == old.Repo && row.Number == old.Number && row.URL != nil && old.URL != nil && *row.URL == *old.URL
+	}
 	if incoming.Collection != current.Collection || incoming.authContext != current.authContext || strings.HasPrefix(incoming.authContext, "unknown-") {
+		if incoming.Collection == current.Collection {
+			statusMarkPriorNotReused(&incoming, current, samePR)
+		}
 		return incoming
 	}
 	knownMerge := func(row StatusPRRow) bool {
@@ -514,8 +523,15 @@ func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnaps
 	}
 	for i, row := range incoming.PRs {
 		for _, old := range current.PRs {
-			if row.Repo != old.Repo || row.Number != old.Number || row.URL == nil || old.URL == nil || *row.URL != *old.URL {
+			if !samePR(row, old) {
 				continue
+			}
+			if knownMerge(row) && knownMerge(old) && row.MergedOn == nil && old.MergedOn != nil {
+				// A newer merge read whose merge-time read was deferred keeps
+				// the known merge time and its archive treatment (#548).
+				incoming.PRs[i].MergedOn = old.MergedOn
+				incoming.PRs[i].Archived = incoming.PRs[i].Archived || old.Archived && !incoming.PRs[i].OnBranch
+				row = incoming.PRs[i]
 			}
 			if knownMerge(row) && !knownMerge(old) {
 				continue
@@ -578,6 +594,24 @@ func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnaps
 		}
 	}
 	return incoming
+}
+
+// statusMarkPriorNotReused notes, on rows this snapshot has not observed,
+// that the view held an observation its credential context may not reuse. A
+// note already given stays until the PR is observed again (#548).
+func statusMarkPriorNotReused(incoming *StatusSnapshot, current StatusSnapshot, samePR func(row, old StatusPRRow) bool) {
+	for i := range incoming.PRs {
+		row := &incoming.PRs[i]
+		if row.ObservedAt != "" || row.State != "" && row.State != "UNKNOWN" {
+			continue
+		}
+		for _, old := range current.PRs {
+			if samePR(*row, old) && (old.ObservedAt != "" || old.PriorNotReused) {
+				row.PriorNotReused = true
+				break
+			}
+		}
+	}
 }
 
 func statusRetainedPRIdentity(facts *StatusPRFacts, row StatusPRRow) bool {

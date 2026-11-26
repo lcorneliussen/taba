@@ -97,6 +97,7 @@ type statusTUIModel struct {
 	interval          time.Duration
 	background        time.Duration
 	nextRefresh       time.Time
+	waitingRetry      time.Time // earliest pass for PRs still waiting for a first observation (#548)
 	lastRefresh       time.Time
 	paintAt           time.Time // UI clock only; never an observation timestamp
 	width             int
@@ -292,6 +293,41 @@ func (m statusTUIModel) visibleRow(x, y int) (statusTUIRow, bool) {
 
 func statusTUIRepoKey(row wtc.StatusRepo) string {
 	return "repo:" + row.Collection + "\x00" + row.Dir + "\x00" + row.Worktree
+}
+
+// statusTUIWaitingRetry is when the next pass should come for PR rows that
+// have no observation yet and whose read was deferred: at their earliest
+// retry, but not sooner than the focused interval (30 s when unset), so a view
+// left in the background still reads them without a keypress (#548). Every
+// read stays subject to the shared admission. Zero when no row waits.
+func statusTUIWaitingRetry(snapshot wtc.StatusSnapshot, at time.Time, interval time.Duration) time.Time {
+	floor := interval
+	if floor <= 0 {
+		floor = 30 * time.Second
+	}
+	var due time.Time
+	for _, row := range snapshot.PRs {
+		if row.ObservedAt != "" || row.Freshness != "deferred" || row.State != "" && row.State != "UNKNOWN" {
+			continue
+		}
+		next := at.Add(floor)
+		if retry, err := time.Parse(time.RFC3339Nano, row.RetryAt); err == nil && retry.After(next) {
+			next = retry
+		}
+		if due.IsZero() || next.Before(due) {
+			due = next
+		}
+	}
+	return due
+}
+
+// refreshNoLaterThanWaiting keeps a scheduled pass no later than the waiting
+// rows' retry; a view that refreshes only once (no interval) is left alone.
+func (m statusTUIModel) refreshNoLaterThanWaiting(next time.Time) time.Time {
+	if m.waitingRetry.IsZero() || m.interval <= 0 && m.background <= 0 || !next.IsZero() && !m.waitingRetry.Before(next) {
+		return next
+	}
+	return m.waitingRetry
 }
 
 func statusTUITick() tea.Cmd {
@@ -599,13 +635,13 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.focused = true
 		m.observedUntil = time.Now().Add(time.Minute)
 		if m.interval > 0 {
-			m.nextRefresh = time.Now().Add(m.interval)
+			m.nextRefresh = m.refreshNoLaterThanWaiting(time.Now().Add(m.interval))
 		}
 	case tea.BlurMsg:
 		m.focused = false
 		m.observedUntil = time.Time{}
 		if m.background > 0 {
-			m.nextRefresh = time.Now().Add(m.background)
+			m.nextRefresh = m.refreshNoLaterThanWaiting(time.Now().Add(m.background))
 		}
 	case statusRuntimeMsg:
 		m.runtimeReading = false
@@ -729,6 +765,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.resourceObserved(msg.at) {
 			m.nextRefresh = msg.at.Add(m.background)
 		}
+		m.waitingRetry = time.Time{}
 		if m.context != nil {
 			m.resourceSignature = m.context.StatusResourceSignature()
 		}
@@ -747,6 +784,11 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				runtimeAt = statusSnapshotTime(msg.snapshot)
 			}
 			m.snapshot = wtc.StatusPreferNewerObservations(msg.snapshot, m.snapshot)
+			if !m.procs {
+				// Only rows the view still has no observation for.
+				m.waitingRetry = statusTUIWaitingRetry(m.snapshot, msg.at, m.interval)
+				m.nextRefresh = m.refreshNoLaterThanWaiting(m.nextRefresh)
+			}
 			m.selectedNext = min(m.selectedNext, max(0, len(statusNextRepos(m.snapshot))-1))
 			for i, row := range statusNextRepos(m.snapshot) {
 				if statusNextIdentity(row) == selectedKey {
@@ -810,7 +852,7 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if base.IsZero() {
 				base = now
 			}
-			m.nextRefresh = base.Add(m.background)
+			m.nextRefresh = m.refreshNoLaterThanWaiting(base.Add(m.background))
 		}
 		changed := false
 		if m.context != nil && !m.watcherPending {
@@ -2248,7 +2290,7 @@ func (m statusTUIModel) contentLayout() statusTUIContent {
 			"C checks: ✓ passed; ✗ failed/error; ● pending/expected; · absent/unknown.",
 			"M mergeability: ✓ clean/mergeable; ✗ conflict; ↓ behind base; ⊘ blocked; · absent/unknown/other.",
 			"R reviews: ✓ approved; ✗ changes requested; ● waiting; ✎ commented (not approval); ∅ no reviewers; · absent/unknown.",
-			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, r:age refreshing, never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up; still on a merged branch: ⚠ catch-up fully landed or no landing record, ⚠ extra follow-up work, merged? landing unknown; ⚠ before a freshness mark: still on a merged branch whose merge is not currently confirmed (details below).",
+			"PR freshness in STATE: s:age stale, d:age deferred, u:age unavailable, r:age refreshing, wait = not yet observed, read deferred (reason and retry below), never = no observation; age ? = unknown. r refresh explicitly rechecks active enlisted PR metadata; repeated keys coalesce. Details below and l log. Shared limits apply; stale/deferred facts keep their observation time. ◇ draft; ↗ opens a link. Merged PRs off their branch use · signals; retained branches keep recorded observations. See STATE for follow-up; still on a merged branch: ⚠ catch-up fully landed or no landing record, ⚠ extra follow-up work, merged? landing unknown; ⚠ before a freshness mark: still on a merged branch whose merge is not currently confirmed (details below).",
 		}
 		if overrides := statusTUIBaseOverrideDetails(m.snapshot); len(overrides) > 0 {
 			help = append(help, statusTUIBaseMarker+" after a ↓ count: counted against a collection base override. Full values: "+branding.Text("{{command}} repo base show <repo>")+".")

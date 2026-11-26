@@ -150,6 +150,7 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 	ctx, cancel := statusRefreshContext(ctx)
 	defer cancel()
 	defer func() {
+		statusMarkObservedDetail(forge, slug, result)
 		if forge != "bitbucket.org" || (result.State != "OPEN" && result.State != "DRAFT") {
 			return
 		}

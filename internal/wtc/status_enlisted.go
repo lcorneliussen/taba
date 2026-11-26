@@ -257,9 +257,16 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 		}
 		return refused.apply(statusDeferredDetail(record))
 	}
-	defer func() { result = statusObserveDetailContext(ctx, result, slug, forge) }()
+	defer func() {
+		result = statusObserveDetailContext(ctx, result, slug, forge)
+		statusMarkObservedDetail(forge, slug, result)
+	}()
 	if slug == "" || forge == "" {
 		return statusUnknownDetail(record)
+	}
+	// A PR nobody has observed yet reads in its bounded first turn (#548).
+	if statusFirstObservationDue(ctx, record, slug, forge) {
+		ctx = statusFirstObservationNeeded(ctx)
 	}
 	if detail, ok := statusResourceSettledMerge(ctx, record, slug, forge); ok {
 		statusForgetConfirmation(forge, slug+"#"+record.Number)
@@ -438,7 +445,7 @@ func statusViewPRWithLiveContext(ctx context.Context, record PRRecord, slug, for
 		}
 		stale, _ := statusReadForgeEntryAnyContext(ctx, "pr", forge, slug, record.Number)
 		started := time.Now()
-		raw, live, refused, err = statusWithForgeAdmissionContext(ctx, forge, slug+"#"+record.Number, stale, fetch)
+		raw, live, refused, err = statusWithForgeAdmissionContext(statusFirstObservationRead(ctx, forge, slug, record.Number), forge, slug+"#"+record.Number, stale, fetch)
 		if live && len(raw) > 0 {
 			if !statusResourceWriteSince(ctx, "pr", forge, slug, record.Number, raw, started) {
 				if winner, ok := statusResourceObservedDetail(ctx, record, slug, forge, 365*24*time.Hour); ok {
@@ -449,7 +456,7 @@ func statusViewPRWithLiveContext(ctx context.Context, record PRRecord, slug, for
 			statusResourceWriteEntry(ctx, "omit", forge, slug, record.Number, []byte("ok"))
 		}
 	} else {
-		raw, live, refused, err = statusFetchSharedAdmissionContext(ctx, "pr", forge, slug, record.Number, fetch)
+		raw, live, refused, err = statusFetchSharedAdmissionContext(statusFirstObservationRead(ctx, forge, slug, record.Number), "pr", forge, slug, record.Number, fetch)
 	}
 	if requireFresh && err == nil && !live {
 		// Shared reads can fall back to expired data during cooling or a

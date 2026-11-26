@@ -225,8 +225,13 @@ func StatusPRFreshnessMark(freshness, observed string, now time.Time) string {
 		return ""
 	}
 	if observed == "" {
-		if freshness == "refreshing" {
+		switch freshness {
+		case "refreshing":
 			return "reading"
+		case "deferred":
+			// Nothing seen yet, and the read is waiting for admission, a
+			// cooldown or the next pass; details name the reason (#548).
+			return "wait"
 		}
 		return "never"
 	}
@@ -271,6 +276,9 @@ func StatusPRObservationDetail(row StatusPRRow) string {
 	text := row.Repo + "#" + row.Number + ": " + row.Freshness + "; " + observation + reasonLabel + reason
 	if row.RetryAt != "" {
 		text += "; retry after " + row.RetryAt
+	}
+	if row.PriorNotReused {
+		text += "; earlier observation not reused: this read's credential context cannot be verified as the one that made it"
 	}
 	return text
 }

@@ -157,6 +157,7 @@ func TestStatusPRLayoutFreshnessOneLine(t *testing.T) {
 		{"deferred", wtc.StatusPRRow{State: "OPEN", Freshness: "deferred", ObservedAt: twoHours, ObservationReason: "shared-budget"}, "d:2h"},
 		{"unavailable-failed-retry", wtc.StatusPRRow{State: "OPEN", Freshness: "unavailable", ObservedAt: twoHours, ObservationReason: "rate-limit", RetryAt: "2026-11-16T11:00:00Z"}, "u:2h"},
 		{"never", wtc.StatusPRRow{Freshness: "unavailable"}, "never"},
+		{"waiting", wtc.StatusPRRow{Freshness: "deferred", ObservationReason: "shared-budget", RetryAt: "2026-11-16T11:00:00Z"}, "wait"},
 		{"refreshing", wtc.StatusPRRow{State: "OPEN", Freshness: "refreshing", ObservedAt: twoHours}, "r:2h"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

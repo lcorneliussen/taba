@@ -238,7 +238,10 @@ future observation times cannot establish currentness. Confirmed merges retain
 their terminal authority; checks and reviews remain separate observations.
 
 The PR STATE cell uses compact `s:age` (stale), `d:age` (deferred), and `u:age`
-(unavailable) marks so titles remain visible. `never` means no known observation;
+(unavailable) marks so titles remain visible. `wait` means no known observation
+yet while its read is deferred (shared budget, provider cooldown, deadline); the
+next pass retries it, and details name the reason and retry time. `never` means
+no known observation and no pending read;
 `?` means unknown age. The header shows a refresh in progress. `?` help and `l`
 log provide the full last-known state, original observation time, actual admission
 reason and retry time when known. Missing admission or budget reasons remain

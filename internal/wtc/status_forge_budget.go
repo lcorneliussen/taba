@@ -342,6 +342,28 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 		return false, time.Time{}
 	}
 	ordinary := confirmation == ""
+	// A PR's first read takes its bounded first-observation turn (#548); when
+	// that turn is not open it competes as before.
+	var firstRetry time.Time
+	if first := statusFirstObservationIdentity(ctx); first != "" && forge == "bitbucket.org" {
+		var taken bool
+		taken, firstRetry = statusTakeFirstToken(ctx, forge, first, confirmation, path, &queue, now)
+		if taken {
+			if ordinary {
+				// Its ordinary place, if any, is answered too.
+				waiters := statusReadOrdinaryWaiters(forge, now)
+				if at := waiters.position(statusOrdinaryIdentity(ctx)); at >= 0 {
+					waiters.Queue = append(waiters.Queue[:at], waiters.Queue[at+1:]...)
+					statusSaveOrdinaryWaiters(forge, waiters)
+				}
+			}
+			return true, time.Time{}
+		}
+		if ctx.Err() != nil {
+			return false, time.Time{}
+		}
+		now = statusAdmissionNow()
+	}
 	age := statusOrdinaryAge(forge)
 	// Ordinary waiters exist only beside the Bitbucket FIFO; they are read
 	// even when it is empty so a waiter keeps its place.
@@ -427,6 +449,9 @@ func statusTakeForgeTokenRetry(ctx context.Context, forge, confirmation string) 
 		}
 		if dirty {
 			statusSaveOrdinaryWaiters(forge, waiters)
+		}
+		if !firstRetry.IsZero() && (retry.IsZero() || firstRetry.Before(retry)) {
+			retry = firstRetry
 		}
 		return false, retry
 	}
