@@ -228,9 +228,10 @@ PR, and a reopened PR is open again, so a current open list that carries the
 PR (even a capped one) shows it open and removes the record; a failed list,
 one served stale after a refused read, or a provider cooldown keeps the
 recorded decline. `r` still rereads it by number, and is the only repair
-when a PR was reopened and merged without any current list seeing it open. GitHub closures are not recorded. A by-number read of a
-PR missing from its open list also counts as that PR's full-refresh check,
-so another pane does not repeat it. Never-observed and active PRs are
+when a PR was reopened and merged without any current list seeing it open.
+GitHub closures are not recorded. A by-number read of a PR missing from its
+open list also counts as that PR's full-refresh check, so another pane does
+not repeat it. Never-observed and active PRs are
 read first, in enlistment order; PRs whose last observation is terminal (merged,
 declined, closed or superseded) are rechecked only after them, in explicit and periodic
 refreshes alike, so a deadline defers those rechecks rather than open work. A

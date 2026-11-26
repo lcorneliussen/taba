@@ -351,7 +351,7 @@ func TestStatusDemand562ReopenedDeclineIsOpenAgain(t *testing.T) {
 	}
 }
 
-// A recorded decline needs a complete, current list to be overridden. A
+// A recorded decline needs a current list carrying the PR to be overridden. A
 // failing list, or a provider cooldown, keeps it without reading the PR.
 func TestStatusDemand562RecordedDeclineSurvivesListFailureAndCooldown(t *testing.T) {
 	d := newDemand562(t, 1, map[string]map[string]string{"example/r1": {"12": "DECLINED"}})
@@ -417,4 +417,37 @@ func TestStatusDemand562RecordedDeclineListEvidence(t *testing.T) {
 			t.Fatal("recorded decline was read")
 		}
 	})
+}
+
+// A PR reopened and merged while no current list saw it open keeps its
+// recorded decline in background refresh; an explicit refresh reads it by
+// number, records the merge and drops the decline.
+func TestStatusDemand562ExplicitRefreshRepairsAMergeAfterReopen(t *testing.T) {
+	d := newDemand562(t, 1, map[string]map[string]string{"example/r1": {"12": "DECLINED"}})
+	d.pass()
+	d.setPR("example/r1", "12", "MERGED")
+	d.advance(91 * time.Second)
+	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "DECLINED" || row.Freshness != "recorded" {
+		t.Fatalf("background refresh: %+v", row)
+	}
+	views := d.reads("view", "r1", "12")
+	pane := d.panes[0]
+	snapshot, err := pane.statusForgePreviewWithIntent(pane.resourceContext(), StatusRefreshForeground, false, true, 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := demand562Row(t, snapshot, "r1", "12"); row.State != "MERGED" {
+		t.Fatalf("explicit refresh: %+v", row)
+	}
+	if got := d.reads("view", "r1", "12"); got != views+1 {
+		t.Fatalf("explicit refresh made %d reads, want one", got-views)
+	}
+	records, err := pane.ListPRs()
+	if err != nil || records[0].DeclinedOn != "" || records[0].MergedOn == "" {
+		t.Fatalf("registry after explicit refresh: %+v %v", records, err)
+	}
+	d.advance(91 * time.Second)
+	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "MERGED" || d.reads("view", "r1", "12") != views+1 {
+		t.Fatalf("recorded merge: %+v", row)
+	}
 }

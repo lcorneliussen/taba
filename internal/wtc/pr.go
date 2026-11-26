@@ -29,7 +29,7 @@ type PRRecord struct {
 	MergeHead   string `json:"merge_head,omitempty"`
 	// DeclinedOn and DeclinedAt record a Bitbucket decline (updated_on and,
 	// when known, the decline event). Background refresh trusts the record
-	// until a complete, current open list shows the PR again.
+	// until a current open list (even a capped one) shows the PR again.
 	DeclinedOn string `json:"declined_on,omitempty"`
 	DeclinedAt string `json:"declined_at,omitempty"`
 }
@@ -459,7 +459,7 @@ func (c *Context) recordMergedPRsLocked(records []PRRecord, updates map[string]s
 }
 
 // statusDeclineUpdate is one change to a recorded Bitbucket decline: a new
-// record (DeclinedOn set) or its removal after the PR reappeared as open.
+// record (DeclinedOn set) or its removal once the PR is seen open or merged.
 type statusDeclineUpdate struct {
 	DeclinedOn, DeclinedAt string
 }
