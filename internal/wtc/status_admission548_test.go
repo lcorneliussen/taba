@@ -17,8 +17,9 @@ import (
 
 // admission548Released models the released (0.2.7-0.2.9) Bitbucket
 // admission decision, following v0.2.9's statusTakeForgeTokenForContext with
-// the clock seams; it leaves out the GitHub branch and the cooldown recheck
-// after the refill wait, which no test here exercises. It lets mixed-version
+// the clock seams; it leaves out the GitHub branch, the unlimited-allowance
+// shortcut, the cancellation checks and the cooldown recheck after the refill
+// wait, none of which these tests exercise. It lets mixed-version
 // contention be replayed against the current client. Released clients know the
 // confirmation FIFO and foreground leases, take any token above one per
 // queued confirmation for ordinary reads, and let the FIFO head wait in the
