@@ -115,12 +115,8 @@ func (c *Context) runtimeRepoDeclarationsInputs(repo runtimeRepo) ([]RuntimeItem
 		}
 		item.Label, _ = task["label"].(string)
 		item.Autostart, _ = task["autostart"].(bool)
-		if tags, ok := task["tags"].([]any); ok {
-			for _, tag := range tags {
-				if tag == "endpoint" || tag == "accessory" {
-					item.Kind = tag.(string)
-				}
-			}
+		if err := runtimeTags(&item, task); err != nil {
+			return nil, sources.inputs, err
 		}
 		if value, exists := task["x-wtc"]; exists {
 			meta, ok := value.(map[string]any)
@@ -151,4 +147,25 @@ func (c *Context) runtimeRepoDeclarationsInputs(repo runtimeRepo) ([]RuntimeItem
 		items = append(items, item)
 	}
 	return items, sources.inputs, nil
+}
+
+func runtimeTags(item *RuntimeItem, task map[string]any) error {
+	if task["tags"] == nil {
+		return nil
+	}
+	tags, ok := task["tags"].([]any)
+	if !ok {
+		return fmt.Errorf("%s: tags must be a list of strings", item.Path)
+	}
+	for _, value := range tags {
+		tag, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("%s: tags must be a list of strings", item.Path)
+		}
+		if tag == "endpoint" || tag == "accessory" {
+			item.Kind = tag
+		}
+		item.Tags = append(item.Tags, tag)
+	}
+	return nil
 }
