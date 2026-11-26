@@ -298,12 +298,8 @@ func (c *Context) runtimePlanResolving(binary string, managed, resolveEnv bool) 
 			} else if _, exists := task["x-wtc"]; exists {
 				return nil, nil, fmt.Errorf("%s: x-wtc must be an object", full)
 			}
-			if tags, ok := task["tags"].([]any); ok {
-				for _, tag := range tags {
-					if tag == "endpoint" || tag == "accessory" {
-						item.Kind = tag.(string)
-					}
-				}
+			if err := runtimeTags(&item.RuntimeItem, task); err != nil {
+				return nil, nil, err
 			}
 			if ready, ok := task["ready"].(map[string]any); ok {
 				item.Ready = true

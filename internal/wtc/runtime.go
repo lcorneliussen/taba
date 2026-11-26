@@ -28,14 +28,15 @@ type RuntimeItem struct {
 	// nativeDeclaration marks a planned task from the dekit.yaml tree.
 	nativeDeclaration bool
 
-	Collection string `json:"collection"`
-	Repo       string `json:"repo"`
-	Dir        string `json:"dir"`
-	Path       string `json:"path"`
-	Group      string `json:"group"`
-	Kind       string `json:"kind"`
-	Label      string `json:"label,omitempty"`
-	URL        string `json:"url,omitempty"`
+	Collection string   `json:"collection"`
+	Repo       string   `json:"repo"`
+	Dir        string   `json:"dir"`
+	Path       string   `json:"path"`
+	Group      string   `json:"group"`
+	Kind       string   `json:"kind"`
+	Label      string   `json:"label,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	URL        string   `json:"url,omitempty"`
 	// HealthURL is the configured health path at a service's port-derived
 	// URL. Status's answering check looks at it; readiness uses the same URL
 	// through the rendered ready.http.
