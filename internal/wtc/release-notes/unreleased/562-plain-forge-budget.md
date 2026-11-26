@@ -9,4 +9,5 @@
   keeps 90); `WTC_FORGE_CACHE_AGE` still sets one age for both. Status panes
   still on an older release keep deferring their own reads behind their queue;
   restart them on this release
-  ([#562](https://github.com/lcorneliussen/taba/issues/562)).
+  ([#562](https://github.com/lcorneliussen/taba/issues/562),
+  [#564](https://github.com/lcorneliussen/taba/pull/564)).
