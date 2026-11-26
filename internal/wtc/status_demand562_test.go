@@ -443,8 +443,13 @@ func TestStatusDemand562ExplicitRefreshRepairsAMergeAfterReopen(t *testing.T) {
 		t.Fatalf("explicit refresh made %d reads, want one", got-views)
 	}
 	records, err := pane.ListPRs()
-	if err != nil || records[0].DeclinedOn != "" || records[0].MergedOn == "" {
-		t.Fatalf("registry after explicit refresh: %+v %v", records, err)
+	if err != nil || records[0].MergedOn == "" {
+		t.Fatalf("merge not recorded: %+v %v", records, err)
+	}
+	// ListPRs hides a decline behind a recorded merge; the row itself is gone.
+	raw, err := os.ReadFile(filepath.Join(pane.Collection, ".wtc-prs"))
+	if err != nil || strings.Contains(string(raw), "# declined-pr r1 12 ") {
+		t.Fatalf("decline row left after the merge:\n%s %v", raw, err)
 	}
 	d.advance(91 * time.Second)
 	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "MERGED" || d.reads("view", "r1", "12") != views+1 {
