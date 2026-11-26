@@ -8,4 +8,5 @@
   status cannot verify the credential context (such as a TWG profile kept in
   TWG's own store), earlier observations are still not reused, and the row
   says so.
-  ([#548](https://github.com/lcorneliussen/taba/issues/548)).
+  ([#548](https://github.com/lcorneliussen/taba/issues/548),
+  [#560](https://github.com/lcorneliussen/taba/pull/560)).
