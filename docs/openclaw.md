@@ -43,7 +43,23 @@ digits and hyphens, at most 64 characters.
 
 ## Host compatibility
 
-The plugin supports OpenClaw 2026.10.2 and later. Session reads await
+The plugin declares **OpenClaw 2026.10.2 as its minimum host** in
+`openclaw-plugin/package.json` (`install.minHostVersion` and
+`compat.pluginApi`). That lower bound is not evidence that every later host
+has been tested. Pin an exact stable OpenClaw release when deploying, and
+check its SDK deprecations before upgrading.
+
+| Taba release | OpenClaw host | Verified coverage |
+|---|---|---|
+| 0.2.11 | 2026.11.10 | Credential-free installation, plugin loading, gateway startup and an empty-collection session action reporting matching CLI/plugin versions. Bitbucket 0.3.7 also installs and loads; both packages pass the host's runtime compatibility lint. |
+
+This smoke test does not verify model sign-in, existing account migration,
+repository access, Git pushes or PR confirmation. It is not a claim that all
+versions between the declared minimum and this host passed integration tests.
+See the [API audit](../tools/openclaw-compat/README.md) for repeatable source
+checks and the host's own observed-deprecation diagnostics.
+
+Session reads await
 `listSessionEntriesAsync` and `getSessionEntryAsync` when the host exposes them.
 Older hosts use a legacy reader only when its corresponding async method is
 absent. A failed async read never retries synchronously or authorizes an action
