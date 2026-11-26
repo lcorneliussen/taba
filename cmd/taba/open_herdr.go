@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -129,56 +128,7 @@ func openHerdr(session string, args ...string) (openHerdrResponse, error) {
 	return result, nil
 }
 
-func openSessionRunning(session string) bool {
-	_, err := openHerdr(session, "workspace", "list")
-	return err == nil
-}
-
 var openAgentEnvironment = regexp.MustCompile(`^(CLAUDE[A-Z0-9_]*|ANTHROPIC[A-Z0-9_]*|AI_AGENT|CODEX[A-Z0-9_]*|CURSOR[A-Z0-9_]*|GEMINI[A-Z0-9_]*)=`)
-
-func openEnsureSession(session string) error {
-	if openSessionRunning(session) {
-		return nil
-	}
-	cmd := exec.Command("herdr", "--session", session, "server")
-	cmd.Env = []string{}
-	for _, setting := range os.Environ() {
-		if !openAgentEnvironment.MatchString(setting) {
-			cmd.Env = append(cmd.Env, setting)
-		}
-	}
-	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		return err
-	}
-	defer devNull.Close()
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, devNull, devNull
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	_ = cmd.Process.Release()
-	if err := retry.Poll(context.Background(), retry.Policy{Every: 250 * time.Millisecond, Attempts: 60}, func(context.Context) (bool, error) {
-		return openSessionRunning(session), nil
-	}); err != nil {
-		return fmt.Errorf("herdr session %q did not start", session)
-	}
-	return nil
-}
-
-func openWorkspaces(session string) ([]openWorkspaceInfo, error) {
-	result, err := openHerdr(session, "workspace", "list")
-	return result.Result.Workspaces, err
-}
-
-func openPanes(session, workspace string) ([]openPaneInfo, error) {
-	result, err := openHerdr(session, "pane", "list", "--workspace", workspace)
-	return result.Result.Panes, err
-}
-
-func openTabs(session, workspace string) ([]openTabInfo, error) {
-	result, err := openHerdr(session, "tab", "list", "--workspace", workspace)
-	return result.Result.Tabs, err
-}
 
 func openPaneByLabel(panes []openPaneInfo, label string) openPaneInfo {
 	for _, pane := range panes {
@@ -198,34 +148,20 @@ func openTabByLabel(tabs []openTabInfo, label string) openTabInfo {
 	return openTabInfo{}
 }
 
-func openSessionWidth(session string) int {
-	result, err := openHerdr(session, "api", "snapshot")
-	if err != nil {
-		return 0
-	}
-	width := 0
-	for _, layout := range result.Result.Snapshot.Layouts {
-		if layout.Area.Width > width {
-			width = layout.Area.Width
-		}
-	}
-	return width
-}
-
-func openSameColumn(session, left, right string) bool {
-	result, err := openHerdr(session, "api", "snapshot")
+func openSameColumn(host terminalHost, workspace, left, right string) bool {
+	layouts, err := host.Layouts(workspace)
 	if err != nil {
 		return false
 	}
 	var xleft, xright int
 	foundLeft, foundRight := false, false
-	for _, layout := range result.Result.Snapshot.Layouts {
+	for _, layout := range layouts {
 		for _, pane := range layout.Panes {
 			if pane.ID == left {
-				xleft, foundLeft = pane.Rect.X, true
+				xleft, foundLeft = pane.X, true
 			}
 			if pane.ID == right {
-				xright, foundRight = pane.Rect.X, true
+				xright, foundRight = pane.X, true
 			}
 		}
 	}
@@ -233,20 +169,20 @@ func openSameColumn(session, left, right string) bool {
 }
 
 // openStacked reports whether lower sits below upper in the same tab and column.
-func openStacked(session, upper, lower string) (bool, error) {
-	result, err := openHerdr(session, "api", "snapshot")
+func openStacked(host terminalHost, workspace, upper, lower string) (bool, error) {
+	layouts, err := host.Layouts(workspace)
 	if err != nil {
 		return false, err
 	}
-	for _, layout := range result.Result.Snapshot.Layouts {
+	for _, layout := range layouts {
 		var xupper, yupper, xlower, ylower int
 		foundUpper, foundLower := false, false
 		for _, pane := range layout.Panes {
 			if pane.ID == upper {
-				xupper, yupper, foundUpper = pane.Rect.X, pane.Rect.Y, true
+				xupper, yupper, foundUpper = pane.X, pane.Y, true
 			}
 			if pane.ID == lower {
-				xlower, ylower, foundLower = pane.Rect.X, pane.Rect.Y, true
+				xlower, ylower, foundLower = pane.X, pane.Y, true
 			}
 		}
 		if foundUpper && foundLower {
@@ -256,7 +192,7 @@ func openStacked(session, upper, lower string) (bool, error) {
 			return false, nil
 		}
 	}
-	return false, fmt.Errorf("herdr snapshot has no layout for panes %s and %s", upper, lower)
+	return false, fmt.Errorf("%s snapshot has no layout for panes %s and %s", host.Kind(), upper, lower)
 }
 
 func openFirstPane(result openHerdrResponse) string {
@@ -275,30 +211,6 @@ func openFirstPane(result openHerdrResponse) string {
 	return ""
 }
 
-func openPaneTab(session, pane string) string {
-	result, err := openHerdr(session, "pane", "get", pane)
-	if err != nil {
-		return ""
-	}
-	return result.Result.Pane.TabID
-}
-
-func openPaneCommand(session, pane string) ([]string, error) {
-	result, err := openHerdr(session, "pane", "process-info", "--pane", pane)
-	if err != nil {
-		return nil, err
-	}
-	for _, process := range result.Result.ProcessInfo.Processes {
-		if process.PID == result.Result.ProcessInfo.Group {
-			if len(process.Argv) > 0 {
-				return process.Argv, nil
-			}
-			return strings.Fields(process.Cmdline), nil
-		}
-	}
-	return nil, fmt.Errorf("foreground process unavailable for pane %s", pane)
-}
-
 func openShellCommand(argv []string) bool {
 	if len(argv) == 0 {
 		return false
@@ -315,8 +227,8 @@ func openShellCommand(argv []string) bool {
 // tests count it instead of sleeping.
 var openSettlePause func(context.Context) error
 
-func openPaneIdle(session, pane string) bool {
-	argv, err := openPaneCommand(session, pane)
+func openPaneIdle(host terminalHost, pane string) bool {
+	argv, err := host.Foreground(pane)
 	return err == nil && openShellCommand(argv)
 }
 
@@ -334,18 +246,18 @@ func openSettled(idle func() bool) bool {
 	}) == nil
 }
 
-func openWaitIdle(session, pane string) bool {
-	return openSettled(func() bool { return openPaneIdle(session, pane) })
+func openWaitIdle(host terminalHost, pane string) bool {
+	return openSettled(func() bool { return openPaneIdle(host, pane) })
 }
 
-func openWaitWorkspaceIdle(session, workspace string) {
+func openWaitWorkspaceIdle(host terminalHost, workspace string) {
 	openSettled(func() bool {
-		panes, err := openPanes(session, workspace)
+		panes, err := host.Panes(workspace)
 		if err != nil || len(panes) == 0 {
 			return false
 		}
 		for _, pane := range panes {
-			if !openPaneIdle(session, pane.ID) {
+			if !openPaneIdle(host, pane.ID) {
 				return false
 			}
 		}

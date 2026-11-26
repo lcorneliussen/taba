@@ -242,6 +242,10 @@ func statusNextRunInContext(ctx context.Context, c *wtc.Context, selected wtc.St
 	}
 }
 
+func statusNextHost(owner *wtc.Context, run statusNextRunner) terminalHost {
+	return &herdrHost{session: openSession(owner, ""), call: run.herdr}
+}
+
 func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt prompts.Text, run statusNextRunner, contexts ...context.Context) tea.Msg {
 	failed := func(err error) tea.Msg { return statusNextDoneMsg{err: err} }
 	ctx := context.Background()
@@ -256,16 +260,16 @@ func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt prompts.Text,
 	}
 	// The owning collection's named author pane is the destination. Focus can
 	// point to status, a shell or a reviewer, so it never selects a recipient.
-	session := openSession(owner, "")
-	workspaces, err := run.herdr(session, "workspace", "list")
+	host := statusNextHost(owner, run)
+	workspaces, err := host.Workspaces()
 	if err := ctx.Err(); err != nil {
 		return failed(err)
 	}
 	if err != nil {
-		return instruction("No herdr destination available")
+		return instruction("No " + host.Kind() + " destination available")
 	}
 	var matches []openWorkspaceInfo
-	for _, workspace := range workspaces.Result.Workspaces {
+	for _, workspace := range workspaces {
 		if workspace.Label == r.Collection {
 			matches = append(matches, workspace)
 		}
@@ -273,7 +277,7 @@ func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt prompts.Text,
 	if len(matches) != 1 {
 		return instruction("Cannot identify one workspace for " + r.Collection)
 	}
-	panes, err := run.herdr(session, "pane", "list", "--workspace", matches[0].ID)
+	panes, err := host.Panes(matches[0].ID)
 	if err := ctx.Err(); err != nil {
 		return failed(err)
 	}
@@ -281,7 +285,7 @@ func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt prompts.Text,
 		return failed(err)
 	}
 	var agents []openPaneInfo
-	for _, pane := range panes.Result.Panes {
+	for _, pane := range panes {
 		if pane.Label == "agent" && pane.ID != "" && pane.Agent != "" {
 			agents = append(agents, pane)
 		}
@@ -297,7 +301,7 @@ func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt prompts.Text,
 	if err := ctx.Err(); err != nil {
 		return failed(err)
 	}
-	_, err = run.herdr(session, "agent", "prompt", pane.ID, prompt.String())
+	err = host.PromptAgent(pane.ID, prompt)
 	result := statusNextDoneMsg{err: err}
 	if err == nil {
 		result.text = "Sent to " + destination + "; completion pending"
