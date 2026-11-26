@@ -298,6 +298,9 @@ func TestStatusHTTPRedirectFallbackDeferred(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// An observed PR, so its read is ordinary: a never-observed one would wait
+	// for the next refill in its first-observation turn (#548).
+	statusMarkObserved("bitbucket.org", "example/widget", "7")
 	detail := statusEnrichRecordMetadata(PRRecord{Number: "7"}, "example/widget", "bitbucket.org")
 	if detail.State != "" || detail.Freshness != "deferred" || calls.Load() != 1 {
 		t.Fatalf("requests=%d detail=%+v", calls.Load(), detail)
