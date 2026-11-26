@@ -159,7 +159,7 @@ the merge time of a merged PR, the provider's closure time of a closed one
 (JSON `closed_at`). A Bitbucket decline is dated by the update that entered
 its current declined state in the PR's activity log, from the same bounded
 read that dates a Bitbucket merge; `updated_on` never stands in. Unlike a
-merge, a decline is not recorded and can be reopened, so it is dated only when
+merge, a decline can be reopened, so it is dated only when
 `twg` reads with a known credential (a `TWG_BBC_TOKEN` environment token or a
 host read credential; see [status-auth-cache.md](status-auth-cache.md)). That
 read is cached under the PR's `updated_on` and serves later runs until a
@@ -220,7 +220,16 @@ coalesce; a request made during collection runs immediately after that collectio
 Manual Refresh is not delayed by the background interval. A 30-second metadata
 phase budget returns completed live observations alongside deferred deadline
 outcomes for unfinished records; it does not date their old facts as new reads. Recorded/retained
-merges are reused without metadata queries. Never-observed and active PRs are
+merges are reused without metadata queries. A Bitbucket decline is recorded
+in `.wtc-prs` (`# declined-pr repo number updated-on [declined-at]`) the
+first time a pass observes it, and later background refreshes read nothing
+for it but the repository's shared open list. Bitbucket can reopen a declined
+PR, and a reopened PR is open again, so a complete, current open list that
+carries the PR shows it open and removes the record; a failed, stale or
+capped list, or a provider cooldown, keeps the recorded decline. `r` still
+rereads it by number. GitHub closures are not recorded. A by-number read of a
+PR missing from its open list also counts as that PR's full-refresh check,
+so another pane does not repeat it. Never-observed and active PRs are
 read first, in enlistment order; PRs whose last observation is terminal (merged,
 declined, closed or superseded) are rechecked only after them, in explicit and periodic
 refreshes alike, so a deadline defers those rechecks rather than open work. A
