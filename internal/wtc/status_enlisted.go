@@ -378,7 +378,7 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 		// still observed it, so equal time also dates the row.
 		if !item.Started.Before(observed) {
 			detail.Freshness = ""
-			detail = statusObserveAt(detail, item.Started, "open-list")
+			detail = statusObserveAt(detail, item.Started, "open-list", forge)
 		}
 	}
 	unlock()

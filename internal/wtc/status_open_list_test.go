@@ -159,7 +159,7 @@ esac
 		t.Fatalf("list did not replace the view: %+v hits=%d views=%d", first, listHits.Load(), statusTestFileLines(t, views))
 	}
 	phase.Store(1)
-	past := time.Now().Add(-2 * time.Minute)
+	past := time.Now().Add(-4 * time.Minute) // past the 180 s Bitbucket list age
 	if err := os.Chtimes(statusForgeEntryPath("openprs", "bitbucket.org", slug, "open"), past, past); err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +259,7 @@ esac
 				fixtureFile(t, view, merged, 0600)
 				fixtureGit(t, "-C", c.Harness, "checkout", "--detach", "origin/"+base)
 				fixtureGit(t, "-C", c.Harness, "branch", "-d", "topic")
-				past := time.Now().Add(-2 * time.Minute)
+				past := time.Now().Add(-4 * time.Minute) // past the 180 s Bitbucket list age
 				for kind, key := range map[string]string{"pr": "7", "openprs": "open"} {
 					if err := os.Chtimes(statusForgeEntryPath(kind, "bitbucket.org", "example/widget", key), past, past); err != nil {
 						t.Fatal(err)

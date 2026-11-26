@@ -129,7 +129,7 @@ func statusDetailFromOpenItemContext(ctx context.Context, record PRRecord, slug,
 		}
 	}
 	statusResourceWriteEntry(ctx, "stamp", forge, slug, record.Number, []byte(item.Fingerprint))
-	return statusObserveAt(detail, item.Started, "open-list"), true, false
+	return statusObserveAt(detail, item.Started, "open-list", forge), true, false
 }
 
 type statusGHListItem struct {
