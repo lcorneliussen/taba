@@ -24,6 +24,7 @@ export function inventory(source, filename = 'index.js') {
     if (!n) return null;
     if (ts.isIdentifier(n)) return bindings.get(n.text) ?? null;
     if (ts.isAwaitExpression(n) || ts.isParenthesizedExpression(n)) return chain(n.expression);
+    if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword && ts.isStringLiteral(n.arguments[0]) && sdk(n.arguments[0].text)) return normalize(n.arguments[0].text);
     if (ts.isPropertyAccessExpression(n)) { const base = chain(n.expression); return base ? base + '.' + n.name.text : null; }
     if (ts.isElementAccessExpression(n) && ts.isStringLiteral(n.argumentExpression)) { const base = chain(n.expression); return base ? base + '.' + n.argumentExpression.text : null; }
     return null;

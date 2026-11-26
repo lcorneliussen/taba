@@ -4,8 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { inventory, assess } from './audit.mjs';
 import { readRegistry } from './registry.mjs';
+const cli = fileURLToPath(new URL('./audit.mjs', import.meta.url));
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-audit-'));
@@ -33,6 +35,8 @@ test('AST inventory follows aliases, destructuring and optional/literal members,
   assert(uses.some(u => u.kind === 'rpc' && u.surface === 'sessions.list'));
   assert(uses.some(u => u.kind === 'rpc' && u.surface === 'sessions.github.publish'));
   assert(!uses.some(u => u.surface.includes('imaginary')));
+  const inline = inventory(`const fn = async () => (await import('openclaw/plugin-sdk/current')).old();`);
+  assert(inline.uses.some(u => u.surface === 'openclaw/plugin-sdk/current.old'));
 });
 
 test('dates do not turn removal-pending into removed; missing imports are errors', t => {
@@ -74,7 +78,7 @@ test('registry reads imported data, spreads, mapped records and helper returns w
 test('unknown registry syntax cannot produce a clean assessment', t => {
   const f = fixture(t);
   fs.writeFileSync(path.join(f.compat, 'registry-records.ts'), 'export const PLUGIN_COMPAT_RECORDS = JSON.parse("[]");');
-  const r = spawnSync(process.execPath, ['tools/openclaw-compat/audit.mjs', '--host', f.host, '--plugin', f.plugin], { encoding: 'utf8' });
+  const r = spawnSync(process.execPath, [cli, '--host', f.host, '--plugin', f.plugin], { encoding: 'utf8' });
   assert.equal(r.status, 2); assert.match(r.stderr, /Audit incomplete/);
 });
 
@@ -87,6 +91,7 @@ test('never executes plugin code; scans shipped dist but skips tests and symlink
   fs.symlinkSync(f.host, path.join(f.plugin, 'external'));
   const r = assess(f.host, [f.plugin]);
   assert(!fs.existsSync(marker)); assert.equal(r.findings.length, 1); assert.equal(r.findings[0].file, 'dist/ui.js');
+  assert.deepEqual(r.inputs.map(x => x.file).sort(), ['dist/ui.js', 'index.js']);
 });
 
 test('root SDK export and wildcard exports are not missing subpaths', t => {
@@ -94,4 +99,17 @@ test('root SDK export and wildcard exports are not missing subpaths', t => {
   fs.writeFileSync(path.join(f.host, 'package.json'), JSON.stringify({ version:'2026.11.10',exports:{'.':'./index.js','./plugin-sdk/*':'./dist/*.js'} }));
   fs.writeFileSync(path.join(f.plugin, 'index.js'), `import 'openclaw'; import 'openclaw/plugin-sdk/focused';`);
   assert.equal(assess(f.host, [f.plugin]).findings.length, 0);
+});
+
+test('CLI exit 0/1, strict warnings and removed members work from any cwd', t => {
+  const f = fixture(t);
+  const run = (...extra) => spawnSync(process.execPath, [cli, '--host', f.host, '--plugin', f.plugin, '--json', ...extra], { cwd: f.plugin, encoding: 'utf8' });
+  fs.writeFileSync(path.join(f.plugin, 'index.js'), 'api.runtime.agent.session.current();');
+  assert.equal(run().status, 0);
+  fs.writeFileSync(path.join(f.plugin, 'index.js'), 'api.runtime.agent.session.old();');
+  assert.equal(run().status, 0); assert.equal(run('--fail-on-warning').status, 1);
+  const file = path.join(f.compat, 'registry-records.ts');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('removal-pending', 'removed'));
+  const r = run(); assert.equal(r.status, 1);
+  assert.equal(JSON.parse(r.stdout).findings[0].severity, 'error');
 });

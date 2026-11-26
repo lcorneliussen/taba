@@ -28,6 +28,11 @@ fingerprint of the export map and registry, and hashes of the scanned files.
 Treat reports as private until inspected: filenames and API names can identify
 the inspected package.
 
+The read-only `OpenClaw API audit` workflow runs the unit tests on Node 22 and
+24, then audits Taba against that published host's pinned source commit. It
+does not start a gateway or use account credentials. Update the host pin and
+repeat the real-host checks when qualifying another release.
+
 ## Reading the result
 
 - **Error:** an SDK subpath is absent from this host's export map, or a matched
