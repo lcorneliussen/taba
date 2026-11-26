@@ -224,6 +224,11 @@ func (w *statusFirstWaiters) rank(key string, now time.Time, grace time.Duration
 // in the lock and on admission (without the answered confirmation).
 func statusTakeFirstToken(ctx context.Context, forge, key, confirmation, path string, queue *[]statusPendingConfirmation, now time.Time) (bool, time.Time) {
 	burst, every := statusForgeAllowance(forge)
+	if burst <= 1 || statusForgeCooling(forge) {
+		// No first turn applies: a one-token allowance cannot hold one, and a
+		// cooldown names its own retry. The read competes as before.
+		return false, time.Time{}
+	}
 	gap := statusFirstObservationGap(forge)
 	waiters := statusReadFirstWaiters(forge, now)
 	at := waiters.register(key, now)
@@ -235,9 +240,18 @@ func statusTakeFirstToken(ctx context.Context, forge, key, confirmation, path st
 	grace := statusPendingLifetime
 	rank := waiters.rank(key, now, grace)
 	eligible := !now.Before(open) && (rank == 0 || !now.Before(open.Add(every)))
-	if !eligible || burst <= 1 || statusForgeCooling(forge) {
+	if !eligible {
 		statusSaveFirstWaiters(forge, waiters)
-		return false, open.Add(time.Duration(max(rank, 0)) * gap)
+		// Earliest: each recent waiter ahead takes one turn; a younger waiter
+		// also waits out the head's exclusive refill. Never in the past.
+		due := open.Add(time.Duration(max(rank, 0)) * gap)
+		if rank > 0 && due.Before(open.Add(every)) {
+			due = open.Add(every)
+		}
+		if due.Before(now) {
+			due = now
+		}
+		return false, due
 	}
 	tokens, updated := statusReadForgeBudget(path, burst, every, now)
 	if tokens == 0 {

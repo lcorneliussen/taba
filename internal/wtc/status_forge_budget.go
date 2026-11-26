@@ -171,11 +171,11 @@ var (
 // Bound (finite load: waiters retry within statusPendingLifetime, fewer than
 // statusPendingLimit wait): the waiter at position p is admitted within
 // (p+1) * (window + one refill + its retry interval), plus the grace of any
-// dormant waiter ahead, however many confirmations arrive, plus one refill for
-// each first-observation turn (#548, statusTakeFirstToken: at most one per two
-// refills) that takes the held token. Confirmations lose
-// at most one token per window to this path, otherwise only tokens left above
-// their reserve. Reads that name no identity share one place in the FIFO and
+// dormant waiter ahead, however many confirmations arrive. Confirmations lose
+// at most one token per window to the aged ordinary path, otherwise only
+// tokens left above their reserve. First-observation turns (#548,
+// statusTakeFirstToken: at most one per two refills) add one refill to that
+// bound for each turn that takes the held token. Reads that name no identity share one place in the FIFO and
 // among themselves stay first come. With a one-token allowance
 // (WTC_FORGE_MIN_INTERVAL) nothing can be held: the head gets a turn only
 // when it finds the token unspent. Released clients share the bucket and the

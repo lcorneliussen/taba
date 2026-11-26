@@ -784,11 +784,6 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				runtimeAt = statusSnapshotTime(msg.snapshot)
 			}
 			m.snapshot = wtc.StatusPreferNewerObservations(msg.snapshot, m.snapshot)
-			if !m.procs {
-				// Only rows the view still has no observation for.
-				m.waitingRetry = statusTUIWaitingRetry(m.snapshot, msg.at, m.interval)
-				m.nextRefresh = m.refreshNoLaterThanWaiting(m.nextRefresh)
-			}
 			m.selectedNext = min(m.selectedNext, max(0, len(statusNextRepos(m.snapshot))-1))
 			for i, row := range statusNextRepos(m.snapshot) {
 				if statusNextIdentity(row) == selectedKey {
@@ -808,6 +803,12 @@ func (m statusTUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.fetched.Failed != 0 {
 				m.errorText = fmt.Sprintf("%d ref refresh(es) failed; showing local refs", msg.fetched.Failed)
 			}
+		}
+		if !m.procs {
+			// Rows the view still has no observation for, after this result or,
+			// when it failed, from the snapshot still on screen.
+			m.waitingRetry = statusTUIWaitingRetry(m.snapshot, msg.at, m.interval)
+			m.nextRefresh = m.refreshNoLaterThanWaiting(m.nextRefresh)
 		}
 		if m.showLog {
 			m.focusLogTail()

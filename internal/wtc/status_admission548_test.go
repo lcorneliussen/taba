@@ -194,9 +194,10 @@ func TestStatusAdmission548NeverObservedPRBehindReleasedPanes(t *testing.T) {
 // most one turn per gap, so confirmations keep progressing, and every first
 // read still lands within its bounded share.
 func TestStatusAdmission548FirstReadsShareIsBounded(t *testing.T) {
-	// Ninety turns at least one 16 s gap apart need at least 89 gaps (23m44s)
-	// (observed in this run: about 33 minutes, as turns also wait for
-	// refills and polls).
+	// Asserted below: at least readers/2 turns, each at least one 16 s gap
+	// after the last, and every first read served within the bound. Run
+	// observation, not a bound: the last first read was served at about
+	// 28 minutes, 66 of the 90 by turn.
 	const forge, duration = "bitbucket.org", 45 * time.Minute
 	foreground424Fixture(t, "exit 0\n")
 	clock := admission424FakeClock(t)
@@ -513,5 +514,42 @@ func TestStatusAdmission548OrdinaryAdmissionLeavesFirstWaiters(t *testing.T) {
 	}
 	if got := len(statusReadFirstWaiters(forge, clock.now).Queue); got != 0 {
 		t.Fatalf("admitted read still waits for a first turn: %d waiters", got)
+	}
+}
+
+// A refused first read never reports a retry in the past: with a one-token
+// allowance or a cooldown no first turn applies, and with no turn recorded yet
+// the zero time must not become a year-one retry.
+func TestStatusAdmission548FirstReadRetryIsNeverInThePast(t *testing.T) {
+	for _, tc := range []string{"one-token", "cooling", "younger-waiter"} {
+		t.Run(tc, func(t *testing.T) {
+			clock, forge := admission548Turn(t, 0)
+			switch tc {
+			case "one-token":
+				t.Setenv("WTC_FORGE_MIN_INTERVAL", "5")
+			case "cooling":
+				statusForgeCool(forge, time.Hour)
+			case "younger-waiter":
+				// The last turn was taken just over a gap ago and an older
+				// waiter is asking, so it holds the open turn's exclusive refill.
+				gap := statusFirstObservationGap(forge)
+				if !statusSaveFirstWaiters(forge, statusFirstWaiters{Last: clock.now.Add(-gap - time.Second),
+					Queue: []statusOrdinaryWaiter{{Key: statusFirstObservationIdentity(admission548First("9")), Since: clock.now.Add(-time.Minute), Seen: clock.now}}}) {
+					t.Fatal("seed waiters")
+				}
+			}
+			ok, retry := statusTakeForgeTokenRetry(admission548First("1"), forge, "")
+			if ok {
+				t.Fatal("admitted")
+			}
+			if !retry.IsZero() && retry.Before(clock.now) {
+				t.Fatalf("retry %s is before now %s", retry, clock.now)
+			}
+			if tc != "younger-waiter" {
+				if got := len(statusReadFirstWaiters(forge, clock.now).Queue); got != 0 {
+					t.Fatalf("no turn applies, yet %d first waiters were recorded", got)
+				}
+			}
+		})
 	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"regexp"
 
 	tea "charm.land/bubbletea/v2"
@@ -176,5 +177,23 @@ func TestStatus548WaitingRetryFloor(t *testing.T) {
 	}
 	if !statusTUIWaitingRetry(wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{refresh548Row("4", "OPEN", "deferred", at.UTC().Format(time.RFC3339Nano), "", false)}}, at, time.Second).IsZero() {
 		t.Error("a row with an observation is not waiting")
+	}
+}
+
+// A failed pass leaves the waiting rows on screen, and their retry keeps the
+// next pass early.
+func TestStatus548FailedPassKeepsWaitingRetry(t *testing.T) {
+	at := time.Now()
+	m := statusTUIModel{width: 120, height: 40, interval: 30 * time.Second, background: 5 * time.Minute}
+	next, _ := m.Update(statusLoadedMsg{snapshot: wtc.StatusSnapshot{Collection: "fixture", PRs: []wtc.StatusPRRow{refresh548Row("4", "", "deferred", "", "", false)}}, at: at})
+	m = next.(statusTUIModel)
+	failed := at.Add(time.Minute)
+	next, _ = m.Update(statusLoadedMsg{err: errors.New("synthetic collector failure"), at: failed})
+	m = next.(statusTUIModel)
+	if len(m.snapshot.PRs) != 1 || m.snapshot.PRs[0].ObservedAt != "" {
+		t.Fatalf("failed pass replaced the view: %+v", m.snapshot.PRs)
+	}
+	if want := failed.Add(30 * time.Second); !m.nextRefresh.Equal(want) {
+		t.Fatalf("after a failed pass the next pass is %s out, want 30s", m.nextRefresh.Sub(failed))
 	}
 }
