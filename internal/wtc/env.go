@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"taba.sh/taba/internal/envcompat"
 )
 
@@ -305,6 +306,18 @@ func (c *Context) RenderMise() ([]byte, error) {
 		sort.Strings(names)
 		for _, name := range names {
 			fmt.Fprintf(&b, "%q = %q\n", name, tools[name])
+		}
+		b.WriteByte('\n')
+	}
+	settings, ok := c.Config.Mise.Settings.(map[string]any)
+	if c.Config.Mise.Settings != nil && !ok {
+		return nil, fmt.Errorf("mise.settings must be a table")
+	}
+	if len(settings) > 0 {
+		enc := toml.NewEncoder(&b)
+		enc.Indent = ""
+		if err := enc.Encode(map[string]any{"settings": settings}); err != nil {
+			return nil, fmt.Errorf("mise.settings: %w", err)
 		}
 		b.WriteByte('\n')
 	}
