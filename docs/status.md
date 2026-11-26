@@ -319,6 +319,28 @@ ordinary reads. A deferred PR that was never observed shows its checks as
 `UNKNOWN` (`·` in the interactive view), not pending, and names the actual
 refusal reason and the earliest retry time instead of only `never-observed`.
 
+A PR that no status view has observed yet gets a bounded first read on
+Bitbucket. Its own detail read (not its repository's shared open list) takes a
+first-observation turn: one per two refills for all processes together, so first
+reads never take more than half the refill rate however many views start at
+once. When a turn is open and the bucket is empty, the reader waits in the
+budget lock for the next refill, as the head of the confirmation queue does, so
+clients from older releases cannot take that token. The oldest waiter that
+asked recently has one refill to take a turn, then any first read may. A refused
+first read keeps its ordinary or confirmation place, and foreground requests and
+cooldowns still come first. Once any view has observed the PR, a shared mark
+that holds no PR facts ends its first turns. The interactive view schedules its
+next pass at such a row's retry time, at least 30 seconds out, even in the
+background, so no keypress is needed.
+
+Within one verifiable credential context, a refresh that cannot observe a PR
+again keeps its last facts and their original observation time; a newer merge
+read whose merge-time read was deferred keeps the known merge time, so archived
+merges stay archived. A refresh whose credential context cannot be verified as
+the earlier one does not reuse those facts. Its rows say
+`earlier observation not reused` in the details (`prior_not_reused` in JSON)
+rather than looking unseen.
+
 Quit cancels discovery and watcher waits, selected PR/build provider reads,
 the read-only build hook, guarded retirement Git reads, and queued
 cache/admission waits. Snapshot publication
