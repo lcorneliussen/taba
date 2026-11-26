@@ -67,9 +67,9 @@ collection. Keep the existing stash/update/restore behavior for a local
 invocation unless `--clean-only` is requested. Never remove untracked files
 to make a rollout proceed.
 
-`--idle-only` also leaves a collection whose herdr agent is working or
-blocked to that agent (`needs-owner`, "agent working"); the initiating
-collection is never skipped for its own agent. `--install-tools` runs
+`--idle-only` also leaves a collection whose agent is working or blocked,
+or cannot be checked, to that agent (`needs-owner`, "agent working"); the
+initiating collection is never skipped for its own agent. `--install-tools` runs
 `mise install` after a harness's environment refresh, so a new CLI pin is
 installed where it lands.
 

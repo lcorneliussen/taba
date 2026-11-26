@@ -5,7 +5,9 @@ description: Open or reshape a worktree collection in herdr — ensure the agent
 
 # Open a collection in herdr
 
-Mechanism: `taba open`. Canon: `.wtc/instructions/herdr.md`.
+Mechanism: `taba open`. Canon: `.wtc/instructions/herdr.md`. In Rex
+(`taba host` prints `rex`) the same commands open Rex sessions; the
+differences are in `.wtc/instructions/rex.md`.
 
 A workspace is ergonomics only — worktrees already exist. Opening is
 idempotent: reuse the workspace, keep a live agent, fill idle panes, and
