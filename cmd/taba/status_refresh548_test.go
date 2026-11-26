@@ -2,6 +2,8 @@ package main
 
 import (
 	"regexp"
+
+	tea "charm.land/bubbletea/v2"
 	"strconv"
 	"strings"
 	"testing"
@@ -112,5 +114,48 @@ func TestStatus548DeliveredPassesNeverRegressAndWaitingRowsRetry(t *testing.T) {
 		if row.State == "" || row.ObservedAt == "" {
 			t.Fatalf("row %s lost its observation: %+v", row.Number, row)
 		}
+	}
+}
+
+// Focus changes reschedule the next pass; a waiting row keeps it no later
+// than its retry through blur, focus and the focus expiry.
+func TestStatus548WaitingRetrySurvivesFocusChanges(t *testing.T) {
+	now := time.Now()
+	retry := now.Add(2 * time.Minute)
+	row := refresh548Row("4", "", "deferred", "", "", false)
+	row.RetryAt = retry.UTC().Format(time.RFC3339Nano)
+	m := statusTUIModel{width: 120, height: 40, interval: 30 * time.Second, background: 5 * time.Minute}
+	next, _ := m.Update(statusLoadedMsg{snapshot: wtc.StatusSnapshot{Collection: "fixture", PRs: []wtc.StatusPRRow{row}}, at: now})
+	m = next.(statusTUIModel)
+	if !m.nextRefresh.Equal(retry) {
+		t.Fatalf("after load: next refresh in %s, want the retry", m.nextRefresh.Sub(now))
+	}
+	next, _ = m.Update(tea.BlurMsg{})
+	m = next.(statusTUIModel)
+	if m.nextRefresh.After(retry) {
+		t.Fatalf("blur pushed the waiting row's pass to %s", time.Until(m.nextRefresh))
+	}
+	next, _ = m.Update(tea.FocusMsg{})
+	m = next.(statusTUIModel)
+	if m.nextRefresh.After(time.Now().Add(30 * time.Second)) {
+		t.Fatalf("focus did not keep the focused interval: %s", time.Until(m.nextRefresh))
+	}
+	// The focus observation expires: the background interval applies again,
+	// but not past the waiting row's retry.
+	m.observedUntil = time.Now().Add(-time.Second)
+	m.refreshing = true // keep the tick from starting a pass
+	next, _ = m.Update(statusTickMsg(time.Now()))
+	m = next.(statusTUIModel)
+	if m.focused || m.nextRefresh.After(retry) {
+		t.Fatalf("focus expiry: focused=%v next refresh in %s", m.focused, time.Until(m.nextRefresh))
+	}
+	// Once observed, the row no longer holds the pass early.
+	observed := refresh548Row("4", "OPEN", "live", time.Now().UTC().Format(time.RFC3339Nano), "", false)
+	m.refreshing = false
+	at := time.Now()
+	next, _ = m.Update(statusLoadedMsg{snapshot: wtc.StatusSnapshot{Collection: "fixture", PRs: []wtc.StatusPRRow{observed}}, at: at})
+	m = next.(statusTUIModel)
+	if !m.waitingRetry.IsZero() || !m.nextRefresh.Equal(at.Add(5*time.Minute)) {
+		t.Fatalf("observed row still scheduled early: next refresh in %s", m.nextRefresh.Sub(at))
 	}
 }

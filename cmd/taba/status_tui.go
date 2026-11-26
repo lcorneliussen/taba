@@ -297,14 +297,12 @@ func statusTUIRepoKey(row wtc.StatusRepo) string {
 
 // statusTUIWaitingRetry is when the next pass should come for PR rows that
 // have no observation yet and whose read was deferred: at their earliest
-// retry, but not sooner than the focused interval (30 s when unset), so a view
-// left in the background still reads them without a keypress (#548). Every
-// read stays subject to the shared admission. Zero when no row waits.
+// retry, but not sooner than 30 s or the focused interval, whichever is
+// longer, so a view left in the background still reads them without a
+// keypress (#548). Every read stays subject to the shared admission. Zero
+// when no row waits.
 func statusTUIWaitingRetry(snapshot wtc.StatusSnapshot, at time.Time, interval time.Duration) time.Time {
-	floor := interval
-	if floor <= 0 {
-		floor = 30 * time.Second
-	}
+	floor := max(interval, 30*time.Second)
 	var due time.Time
 	for _, row := range snapshot.PRs {
 		if row.ObservedAt != "" || row.Freshness != "deferred" || row.State != "" && row.State != "UNKNOWN" {

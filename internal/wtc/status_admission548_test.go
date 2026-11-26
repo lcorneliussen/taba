@@ -164,7 +164,10 @@ func TestStatusAdmission548NeverObservedPRBehindReleasedPanes(t *testing.T) {
 			if admittedAt < 0 {
 				t.Fatalf("never-observed PR not read in %s behind released panes", duration)
 			}
-			// One first-observation turn, a refill and one poll.
+			// The first turn opens at once; the read waits at most one refill
+			// in the lock for it, plus one more if a released head took the
+			// refill first, and asks again at most one 30 s pass later. The
+			// first ask comes 20 s into the run.
 			if bound := statusFirstObservationGap(forge) + 2*every + 30*time.Second; admittedAt > bound+20*time.Second {
 				t.Fatalf("never-observed PR waited %s, bound %s", admittedAt, bound)
 			}
@@ -200,6 +203,13 @@ func TestStatusAdmission548FirstReadsShareIsBounded(t *testing.T) {
 	admission548Panes(t, clock, &actors, &load)
 	served := map[string]time.Duration{}
 	readers := 0
+	// Every first-observation turn, as recorded for all processes.
+	var turns []time.Time
+	noteTurn := func() {
+		if last := statusReadFirstWaiters(forge, clock.now).Last; !last.IsZero() && (len(turns) == 0 || !last.Equal(turns[len(turns)-1])) {
+			turns = append(turns, last)
+		}
+	}
 	for pane := 0; pane < 30; pane++ {
 		for pr := 0; pr < 3; pr++ {
 			number := fmt.Sprintf("%d", 100+pane*3+pr)
@@ -208,6 +218,7 @@ func TestStatusAdmission548FirstReadsShareIsBounded(t *testing.T) {
 			readers++
 			actors = append(actors, &admission424Actor{next: start.Add(time.Duration(pane) * time.Second), run: func() (time.Duration, bool) {
 				ok, retry := statusTakeForgeTokenRetry(read, forge, "")
+				noteTurn()
 				if ok {
 					load.first++
 					served[slug+"#"+number] = clock.now.Sub(start)
@@ -223,14 +234,21 @@ func TestStatusAdmission548FirstReadsShareIsBounded(t *testing.T) {
 	for _, at := range served {
 		last = max(last, at)
 	}
-	t.Logf("%s: %d/%d first reads, last after %s; %+v", elapsed.Round(time.Second), len(served), readers, last, load)
+	t.Logf("%s: %d/%d first reads (%d by turn), last after %s; %+v", elapsed.Round(time.Second), len(served), readers, len(turns), last, load)
 	total := load.confirmations + load.releasedOrdinary + load.currentOrdinary + load.first
 	if ceiling := burst + int(elapsed/every); total > ceiling {
 		t.Fatalf("admitted %d reads, provider ceiling %d", total, ceiling)
 	}
-	// One first turn per gap at most, whoever asks.
-	if share := 1 + int(elapsed/gap); load.first > share {
-		t.Fatalf("first reads took %d turns, share %d", load.first, share)
+	// One first turn per gap at most, whoever asks. With ninety readers
+	// asking at least every 30 s, the gap is what limits the turns; reads
+	// admitted through their ordinary place are not turns.
+	if len(turns) < readers/2 {
+		t.Fatalf("only %d first-observation turns for %d readers", len(turns), readers)
+	}
+	for i := 1; i < len(turns); i++ {
+		if spacing := turns[i].Sub(turns[i-1]); spacing < gap {
+			t.Fatalf("turns %d and %d only %s apart, gap %s", i-1, i, spacing, gap)
+		}
 	}
 	if len(served) != readers {
 		t.Fatalf("%d of %d first reads served in %s", len(served), readers, duration)
@@ -265,11 +283,11 @@ func TestStatusAdmission548GitHubFirstReadsUnchanged(t *testing.T) {
 
 // The collector end to end: a periodic pass enlists a new Bitbucket PR and an
 // old declined one behind thirty dormant released confirmations and an empty
-// bucket. The new PR's reads take first turns (its repository's open list,
-// then the PR itself when the list omits it), so it is observed within two
-// passes; the old PR keeps its last observation, deferred. Once observed, a
-// PR is marked and takes no further first turns.
-func TestStatusAdmission548CollectorReadsNewPRWithinTwoPasses(t *testing.T) {
+// bucket. The new PR's own detail read takes a first turn (its repository's
+// open list stays ordinary work), so it is observed in the first pass; the old
+// PR keeps its last observation, deferred. Once observed, a PR is marked and
+// takes no further first turns.
+func TestStatusAdmission548CollectorReadsNewPRInFirstPass(t *testing.T) {
 	const forge = "bitbucket.org"
 	refresh535Provider(t, []string{"90"})
 	clock := admission424FakeClock(t)
@@ -286,25 +304,12 @@ func TestStatusAdmission548CollectorReadsNewPRWithinTwoPasses(t *testing.T) {
 	if statusFirstObservationDue(statusAuthOperation(context.Background()), records[0], "example/widget", forge) {
 		t.Fatal("observed PR due for a first read")
 	}
-	var details []statusPRDetail
-	pass := 0
-	for ; pass < 2; pass++ {
-		details, _, err = c.statusEnrichRecordsWithIntent(context.Background(), StatusRefreshBackground, records, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Logf("pass %d: #90 %s %s %s retry %s", pass, details[1].State, details[1].Freshness, details[1].Reason, details[1].RetryAt)
-		if details[1].State == "DRAFT" && !statusObservationUnavailable(details[1].Freshness) {
-			break
-		}
-		if details[1].Freshness != "deferred" || details[1].RetryAt == "" {
-			t.Fatalf("waiting PR without a deferral and retry: %+v", details[1])
-		}
-		// The view comes back at the retry (the TUI's floor is 30 s).
-		clock.now = clock.now.Add(30 * time.Second)
+	details, _, err := c.statusEnrichRecordsWithIntent(context.Background(), StatusRefreshBackground, records, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if pass == 2 {
-		t.Fatalf("new PR not observed in two passes: %+v", details[1])
+	if details[1].State != "DRAFT" || statusObservationUnavailable(details[1].Freshness) {
+		t.Fatalf("new PR not observed in the first pass: %+v", details[1])
 	}
 	if details[0].State != "DECLINED" || details[0].ObservedAt == "" {
 		t.Fatalf("old PR lost its last observation: %+v", details[0])
@@ -315,5 +320,125 @@ func TestStatusAdmission548CollectorReadsNewPRWithinTwoPasses(t *testing.T) {
 	// The dormant released FIFO keeps its order and is not starved by us.
 	if got := len(statusReadPendingConfirmations(forge, clock.now)); got < 30 {
 		t.Fatalf("released confirmations dropped: %d", got)
+	}
+}
+
+// admission548Turn sets up a first-observation turn under test: the decision
+// clock is fake, eight dormant confirmations reserve every token an ordinary
+// read could take, and the bucket holds tokens at the current fake time.
+func admission548Turn(t *testing.T, tokens int) (*admission424Clock, string) {
+	t.Helper()
+	const forge = "bitbucket.org"
+	foreground424Fixture(t, "exit 0\n")
+	clock := admission424FakeClock(t)
+	admission424Queue(t, forge, 8, clock.now)
+	foreground424Budget(t, forge, tokens, clock.now)
+	return clock, forge
+}
+
+func admission548First(number string) context.Context {
+	return statusFirstObservation(statusOrdinaryRead(context.Background(), "pr", "bitbucket.org", "example/widget", number), "bitbucket.org", "example/widget", number)
+}
+
+// For one refill after a turn opens only the oldest waiter that asked
+// recently may take it; after that any first read may, so a waiter that went
+// away delays the others by at most one refill.
+func TestStatusAdmission548OldestWaiterExclusivity(t *testing.T) {
+	clock, forge := admission548Turn(t, 1)
+	_, every := statusForgeAllowance(forge)
+	gap := statusFirstObservationGap(forge)
+	start := clock.now
+	if !statusSaveFirstWaiters(forge, statusFirstWaiters{Last: start}) {
+		t.Fatal("seed turn")
+	}
+	older, newer, quiet := admission548First("1"), admission548First("2"), admission548First("3")
+	ask := func(ctx context.Context, at time.Duration) (bool, time.Time) {
+		clock.now = start.Add(at)
+		foreground424Budget(t, forge, 1, clock.now)
+		return statusTakeForgeTokenRetry(ctx, forge, "")
+	}
+	if ok, _ := ask(older, time.Second); ok {
+		t.Fatal("admitted before the turn opened")
+	}
+	if ok, retry := ask(newer, 2*time.Second); ok || !retry.Equal(start.Add(2*gap)) {
+		t.Fatalf("second waiter admitted=%v retry=%s, want one gap after the head's turn", ok, retry.Sub(start))
+	}
+	if ok, _ := ask(newer, gap+time.Second); ok {
+		t.Fatal("younger waiter took the head's exclusive refill")
+	}
+	if ok, _ := ask(older, gap+2*time.Second); !ok {
+		t.Fatal("head refused its open turn")
+	}
+	// The next turn: the head is gone; a waiter that registers and then stays
+	// quiet is head, but only for one refill.
+	turn := statusReadFirstWaiters(forge, clock.now).Last
+	if ok, _ := ask(quiet, gap+3*time.Second); ok {
+		t.Fatal("admitted inside the gap")
+	}
+	clock.now = turn.Add(gap).Add(time.Second)
+	foreground424Budget(t, forge, 1, clock.now)
+	if ok, _ := statusTakeForgeTokenRetry(newer, forge, ""); !ok {
+		// newer registered before quiet, so it is the head now.
+		t.Fatal("oldest remaining waiter refused")
+	}
+	turn = statusReadFirstWaiters(forge, clock.now).Last
+	other := admission548First("4")
+	clock.now = turn.Add(gap).Add(time.Second)
+	foreground424Budget(t, forge, 1, clock.now)
+	if ok, _ := statusTakeForgeTokenRetry(other, forge, ""); ok {
+		t.Fatal("took a quiet head's exclusive refill")
+	}
+	clock.now = turn.Add(gap).Add(every)
+	foreground424Budget(t, forge, 1, clock.now)
+	if ok, _ := statusTakeForgeTokenRetry(other, forge, ""); !ok {
+		t.Fatal("a quiet head blocked the turn past its exclusive refill")
+	}
+}
+
+// Waiting in the lock for a refill: cancellation or a provider cooldown that
+// starts meanwhile refuses the read without spending a token or a turn, and a
+// turn whose record cannot be written is refused too.
+func TestStatusAdmission548TurnWaitFailures(t *testing.T) {
+	for _, failure := range []string{"cancelled", "cooldown", "unrecorded"} {
+		t.Run(failure, func(t *testing.T) {
+			tokens := 0
+			if failure == "unrecorded" {
+				tokens = 1
+			}
+			clock, forge := admission548Turn(t, tokens)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			read := statusFirstObservation(statusOrdinaryRead(ctx, "pr", forge, "example/widget", "1"), forge, "example/widget", "1")
+			waited := false
+			statusAdmissionWait = func(ctx context.Context, delay time.Duration) error {
+				waited = true
+				clock.now = clock.now.Add(delay)
+				switch failure {
+				case "cancelled":
+					cancel()
+				case "cooldown":
+					statusForgeCool(forge, time.Hour)
+				}
+				return ctx.Err()
+			}
+			if failure == "unrecorded" {
+				if err := os.Mkdir(statusFirstWaitPath(forge), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := admission424Tokens(t, forge)
+			if ok, _ := statusTakeForgeTokenRetry(read, forge, ""); ok {
+				t.Fatal("admitted")
+			}
+			if failure != "unrecorded" && !waited {
+				t.Fatal("did not wait for the refill")
+			}
+			if after := admission424Tokens(t, forge); after != before {
+				t.Fatalf("budget %q became %q", before, after)
+			}
+			if failure != "unrecorded" && !statusReadFirstWaiters(forge, clock.now).Last.IsZero() {
+				t.Fatal("refused read recorded a turn")
+			}
+		})
 	}
 }

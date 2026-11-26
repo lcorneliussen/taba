@@ -205,7 +205,8 @@ func (w *statusFirstWaiters) rank(key string, now time.Time, grace time.Duration
 // statusTakeFirstToken is the first-observation turn for one Bitbucket read;
 // caller holds the budget lock and has refused foreground heads. It reports
 // whether the read was admitted and, if not, when its turn could earliest
-// come. queue is the confirmation FIFO as the caller will save it.
+// come. queue is the confirmation FIFO; this function saves it before waiting
+// in the lock and on admission (without the answered confirmation).
 func statusTakeFirstToken(ctx context.Context, forge, key, confirmation, path string, queue *[]statusPendingConfirmation, now time.Time) (bool, time.Time) {
 	burst, every := statusForgeAllowance(forge)
 	gap := statusFirstObservationGap(forge)

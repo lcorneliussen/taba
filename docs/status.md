@@ -330,8 +330,9 @@ asked recently has one refill to take a turn, then any first read may. A refused
 first read keeps its ordinary or confirmation place, and foreground requests and
 cooldowns still come first. Once any view has observed the PR, a shared mark
 that holds no PR facts ends its first turns. The interactive view schedules its
-next pass at such a row's retry time, at least 30 seconds out, even in the
-background, so no keypress is needed.
+next pass at such a row's retry time, at least 30 seconds or the focused
+interval out, whichever is longer, even in the background, so no keypress is
+needed.
 
 Within one verifiable credential context, a refresh that cannot observe a PR
 again keeps its last facts and their original observation time; a newer merge

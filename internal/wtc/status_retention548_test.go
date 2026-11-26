@@ -138,3 +138,45 @@ func TestStatusRetention548UnverifiedIdentityExplainsInsteadOfReusing(t *testing
 		}
 	}
 }
+
+// The explanation stays while unverifiable passes keep failing to observe
+// the PR, and ends once one observes it.
+func TestStatusRetention548PriorNotReusedIsStickyUntilObserved(t *testing.T) {
+	t1 := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	view := retention548Snapshot("verified-context", retention548Row("1", "MERGED", "live", t1, "2026-10-01T10:00:00Z", true))
+	for pass := 0; pass < 3; pass++ {
+		view = StatusPreferNewerObservations(retention548Snapshot("unknown-"+string(rune('a'+pass)), retention548Row("1", "", "deferred", "", "", false)), view)
+		if !view.PRs[0].PriorNotReused {
+			t.Fatalf("pass %d dropped the explanation", pass)
+		}
+	}
+	view = StatusPreferNewerObservations(retention548Snapshot("unknown-z", retention548Row("1", "MERGED", "live", time.Now().UTC().Format(time.RFC3339Nano), "", false)), view)
+	if view.PRs[0].PriorNotReused {
+		t.Fatal("observed row still says its earlier observation was not reused")
+	}
+	// Another collection's view never marks this one.
+	other := retention548Snapshot("unknown-q", retention548Row("1", "", "deferred", "", "", false))
+	other.Collection = "elsewhere"
+	if StatusPreferNewerObservations(other, view).PRs[0].PriorNotReused {
+		t.Fatal("explanation crossed collections")
+	}
+}
+
+// A merged PR still on its branch is never archived, even when an earlier
+// observation of it was.
+func TestStatusRetention548MergeTimeCarryKeepsOnBranchUnarchived(t *testing.T) {
+	const auth = "verified-context"
+	t1 := time.Now().Add(-2 * time.Minute).UTC().Format(time.RFC3339Nano)
+	t2 := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	old := "2026-10-01T10:00:00Z"
+	view := retention548Snapshot(auth, retention548Row("1", "MERGED", "live", t1, old, true))
+	incoming := retention548Row("1", "MERGED", "live", t2, "", false)
+	incoming.OnBranch = true
+	got := StatusPreferNewerObservations(retention548Snapshot(auth, incoming), view).PRs[0]
+	if got.MergedOn == nil || *got.MergedOn != old {
+		t.Fatalf("merge time not carried: %+v", got)
+	}
+	if got.Archived {
+		t.Fatalf("on-branch merge archived: %+v", got)
+	}
+}
