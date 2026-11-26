@@ -347,13 +347,7 @@ func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, sl
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if statusForgeCooling(forge) {
-		return nil, errForgeCooling
-	}
-	if !statusTakeForgeTokenForContext(statusOrdinaryRead(ctx, "pr", forge, slug, record.Number), forge, "") {
-		return nil, errForgeBudget
-	}
-	if err := ctx.Err(); err != nil {
+	if err := statusTakeForgeToken(ctx, forge); err != nil {
 		return nil, err
 	}
 	var raw []byte
@@ -448,7 +442,7 @@ func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, inc
 	if len(parts) != 2 {
 		return fallback
 	}
-	if statusForgeCooling("bitbucket.org") || !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "") {
+	if statusTakeForgeToken(ctx, "bitbucket.org") != nil {
 		return fallback
 	}
 	started := time.Now()

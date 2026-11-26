@@ -456,7 +456,7 @@ func resolveBBCheckHeadContext(ctx context.Context, intent StatusRefreshIntent, 
 // inside the HTTP helper; the aggregate never consumes an additional token.
 func statusBBCheckRead(ctx context.Context, intent StatusRefreshIntent, endpoint, user, pass string) ([]byte, error) {
 	if intent != StatusRefreshForeground {
-		raw, _, err := statusWithForgeBudgetKeyContext(ctx, "bitbucket.org", "", nil, func() ([]byte, error) { return statusBBGETContext(ctx, intent, endpoint, user, pass) })
+		raw, _, _, err := statusWithForgeAdmissionContext(ctx, "bitbucket.org", nil, func() ([]byte, error) { return statusBBGETContext(ctx, intent, endpoint, user, pass) })
 		return raw, err
 	}
 	if err := statusTakeForegroundToken(ctx, "bitbucket.org"); err != nil {

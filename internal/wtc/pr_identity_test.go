@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -321,7 +322,7 @@ func TestPRRenameProofRequiresSameImmutableBaseRepository(t *testing.T) {
 					statusForgeCool(forge, time.Minute)
 				case "spent-budget":
 					t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-					if !statusTakeForgeToken(forge) {
+					if statusTakeForgeToken(context.Background(), forge) != nil {
 						t.Fatal("could not spend initial token")
 					}
 				}
@@ -609,7 +610,7 @@ func TestStatusOmittedCacheHitDoesNotCertifyFullRequest(t *testing.T) {
 	statusWriteForgeEntry("openprs", "github.com", "example/new-name", "open", listed)
 	statusWriteForgeEntry("omit", "github.com", "example/new-name", "42", []byte("ok"))
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "60")
-	if !statusTakeForgeToken("github.com") {
+	if statusTakeForgeToken(context.Background(), "github.com") != nil {
 		t.Fatal("budget setup")
 	}
 	if detail := statusEnrichRecordMetadata(record, "example/new-name", "github.com"); detail.State != "OPEN" {

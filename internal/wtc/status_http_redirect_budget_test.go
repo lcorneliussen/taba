@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,42 +66,26 @@ func TestStatusHTTPRedirectAllowed(t *testing.T) {
 				t.Fatalf("requests=%d live=%v body=%s err=%v", calls.Load(), live, raw, err)
 			}
 			// Two dispatches leave exactly one token. The caller's initial debit is not repeated.
-			if !statusTakeForgeToken("bitbucket.org") || statusTakeForgeToken("bitbucket.org") {
+			if statusTakeForgeToken(context.Background(), "bitbucket.org") != nil || statusTakeForgeToken(context.Background(), "bitbucket.org") == nil {
 				t.Fatal("incorrect redirect accounting")
 			}
 		})
 	}
 }
 
-func TestStatusHTTPRedirectCoolingAndPriority(t *testing.T) {
-	for _, cooling := range []bool{false, true} {
-		t.Run(fmt.Sprint(cooling), func(t *testing.T) {
-			redirectBudget(t, 2)
-			var calls atomic.Int32
-			key := statusConfirmationKey("example/widget#7")
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls.Add(1)
-				if cooling {
-					statusForgeCool("bitbucket.org", time.Minute)
-				} else {
-					statusSavePendingConfirmations("bitbucket.org", []statusPendingConfirmation{{Key: key, Seen: time.Now()}})
-				}
-				w.Header().Set("Location", "/end")
-				w.WriteHeader(302)
-			}))
-			defer server.Close()
-			_, live, err := statusWithForgeBudget("bitbucket.org", nil, func() ([]byte, error) { return statusBBGET(server.URL, "example", "secret") })
-			want := errForgeBudget
-			if cooling {
-				want = errForgeCooling
-			}
-			if !errors.Is(err, want) || live || calls.Load() != 1 {
-				t.Fatalf("requests=%d live=%v err=%v", calls.Load(), live, err)
-			}
-			if !cooling && !statusTakeForgeTokenFor("bitbucket.org", key) {
-				t.Fatal("redirect spent confirmation's reserved token")
-			}
-		})
+func TestStatusHTTPRedirectCooling(t *testing.T) {
+	redirectBudget(t, 2)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		statusForgeCool("bitbucket.org", time.Minute)
+		w.Header().Set("Location", "/end")
+		w.WriteHeader(302)
+	}))
+	defer server.Close()
+	_, live, err := statusWithForgeBudget("bitbucket.org", nil, func() ([]byte, error) { return statusBBGET(server.URL, "example", "secret") })
+	if !errors.Is(err, errForgeCooling) || live || calls.Load() != 1 {
+		t.Fatalf("requests=%d live=%v err=%v", calls.Load(), live, err)
 	}
 }
 
@@ -125,7 +110,7 @@ func TestStatusHTTPRedirectUnsafe(t *testing.T) {
 			if strings.Contains(err.Error(), "sentinel") || strings.Contains(err.Error(), server.URL) || strings.Contains(err.Error(), "secret") {
 				t.Fatalf("sensitive redirect error: %v", err)
 			}
-			first, second := statusTakeForgeToken("bitbucket.org"), statusTakeForgeToken("bitbucket.org")
+			first, second := statusTakeForgeToken(context.Background(), "bitbucket.org") == nil, statusTakeForgeToken(context.Background(), "bitbucket.org") == nil
 			if !first || !second {
 				t.Fatal("unsafe redirect spent allowance")
 			}
@@ -332,7 +317,7 @@ func TestStatusHTTPRedirectDirectRead(t *testing.T) {
 	if err != nil || !live || calls.Load() != 1 {
 		t.Fatalf("requests=%d live=%v err=%v", calls.Load(), live, err)
 	}
-	if statusTakeForgeToken("bitbucket.org") {
+	if statusTakeForgeToken(context.Background(), "bitbucket.org") == nil {
 		t.Fatal("initial request not charged")
 	}
 }

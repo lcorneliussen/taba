@@ -296,8 +296,9 @@ func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 			list, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: raw, Fingerprint: "same"}}, false, old)
 			statusWriteForgeEntrySinceObservedContext(ctx, "openprs", forge, f.slug, "open", list, old, old)
 			statusWriteForgeEntryObservedContext(ctx, "stamp", forge, f.slug, "7", []byte("same"), old)
-			// The allowance is spent: the ordinary list read is refused and
-			// served stale; the next refill is one second away.
+			// The allowance is spent: the list read is refused and served
+			// stale, and the PR's own read is deferred with its reason rather
+			// than waiting for the refill one second away.
 			t.Setenv("WTC_FORGE_MIN_INTERVAL", "1")
 			foreground424Budget(t, forge, 0, time.Now())
 			snapshot, err := f.c.StatusForgePreview()
@@ -311,14 +312,8 @@ func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 			if row.LocalMergeEvidence != "upstream-gone; head in origin/main" || f.listHits.Load() != 0 {
 				t.Fatalf("evidence=%q list requests=%d", row.LocalMergeEvidence, f.listHits.Load())
 			}
-			if forge == "bitbucket.org" {
-				if row.State != "MERGED" || row.Freshness != "live" || f.detailCalls() != 1 {
-					t.Fatalf("gone branch PR not confirmed: state=%s freshness=%s source=%s reason=%s calls=%v", row.State, row.Freshness, row.StateSource, row.ObservationReason, f.providerCalls())
-				}
-				return
-			}
 			if row.State != "OPEN" || row.Freshness != "deferred" || row.ObservationReason != "shared-budget" || len(f.providerCalls()) != 0 {
-				t.Fatalf("GitHub deferral: %+v calls=%v", row, f.providerCalls())
+				t.Fatalf("deferral: %+v calls=%v", row, f.providerCalls())
 			}
 		})
 	}

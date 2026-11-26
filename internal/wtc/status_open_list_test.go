@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -327,7 +328,7 @@ func TestStatusCappedPRCacheRespectsFreshnessAndAllowance(t *testing.T) {
 			}
 			if tc.mode == "budget" {
 				t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-				if !statusTakeForgeToken(forge) {
+				if statusTakeForgeToken(context.Background(), forge) != nil {
 					t.Fatal("could not consume synthetic allowance")
 				}
 			}
@@ -421,7 +422,7 @@ printf '%s\n' '{"id":7,"state":"MERGED","merged_on":"2026-11-04T10:01:00Z"}'
 			t.Fatal("shared lookup did not finish")
 		}
 	}
-	if count := statusTestFileLines(t, views); count != 1 || statusTakeForgeToken(forge) {
+	if count := statusTestFileLines(t, views); count != 1 || statusTakeForgeToken(context.Background(), forge) == nil {
 		t.Fatalf("coalesced lookup used %d views or bypassed its single-token allowance", count)
 	}
 }

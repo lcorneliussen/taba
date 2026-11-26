@@ -262,25 +262,18 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 		return statusUnknownDetail(record)
 	}
 	if detail, ok := statusResourceSettledMerge(ctx, record, slug, forge); ok {
-		statusForgetConfirmation(forge, slug+"#"+record.Number)
 		return detail
-	}
-	if _, known := statusResourceRetainedMerge(ctx, record, slug, forge); known {
-		// State confirmation is complete even if ancillary merge time/checks
-		// still need their own admitted refreshes.
-		statusForgetConfirmation(forge, slug+"#"+record.Number)
 	}
 	if listed, truncated, current, err := statusOpenPRsCurrentContext(ctx, forge, slug); err == nil {
 		if _, ok := listed[record.Number]; ok && !current && statusLocalEvidenceHinted(ctx, forge, slug, record.Number) {
 			// A checked-out branch whose upstream is gone is likely merged or
 			// declined. An open list served stale after a refused read cannot
 			// confirm it is still open; confirm the PR itself as for an
-			// omitted PR (Bitbucket keeps its confirmation queue place), at
-			// most once per cache interval. A current list is trusted.
+			// omitted PR, at most once per cache interval. A current list is
+			// trusted.
 			return statusViewPRWithLiveContext(ctx, record, slug, forge, true, false, nil)
 		}
 		if item, ok := listed[record.Number]; ok {
-			statusForgetConfirmation(forge, slug+"#"+record.Number)
 			return statusEnrichListedContext(ctx, record, slug, forge, item)
 		}
 		if truncated {
@@ -438,7 +431,7 @@ func statusViewPRWithLiveContext(ctx context.Context, record PRRecord, slug, for
 		}
 		stale, _ := statusReadForgeEntryAnyContext(ctx, "pr", forge, slug, record.Number)
 		started := time.Now()
-		raw, live, refused, err = statusWithForgeAdmissionContext(ctx, forge, slug+"#"+record.Number, stale, fetch)
+		raw, live, refused, err = statusWithForgeAdmissionContext(ctx, forge, stale, fetch)
 		if live && len(raw) > 0 {
 			if !statusResourceWriteSince(ctx, "pr", forge, slug, record.Number, raw, started) {
 				if winner, ok := statusResourceObservedDetail(ctx, record, slug, forge, 365*24*time.Hour); ok {

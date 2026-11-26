@@ -287,7 +287,7 @@ func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, err
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if page > 0 && (statusForgeCooling("bitbucket.org") || !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "")) {
+		if page > 0 && statusTakeForgeToken(ctx, "bitbucket.org") != nil {
 			truncated = true
 			break
 		}
@@ -440,13 +440,8 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 				if err := statusTakeForegroundToken(ctx, "bitbucket.org"); err != nil {
 					return nil, err
 				}
-			} else {
-				if statusForgeCooling("bitbucket.org") {
-					return nil, errForgeCooling
-				}
-				if !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "") {
-					return nil, errForgeBudget
-				}
+			} else if err := statusTakeForgeToken(ctx, "bitbucket.org"); err != nil {
+				return nil, err
 			}
 			endpoint = location.String()
 			continue

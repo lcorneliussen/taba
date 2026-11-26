@@ -1,20 +1,15 @@
 package wtc
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 func foreground424Fixture(t *testing.T, script string) string {
@@ -40,7 +35,7 @@ func foreground424Count(path string) int {
 	return strings.Count(string(raw), "request")
 }
 
-func TestStatusForeground424ConfirmsTransitionsDespiteStaleListAndStoppedQueue(t *testing.T) {
+func TestStatusForeground424ConfirmsTransitionsDespiteStaleList(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		for _, transition := range []string{"merged", "ready"} {
 			t.Run(forge+"/"+transition, func(t *testing.T) {
@@ -60,11 +55,6 @@ func TestStatusForeground424ConfirmsTransitionsDespiteStaleListAndStoppedQueue(t
 				list, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: raw, Fingerprint: "old"}}, false, old)
 				statusWriteForgeEntrySinceObserved("openprs", forge, slug, "open", list, old, old)
 				statusMarkFullRefresh(forge, slug, "7") // foreground also bypasses a recent audit
-				queue := make([]statusPendingConfirmation, 100)
-				for i := range queue {
-					queue[i] = statusPendingConfirmation{Key: statusConfirmationKey(fmt.Sprint(i)), Seen: now}
-				}
-				statusSavePendingConfirmations(forge, queue)
 				burst, _ := statusForgeAllowance(forge)
 				foreground424Budget(t, forge, burst, now)
 				got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge)
@@ -85,9 +75,6 @@ func TestStatusForeground424ConfirmsTransitionsDespiteStaleListAndStoppedQueue(t
 				fmt.Sscanf(string(budget), "%d", &tokens)
 				if tokens != burst-1 {
 					t.Fatalf("foreground spent %d tokens; want one", burst-tokens)
-				}
-				if len(statusReadPendingConfirmations(forge, time.Now())) != 100 {
-					t.Fatal("foreground lost background reservations or leaked its lease")
 				}
 			})
 		}
@@ -148,9 +135,6 @@ func TestStatusForeground424CooldownAndCustomBudgetAreHonest(t *testing.T) {
 				if got.State != "OPEN" || got.Freshness != "deferred" || out.Reason != reason || err != nil || !retry.After(time.Now()) || out.ProviderConfirmed || foreground424Count(calls) != 0 {
 					t.Fatalf("%+v %+v retryError=%v", got, out, err)
 				}
-				if len(statusReadPendingConfirmations(forge, time.Now())) != 0 {
-					t.Fatal("deferred request leaked a reservation")
-				}
 			})
 		}
 	}
@@ -190,7 +174,7 @@ func TestStatusForeground424CancellationNeverStartsLater(t *testing.T) {
 				unlock()
 			}
 			foreground424Budget(t, forge, 16, time.Now())
-			if out.Reason != "deadline" || foreground424Count(calls) != 0 || len(statusReadPendingConfirmations(forge, time.Now())) != 0 {
+			if out.Reason != "deadline" || foreground424Count(calls) != 0 {
 				t.Fatalf("%s %+v calls=%d", blocked, out, foreground424Count(calls))
 			}
 		})
@@ -201,134 +185,6 @@ func TestStatusForeground424CancellationNeverStartsLater(t *testing.T) {
 	_, out := statusRefreshRecord(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com")
 	if out.Reason != "cancelled" || foreground424Count(calls) != 0 {
 		t.Fatalf("%+v", out)
-	}
-}
-
-func TestStatusForeground424LeasePriorityExpiryAndBound(t *testing.T) {
-	foreground424Fixture(t, "exit 99\n")
-	forge := "bitbucket.org"
-	now := time.Now()
-	key := statusConfirmationKey("explicit")
-	queue := make([]statusPendingConfirmation, statusPendingLimit)
-	for i := range queue {
-		queue[i] = statusPendingConfirmation{Key: statusConfirmationKey(fmt.Sprint(i)), Seen: now}
-	}
-	queue, ok := statusQueueForeground(queue, key, now.Add(time.Second))
-	if !ok || len(queue) != statusPendingLimit || queue[0].Key != key {
-		t.Fatal("foreground did not displace a bounded background tail")
-	}
-	statusSavePendingConfirmations(forge, queue)
-	foreground424Budget(t, forge, 8, now)
-	if statusTakeForgeToken(forge) || statusTakeForgeTokenFor(forge, queue[1].Key) {
-		t.Fatal("background did not yield")
-	}
-	if len(statusReadPendingConfirmations(forge, now.Add(2*time.Second))) != statusPendingLimit-1 {
-		t.Fatal("foreground deadline not expired")
-	}
-	raw, _ := os.ReadFile(statusForgeStatePath("pending", forge))
-	var released []struct {
-		Key  string
-		Seen time.Time
-	}
-	json.Unmarshal(raw, &released)
-	if now.Add(2*time.Second).Sub(released[0].Seen) < statusPendingLifetime {
-		t.Fatal("released reader would retain expired lease")
-	}
-	queue = queue[:0]
-	for i := 0; i < statusPendingLimit; i++ {
-		queue = append(queue, statusPendingConfirmation{Key: statusConfirmationKey(fmt.Sprint(i)), Foreground: true, Expires: now.Add(time.Second), Seen: now.Add(time.Second - statusPendingLifetime)})
-	}
-	if _, ok := statusQueueForeground(queue, key, now.Add(time.Second)); ok {
-		t.Fatal("foreground cap bypassed")
-	}
-}
-
-// This subprocess uses only the released two-field budget and flock protocol;
-// it deliberately knows nothing about the new pending-request fields.
-func TestStatusForeground424ReleasedConsumerProcess(t *testing.T) {
-	if os.Getenv("STATUS_424_RELEASED") != "1" {
-		return
-	}
-	if ready := os.Getenv("STATUS_424_RELEASED_READY"); ready != "" {
-		fixtureFile(t, ready, "", 0600)
-		foreground424WaitFile(t, os.Getenv("STATUS_424_RELEASED_GO"))
-	}
-	path := os.Getenv("STATUS_424_BUDGET")
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Close()
-	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
-		t.Fatal(err)
-	}
-	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var tokens int
-	var updated int64
-	if _, err := fmt.Sscanf(string(raw), "%d %d", &tokens, &updated); err != nil {
-		t.Fatal(err)
-	}
-	if tokens > 0 {
-		if err := os.WriteFile(path, []byte(fmt.Sprintf("%d %d\n", tokens-1, updated)), 0600); err != nil {
-			t.Fatal(err)
-		}
-		fmt.Println("released-admitted")
-	}
-}
-func foreground424WaitFile(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("synthetic process did not reach barrier")
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-func TestStatusForeground424ReleasedConsumerCannotStealOwnedRefill(t *testing.T) {
-	foreground424Fixture(t, "exit 99\n")
-	forge := "bitbucket.org"
-	path := statusForgeStatePath("budget", forge)
-	dir := t.TempDir()
-	ready, release := filepath.Join(dir, "ready"), filepath.Join(dir, "release")
-	exe, _ := os.Executable()
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestStatusForeground424ReleasedConsumerProcess$")
-	cmd.Env = append(os.Environ(), "STATUS_424_RELEASED=1", "STATUS_424_BUDGET="+path, "STATUS_424_RELEASED_READY="+ready, "STATUS_424_RELEASED_GO="+release)
-	var output bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &output, &output
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	foreground424WaitFile(t, ready)
-	foreground424Budget(t, forge, 0, time.Now().Add(-statusBitbucketEvery+200*time.Millisecond))
-	done := make(chan error, 1)
-	go func() { done <- statusTakeForegroundToken(context.Background(), forge) }()
-	deadline := time.Now().Add(time.Second)
-	for len(statusReadPendingConfirmations(forge, time.Now())) == 0 {
-		if time.Now().After(deadline) {
-			t.Fatal("foreground did not register")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	fixtureFile(t, release, "", 0600)
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("%s %v", output.String(), err)
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(output.String(), "released-admitted") {
-		t.Fatalf("released consumer stole a debited refill: %s", output.String())
 	}
 }
 
@@ -360,24 +216,6 @@ func TestStatusForeground424ConcurrentRequestsStayWithinBurst(t *testing.T) {
 	if admitted != 4 {
 		t.Fatalf("admitted=%d want 4", admitted)
 	}
-	if len(statusReadPendingConfirmations(forge, time.Now())) != 0 {
-		t.Fatal("cancelled queue remains")
-	}
-}
-
-func TestStatusForeground424ReservationFailureDoesNotDispatch(t *testing.T) {
-	calls := foreground424Fixture(t, "exit 99\n")
-	forge := "github.com"
-	if !statusSecureCacheDir(statusForgeCacheDir()) {
-		t.Fatal("cache fixture")
-	}
-	if err := os.Mkdir(statusForgeStatePath("pending", forge), 0700); err != nil {
-		t.Fatal(err)
-	}
-	_, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", forge)
-	if out.Reason != "refresh-failed" || foreground424Count(calls) != 0 {
-		t.Fatalf("%+v", out)
-	}
 }
 
 func TestStatusForeground424UnsafeLockFailsClosed(t *testing.T) {
@@ -395,37 +233,5 @@ func TestStatusForeground424UnsafeLockFailsClosed(t *testing.T) {
 	raw, _ := os.ReadFile(target)
 	if out.Reason != "refresh-failed" || foreground424Count(calls) != 0 || string(raw) != "unchanged" {
 		t.Fatalf("%+v", out)
-	}
-}
-
-func TestStatusForeground424GitHubBackgroundYieldsOnlyToLiveForeground(t *testing.T) {
-	foreground424Fixture(t, "exit 99\n")
-	forge := "github.com"
-	now := time.Now()
-	queue := []statusPendingConfirmation{{Key: statusConfirmationKey("background"), Seen: now}}
-	queue, _ = statusQueueForeground(queue, statusConfirmationKey("foreground"), now.Add(time.Second))
-	if !statusSavePendingConfirmations(forge, queue) {
-		t.Fatal("fixture queue unavailable")
-	}
-	path := statusForgeStatePath("pending", forge)
-	before, _ := os.ReadFile(path)
-	foreground424Budget(t, forge, 8, now)
-	if statusTakeForgeToken(forge) {
-		t.Fatal("background bypassed owned foreground")
-	}
-	after, _ := os.ReadFile(path)
-	if !bytes.Equal(before, after) {
-		t.Fatal("background modified queue it does not own")
-	}
-	queue[0].Expires = now.Add(-time.Second)
-	queue[0].Seen = now.Add(-statusPendingLifetime - time.Second)
-	statusSavePendingConfirmations(forge, queue)
-	before, _ = os.ReadFile(path)
-	if !statusTakeForgeToken(forge) {
-		t.Fatal("expired foreground or legacy reservation blocked GitHub")
-	}
-	after, _ = os.ReadFile(path)
-	if !bytes.Equal(before, after) {
-		t.Fatal("legacy pending bytes changed")
 	}
 }

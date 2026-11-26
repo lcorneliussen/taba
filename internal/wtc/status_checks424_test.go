@@ -95,7 +95,7 @@ func TestStatusChecks424FallbackMetadataFailureKeepsChecks(t *testing.T) {
 }
 
 func TestStatusChecks424CancelBeforeLockAndHTTP(t *testing.T) {
-	for _, where := range []string{"lock", "http", "queue"} {
+	for _, where := range []string{"lock", "http", "refill"} {
 		t.Run(where, func(t *testing.T) {
 			entered := make(chan struct{}, 1)
 			var hits atomic.Int32
@@ -113,7 +113,7 @@ func TestStatusChecks424CancelBeforeLockAndHTTP(t *testing.T) {
 				}
 				defer unlock()
 			}
-			if where == "queue" {
+			if where == "refill" {
 				foreground424Budget(t, "bitbucket.org", 0, time.Now())
 			}
 			ctx, cancel := context.WithCancel(context.Background())
@@ -133,23 +133,9 @@ func TestStatusChecks424CancelBeforeLockAndHTTP(t *testing.T) {
 				case <-time.After(2 * time.Second):
 					t.Fatal("no HTTP request")
 				}
-			} else if where == "queue" {
-				deadline := time.Now().Add(2 * time.Second)
-				queued := false
-				for time.Now().Before(deadline) {
-					for _, p := range statusReadPendingConfirmations("bitbucket.org", time.Now()) {
-						if p.Foreground {
-							queued = true
-						}
-					}
-					if queued {
-						break
-					}
-					time.Sleep(5 * time.Millisecond)
-				}
-				if !queued {
-					t.Fatal("no queued lease")
-				}
+			} else if where == "refill" {
+				// The empty bucket refills in 8 s; the request is waiting for it.
+				time.Sleep(100 * time.Millisecond)
 			}
 			cancel()
 			select {
@@ -165,15 +151,7 @@ func TestStatusChecks424CancelBeforeLockAndHTTP(t *testing.T) {
 				t.Fatal("cancelled checks persisted")
 			}
 			if where != "http" && hits.Load() != 0 {
-				t.Fatal("cancelled queued/locked request dispatched")
-			}
-			if where == "queue" {
-				foreground424Budget(t, "bitbucket.org", 8, time.Now())
-				for _, p := range statusReadPendingConfirmations("bitbucket.org", time.Now()) {
-					if p.Foreground {
-						t.Fatal("lease leaked")
-					}
-				}
+				t.Fatal("cancelled waiting/locked request dispatched")
 			}
 		})
 	}

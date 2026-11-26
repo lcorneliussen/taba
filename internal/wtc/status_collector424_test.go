@@ -70,12 +70,12 @@ func TestStatusCollector424ExplicitTransitionsAndAccounting(t *testing.T) {
 	}
 }
 
-func TestStatusCollector424CooldownAndCancelledQueue(t *testing.T) {
-	for _, cancelQueue := range []bool{false, true} {
-		t.Run(fmt.Sprint(cancelQueue), func(t *testing.T) {
+func TestStatusCollector424CooldownAndCancelledWait(t *testing.T) {
+	for _, cancelWait := range []bool{false, true} {
+		t.Run(fmt.Sprint(cancelWait), func(t *testing.T) {
 			calls := foreground424Fixture(t, `printf '%s' '{"number":7,"state":"OPEN"}'`)
 			c := collector424Collection(t, "github.com")
-			if !cancelQueue {
+			if !cancelWait {
 				until, _ := statusForgeCoolContext(context.Background(), "github.com", time.Minute)
 				got, err := c.StatusForegroundSnapshot(context.Background())
 				if err != nil {
@@ -92,22 +92,8 @@ func TestStatusCollector424CooldownAndCancelledQueue(t *testing.T) {
 			defer cancel()
 			done := make(chan error, 1)
 			go func() { _, err := c.StatusForegroundSnapshot(ctx); done <- err }()
-			deadline := time.Now().Add(3 * time.Second)
-			queued := false
-			for time.Now().Before(deadline) {
-				for _, item := range statusReadPendingConfirmations("github.com", time.Now()) {
-					if item.Foreground {
-						queued = true
-					}
-				}
-				if queued {
-					break
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-			if !queued {
-				t.Fatal("foreground did not enter shared admission queue")
-			}
+			// The empty bucket refills in 2 s; the request is waiting for it.
+			time.Sleep(100 * time.Millisecond)
 			cancel()
 			select {
 			case err := <-done:
@@ -117,14 +103,8 @@ func TestStatusCollector424CooldownAndCancelledQueue(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("cancellation did not complete")
 			}
-			foreground424Budget(t, "github.com", 8, time.Now())
-			for _, item := range statusReadPendingConfirmations("github.com", time.Now()) {
-				if item.Foreground {
-					t.Fatal("cancelled foreground lease remains")
-				}
-			}
 			if foreground424Count(calls) != 0 {
-				t.Fatal("cancelled queue dispatched provider")
+				t.Fatal("cancelled wait dispatched provider")
 			}
 			bytes, _ := os.ReadFile(filepath.Join(c.Collection, ".wtc-status.json"))
 			if string(bytes) != "original snapshot bytes" {
