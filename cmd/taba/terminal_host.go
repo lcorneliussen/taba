@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"taba.sh/taba/internal/envcompat"
 	"taba.sh/taba/internal/prompts"
 	"taba.sh/taba/internal/retry"
+	"taba.sh/taba/internal/wtc"
 )
 
 // terminalHost is the multiplexer that holds collection workspaces. The
@@ -24,6 +26,7 @@ type terminalHost interface {
 
 	Workspaces() ([]openWorkspaceInfo, error)
 	CreateWorkspace(label, cwd string, env []string) (workspace, pane string, err error)
+	CloseWorkspace(workspace string) error
 	FocusWorkspace(workspace string) error
 
 	Tabs(workspace string) ([]openTabInfo, error)
@@ -45,6 +48,8 @@ type terminalHost interface {
 	SessionWidth() int
 
 	StartAgent(name, kind, pane string, args []string) error
+	// PromptsAtStart: the first prompt goes to the agent as its start argument.
+	PromptsAtStart(kind string) bool
 	PromptAgent(pane string, text prompts.Text) error
 	SubmitFirstPrompt(pane string, text prompts.Text) error
 
@@ -57,6 +62,12 @@ type terminalHost interface {
 type agentRegistry interface {
 	terminalHost
 	AgentIdentity(name, pane string) (byName, byPane openAgentInfo, err error)
+}
+
+// quietScreenHost holds agents that may report no state: a finished turn
+// shows only as a screen that stops changing.
+type quietScreenHost interface {
+	VisibleText(pane string) (string, error)
 }
 
 type openHostLocation struct {
@@ -79,7 +90,38 @@ type openTabLayout struct {
 }
 
 func newTerminalHost(kind, session string) terminalHost {
+	if kind == "rex" {
+		return &rexHost{session: session}
+	}
 	return &herdrHost{session: session}
+}
+
+// openMultiplexer reads only the environment when c is nil, outside a collection.
+func openMultiplexer(c *wtc.Context) (string, error) {
+	setting := envcompat.Getenv("WTC_MULTIPLEXER")
+	if c != nil {
+		setting = statusSetting(c, "WTC_MULTIPLEXER")
+	}
+	return chooseMultiplexer(setting, os.Getenv("REX_BLOCK") != "", herdrInstalled())
+}
+
+// chooseMultiplexer never moves someone who has herdr to Rex unasked.
+func chooseMultiplexer(setting string, inRexTerminal, herdrInstalled bool) (string, error) {
+	switch setting {
+	case "herdr", "rex":
+		return setting, nil
+	case "":
+		if inRexTerminal && !herdrInstalled {
+			return "rex", nil
+		}
+		return "herdr", nil
+	}
+	return "", fmt.Errorf("WTC_MULTIPLEXER is %q; expected herdr or rex", setting)
+}
+
+func herdrInstalled() bool {
+	_, err := exec.LookPath("herdr")
+	return err == nil
 }
 
 func openHostFor(opt openOptions) terminalHost {
@@ -159,6 +201,11 @@ func (h *herdrHost) CreateWorkspace(label, cwd string, env []string) (string, st
 		workspace = result.Result.Workspace.ID
 	}
 	return workspace, herdrRootPane(result), err
+}
+
+func (h *herdrHost) CloseWorkspace(workspace string) error {
+	_, err := h.herdr("workspace", "close", workspace)
+	return err
 }
 
 func (h *herdrHost) FocusWorkspace(workspace string) error {
@@ -306,6 +353,8 @@ func (h *herdrHost) StartAgent(name, kind, pane string, args []string) error {
 	_, err := h.herdr(command...)
 	return err
 }
+
+func (h *herdrHost) PromptsAtStart(string) bool { return false }
 
 func (h *herdrHost) PromptAgent(pane string, text prompts.Text) error {
 	_, err := h.herdr("agent", "prompt", pane, text.String())

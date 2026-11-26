@@ -16,8 +16,12 @@ import (
 	"taba.sh/taba/internal/wtc"
 )
 
-func openPtyHint() string {
-	return branding.Text("the machine is out of pseudo-terminals (kern.tty.ptmx_max); close idle tool panes with {{command}} open --trim --all or stop unused herdr sessions")
+func openPtyHint(host terminalHost) string {
+	stop := "stop unused herdr sessions"
+	if host.Kind() == "rex" {
+		stop = "close unused Rex sessions"
+	}
+	return branding.Text("the machine is out of pseudo-terminals (kern.tty.ptmx_max); close idle tool panes with {{command}} open --trim --all or " + stop)
 }
 
 func openTrimCommand(c *wtc.Context, names []string, opt openOptions, running bool, asJSON *bool) error {

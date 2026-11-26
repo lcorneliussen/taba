@@ -34,6 +34,25 @@ func emit(v envelope, asJSON bool) error {
 	}
 	return nil
 }
+
+// doctorToolChecks finds git, mise and the multiplexer the collection uses.
+func doctorToolChecks(c *wtc.Context) (terminalHost, []map[string]any) {
+	var checks []map[string]any
+	kind, err := openMultiplexer(c)
+	if err != nil {
+		checks = append(checks, map[string]any{"name": "multiplexer", "ok": false, "detail": err.Error()})
+	}
+	multiplexer := newTerminalHost(kind, "")
+	for _, name := range []string{"git", "mise", multiplexer.Kind()} {
+		path, err := exec.LookPath(name)
+		if name == "rex" {
+			path, err = rexCommand()
+		}
+		checks = append(checks, map[string]any{"name": name, "ok": err == nil, "detail": path})
+	}
+	return multiplexer, checks
+}
+
 func main() {
 	if version == "dev" {
 		if v := moduleVersion(debug.ReadBuildInfo); v != "" {
@@ -242,11 +261,9 @@ func run() error {
 			return err
 		}
 		checks := []map[string]any{{"name": "registry", "ok": len(c.Registry.Repos) > 0, "detail": fmt.Sprintf("%d repositories", len(c.Registry.Repos))}}
-		for _, name := range []string{"git", "mise", "herdr"} {
-			path, err := exec.LookPath(name)
-			checks = append(checks, map[string]any{"name": name, "ok": err == nil, "detail": path})
-		}
-		if budget, low := openPtyReport(newTerminalHost("", "")); budget != "" {
+		multiplexer, tools := doctorToolChecks(c)
+		checks = append(checks, tools...)
+		if budget, low := openPtyReport(multiplexer); budget != "" {
 			checks = append(checks, map[string]any{"name": "pty", "ok": !low, "detail": budget})
 		}
 		if c.Config.Compatibility.Requires != "" {

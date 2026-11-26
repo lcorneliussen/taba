@@ -661,12 +661,15 @@ func (c *Context) CatchUp(opt CatchUpOptions) (CatchUpReport, error) {
 	// The initiating collection's own agent is the one running this sweep.
 	busy := map[string]string{}
 	if opt.IdleOnly {
-		session := catchUpSession(c)
+		var panes CatchUpPanes = herdrCatchUpPanes{session: catchUpSession(c)}
+		if opt.Panes != nil {
+			panes = opt.Panes
+		}
 		for _, t := range targets {
 			if _, seen := busy[t.collection]; seen || t.collection == filepath.Base(c.Collection) {
 				continue
 			}
-			status, err := catchUpAgentBusy(session, t.collection)
+			status, err := panes.AgentBusy(t.collection)
 			if err != nil {
 				status = "unknown: " + err.Error()
 			}

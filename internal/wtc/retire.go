@@ -24,6 +24,9 @@ type RetireOptions struct {
 	// InPlace retires an ad-hoc collection from inside itself without Herdr:
 	// it may have no other collection to hand the work to.
 	InPlace bool
+	// CloseWorkspace closes the collection's workspace, as CloseHerdrWorkspace
+	// does; nil means CloseHerdrWorkspace.
+	CloseWorkspace func(name, expectedID string) (closed bool, warning string)
 }
 
 type RetireResult struct {
@@ -82,7 +85,7 @@ func (c *Context) RetireCollection(opt RetireOptions) (result RetireResult, resu
 	// Close the source workspace before hooks or worktree removal. Once closed,
 	// no new pane or agent turn can start against a collection being deleted.
 	if opt.Self && !opt.InPlace {
-		closed, warning := c.closeRetiredWorkspaceID(opt.Name, opt.WorkspaceID)
+		closed, warning := c.closeWorkspace(opt)
 		if !closed {
 			if warning == "" {
 				warning = "source workspace was not found or Herdr is unavailable"
@@ -170,7 +173,7 @@ func (c *Context) RetireCollection(opt RetireOptions) (result RetireResult, resu
 			}
 		}
 		if !result.WorkspaceClosed && !opt.InPlace {
-			closed, warning := c.closeRetiredWorkspaceID(opt.Name, opt.WorkspaceID)
+			closed, warning := c.closeWorkspace(opt)
 			result.WorkspaceClosed = closed
 			if warning != "" {
 				result.Warnings = append(result.Warnings, warning)
@@ -363,6 +366,18 @@ func inspectRetireWorktrees(target string) ([]retireWorktree, []string, error) {
 		return worktrees[i].name < worktrees[j].name
 	})
 	return worktrees, problems, nil
+}
+
+func (c *Context) closeWorkspace(opt RetireOptions) (bool, string) {
+	if opt.CloseWorkspace != nil {
+		return opt.CloseWorkspace(opt.Name, opt.WorkspaceID)
+	}
+	return c.closeRetiredWorkspaceID(opt.Name, opt.WorkspaceID)
+}
+
+// CloseHerdrWorkspace closes the herdr workspace labelled name and, if set, expectedID.
+func (c *Context) CloseHerdrWorkspace(name, expectedID string) (closed bool, warning string) {
+	return c.closeRetiredWorkspaceID(name, expectedID)
 }
 
 func (c *Context) closeRetiredWorkspace(name string) (bool, string) {

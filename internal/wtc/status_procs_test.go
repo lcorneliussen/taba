@@ -24,3 +24,16 @@ func TestStatusProcessesKeepsOnlyHerdrDescendants(t *testing.T) {
 		t.Fatalf("matched another session: %+v", got)
 	}
 }
+
+func TestStatusProcessesInPaneShellsKeepsTheShells(t *testing.T) {
+	output := `200 1 0.5 1.0 2048 -zsh
+201 200 9.0 1.0 4096 claude
+202 201 3.0 0.5 1024 node mcp
+203 1 0.1 0.1 512 -zsh
+204 1 50.0 1.0 9999 unrelated worker
+`
+	rows := statusProcessTree(statusProcessTable(output), map[int]bool{200: true, 203: true})
+	if len(rows) != 4 || rows[0].PID != 201 || rows[1].PID != 202 || rows[2].PID != 200 || rows[3].PID != 203 {
+		t.Fatalf("pane shells and their descendants, busiest first, expected: %+v", rows)
+	}
+}

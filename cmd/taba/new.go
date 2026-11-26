@@ -23,7 +23,7 @@ func addNewCommand(root *cobra.Command, asJSON *bool) {
 	cmd.Flags().StringVar(&baseReason, "base-reason", "", "Human reason for explicitly selected repository bases")
 	cmd.Flags().BoolVar(&review, "review", false, "With --pr: review someone else's PR without writing to its branch")
 	cmd.Flags().BoolVar(&tip, "tip", false, "Compatibility flag; detached tip is the default")
-	cmd.Flags().BoolVar(&open, "open", false, "Open the new collection in herdr")
+	cmd.Flags().BoolVar(&open, "open", false, "Open the new collection in herdr or Rex")
 	cmd.Flags().BoolVar(&noOpen, "no-open", false, "Leave the collection unopened")
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if err := refuseUnderGateway("new"); err != nil {
@@ -94,23 +94,30 @@ func runNewAtRoot(root string, opt wtc.NewOptions, open, noOpen, asJSON bool) er
 }
 
 func openAfterNew(source *wtc.Context, collection string, explicitOpen, noOpen bool) error {
+	if noOpen {
+		return nil
+	}
+	kind, err := openMultiplexer(source)
+	if err != nil {
+		return fmt.Errorf("collection created at %s, but %w", collection, err)
+	}
 	shouldOpen := explicitOpen
-	if !explicitOpen && !noOpen {
-		if host := newTerminalHost("", openSession(source, "")); host.Available() == nil {
-			shouldOpen = host.Running()
+	if !explicitOpen {
+		if host := newTerminalHost(kind, openSession(source, "")); host.Available() == nil {
+			shouldOpen = openProjectRunning(host)
 		}
 	}
 	if !shouldOpen {
 		return nil
 	}
-	if host := newTerminalHost("", ""); host.Available() != nil {
+	if host := newTerminalHost(kind, ""); host.Available() != nil {
 		return fmt.Errorf("collection created at %s, but %s is unavailable: %w", collection, host.Kind(), host.Available())
 	}
 	target, err := wtc.OpenCollection(collection)
 	if err != nil {
 		return fmt.Errorf("collection created at %s, but cannot read its configuration: %w", collection, err)
 	}
-	opt := openOptions{Session: openSession(target, ""), Tools: openWantedTools(statusSetting(target, "WTC_PANES") == "full", nil)}
+	opt := openOptions{Session: openSession(target, ""), Multiplexer: kind, Tools: openWantedTools(statusSetting(target, "WTC_PANES") == "full", nil)}
 	host := openHostFor(opt)
 	running := host.Running()
 	if !running {
@@ -122,9 +129,19 @@ func openAfterNew(source *wtc.Context, collection string, explicitOpen, noOpen b
 	item := openCollection(source, filepath.Base(collection), opt, openDesiredLayout(target, opt, running), running, true)
 	if item.Error != "" {
 		if strings.Contains(item.Error, "openpty") {
-			item.Error += "; " + openPtyHint()
+			item.Error += "; " + openPtyHint(host)
 		}
 		return fmt.Errorf("collection created at %s, but opening failed: %s", collection, item.Error)
 	}
 	return nil
+}
+
+// openProjectRunning: herdr runs a server per project session, Rex one for
+// everything, so there a project runs once one of its collections has a session.
+func openProjectRunning(host terminalHost) bool {
+	if host.Kind() != "rex" {
+		return host.Running()
+	}
+	workspaces, err := host.Workspaces()
+	return err == nil && len(workspaces) > 0
 }

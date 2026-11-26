@@ -153,9 +153,10 @@ func openMoveBelow(host terminalHost, workspace, pane, target, ratio string) err
 	return openMoveBeside(host, workspace, pane, target, "down", ratio)
 }
 
-// openMoveBeside puts pane next to target in target's tab. herdr ignores a
-// move within one tab, so a pane already there leaves through a temporary tab,
-// which keeps its process alive and closes once the pane moves back.
+// openMoveBeside puts pane next to target in target's tab. A pane already in
+// that tab leaves through a temporary tab, which keeps its process alive and
+// closes once the pane moves back, since a host may ignore a move within one
+// tab, as herdr does.
 func openMoveBeside(host terminalHost, workspace, pane, target, direction, ratio string) error {
 	tab := host.PaneTab(target)
 	if tab == "" {

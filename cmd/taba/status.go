@@ -35,7 +35,7 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 	cmd.Flags().BoolVar(&cached, "cached", false, "Read the last completed snapshot without Git or forge calls")
 	cmd.Flags().BoolVar(&noFetch, "no-fetch", false, "Use current local refs without fetching")
 	cmd.Flags().BoolVar(&tui, "tui", false, "Run the interactive status view")
-	cmd.Flags().BoolVar(&procs, "procs", false, "Show processes under the herdr session")
+	cmd.Flags().BoolVar(&procs, "procs", false, "Show processes in the collections' panes")
 	cmd.Flags().BoolVar(&noClick, "no-click", false, "Disable PR and build URL mouse targets in the TUI")
 	cmd.Flags().BoolVar(&click, "click", false, "Enable PR and build URL mouse targets in the TUI")
 	cmd.Flags().BoolVar(&mouse, "mouse", false, "Capture the mouse in the TUI for in-app wheel, click targets and hover text; by default drag selection stays with the terminal")
@@ -149,7 +149,7 @@ func addStatusCommand(root *cobra.Command, asJSON *bool) {
 			}
 		}
 		if procs {
-			processes, err := c.StatusProcesses()
+			processes, err := statusProcesses(c)
 			if err != nil {
 				return err
 			}

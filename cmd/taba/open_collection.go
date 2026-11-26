@@ -421,8 +421,19 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	}
 	host := openHostFor(opt)
 	name := openAgentName(opt.Session, filepath.Base(target.Collection))
+	argv := strings.Fields(args)
+	startPrompt := host.PromptsAtStart(kind)
+	if startPrompt && !opt.NoFirstPrompt {
+		if _, err := os.Stat(filepath.Join(target.Collection, "HANDOFF.md")); err == nil {
+			prompt, err := firstAgentPrompt(target.Prompts(), target.Collection, kind)
+			if err != nil {
+				return fmt.Errorf("first prompt was not rendered; no agent started: %w", err)
+			}
+			argv = append(argv, prompt.String())
+		}
+	}
 	start := func(context.Context) (retry.Outcome, error) {
-		err := host.StartAgent(name, kind, pane, strings.Fields(args))
+		err := host.StartAgent(name, kind, pane, argv)
 		var failure *openHerdrError
 		switch {
 		case err == nil:
@@ -459,7 +470,7 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	case err != nil:
 		return err
 	}
-	if opt.NoFirstPrompt {
+	if opt.NoFirstPrompt || startPrompt {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(target.Collection, "HANDOFF.md")); err != nil {

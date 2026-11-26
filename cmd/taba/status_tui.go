@@ -323,7 +323,7 @@ func statusTUIRefreshCollectorContext(ctx context.Context, c *wtc.Context, procs
 		go func() {
 			defer close(events)
 			if procs {
-				processes, err := c.StatusProcesses()
+				processes, err := statusProcesses(c)
 				select {
 				case events <- statusLoadedMsg{requestID: id, processes: processes, err: err, at: time.Now()}:
 				case <-ctx.Done():

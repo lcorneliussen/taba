@@ -2,8 +2,10 @@ package wtc
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,9 +34,18 @@ func (c *Context) statusHerdrSession() string {
 }
 
 func statusParseProcesses(output, session string) []StatusProcess {
-	all := []StatusProcess{}
-	rootPID := 0
+	all := statusProcessTable(output)
 	needle := "herdr --session " + session + " server"
+	for _, process := range all {
+		if strings.Contains(process.Command, needle) {
+			return slices.DeleteFunc(statusProcessTree(all, map[int]bool{process.PID: true}), func(p StatusProcess) bool { return p.PID == process.PID })
+		}
+	}
+	return []StatusProcess{}
+}
+
+func statusProcessTable(output string) []StatusProcess {
+	all := []StatusProcess{}
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 6 {
@@ -48,16 +59,14 @@ func statusParseProcesses(output, session string) []StatusProcess {
 		if err1 != nil || err2 != nil || err3 != nil || err4 != nil || err5 != nil {
 			continue
 		}
-		command := strings.Join(fields[5:], " ")
-		if rootPID == 0 && strings.Contains(command, needle) {
-			rootPID = pid
-		}
-		all = append(all, StatusProcess{PID: pid, PPID: ppid, CPU: cpu, Memory: mem, RSSKiB: rss, Command: command})
+		all = append(all, StatusProcess{PID: pid, PPID: ppid, CPU: cpu, Memory: mem, RSSKiB: rss, Command: strings.Join(fields[5:], " ")})
 	}
-	if rootPID == 0 {
-		return []StatusProcess{}
-	}
-	keep := map[int]bool{rootPID: true}
+	return all
+}
+
+// statusProcessTree is roots and their descendants, busiest first.
+func statusProcessTree(all []StatusProcess, roots map[int]bool) []StatusProcess {
+	keep := maps.Clone(roots)
 	for changed := true; changed; {
 		changed = false
 		for _, process := range all {
@@ -69,11 +78,11 @@ func statusParseProcesses(output, session string) []StatusProcess {
 	}
 	selected := []StatusProcess{}
 	for _, process := range all {
-		if process.PID != rootPID && keep[process.PID] {
+		if keep[process.PID] {
 			selected = append(selected, process)
 		}
 	}
-	sort.Slice(selected, func(i, j int) bool { return selected[i].CPU > selected[j].CPU })
+	sort.SliceStable(selected, func(i, j int) bool { return selected[i].CPU > selected[j].CPU })
 	return selected
 }
 
@@ -85,9 +94,21 @@ func (c *Context) StatusProcesses() ([]StatusProcess, error) {
 	return statusParseProcesses(string(out), c.statusHerdrSession()), nil
 }
 
+// StatusProcessesIn lists the given pane shells and every process under them.
+func (c *Context) StatusProcessesIn(shells map[int]bool) ([]StatusProcess, error) {
+	if len(shells) == 0 {
+		return []StatusProcess{}, nil
+	}
+	out, err := statusCommand(10*time.Second, "ps", "-axo", "pid=,ppid=,pcpu=,pmem=,rss=,args=")
+	if err != nil {
+		return nil, fmt.Errorf("ps: %w", err)
+	}
+	return statusProcessTree(statusProcessTable(string(out)), shells), nil
+}
+
 func StatusProcessesText(processes []StatusProcess) string {
 	if len(processes) == 0 {
-		return "(no processes under the herdr session)\n"
+		return "(no processes in the collections' panes)\n"
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%7s %6s %6s %9s  %s\n", "PID", "%CPU", "%MEM", "RSS", "COMMAND")

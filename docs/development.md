@@ -12,7 +12,8 @@ golangci-lint run   # v2.15.0, as CI runs it; linters in .golangci.yml
 Tests see the environment CI gives them, also from a collection shell. Every
 test package's `TestMain` calls `testenv.Main` from `internal/testenv`. It
 removes your shell's `WTC_*`, `TABA_*` and `GIT_*` variables, except test
-settings and `GIT_TRACE*`. Git then reads no system configuration, and a
+settings and `GIT_TRACE*`, and the `HERDR_*`, `REX_*` and
+`HARNESS_HERDR_SESSION` variables that would reach a real multiplexer. Git then reads no system configuration, and a
 global configuration that holds only a fixture identity. Name a new test
 setting `WTC_TEST_*` or `TABA_TEST_*` so that it reaches the tests.
 

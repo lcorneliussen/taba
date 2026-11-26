@@ -45,7 +45,11 @@ func addUpgradeCommand(root *cobra.Command, asJSON *bool) {
 			return err
 		}
 		if rollout {
-			report, runErr := c.CatchUp(wtc.RolloutOptions(opt.DryRun))
+			sweep := wtc.RolloutOptions(opt.DryRun)
+			if sweep.Panes, err = catchUpPanes(c); err != nil {
+				return err
+			}
+			report, runErr := c.CatchUp(sweep)
 			if *asJSON {
 				if err := json.NewEncoder(os.Stdout).Encode(report); err != nil {
 					return err

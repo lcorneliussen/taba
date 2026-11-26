@@ -35,11 +35,11 @@ type openItem struct {
 
 func addOpenCommand(root *cobra.Command, asJSON *bool) {
 	var opt openOptions
-	cmd := &cobra.Command{Use: "open [collection ...]", Short: "Open or repair collection workspaces in herdr", Args: cobra.ArbitraryArgs}
+	cmd := &cobra.Command{Use: "open [collection ...]", Short: "Open or repair collection workspaces in herdr or Rex", Args: cobra.ArbitraryArgs}
 	cmd.Flags().BoolVar(&opt.All, "all", false, "Open every collection in this workspace")
 	cmd.Flags().BoolVar(&opt.List, "list", false, "Report workspace and pane state without changing it")
 	cmd.Flags().BoolVar(&opt.DryRun, "dry-run", false, "Show needed changes without making them")
-	cmd.Flags().StringVar(&opt.Session, "session", "", "Herdr session")
+	cmd.Flags().StringVar(&opt.Session, "session", "", "Herdr session (in Rex: the label prefix of the collection sessions)")
 	cmd.Flags().StringVar(&opt.Agent, "agent", "", "Agent kind to start (default: claude)")
 	cmd.Flags().StringVar(&opt.AgentArgs, "agent-args", "", "Arguments passed to the agent, replacing defaults")
 	cmd.Flags().BoolVar(&opt.NoRemoteControl, "no-remote-control", false, "Do not enable Claude Remote Control")
@@ -95,6 +95,9 @@ func addOpenCommand(root *cobra.Command, asJSON *bool) {
 		if !cmd.Flags().Changed("full") && statusSetting(c, "WTC_PANES") == "full" {
 			opt.Tools = openWantedTools(true, opt.Add)
 		}
+		if opt.Multiplexer, err = openMultiplexer(c); err != nil {
+			return err
+		}
 		if host := newTerminalHost(opt.Multiplexer, ""); host.Available() != nil {
 			return errors.New(host.Kind() + " is not installed")
 		}
@@ -126,7 +129,7 @@ func addOpenCommand(root *cobra.Command, asJSON *bool) {
 			if item.Error != "" {
 				failures++
 				if strings.Contains(item.Error, "openpty") {
-					item.Error += "; " + openPtyHint()
+					item.Error += "; " + openPtyHint(host)
 				}
 			}
 			items = append(items, item)

@@ -157,7 +157,7 @@ func statusNextRun(c *wtc.Context, selected wtc.StatusRepo) tea.Cmd {
 func statusNextDefaultRunner() statusNextRunner {
 	return statusNextRunner{
 		readStatus: (*wtc.Context).StatusForgePreview,
-		busy:       (*wtc.Context).AgentBusy,
+		busy:       collectionAgentBusy,
 		command: func(owner *wtc.Context, argv []string) (string, error) {
 			binary, err := os.Executable()
 			if err != nil {
@@ -242,8 +242,15 @@ func statusNextRunInContext(ctx context.Context, c *wtc.Context, selected wtc.St
 	}
 }
 
-func statusNextHost(owner *wtc.Context, run statusNextRunner) terminalHost {
-	return &herdrHost{session: openSession(owner, ""), call: run.herdr}
+func statusNextHost(owner *wtc.Context, run statusNextRunner) (terminalHost, error) {
+	kind, err := openMultiplexer(owner)
+	switch {
+	case err != nil:
+		return nil, err
+	case kind == "rex":
+		return newTerminalHost(kind, openSession(owner, "")), nil
+	}
+	return &herdrHost{session: openSession(owner, ""), call: run.herdr}, nil
 }
 
 func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt prompts.Text, run statusNextRunner, contexts ...context.Context) tea.Msg {
@@ -260,7 +267,10 @@ func statusNextPrompt(owner *wtc.Context, r wtc.StatusRepo, prompt prompts.Text,
 	}
 	// The owning collection's named author pane is the destination. Focus can
 	// point to status, a shell or a reviewer, so it never selects a recipient.
-	host := statusNextHost(owner, run)
+	host, err := statusNextHost(owner, run)
+	if err != nil {
+		return instruction(err.Error())
+	}
 	workspaces, err := host.Workspaces()
 	if err := ctx.Err(); err != nil {
 		return failed(err)
