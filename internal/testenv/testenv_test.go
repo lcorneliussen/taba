@@ -138,10 +138,12 @@ func TestMainIsolatesTheCallersShell(t *testing.T) {
 	}
 	shell := []string{"HOME=" + home, "WTC_CONFIG_ROOT=" + home, "TABA_COLLECTION=shell", "TABA_BITBUCKET_TRANSPORT=bb",
 		"GIT_EDITOR=vi", "GIT_DIR=" + home, "GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"),
-		"GIT_TRACE2_EVENT=" + filepath.Join(home, "trace"), "WTC_TEST_KNOB=kept", "WTC_RECORDING_OUTPUT=kept"}
+		"GIT_TRACE2_EVENT=" + filepath.Join(home, "trace"), "WTC_TEST_KNOB=kept", "WTC_RECORDING_OUTPUT=kept",
+		"REX_BLOCK=block:1", "REX_BIN_DIR=" + home, "HERDR_ENV=1", "HERDR_SESSION=shell", "HERDR_SOCKET_PATH=" + home, "HARNESS_HERDR_SESSION=shell"}
 
 	outside := child(t, append(withoutMarker(os.Environ()), shell...))
-	for _, gone := range []string{"WTC_CONFIG_ROOT", "TABA_COLLECTION", "TABA_BITBUCKET_TRANSPORT", "GIT_EDITOR", "GIT_DIR"} {
+	for _, gone := range []string{"WTC_CONFIG_ROOT", "TABA_COLLECTION", "TABA_BITBUCKET_TRANSPORT", "GIT_EDITOR", "GIT_DIR",
+		"REX_BLOCK", "REX_BIN_DIR", "HERDR_ENV", "HERDR_SESSION", "HERDR_SOCKET_PATH", "HARNESS_HERDR_SESSION"} {
 		if value, ok := outside.env[gone]; ok {
 			t.Errorf("%s=%s reached the tests", gone, value)
 		}

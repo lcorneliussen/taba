@@ -269,16 +269,16 @@ esac
 	counts := openPtyCounts
 	t.Cleanup(func() { openPtyCounts = counts })
 	openPtyCounts = func() (int, int) { return 100, 511 }
-	if report, low := openPtyReport(); low || report != "100 of 511 pseudo-terminals in use (kern.tty.ptmx_max)" {
+	if report, low := openPtyReport(newTerminalHost("", "")); low || report != "100 of 511 pseudo-terminals in use (kern.tty.ptmx_max)" {
 		t.Fatalf("roomy budget reported as low: %q", report)
 	}
 	openPtyCounts = func() (int, int) { return 470, 511 }
-	report, low := openPtyReport()
+	report, low := openPtyReport(newTerminalHost("", ""))
 	if !low || !strings.Contains(report, "most panes: busy 5 (agent 1, browse 2, shell 1, other 1), quiet 1 (agent 1)") || !strings.Contains(report, "wtc open --trim --all") {
 		t.Fatalf("low budget does not name holders: %q", report)
 	}
 	openPtyCounts = func() (int, int) { return 0, 0 }
-	if report, low := openPtyReport(); low || report != "" {
+	if report, low := openPtyReport(newTerminalHost("", "")); low || report != "" {
 		t.Fatalf("unknown budget reported: %q", report)
 	}
 }

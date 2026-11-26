@@ -37,7 +37,7 @@ merge time continue refreshing after the live cache expires.
 ```bash
 taba status other-collection        # one named collection
 taba status --all                   # every collection, no scoped snapshot files
-taba status --procs                 # processes under the herdr session
+taba status --procs                 # processes in the collections' panes
 taba status --tui                   # interactive repositories and PRs
 taba status --watch 120             # interactive view, 120-second refresh
 ```

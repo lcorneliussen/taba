@@ -18,6 +18,7 @@ import (
 
 func openCollection(source *wtc.Context, name string, opt openOptions, desired string, running, last bool) openItem {
 	item := openItem{Collection: name, Layout: desired, Actions: []string{}}
+	host := openHostFor(opt)
 	targetDir := filepath.Join(source.Workspace, name)
 	target, err := wtc.OpenCollection(targetDir)
 	if err != nil {
@@ -27,7 +28,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 	workspaces := []openWorkspaceInfo{}
 	fresh := false
 	if running {
-		workspaces, err = openWorkspaces(opt.Session)
+		workspaces, err = host.Workspaces()
 		if err != nil {
 			item.Error = err.Error()
 			return item
@@ -48,11 +49,11 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 			item.Actions = append(item.Actions, "would create workspace ("+desired+")")
 			return item
 		}
-		if err := openCreateWorkspace(target, opt.Session, name); err != nil {
+		if err := openCreateWorkspace(target, host, name); err != nil {
 			item.Error = err.Error()
 			return item
 		}
-		workspaces, err = openWorkspaces(opt.Session)
+		workspaces, err = host.Workspaces()
 		if err != nil {
 			item.Error = err.Error()
 			return item
@@ -64,10 +65,10 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 			}
 		}
 		if item.Workspace == "" {
-			item.Error = "herdr created a workspace but did not list it"
+			item.Error = host.Kind() + " created a workspace but did not list it"
 			return item
 		}
-		if _, err := openEnsureLayout(opt.Session, item.Workspace, target.Collection, desired); err != nil {
+		if _, err := openEnsureLayout(host, item.Workspace, target.Collection, desired); err != nil {
 			item.Error = err.Error()
 			return item
 		}
@@ -75,7 +76,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		fresh = true
 		item.Actions = append(item.Actions, "workspace created ("+desired+")")
 	} else {
-		current, panes, err := openLayoutState(opt.Session, item.Workspace)
+		current, panes, err := openLayoutState(host, item.Workspace)
 		if err != nil {
 			item.Error = err.Error()
 			return item
@@ -84,7 +85,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 			item.Layout = current
 			item.Actions = append(item.Actions, openLayoutDescription(current, panes))
 			for _, label := range []string{"agent", "browse", "shell", "review", "status"} {
-				state, inspectErr := openPaneState(opt.Session, openPaneByLabel(panes, label))
+				state, inspectErr := openPaneState(host, openPaneByLabel(panes, label))
 				item.Actions = append(item.Actions, label+": "+state)
 				if inspectErr != nil {
 					if item.Error != "" {
@@ -102,14 +103,14 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 			if opt.DryRun {
 				item.Actions = append(item.Actions, "would layout "+current+" → "+desired)
 			} else {
-				change, err := openEnsureLayout(opt.Session, item.Workspace, target.Collection, desired)
+				change, err := openEnsureLayout(host, item.Workspace, target.Collection, desired)
 				if err != nil {
 					item.Error = err.Error()
 					return item
 				}
 				if change != "unchanged" {
 					item.Actions = append(item.Actions, "layout "+change+" ("+desired+")")
-					openWaitWorkspaceIdle(opt.Session, item.Workspace)
+					openWaitWorkspaceIdle(host, item.Workspace)
 				}
 			}
 		} else {
@@ -117,7 +118,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		}
 	}
 	if opt.DryRun {
-		panes, err := openPanes(opt.Session, item.Workspace)
+		panes, err := host.Panes(item.Workspace)
 		if err != nil {
 			item.Error = err.Error()
 			return item
@@ -132,14 +133,14 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		}
 		return item
 	}
-	added, err := openEnsureTools(opt.Session, item.Workspace, target.Collection, item.Layout, opt.Tools)
+	added, err := openEnsureTools(host, item.Workspace, target.Collection, item.Layout, opt.Tools)
 	if fresh {
 		// Tool panes are split after the layout shells, so settle once after
 		// the split: the guard then covers every pane, the new ones included.
-		openWaitWorkspaceIdle(opt.Session, item.Workspace)
+		openWaitWorkspaceIdle(host, item.Workspace)
 	} else {
 		for _, pane := range added {
-			openWaitIdle(opt.Session, pane)
+			openWaitIdle(host, pane)
 		}
 	}
 	if len(added) > 0 {
@@ -149,7 +150,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		item.Error = err.Error()
 		return item
 	}
-	panes, err := openPanes(opt.Session, item.Workspace)
+	panes, err := host.Panes(item.Workspace)
 	if err != nil {
 		item.Error = err.Error()
 		return item
@@ -158,7 +159,7 @@ func openCollection(source *wtc.Context, name string, opt openOptions, desired s
 		item.Error = err.Error()
 	}
 	if opt.Focus && last {
-		if _, err := openHerdr(opt.Session, "workspace", "focus", item.Workspace); err != nil {
+		if err := host.FocusWorkspace(item.Workspace); err != nil {
 			item.Error = err.Error()
 		}
 	}
@@ -193,49 +194,51 @@ func openReadEnvironment(path string) ([]string, error) {
 	return settings, nil
 }
 
-func openCreateWorkspace(target *wtc.Context, session, name string) error {
-	scope, err := target.ValidateControlRoot()
+func openCreateWorkspace(target *wtc.Context, host terminalHost, name string) error {
+	env, err := openWorkspaceEnvironment(target, host.Session(), name)
 	if err != nil {
 		return err
 	}
-	args := []string{"workspace", "create", "--cwd", target.Collection, "--label", name, "--no-focus"}
+	_, _, err = host.CreateWorkspace(name, target.Collection, env)
+	return err
+}
+
+func openWorkspaceEnvironment(target *wtc.Context, session, name string) ([]string, error) {
+	scope, err := target.ValidateControlRoot()
+	if err != nil {
+		return nil, err
+	}
+	var env []string
 	for _, file := range []string{".env.collection", ".env.collection.local"} {
 		settings, err := openReadEnvironment(filepath.Join(target.Collection, file))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, setting := range settings {
 			if strings.HasPrefix(setting, "TABA_CONFIG_ROOT=") || strings.HasPrefix(setting, "WTC_CONFIG_ROOT=") {
 				continue
 			}
-			args = append(args, "--env", setting)
+			env = append(env, setting)
 		}
 	}
-	for _, setting := range envcompat.Both("WTC_CONFIG_ROOT", "'"+scope.Root+"'") {
-		args = append(args, "--env", setting)
-	}
+	env = append(env, envcompat.Both("WTC_CONFIG_ROOT", "'"+scope.Root+"'")...)
 	path, err := target.AgentToolchainPath(true)
 	if err == nil && path != "" {
-		for _, setting := range envcompat.Both("WTC_TOOLCHAIN_PATH", path) {
-			args = append(args, "--env", setting)
-		}
+		env = append(env, envcompat.Both("WTC_TOOLCHAIN_PATH", path)...)
 	}
-	for _, setting := range envcompat.Both("WTC_AGENT_NAME", openAgentName(session, name)) {
-		args = append(args, "--env", setting)
-	}
-	_, err = openHerdr(session, args...)
-	return err
+	env = append(env, envcompat.Both("WTC_AGENT_NAME", openAgentName(session, name))...)
+	return env, nil
 }
 
 func openAgentName(session, collection string) string {
 	return wtc.AgentName(session, collection)
 }
 
-func openPaneState(session string, pane openPaneInfo) (string, error) {
+func openPaneState(host terminalHost, pane openPaneInfo) (string, error) {
 	if pane.ID == "" {
 		return "no pane", nil
 	}
-	argv, err := openPaneCommand(session, pane.ID)
+	argv, err := host.Foreground(pane.ID)
 	if err != nil {
 		return "unknown", err
 	}
@@ -269,6 +272,7 @@ func openPaneState(session string, pane openPaneInfo) (string, error) {
 }
 
 func openPlanPanes(item *openItem, panes []openPaneInfo, opt openOptions) error {
+	host := openHostFor(opt)
 	var failures []error
 	for _, label := range []string{"agent", "browse", "review", "status"} {
 		if label == "review" && !openWants(opt, label) {
@@ -278,7 +282,7 @@ func openPlanPanes(item *openItem, panes []openPaneInfo, opt openOptions) error 
 			continue
 		}
 		pane := openPaneByLabel(panes, label)
-		state, err := openPaneState(opt.Session, pane)
+		state, err := openPaneState(host, pane)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", label, err))
 			continue
@@ -291,6 +295,7 @@ func openPlanPanes(item *openItem, panes []openPaneInfo, opt openOptions) error 
 }
 
 func openStartPanes(item *openItem, target *wtc.Context, panes []openPaneInfo, opt openOptions) error {
+	host := openHostFor(opt)
 	var failures []error
 	for _, label := range []string{"agent", "browse", "shell", "review", "status"} {
 		if label == "agent" && opt.NoAgent || label == "browse" && opt.NoBrowse || label == "status" && opt.NoStatus {
@@ -301,7 +306,7 @@ func openStartPanes(item *openItem, target *wtc.Context, panes []openPaneInfo, o
 		if pane.ID == "" && (label == "browse" || label == "shell" || label == "review") && !openWants(opt, label) {
 			continue // Tool panes come on demand.
 		}
-		state, inspectErr := openPaneState(opt.Session, pane)
+		state, inspectErr := openPaneState(host, pane)
 		if inspectErr != nil {
 			item.Actions = append(item.Actions, label+" inspection failed")
 			failures = append(failures, fmt.Errorf("%s: %w", label, inspectErr))
@@ -365,11 +370,11 @@ func openStartPanes(item *openItem, target *wtc.Context, panes []openPaneInfo, o
 				}
 				item.Actions = append(item.Actions, detail)
 			}
-			if !openPaneIdle(opt.Session, pane.ID) {
+			if !openPaneIdle(host, pane.ID) {
 				item.Actions = append(item.Actions, label+" busy — left alone")
 				continue
 			}
-			if _, err := openHerdr(opt.Session, "pane", "run", pane.ID, command); err != nil {
+			if err := host.Run(pane.ID, command); err != nil {
 				failures = append(failures, fmt.Errorf("%s: %w", label, err))
 				item.Actions = append(item.Actions, label+" start failed: "+err.Error())
 			} else {
@@ -414,13 +419,21 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	if kind == "claude" && !opt.NoRemoteControl && !opt.AgentArgsSet && !configuredArgs {
 		args += " --remote-control " + openAgentName(opt.Session, filepath.Base(target.Collection))
 	}
-	command := []string{"agent", "start", openAgentName(opt.Session, filepath.Base(target.Collection)), "--kind", kind, "--pane", pane}
-	if args != "" {
-		command = append(command, "--")
-		command = append(command, strings.Fields(args)...)
+	host := openHostFor(opt)
+	name := openAgentName(opt.Session, filepath.Base(target.Collection))
+	argv := strings.Fields(args)
+	startPrompt := host.PromptsAtStart(kind)
+	if startPrompt && !opt.NoFirstPrompt {
+		if _, err := os.Stat(filepath.Join(target.Collection, "HANDOFF.md")); err == nil {
+			prompt, err := firstAgentPrompt(target.Prompts(), target.Collection, kind)
+			if err != nil {
+				return fmt.Errorf("first prompt was not rendered; no agent started: %w", err)
+			}
+			argv = append(argv, prompt.String())
+		}
 	}
 	start := func(context.Context) (retry.Outcome, error) {
-		_, err := openHerdr(opt.Session, command...)
+		err := host.StartAgent(name, kind, pane, argv)
 		var failure *openHerdrError
 		switch {
 		case err == nil:
@@ -428,13 +441,15 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 		case !errors.As(err, &failure):
 			return retry.Unknown, err
 		case failure.Code == "agent_not_ready":
-			err = openReconcileStartedAgent(target, opt.Session, command[2], kind, pane, err)
+			if registry, ok := host.(agentRegistry); ok {
+				err = openReconcileStartedAgent(target, registry, name, kind, pane, err)
+			}
 			var started *openAgentStartedError
 			if errors.As(err, &started) {
 				return retry.Applied, err
 			}
 			return retry.Unknown, err
-		case failure.Code == "agent_pane_busy" && openPaneIdle(opt.Session, pane):
+		case failure.Code == "agent_pane_busy" && openPaneIdle(host, pane):
 			return retry.Busy, err // A busy shell can settle during cold startup.
 		case failure.Code == "agent_pane_busy", failure.Code == "agent_name_taken", failure.Code == "agent_start_failed":
 			return retry.Refused, err
@@ -443,7 +458,7 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	}
 	marker := filepath.Join(target.Collection, ".wtc-agent-start.pending")
 	occupied := func() (bool, error) {
-		argv, err := openPaneCommand(opt.Session, pane)
+		argv, err := host.Foreground(pane)
 		return err == nil && !openShellCommand(argv), err
 	}
 	err := retry.Intent{Marker: marker, Done: occupied}.Do(context.Background(), retry.Policy{Every: time.Second, Attempts: 15}, start)
@@ -455,7 +470,7 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	case err != nil:
 		return err
 	}
-	if opt.NoFirstPrompt {
+	if opt.NoFirstPrompt || startPrompt {
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(target.Collection, "HANDOFF.md")); err != nil {
@@ -465,22 +480,7 @@ func openStartAgent(target *wtc.Context, opt openOptions, pane string) error {
 	if err != nil {
 		return fmt.Errorf("agent started, but first prompt was not rendered: %w", err)
 	}
-	return openPromptAgent(opt.Session, pane, prompt)
-}
-
-func openPromptAgent(session, pane string, prompt prompts.Text) error {
-	if _, err := openHerdr(session, "agent", "prompt", pane, prompt.String(), "--wait", "--until", "working", "--timeout", "20000"); err == nil {
-		return nil
-	} else if !strings.Contains(err.Error(), "agent_prompt_stalled") {
-		return fmt.Errorf("agent started, but first prompt was not taken: %w", err)
-	}
-	if _, err := openHerdr(session, "agent", "send-keys", pane, "enter"); err != nil {
-		return fmt.Errorf("first prompt was not taken: %w", err)
-	}
-	if _, err := openHerdr(session, "agent", "wait", pane, "--until", "working", "--timeout", "10000"); err != nil {
-		return fmt.Errorf("first prompt was not taken: %w", err)
-	}
-	return nil
+	return host.SubmitFirstPrompt(pane, prompt)
 }
 
 // A verified partial launch remains incomplete. Never submit the initial task
@@ -491,17 +491,12 @@ func (e *openAgentStartedError) Error() string {
 	return "agent started; " + e.State + "; inspect the agent pane, finish startup manually, and submit the initial task when ready (no first prompt sent)"
 }
 
-func openReconcileStartedAgent(target *wtc.Context, session, name, kind, pane string, startErr error) error {
-	byName, err := openHerdr(session, "agent", "get", name)
+func openReconcileStartedAgent(target *wtc.Context, host agentRegistry, name, kind, pane string, startErr error) error {
+	a, b, err := host.AgentIdentity(name, pane)
 	if err != nil {
-		return fmt.Errorf("%w; live startup identity lookup failed: %v", startErr, err)
+		return fmt.Errorf("%w; %v", startErr, err)
 	}
-	byPane, err := openHerdr(session, "agent", "get", pane)
-	if err != nil {
-		return fmt.Errorf("%w; live startup pane lookup failed: %v", startErr, err)
-	}
-	a, b := byName.Result.Agent, byPane.Result.Agent
-	workspaces, err := openWorkspaces(session)
+	workspaces, err := host.Workspaces()
 	if err != nil {
 		return fmt.Errorf("%w; live startup workspace lookup failed: %v", startErr, err)
 	}

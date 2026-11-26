@@ -299,7 +299,7 @@ func TestOpenReviewPaneLifecycle(t *testing.T) {
 			}
 			check := func(want string) {
 				t.Helper()
-				got, panes, err := openLayoutState("test", "ws1")
+				got, panes, err := openLayoutState(newTerminalHost("", "test"), "ws1")
 				if err != nil || got != want || len(panes) != 5 {
 					t.Fatalf("wrong layout %s, %v: %+v", got, err, panes)
 				}
@@ -452,7 +452,7 @@ func TestOpenReviewResolvesHarnessAliasAndRejectsMultipleSiblingBundles(t *testi
 
 func TestOpenIdleReviewRequiresExplicitRequest(t *testing.T) {
 	c, _, _, log, _ := openTestFixture(t)
-	if err := openCreateWorkspace(c, "test", "sample"); err != nil {
+	if err := openCreateWorkspace(c, newTerminalHost("", "test"), "sample"); err != nil {
 		t.Fatal(err)
 	}
 	panes := []openPaneInfo{{Label: "review", ID: "p1"}}

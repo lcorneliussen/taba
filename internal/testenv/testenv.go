@@ -1,7 +1,7 @@
 // Package testenv runs every test package in the environment CI gives it,
-// whatever shell runs `go test`. It only scrubs the caller's product and Git
-// settings and then runs the package's fixtures, and leaves HOME, proxy and
-// GO* variables as they are.
+// whatever shell runs `go test`. It only scrubs the caller's product,
+// multiplexer and Git settings and then runs the package's fixtures, and
+// leaves HOME, proxy and GO* variables as they are.
 package testenv
 
 import (
@@ -103,13 +103,17 @@ func configure(e env, dir string) error {
 var knobs = []string{"WTC_TEST_", "TABA_TEST_", "WTC_OPENCLAW_", "WTC_RECORDING_",
 	"WTC_HOSTED435_FRAME_DIR", "WTC_TS_AUTHKEY", "WTC_PUBLISH_GH_TOKEN"}
 
-// fromShell reports whether a variable is a product or Git setting from the
-// caller's shell. A collection shell carries WTC_ and TABA_ settings, and
-// agents and editors set Git variables such as GIT_EDITOR; CI sets neither.
-// Git tracing passes through for tools/ci/test-timings.py --git-trace.
+// fromShell reports whether a variable is a product, multiplexer or Git
+// setting from the caller's shell. A collection shell carries WTC_ and TABA_
+// settings, a herdr or Rex pane names its server, and agents and editors set
+// Git variables such as GIT_EDITOR; CI sets none of them. Git tracing passes
+// through for tools/ci/test-timings.py --git-trace.
 func fromShell(name string) bool {
 	if strings.HasPrefix(name, "GIT_") {
 		return !strings.HasPrefix(name, "GIT_TRACE")
+	}
+	if strings.HasPrefix(name, "HERDR_") || strings.HasPrefix(name, "REX_") || name == "HARNESS_HERDR_SESSION" {
+		return true
 	}
 	if !strings.HasPrefix(name, "WTC_") && !strings.HasPrefix(name, "TABA_") {
 		return false

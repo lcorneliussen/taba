@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,17 +67,23 @@ func addRetireCommand(root *cobra.Command, asJSON *bool) {
 				return err
 			}
 		}
-		if name == filepath.Base(c.Collection) && c.AdHoc && os.Getenv("HERDR_ENV") != "1" {
-			result, err := c.RetireCollection(wtc.RetireOptions{Name: name, Force: force, Self: true, InPlace: true})
+		if name == filepath.Base(c.Collection) && c.AdHoc {
+			host, err := retireHost(c)
 			if err != nil {
 				return err
 			}
-			return emitRetireResult(name, result, *asJSON)
+			if _, inPane := host.Here(); !inPane {
+				result, err := c.RetireCollection(wtc.RetireOptions{Name: name, Force: force, Self: true, InPlace: true})
+				if err != nil {
+					return err
+				}
+				return emitRetireResult(name, result, *asJSON)
+			}
 		}
 		if name == filepath.Base(c.Collection) {
 			return handoffSelfRetire(c, name, force, *asJSON)
 		}
-		result, err := c.RetireCollection(wtc.RetireOptions{Name: name, Force: force})
+		result, err := c.RetireCollection(wtc.RetireOptions{Name: name, Force: force, CloseWorkspace: retireEverywhere(c)})
 		if err != nil {
 			return err
 		}
@@ -101,16 +108,20 @@ func emitRetireResult(name string, result wtc.RetireResult, asJSON bool) error {
 }
 
 func handoffSelfRetire(c *wtc.Context, name string, force, asJSON bool) error {
-	session := os.Getenv("HERDR_SESSION")
-	sourceID := os.Getenv("HERDR_WORKSPACE_ID")
-	sourcePane := os.Getenv("HERDR_PANE_ID")
-	if os.Getenv("HERDR_ENV") != "1" || session == "" || sourceID == "" || sourcePane == "" {
-		return errors.New("retiring the current collection requires its Herdr pane; use another collection otherwise")
+	located, err := retireHost(c)
+	if err != nil {
+		return err
+	}
+	here, inPane := located.Here()
+	session, sourceID, sourcePane := here.Session, here.Workspace, here.Pane
+	host := newTerminalHost(located.Kind(), session)
+	if !inPane || session == "" || sourceID == "" || sourcePane == "" {
+		return errors.New("retiring the current collection requires its " + retireHostTitle(host) + " pane; use another collection otherwise")
 	}
 	if _, err := c.RetirePreflight(wtc.RetireOptions{Name: name, Force: force, Self: true}); err != nil {
 		return err
 	}
-	workspaces, err := openWorkspaces(session)
+	workspaces, err := host.Workspaces()
 	if err != nil {
 		return err
 	}
@@ -125,9 +136,9 @@ func handoffSelfRetire(c *wtc.Context, name string, force, asJSON bool) error {
 		}
 	}
 	if !sourceFound {
-		return errors.New("current Herdr workspace does not match the collection being retired")
+		return errors.New("current " + retireHostTitle(host) + " workspace does not match the collection being retired")
 	}
-	panes, err := openPanes(session, sourceID)
+	panes, err := host.Panes(sourceID)
 	if err != nil {
 		return err
 	}
@@ -138,7 +149,7 @@ func handoffSelfRetire(c *wtc.Context, name string, force, asJSON bool) error {
 		}
 	}
 	if !sourcePaneFound {
-		return errors.New("current Herdr pane is not in the target workspace")
+		return errors.New("current " + retireHostTitle(host) + " pane is not in the target workspace")
 	}
 	for _, pane := range panes {
 		if pane.ID != sourcePane && pane.Agent != "" {
@@ -146,35 +157,27 @@ func handoffSelfRetire(c *wtc.Context, name string, force, asJSON bool) error {
 		}
 	}
 	settings := []string{
-		"--cwd", c.Workspace, "--no-focus",
-		"--env", "WTC_RETIRE_SESSION=" + session,
-		"--env", "WTC_RETIRE_SOURCE_WORKSPACE=" + sourceID,
-		"--env", "WTC_RETIRE_SOURCE_PANE=" + sourcePane,
-		"--env", "WTC_RETIRE_TARGET=" + name,
-		"--env", "HARNESS_HERDR_SESSION=" + session,
+		"WTC_RETIRE_SESSION=" + session,
+		"WTC_RETIRE_SOURCE_WORKSPACE=" + sourceID,
+		"WTC_RETIRE_SOURCE_PANE=" + sourcePane,
+		"WTC_RETIRE_TARGET=" + name,
 	}
-	var launched openHerdrResponse
-	if cleanupID == "" {
-		launched, err = openHerdr(session, append([]string{"workspace", "create", "--label", cleanupWorkspaceLabel}, settings...)...)
-		cleanupID = launched.Result.WorkspaceID
-		if cleanupID == "" {
-			cleanupID = launched.Result.Workspace.ID
-		}
+	if host.Kind() == "rex" {
+		settings = append(settings, "WTC_RETIRE_MULTIPLEXER=rex")
 	} else {
-		launched, err = openHerdr(session, append([]string{"tab", "create", "--workspace", cleanupID, "--label", name}, settings...)...)
+		settings = append(settings, "HARNESS_HERDR_SESSION="+session)
+	}
+	var paneID string
+	if cleanupID == "" {
+		cleanupID, paneID, err = host.CreateWorkspace(cleanupWorkspaceLabel, c.Workspace, settings)
+	} else {
+		paneID, err = host.CreateTab(cleanupID, c.Workspace, name, settings)
 	}
 	if err != nil {
 		return err
 	}
-	paneID := launched.Result.RootPane.ID
-	if paneID == "" {
-		paneID = launched.Result.Pane.ID
-	}
-	if paneID == "" {
-		paneID = launched.Result.PaneID
-	}
 	if cleanupID == "" || paneID == "" {
-		return errors.New("Herdr created cleanup space without a workspace and pane ID")
+		return errors.New(retireHostTitle(host) + " created cleanup space without a workspace and pane ID")
 	}
 	binary, err := os.Executable()
 	if err != nil {
@@ -184,24 +187,26 @@ func handoffSelfRetire(c *wtc.Context, name string, force, asJSON bool) error {
 	if force {
 		command += " --force"
 	}
-	if _, err := openHerdr(session, "pane", "run", paneID, command); err != nil {
+	if err := host.Run(paneID, command); err != nil {
 		return err
 	}
 	return emit(envelope{OK: true, Data: map[string]string{"workspace_id": cleanupID, "pane_id": paneID, "collection": name}, Summary: "retirement of " + name + " handed to " + cleanupWorkspaceLabel}, asJSON)
 }
 
 func runRetireWorker(name string, force, asJSON bool) error {
-	if os.Getenv("HERDR_ENV") != "1" || os.Getenv("HERDR_SESSION") != os.Getenv("WTC_RETIRE_SESSION") || os.Getenv("WTC_RETIRE_TARGET") != name {
-		return errors.New("retire worker is not in its scheduled Herdr session")
+	located := newTerminalHost(os.Getenv("WTC_RETIRE_MULTIPLEXER"), "")
+	here, inPane := located.Here()
+	host := newTerminalHost(located.Kind(), here.Session)
+	if !inPane || here.Session != os.Getenv("WTC_RETIRE_SESSION") || os.Getenv("WTC_RETIRE_TARGET") != name {
+		return errors.New("retire worker is not in its scheduled " + retireHostTitle(host) + " session")
 	}
-	session := os.Getenv("HERDR_SESSION")
-	cleanupID := os.Getenv("HERDR_WORKSPACE_ID")
+	cleanupID := here.Workspace
 	sourceID := os.Getenv("WTC_RETIRE_SOURCE_WORKSPACE")
 	sourcePane := os.Getenv("WTC_RETIRE_SOURCE_PANE")
 	if cleanupID == "" || sourceID == "" || sourcePane == "" || cleanupID == sourceID {
 		return errors.New("retire worker is missing its source or cleanup pane identity")
 	}
-	workspaces, err := openWorkspaces(session)
+	workspaces, err := host.Workspaces()
 	if err != nil {
 		return err
 	}
@@ -231,10 +236,10 @@ func runRetireWorker(name string, force, asJSON bool) error {
 		return err
 	}
 	fmt.Printf("Waiting for the source pane to finish before retiring %s...\n", name)
-	if err := waitRetireSource(session, sourceID, sourcePane); err != nil {
+	if err := waitRetireSource(host, sourceID, sourcePane); err != nil {
 		return err
 	}
-	panes, err := openPanes(session, sourceID)
+	panes, err := host.Panes(sourceID)
 	if err != nil {
 		return fmt.Errorf("cannot verify remaining source panes: %w", err)
 	}
@@ -243,23 +248,24 @@ func runRetireWorker(name string, force, asJSON bool) error {
 			return fmt.Errorf("another agent appeared in pane %s; retirement remains pending", pane.ID)
 		}
 	}
-	result, err := c.RetireCollection(wtc.RetireOptions{Name: name, Force: force, Self: true, WorkspaceID: sourceID})
+	result, err := c.RetireCollection(wtc.RetireOptions{Name: name, Force: force, Self: true, WorkspaceID: sourceID, CloseWorkspace: retireCloser(host)})
 	if err != nil {
 		return err
 	}
 	return emitRetireResult(name, result, asJSON)
 }
 
-func waitRetireSource(session, workspaceID, paneID string) error {
+func waitRetireSource(host terminalHost, workspaceID, paneID string) error {
 	time.Sleep(time.Second) //nolint:forbidigo // A single delay lets the initiating CLI return before its pane closes.
+	watch := newRetireSourceWatch(host)
 	err := retry.Poll(context.Background(), retry.Policy{Every: 2 * time.Second, Within: 2 * time.Hour}, func(context.Context) (bool, error) {
-		panes, err := openPanes(session, workspaceID)
+		panes, err := host.Panes(workspaceID)
 		if err != nil {
 			return false, fmt.Errorf("cannot verify source pane state: %w", err)
 		}
 		for _, pane := range panes {
 			if pane.ID == paneID {
-				return pane.Agent == "" || pane.AgentStatus == "idle" || pane.AgentStatus == "done", nil
+				return watch.finished(pane, time.Now()), nil
 			}
 		}
 		return false, errors.New("source pane disappeared before cleanup could verify it")
@@ -268,6 +274,80 @@ func waitRetireSource(session, workspaceID, paneID string) error {
 		return errors.New("source agent did not finish; retirement remains pending in cleanup space")
 	}
 	return err
+}
+
+var retireQuietScreen = time.Minute
+
+type retireSourceWatch struct {
+	screens     quietScreenHost
+	screen      string
+	unchangedAt time.Time
+}
+
+func newRetireSourceWatch(host terminalHost) *retireSourceWatch {
+	screens, _ := host.(quietScreenHost)
+	return &retireSourceWatch{screens: screens}
+}
+
+func (w *retireSourceWatch) finished(pane openPaneInfo, now time.Time) bool {
+	switch {
+	case pane.Agent == "" || pane.AgentStatus == "idle" || pane.AgentStatus == "done":
+		return true
+	case pane.AgentStatus != "unknown" || w.screens == nil:
+		return false
+	}
+	text, err := w.screens.VisibleText(pane.ID)
+	if err != nil || text != w.screen || w.unchangedAt.IsZero() {
+		w.screen, w.unchangedAt = text, now
+		return false
+	}
+	return now.Sub(w.unchangedAt) >= retireQuietScreen
+}
+
+func retireHost(c *wtc.Context) (terminalHost, error) {
+	kind, err := openMultiplexer(c)
+	return newTerminalHost(kind, ""), err
+}
+
+func retireEverywhere(c *wtc.Context) func(name, expectedID string) (bool, string) {
+	rex := retireCloser(newTerminalHost("rex", openSession(c, "")))
+	return func(name, expectedID string) (bool, string) {
+		herdrClosed, herdrWarning := c.CloseHerdrWorkspace(name, expectedID)
+		rexClosed, rexWarning := rex(name, expectedID)
+		warnings := slices.DeleteFunc([]string{herdrWarning, rexWarning}, func(w string) bool { return w == "" })
+		return herdrClosed || rexClosed, strings.Join(warnings, "; ")
+	}
+}
+
+// retireCloser is nil for herdr, whose workspace the retirement closes itself.
+func retireCloser(host terminalHost) func(name, expectedID string) (bool, string) {
+	if host.Kind() == "herdr" {
+		return nil
+	}
+	return func(name, expectedID string) (bool, string) {
+		workspaces, err := host.Workspaces()
+		if err != nil {
+			return false, "" // No running multiplexer is normal.
+		}
+		for _, workspace := range workspaces {
+			if workspace.Label != name || expectedID != "" && workspace.ID != expectedID {
+				continue
+			}
+			if err := host.CloseWorkspace(workspace.ID); err != nil {
+				return false, fmt.Sprintf("could not close %s workspace %s: %v", host.Kind(), workspace.ID, err)
+			}
+			return true, ""
+		}
+		if expectedID != "" {
+			return false, "target " + retireHostTitle(host) + " workspace identity changed; no workspace closed"
+		}
+		return false, ""
+	}
+}
+
+func retireHostTitle(host terminalHost) string {
+	kind := host.Kind()
+	return strings.ToUpper(kind[:1]) + kind[1:]
 }
 
 func shellQuote(value string) string {

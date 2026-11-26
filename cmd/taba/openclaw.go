@@ -24,6 +24,24 @@ import (
 
 func currentHost() openclaw.HostKind { return openclaw.DetectHost(os.Getenv) }
 
+func hostName() (string, error) {
+	host := currentHost()
+	if host == openclaw.HostOpenClaw {
+		return string(host), nil
+	}
+	var c *wtc.Context
+	if dir, err := os.Getwd(); err == nil {
+		if found, err := wtc.Discover(dir); err == nil {
+			c = found
+		}
+	}
+	kind, err := openMultiplexer(c)
+	if kind == "rex" {
+		return kind, nil
+	}
+	return string(host), err
+}
+
 // readBodyFile reads a pull request description from path, or from stdin
 // for -.
 func readBodyFile(path string) ([]byte, error) {
@@ -67,9 +85,12 @@ func printPlan(plan openclaw.Plan) error {
 }
 
 func addHostCommands(root *cobra.Command, asJSON *bool) {
-	host := &cobra.Command{Use: "host", Short: "Print what wtc is running under: openclaw, herdr or terminal", Args: cobra.NoArgs}
+	host := &cobra.Command{Use: "host", Short: "Print what wtc is running under: openclaw, herdr, rex or terminal", Args: cobra.NoArgs}
 	host.RunE = func(cmd *cobra.Command, args []string) error {
-		h := string(currentHost())
+		h, err := hostName()
+		if err != nil {
+			return err
+		}
 		return emit(envelope{OK: true, Data: map[string]string{"host": h}, Summary: h}, *asJSON)
 	}
 	root.AddCommand(host)

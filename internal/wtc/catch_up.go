@@ -29,8 +29,8 @@ type CatchUpOptions struct {
 	NoMCP        bool
 	NoEnv        bool
 	NoSecrets    bool
-	// IdleOnly leaves a collection whose herdr agent is working or blocked
-	// to that agent. InstallTools runs mise install in each harness target,
+	// IdleOnly leaves a collection whose agent is working or blocked, or
+	// cannot be checked, to that agent. InstallTools runs mise install in each harness target,
 	// so a new pin is usable at once; it is skipped when that target's env
 	// refresh failed, and with NoEnv it installs what mise.toml already pins.
 	IdleOnly     bool
@@ -39,6 +39,8 @@ type CatchUpOptions struct {
 	// harness target this sweep updated and installed. Only the rollout asks
 	// for it; an ordinary catch-up is not a version transition.
 	UpgradeDoctor bool
+	// Panes reaches the multiplexer holding the collections; nil is herdr.
+	Panes CatchUpPanes
 }
 
 // RolloutOptions is the sweep `wtc upgrade --rollout` runs: every

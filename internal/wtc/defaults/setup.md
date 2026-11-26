@@ -18,6 +18,7 @@ taba releases; it holds both `taba` and `wtc`), checked against
 | --- | --- | --- |
 | **Terminal** | `taba host` prints `terminal` | a folder of worktrees, used from any shell or editor |
 | **herdr** | `taba host` prints `herdr`, or the person works in herdr panes | the same folder, opened as a herdr workspace with `taba open` |
+| **Rex** | `taba host` prints `rex`, or the person works in Rex terminals | the same folder, opened as a Rex session with `taba open`; with herdr installed, only after `WTC_MULTIPLEXER=rex` (`taba docs instructions/rex.md`) |
 | **OpenClaw** | `taba host` prints `openclaw`, or the target is an OpenClaw gateway | managed worktrees of the gateway, one conversation per task, with a card and a Collection panel in the Control UI |
 
 `taba host` describes the machine you run on. If you are preparing another
@@ -31,7 +32,7 @@ instructions, skills, hooks and tool pins. Look for one before asking: a
 `harness/` beside the current checkout, a `.harness-repos.yml`, or a
 repository the person's organisation names as its harness.
 
-| Answer | Terminal or herdr | OpenClaw |
+| Answer | Terminal, herdr or Rex | OpenClaw |
 | --- | --- | --- |
 | **None**: a task across a few repositories | `docs/getting-started.md`, "Ad-hoc collection, no harness" | The default. Collections are ad hoc; repositories are named as `owner/name`, URLs or gateway projects. |
 | **An existing harness** | `taba docs bootstrap.md`, from step 2 with its remote | Add the harness as a gateway project and configure it under `plugins.entries.wtc.config.harnesses` ([Harnesses](https://github.com/lcorneliussen/taba/blob/main/docs/openclaw.md#harnesses)). Collections then resolve repositories through it. |
@@ -52,7 +53,7 @@ harness without the person's go.
 
 ## Then
 
-- **Terminal or herdr**: `taba doctor` in the first collection checks it.
+- **Terminal, herdr or Rex**: `taba doctor` in the first collection checks it.
 - **OpenClaw**: follow the
   [install](https://github.com/lcorneliussen/taba/blob/main/docs/openclaw.md#install).
   Then run `taba doctor --openclaw` on the gateway host (from an agent's

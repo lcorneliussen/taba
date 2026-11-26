@@ -49,6 +49,44 @@ type catchUpProcessInfo struct {
 	} `json:"result"`
 }
 
+// CatchUpPanes are the collections' panes as catch-up sees them.
+type CatchUpPanes interface {
+	// AgentBusy is the state of an agent catch-up must leave alone, such as
+	// "working" or "blocked"; "" when the collection has none.
+	AgentBusy(collection string) (string, error)
+	StatusPane(ctx context.Context, collection string) (pane string, agent bool, err error)
+	Foreground(ctx context.Context, pane string) ([]string, error)
+	Interrupt(ctx context.Context, pane string) error
+	Run(ctx context.Context, pane, command string) error
+}
+
+type herdrCatchUpPanes struct {
+	session string
+	herdr   func(string, ...string) ([]byte, error)
+}
+
+func (h herdrCatchUpPanes) AgentBusy(collection string) (string, error) {
+	return catchUpAgentBusy(h.session, collection)
+}
+
+func (h herdrCatchUpPanes) StatusPane(_ context.Context, collection string) (string, bool, error) {
+	return catchUpPaneWithHerdr(h.session, collection, h.herdr)
+}
+
+func (h herdrCatchUpPanes) Foreground(_ context.Context, pane string) ([]string, error) {
+	return catchUpForegroundWithHerdr(h.session, pane, h.herdr)
+}
+
+func (h herdrCatchUpPanes) Interrupt(_ context.Context, pane string) error {
+	_, err := h.herdr(h.session, "pane", "send-keys", pane, "ctrl+c")
+	return err
+}
+
+func (h herdrCatchUpPanes) Run(_ context.Context, pane, command string) error {
+	_, err := h.herdr(h.session, "pane", "run", pane, command)
+	return err
+}
+
 func catchUpHerdr(session string, args ...string) ([]byte, error) {
 	command := append([]string{"--session", session}, args...)
 	return exec.Command("herdr", command...).Output()
@@ -459,7 +497,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		add(outcome, "reload observation budget expired; "+state+"; inspect pane before retrying reload")
 		return true
 	}
-	if _, err := exec.LookPath("herdr"); err != nil {
+	if _, err := exec.LookPath("herdr"); err != nil && opt.Panes == nil {
 		add("skipped", "herdr unavailable; no pane control attempted")
 		return
 	}
@@ -468,8 +506,11 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		add("failed", "target collection unavailable; no pane control attempted")
 		return
 	}
-	session := catchUpSession(target)
-	pane, occupied, err := catchUpPaneWithHerdr(session, t.collection, herdr)
+	var panes CatchUpPanes = herdrCatchUpPanes{session: catchUpSession(target), herdr: herdr}
+	if opt.Panes != nil {
+		panes = opt.Panes
+	}
+	pane, occupied, err := panes.StatusPane(ops.ctx, t.collection)
 	if err != nil {
 		if expired("failed", "no pane control attempted") {
 			return
@@ -485,7 +526,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		add("needs-owner", "status-labelled pane contains an agent; untouched")
 		return
 	}
-	argv, err := catchUpForegroundWithHerdr(session, pane, herdr)
+	argv, err := panes.Foreground(ops.ctx, pane)
 	if err != nil {
 		if expired("failed", "no pane control attempted") {
 			return
@@ -580,7 +621,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 	}
 	// Tool/input inspection can be slow. Herdr reads are snapshots; validate
 	// the pane and current foreground again before each control write.
-	currentPane, occupied, err := catchUpPaneWithHerdr(session, t.collection, herdr)
+	currentPane, occupied, err := panes.StatusPane(ops.ctx, t.collection)
 	if err != nil || currentPane != pane {
 		if expired("failed", "no interruption attempted") {
 			return
@@ -592,7 +633,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		add("needs-owner", "agent appeared in status pane; untouched")
 		return
 	}
-	argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
+	argv, err = panes.Foreground(ops.ctx, pane)
 	if err != nil || (!catchUpShell(argv) && !catchUpStatusProcess(argv)) {
 		if expired("needs-owner", "no interruption attempted") {
 			return
@@ -601,7 +642,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		return
 	}
 	if !catchUpShell(argv) {
-		if _, err := herdr(session, "pane", "send-keys", pane, "ctrl+c"); err != nil {
+		if err := panes.Interrupt(ops.ctx, pane); err != nil {
 			if expired("failed", "interrupt delivery unconfirmed for "+pane) {
 				return
 			}
@@ -610,7 +651,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		}
 	}
 	idle := retry.Poll(ops.ctx, retry.Policy{Attempts: 5, Pause: ops.wait}, func(context.Context) (bool, error) {
-		argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
+		argv, err = panes.Foreground(ops.ctx, pane)
 		// A foreground group can disappear while the interrupted process exits.
 		// An unknown observation consumes the same budget as a busy process.
 		return err == nil && ops.err() == nil && catchUpShell(argv), nil
@@ -626,7 +667,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		add("needs-owner", "pane "+pane+" did not become a verified shell; no command sent; inspect pane before retrying reload")
 		return
 	}
-	checkPane, agent, err := catchUpPaneWithHerdr(session, t.collection, herdr)
+	checkPane, agent, err := panes.StatusPane(ops.ctx, t.collection)
 	if err != nil || checkPane != pane {
 		if expired("failed", "no command sent") {
 			return
@@ -638,7 +679,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		add("needs-owner", "agent appeared in status pane "+pane+"; no command sent")
 		return
 	}
-	argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
+	argv, err = panes.Foreground(ops.ctx, pane)
 	if err != nil || !catchUpShell(argv) {
 		if expired("needs-owner", "no command sent") {
 			return
@@ -646,7 +687,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		add("needs-owner", "foreground changed before restart; no command sent")
 		return
 	}
-	if _, err := herdr(session, "pane", "run", pane, command); err != nil {
+	if err := panes.Run(ops.ctx, pane, command); err != nil {
 		if expired("failed", "restart delivery unconfirmed for "+pane) {
 			return
 		}
@@ -654,7 +695,7 @@ func (c *Context) catchUpReloadStatusWithOps(report *CatchUpReport, t catchUpTar
 		return
 	}
 	if retry.Poll(ops.ctx, retry.Policy{Attempts: 5, Pause: ops.wait}, func(context.Context) (bool, error) {
-		argv, err = catchUpForegroundWithHerdr(session, pane, herdr)
+		argv, err = panes.Foreground(ops.ctx, pane)
 		// Command delivery is not proof that the status process has started.
 		return err == nil && ops.err() == nil && catchUpStatusProcess(argv), nil
 	}) == nil {

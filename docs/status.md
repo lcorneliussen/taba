@@ -207,7 +207,7 @@ are distinct from running services. Use `taba svc` and logs for detail.
 `n` opens explicit next-action choices; the view rechecks status before acting.
 Displaying status does not dispatch an agent prompt. Retirement observations
 separate preservation blockers from unknown coverage; see
-[retirement](retirement.md). `--procs` is a separate herdr process view.
+[retirement](retirement.md). `--procs` is a separate view of the processes in the collections' panes.
 
 ## Freshness, missing facts and controls
 

@@ -25,6 +25,7 @@ with the same validated value.
 | `WTC_AGENT_KIND` | `claude` | agent kind `taba open` starts |
 | `WTC_AGENT_ARGS` | — | args passed to the agent, replacing the built-in defaults |
 | `WTC_LAYOUT` | `auto` | `wide` / `narrow` / `auto` — herdr workspace layout at create time |
+| `WTC_MULTIPLEXER` | auto | `herdr` / `rex` — where `taba open` opens collections; auto is herdr, or Rex in a Rex terminal without herdr installed |
 | `WTC_LAYOUT_NARROW_AT` | `140` | session width (cols) below which `auto` picks narrow |
 | `WTC_PANES` | `minimal` | `full` → `taba open` also opens browse and shell panes |
 | `WTC_STATUS_REPOS` | `no` | `yes` → status shows only the collection table |

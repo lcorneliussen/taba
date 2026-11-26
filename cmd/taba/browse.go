@@ -62,7 +62,7 @@ func addBrowseCommand(root *cobra.Command, asJSON *bool) {
 			return errors.New("nvim is not on PATH")
 		}
 		if !here {
-			callerAgent, err := browseCallerIsAgent()
+			callerAgent, err := browseCallerIsAgent(c)
 			if err != nil {
 				return err
 			}
@@ -98,7 +98,22 @@ func browseHerdr(session string, args ...string) (browseHerdrResult, error) {
 	return result, nil
 }
 
-func browseCallerIsAgent() (bool, error) {
+func browseCallerIsAgent(c *wtc.Context) (bool, error) {
+	kind, err := openMultiplexer(c)
+	if err != nil {
+		return false, err
+	}
+	if kind == "rex" {
+		block := os.Getenv("REX_BLOCK")
+		if block == "" {
+			return false, nil
+		}
+		process, err := (&rexHost{}).process(block)
+		if err != nil {
+			return false, fmt.Errorf("cannot determine whether this Rex pane belongs to an agent: %w", err)
+		}
+		return rexAgentKind(process.Foreground) != "", nil
+	}
 	callerSession := os.Getenv("HERDR_SESSION")
 	if os.Getenv("HERDR_ENV") != "1" || os.Getenv("HERDR_PANE_ID") == "" || callerSession == "" {
 		return false, nil

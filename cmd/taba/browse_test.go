@@ -106,7 +106,7 @@ esac
 	t.Setenv("HERDR_ENV", "1")
 	t.Setenv("HERDR_SESSION", "caller-session")
 	t.Setenv("HERDR_PANE_ID", "caller-agent")
-	if agent, err := browseCallerIsAgent(); err != nil || !agent {
+	if agent, err := browseCallerIsAgent(nil); err != nil || !agent {
 		t.Fatalf("registered herdr caller was not recognized as an agent: %v", err)
 	}
 	t.Chdir(collection)
