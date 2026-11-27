@@ -2,6 +2,7 @@ package wtc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -35,6 +36,10 @@ type demand562 struct {
 	failLists, capLists bool
 	// status is the Bitbucket commit status every head reports, or none.
 	status string
+	// stall holds each open-list read of this slug until its client gives up.
+	stall string
+	// paged puts a filler PR on a first list page and the open PRs on a second.
+	paged bool
 }
 
 const demand562Head = "1111111111111111111111111111111111111111"
@@ -112,7 +117,13 @@ esac
 	// gh pr list --repo SLUG ... | gh pr view NUMBER --repo SLUG ...
 	fixtureFile(t, filepath.Join(d.dir, "bin", "gh"), `#!/bin/sh
 case "$2" in
-  list) repo=${4#example/}; printf 'list %s\n' "$repo" >> "$WTC_TEST_BB_DIR/reads"; cat "$WTC_TEST_BB_DIR/gh-$repo-list.json" ;;
+  list) repo=${4#example/}; printf 'list %s\n' "$repo" >> "$WTC_TEST_BB_DIR/reads"
+    [ -n "$WTC_TEST_LIST_DELAY" ] && sleep "$WTC_TEST_LIST_DELAY"
+    # Like gh, a list carries only the fields --json asks for.
+    case "$*" in
+      *headRefOid*) cat "$WTC_TEST_BB_DIR/gh-$repo-list.json" ;;
+      *) sed 's/"headRefOid":"[0-9a-f]*",//g' "$WTC_TEST_BB_DIR/gh-$repo-list.json" ;;
+    esac ;;
   view) repo=${5#example/}; printf 'view %s %s\n' "$repo" "$3" >> "$WTC_TEST_BB_DIR/reads"; cat "$WTC_TEST_BB_DIR/gh-$repo-$3.json" ;;
   *) exit 77 ;;
 esac
@@ -184,9 +195,16 @@ func (d *demand562) setPR(slug, number, state string) {
 }
 
 func (d *demand562) serve(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/repositories/")
+	d.mu.Lock()
+	stall := d.stall != "" && path == d.stall+"/pullrequests"
+	d.mu.Unlock()
+	if stall {
+		<-r.Context().Done()
+		return
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	path := strings.TrimPrefix(r.URL.Path, "/repositories/")
 	switch {
 	case strings.HasSuffix(path, "/pullrequests"):
 		slug := strings.TrimSuffix(path, "/pullrequests")
@@ -200,6 +218,10 @@ func (d *demand562) serve(w http.ResponseWriter, r *http.Request) {
 			if open {
 				values = append(values, demand562Detail(number, "OPEN"))
 			}
+		}
+		if d.paged && r.URL.Query().Get("page") == "" {
+			fmt.Fprintf(w, `{"values":[%s],"next":%q}`, demand562Detail("900", "OPEN"), d.server.URL+"/repositories/"+slug+"/pullrequests?page=1")
+			return
 		}
 		if d.capLists {
 			var page int
@@ -597,8 +619,7 @@ func TestStatusDemand562RecordedDeclineDatesAndDeferredPasses(t *testing.T) {
 	}
 }
 
-// The behaviour tests below pin #562 step 3: the open list is the only
-// routine read.
+// The behaviour tests below pin that the open list is the only routine read.
 
 func demand562Record(t *testing.T, pane *Context, number string) PRRecord {
 	t.Helper()
@@ -746,7 +767,7 @@ func TestStatusDemand562ExplicitRefreshRereadsListsNotPRs(t *testing.T) {
 			lists, views := d.listReads(), d.views()
 			snapshot := d.refresh(0)
 			for _, pr := range [][2]string{{"r1", "11"}, {"r2", "21"}} {
-				if row := demand562Row(t, snapshot, pr[0], pr[1]); row.State != "OPEN" || row.Freshness != "live" {
+				if row := demand562Row(t, snapshot, pr[0], pr[1]); row.State != "OPEN" || row.Freshness != "live" || row.HeadCommit != demand562Head {
 					t.Fatalf("explicit refresh row %+v", row)
 				}
 			}
@@ -839,5 +860,160 @@ func TestStatusDemand562NeverObservedPRIsReadWithOneToken(t *testing.T) {
 	}
 	if lists, views := d.listReads(), d.reads("view", "r1", "13"); lists != 1 || views != 1 {
 		t.Fatalf("%d list reads and %d PR reads, want one each", lists, views)
+	}
+}
+
+func demand562Checks(row StatusPRRow) string {
+	if row.Checks == nil {
+		return ""
+	}
+	return *row.Checks
+}
+
+// When an explicit refresh's phase ends, a record whose list was read stays
+// live, and a record whose list read is still waiting keeps its last
+// observation, checks included, deferred with reason deadline. The snapshot
+// is still saved.
+func TestStatusDemand562PhaseDeadlineKeepsUnfinishedRecords(t *testing.T) {
+	d := newDemand562(t, 1, map[string]map[string]string{"example/r1": {"11": "OPEN"}, "example/r2": {"21": "OPEN"}})
+	d.status = "SUCCESSFUL"
+	last := demand562Row(t, d.pass()[0], "r2", "21")
+	d.mu.Lock()
+	d.stall = "example/r2"
+	d.mu.Unlock()
+	pane := d.panes[0]
+	snapshot, err := pane.statusForegroundSnapshot(context.Background(), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row := demand562Row(t, snapshot, "r1", "11"); row.State != "OPEN" || row.Freshness != "live" || demand562Checks(row) != "SUCCESS" {
+		t.Fatalf("finished record: %+v checks=%q", row, demand562Checks(row))
+	}
+	row := demand562Row(t, snapshot, "r2", "21")
+	if row.State != "OPEN" || row.Freshness != "deferred" || row.ObservationReason != "deadline" || row.ObservedAt != last.ObservedAt || demand562Checks(row) != "SUCCESS" {
+		t.Fatalf("unfinished record: %+v checks=%q, last %+v", row, demand562Checks(row), last)
+	}
+	saved, err := pane.ReadStatusSnapshot()
+	if err != nil || len(saved.PRs) != 2 {
+		t.Fatalf("snapshot not saved: %+v %v", saved.PRs, err)
+	}
+}
+
+// An explicit refresh admits every page of a Bitbucket list as it admits the
+// first, waiting for a refill, so a PR on the second page is shown from the
+// list, and later passes do not see a capped list.
+func TestStatusDemand562ExplicitRefreshReadsEveryListPage(t *testing.T) {
+	d := newDemand562(t, 1, map[string]map[string]string{"example/r1": {"11": "OPEN"}})
+	d.paged = true
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "1")
+	if row := demand562Row(t, d.refresh(0), "r1", "11"); row.State != "OPEN" || row.Freshness != "live" {
+		t.Fatalf("explicit refresh: %+v", row)
+	}
+	if got := d.views(); got != 0 {
+		t.Fatalf("PR read on its own %d times", got)
+	}
+	if row := demand562Row(t, d.pass()[0], "r1", "11"); row.State != "OPEN" || row.ObservationReason == "list-truncated" {
+		t.Fatalf("background pass: %+v", row)
+	}
+}
+
+// A GitHub close is not recorded, so a closed PR off the list is final for
+// background passes, while an explicit refresh reads it once more: it can have
+// been reopened and merged between two lists.
+func TestStatusDemand562ExplicitRefreshRereadsAGitHubClose(t *testing.T) {
+	d := newDemand562On(t, "github.com", 1, map[string]map[string]string{"example/r1": {"11": "OPEN", "12": "DECLINED"}})
+	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "CLOSED" {
+		t.Fatalf("first pass: %+v", row)
+	}
+	d.setPR("example/r1", "12", "MERGED")
+	d.advance(statusOpenListAge("github.com") + time.Second)
+	views := d.reads("view", "r1", "12")
+	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "CLOSED" || d.reads("view", "r1", "12") != views {
+		t.Fatalf("background pass read the close again: %+v", row)
+	}
+	if row := demand562Row(t, d.refresh(0), "r1", "12"); row.State != "MERGED" {
+		t.Fatalf("explicit refresh: %+v", row)
+	}
+	if got := d.reads("view", "r1", "12") - views; got != 1 {
+		t.Fatalf("explicit refresh read the PR %d times, want once", got)
+	}
+	if record := demand562Record(t, d.panes[0], "12"); record.MergedOn == "" {
+		t.Fatalf("merge not recorded: %+v", record)
+	}
+}
+
+// A Bitbucket host without a REST credential has no open list, so status
+// reads its PRs by number: in a known credential context (here TWG with an
+// environment token) at most once per cache age across status operations,
+// and at once under an explicit refresh.
+func TestStatusDemand562NoRESTReadsAPROncePerCacheAge(t *testing.T) {
+	h, _ := archive511TWG(t, strings.Replace(archive511Declined, `"DECLINED"`, `"OPEN"`, 1), archive511Entries())
+	t.Setenv("TWG_BBC_TOKEN", "synthetic-twg-token")
+	t.Setenv("WTC_FORGE_CACHE_AGE", "")
+	pass := func(intent StatusRefreshIntent) {
+		t.Helper()
+		ctx := statusAuthOperation(context.Background())
+		if _, _, err := bitbucketRESTCredentials(ctx, "acme/alpha"); !errors.Is(err, errBitbucketNoREST) {
+			t.Fatalf("fixture has a REST credential: %v", err)
+		}
+		if detail := statusEnrichRecordMetadataContext(ctx, intent, PRRecord{Repo: "alpha", Number: "4"}, "acme/alpha", "bitbucket.org"); detail.State != "OPEN" {
+			t.Fatalf("%+v", detail)
+		}
+	}
+	for range 3 {
+		pass(StatusRefreshBackground)
+	}
+	if got := archive511TWGReads(t, h, "get"); got != 1 {
+		t.Fatalf("PR read %d times within one cache age, want once", got)
+	}
+	(&demand562{t: t}).advance(statusForgeCacheAge() + time.Second)
+	pass(StatusRefreshBackground)
+	if got := archive511TWGReads(t, h, "get"); got != 2 {
+		t.Fatalf("PR read %d times after the cache age, want twice", got)
+	}
+	pass(StatusRefreshForeground)
+	if got := archive511TWGReads(t, h, "get"); got != 3 {
+		t.Fatalf("explicit refresh within the cache age made %d reads, want one", got-2)
+	}
+}
+
+// Panes that refresh at the same time share one list read for a new PR: a
+// pane that waited on another's read uses that list instead of reading again.
+func TestStatusDemand562OverlappingPanesShareOneListRead(t *testing.T) {
+	d := newDemand562On(t, "github.com", 3, map[string]map[string]string{"example/r1": {"11": "OPEN"}})
+	d.pass()
+	d.setPR("example/r1", "14", "OPEN")
+	d.enlist("example/r1", "14")
+	// A slow list read keeps the panes overlapped: each loads the older list
+	// and asks for a new one before the first read returns.
+	t.Setenv("WTC_TEST_LIST_DELAY", "2")
+	lists := d.listReads()
+	var wg sync.WaitGroup
+	rows := make([]StatusPRRow, len(d.panes))
+	errs := make([]error, len(d.panes))
+	for i, pane := range d.panes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			snapshot, err := pane.statusForgePreview(false, true)
+			errs[i] = err
+			for _, row := range snapshot.PRs {
+				if row.Repo == "r1" && row.Number == "14" {
+					rows[i] = row
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	for i := range d.panes {
+		if errs[i] != nil || rows[i].State != "OPEN" {
+			t.Fatalf("pane %d: %+v %v", i, rows[i], errs[i])
+		}
+	}
+	if got := d.listReads() - lists; got != 1 {
+		t.Fatalf("%d list reads by %d overlapping panes, want one", got, len(d.panes))
+	}
+	if got := d.views(); got != 0 {
+		t.Fatalf("new PR read on its own %d times", got)
 	}
 }

@@ -17,10 +17,11 @@ import (
 // Status talks to Bitbucket and GitHub from every open status pane. Those
 // forges bill the calls to one user. A shared cache, one in-flight fetch per
 // record, and one token bucket per forge keep the panes from spending the
-// hour on the first few minutes. Every status provider read takes one token;
+// hour on the first few minutes. Every status provider read takes one token:
 // a background read without one is refused, and an explicit refresh waits for
-// the next refill. Nothing is queued or reserved. A rate-limit response pauses that
-// forge for its Retry-After and status keeps showing the last saved record.
+// the next refill, within one refill interval (statusTakeForegroundToken).
+// Nothing is reserved. A rate-limit response pauses that forge for its
+// Retry-After and status keeps showing the last saved record.
 
 const (
 	statusForgeCoolDefault = 15 * time.Minute

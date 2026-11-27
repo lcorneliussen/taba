@@ -239,12 +239,13 @@ read again for it, so the PR's own read gets the next token.
 
 A list cut short by its page limit confirms nothing about the PRs beyond it.
 Those keep their last observation, `deferred` with reason `list-truncated`, and
-are not read on their own in the background; `r` reads each of them once. When a list read is refused, every PR of that
-repository keeps its last observation, `deferred` with the refusal as the
-reason. When a list read fails, the PRs keep it as `unavailable`. A Bitbucket
+are not read on their own in the background; `r` reads each of them once. When
+a list read is refused, every PR of that repository keeps its last observation,
+`deferred` with the refusal as the reason. When a list read fails, the PRs keep it as `unavailable`. A Bitbucket
 host without a REST credential reads PRs through its CLI only and has no open
 list. Status reads its PRs by number instead, at most once per 90-second cache
-age.
+age in a known credential context, and in every pass in an unknown one
+([status-auth-cache.md](status-auth-cache.md)).
 
 In the collection view, `r` explicitly reads every open-PR list of the pane
 again, even when the lists are still current. It reads a PR on its own only

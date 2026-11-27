@@ -58,11 +58,6 @@ func TestStatus319RetainedMergeRejectsActiveWriters(t *testing.T) {
 				if saved, _ := statusReadForgeEntryAny("pr", forge, slug, "7"); string(saved) != string(merged) {
 					t.Fatalf("merge cache replaced: %s", saved)
 				}
-				for _, kind := range []string{"omit", "full"} {
-					if _, ok := statusReadForgeEntryAny(kind, forge, slug, "7"); ok {
-						t.Fatalf("losing response published %s marker", kind)
-					}
-				}
 			})
 		}
 	}
@@ -115,10 +110,24 @@ func TestStatus319OmittedObservationIsDeferred(t *testing.T) {
 			if got.State != want {
 				t.Fatalf("cached fact lost: %+v", got)
 			}
-			if _, ok := statusReadForgeEntry("omit", forge, slug, "7"); ok {
-				t.Fatal("deferred confirmation marked complete")
-			}
+			// The deferred read observed nothing: the next admitted pass reads.
+			status319ReadsAgain(t, forge, slug)
 		})
+	}
+}
+
+// status319ReadsAgain admits one more read of PR 7, now declined, and
+// requires the next pass to make it: a failed or deferred read is no
+// observation that would stand in for it.
+func status319ReadsAgain(t *testing.T, forge, slug string) {
+	t.Helper()
+	fixtureFile(t, statusForgeStatePath("cool", forge), "0", 0600)
+	status319Refill(t, forge)
+	dir := t.TempDir()
+	fixtureFile(t, dir+"/bb", "#!/bin/sh\nprintf '%s' '{\"id\":7,\"state\":\"DECLINED\"}'\n", 0700)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if got := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge); got.State != "DECLINED" {
+		t.Fatalf("the next admitted pass did not read the PR: %+v", got)
 	}
 }
 
@@ -175,9 +184,7 @@ func TestStatus319ConfirmationFailuresPreserveFacts(t *testing.T) {
 			if string(saved) != string(original) {
 				t.Fatal("bad response replaced cached fact")
 			}
-			if _, ok := statusReadForgeEntry("omit", forge, slug, "7"); ok {
-				t.Fatal("failure marked confirmed")
-			}
+			status319ReadsAgain(t, forge, slug)
 		})
 	}
 }
@@ -503,11 +510,6 @@ func TestStatusStaleListPublicationKeepsObservation(t *testing.T) {
 							}
 							if _, active := statusReadForgeCache(forge, slug, "7"); active {
 								t.Error("expired list became active detail cache")
-							}
-						}
-						for _, kind := range []string{"omit", "full"} {
-							if _, ok := statusReadForgeEntryAny(kind, forge, slug, "7"); ok {
-								t.Errorf("denied response published %s marker", kind)
 							}
 						}
 					})

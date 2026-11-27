@@ -250,11 +250,15 @@ func TestStatusCappedListDoesNotReadPRsBeyondIt(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	views := filepath.Join(t.TempDir(), "views")
 	t.Setenv("WTC_TEST_GH_VIEWS", views)
+	// 150 PRs are open; like gh, the fake returns at most --limit of them.
 	var items []string
-	for i := 0; i <= statusOpenListLimit; i++ {
+	for i := 0; i < 150; i++ {
 		items = append(items, fmt.Sprintf(`{"number":%d,"state":"OPEN","title":"Other","headRefName":"other-%d"}`, i+101, i))
 	}
-	script := "#!/bin/sh\ncase \"$2\" in\n  list) printf '%s\\n' '[" + strings.Join(items, ",") + "]' ;;\n  view) printf 'viewed\\n' >> \"$WTC_TEST_GH_VIEWS\"; printf '%s\\n' '{\"number\":7,\"state\":\"OPEN\",\"title\":\"Audited\"}' ;;\n  *) exit 2 ;;\nesac\n"
+	open := filepath.Join(t.TempDir(), "open")
+	fixtureFile(t, open, strings.Join(items, "\n")+"\n", 0600)
+	t.Setenv("WTC_TEST_GH_OPEN", open)
+	script := "#!/bin/sh\nlimit=30 prev=\nfor arg in \"$@\"; do [ \"$prev\" = --limit ] && limit=$arg; prev=$arg; done\ncase \"$2\" in\n  list) printf '['; head -n \"$limit\" \"$WTC_TEST_GH_OPEN\" | paste -sd, -; printf ']\\n' ;;\n  view) printf 'viewed\\n' >> \"$WTC_TEST_GH_VIEWS\"; printf '%s\\n' '{\"number\":7,\"state\":\"OPEN\",\"title\":\"Audited\"}' ;;\n  *) exit 2 ;;\nesac\n"
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0755); err != nil {
 		t.Fatal(err)

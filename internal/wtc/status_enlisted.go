@@ -212,51 +212,37 @@ func statusParseForgeDetail(forge string, raw []byte, record PRRecord) (statusPR
 	return detail, err
 }
 
-func statusEnrichRecord(record PRRecord, slug, forge string) statusPRDetail {
-	return statusEnrichRecordContext(context.Background(), StatusRefreshBackground, record, slug, forge)
-}
-
 func statusEnrichRecordContext(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) statusPRDetail {
 	ctx = statusAuthOperation(ctx)
 	detail := statusEnrichRecordMetadataContext(ctx, intent, record, slug, forge)
+	if ctx.Err() != nil {
+		// The phase ended before the record finished.
+		return statusLastObservationContext(ctx, record, slug, forge)
+	}
 	if forge == "bitbucket.org" && (detail.State == "OPEN" || detail.State == "DRAFT") {
 		evidence, _ := statusBBHeadChecksContext(ctx, intent, slug, detail.HeadCommit, false)
-		detail.Checks, detail.ChecksUnsettled = evidence.Result, !evidence.Complete || evidence.Result == "PENDING"
-		if detail.State == "DRAFT" && detail.Checks == "NONE" {
-			detail.Checks = "draft"
-		}
+		detail = statusWithBBChecks(detail, evidence)
 	}
 	return detail
 }
 
-func statusEnrichRecordMetadata(record PRRecord, slug, forge string) (result statusPRDetail) {
-	return statusEnrichRecordMetadataContext(context.Background(), StatusRefreshBackground, record, slug, forge)
+func statusWithBBChecks(detail statusPRDetail, evidence headCheckEvidence) statusPRDetail {
+	detail.Checks, detail.ChecksUnsettled = evidence.Result, !evidence.Complete || evidence.Result == "PENDING"
+	if detail.State == "DRAFT" && detail.Checks == "NONE" {
+		detail.Checks = "draft"
+	}
+	return detail
 }
 
 // statusEnrichRecordMetadataContext observes one PR through its repository's
 // open list, the only routine read where a list exists. A listed PR takes its
 // state from the list; a PR missing from it is resolved by
-// statusUnlistedContext.
+// statusUnlistedContext. A Bitbucket host without a REST credential has no
+// list, and reads the PR by number once per cache age (errBitbucketNoREST).
 func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (result statusPRDetail) {
 	ctx = statusAuthOperation(ctx)
 	if ctx.Err() != nil {
-		refused := statusRefusalFor(ctx.Err())
-		if known, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
-			known = refused.apply(known)
-			known.Freshness = "unavailable"
-			return known
-		}
-		if record.DeclinedOn != "" && forge == "bitbucket.org" {
-			// Recorded like a merge: no read is needed to show it.
-			return statusRecordedDeclineDetail(record)
-		}
-		if slug != "" && forge != "" {
-			// The last observation keeps the row's known state, deferred (#535).
-			if known, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
-				return refused.apply(known)
-			}
-		}
-		return refused.apply(statusDeferredDetail(record))
+		return statusLastObservationContext(ctx, record, slug, forge)
 	}
 	defer func() { result = statusObserveDetailContext(ctx, result, slug, forge) }()
 	if _, valid := statusPRInventoryKey(forge, slug, record.Number); !valid {
@@ -289,7 +275,7 @@ func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefresh
 		return detail
 	}
 	if declined {
-		// A recorded decline costs no PR read (#562). It may have been
+		// A recorded decline costs no PR read. It may have been
 		// reopened and merged while no current list saw it open, so an
 		// explicit refresh reads it once; a refused or failed read keeps it.
 		if intent == StatusRefreshForeground && (current || errors.Is(err, errBitbucketNoREST)) {
@@ -306,6 +292,35 @@ func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefresh
 	return statusUnlistedContext(ctx, intent, record, slug, forge, list, err)
 }
 
+// statusLastObservationContext is a PR's row once its operation has ended:
+// its last observation, deferred with the reason, and no read.
+func statusLastObservationContext(ctx context.Context, record PRRecord, slug, forge string) statusPRDetail {
+	refused := statusRefusalFor(ctx.Err())
+	if known, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
+		known = refused.apply(known)
+		known.Freshness = "unavailable"
+		return known
+	}
+	if record.DeclinedOn != "" && forge == "bitbucket.org" {
+		// Recorded like a merge: no read is needed to show it.
+		return statusRecordedDeclineDetail(record)
+	}
+	if slug != "" && forge != "" {
+		if known, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
+			if forge == "bitbucket.org" && (known.State == "OPEN" || known.State == "DRAFT") {
+				// Bitbucket checks are kept per head, apart from the PR.
+				evidence, cached := statusBBCachedHeadChecks(ctx, slug, known.HeadCommit)
+				if !cached {
+					evidence = unknownHeadChecks(known.HeadCommit)
+				}
+				known = statusWithBBChecks(known, evidence)
+			}
+			return refused.apply(known)
+		}
+	}
+	return refused.apply(statusDeferredDetail(record))
+}
+
 // statusPRListContext is the open list that decides a PR. An explicit
 // refresh reads it again. So does a complete list cached before this
 // operation that lacks a PR never observed before, since the PR may be newer
@@ -315,7 +330,7 @@ func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefresh
 // capped list is not read again: the PR may lie beyond the cap.
 func statusPRListContext(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (statusOpenList, error) {
 	if intent == StatusRefreshForeground {
-		list, err := statusOpenListReadContext(ctx, intent, forge, slug)
+		list, err := statusOpenListReadContext(ctx, intent, forge, slug, statusOperationBegan(ctx))
 		if err == nil {
 			return list, nil
 		}
@@ -342,7 +357,7 @@ func statusPRListContext(ctx context.Context, intent StatusRefreshIntent, record
 	stamp := func(at time.Time) []byte { return []byte(strconv.FormatInt(at.UnixNano(), 10)) }
 	lacked, _ := statusReadForgeEntryAnyContext(ctx, "unlisted", forge, slug, record.Number)
 	if list.started.Before(began) && string(lacked) != string(stamp(list.started)) {
-		if fresh, err := statusOpenListReadContext(ctx, StatusRefreshBackground, forge, slug); err == nil {
+		if fresh, err := statusOpenListReadContext(ctx, StatusRefreshBackground, forge, slug, list.started); err == nil {
 			list = fresh
 		}
 		if _, listed := list.prs[record.Number]; listed {
@@ -379,7 +394,8 @@ func statusFinal(detail statusPRDetail) bool {
 // current, complete list shows that the PR is no longer open. A final
 // observation then stands, dated by the list. Any other PR is read on its
 // own, once per list, to learn how it ended. A truncated or refused list
-// confirms nothing, and no PR is read in its place.
+// confirms nothing. Background passes read no PR in its place; an explicit
+// refresh reads a PR beyond a truncated list on its own.
 func statusUnlistedContext(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string, list statusOpenList, listErr error) statusPRDetail {
 	known, seen := statusResourceObservedDetail(ctx, record, slug, forge, 365*24*time.Hour)
 	observed, _ := time.Parse(time.RFC3339Nano, known.ObservedAt)
@@ -456,10 +472,6 @@ func (c *Context) statusLocalMergeEvidence(rows []StatusRepo, records []PRRecord
 		}
 	}
 	return out
-}
-
-func statusEnrichListed(record PRRecord, slug, forge string, item statusOpenPR) statusPRDetail {
-	return statusEnrichListedContext(context.Background(), record, slug, forge, item, false)
 }
 
 // statusEnrichListedContext takes a listed PR's state from its list item. A
@@ -607,10 +619,6 @@ func statusLockUnavailableDetail(ctx context.Context, record PRRecord, slug, for
 
 // Forge CLIs spend most of their time waiting on network responses. Bound the
 // fan-out so a large enlistment refreshes promptly without flooding a forge.
-func (c *Context) statusEnrichRecords(records []PRRecord, rows []StatusRepo) ([]statusPRDetail, error) {
-	return c.statusEnrichRecordsWithIntent(context.Background(), StatusRefreshBackground, records, rows)
-}
-
 func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent StatusRefreshIntent, records []PRRecord, rows []StatusRepo) ([]statusPRDetail, error) {
 	ctx = statusAuthOperation(ctx)
 	repos := c.prRepositories()
@@ -663,7 +671,8 @@ func (c *Context) statusEnrichRecordsWithIntent(ctx context.Context, intent Stat
 			case limit <- struct{}{}:
 				defer func() { <-limit }()
 			case <-ctx.Done():
-				// An ended phase keeps the last observation, deferred.
+				// An ended phase keeps the last observation, deferred, and
+				// reads nothing.
 			}
 			details[i] = statusEnrichRecordContext(ctx, intent, records[i], identities[i][0], identities[i][1])
 			done <- struct{}{}

@@ -1132,7 +1132,6 @@ func TestStatus319ProductionReleasedCacheWriter(t *testing.T) {
 						break
 					}
 					status319Opportunity(t)
-					status319Age(t, "omit", "example/widget", "7")
 					status319Age(t, "pr", "example/widget", "7")
 					merged = status319Refresh(t, c, server.URL, bin, false)
 				}

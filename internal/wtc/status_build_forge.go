@@ -99,8 +99,8 @@ func statusParseGHBuild(raw []byte, slug, branch string) (*StatusBuild, error) {
 // statusBBAPI is the Bitbucket REST root; tests point it at a local server.
 var statusBBAPI = "https://api.bitbucket.org/2.0"
 
-// errBitbucketNoREST is a host that reads Bitbucket through its CLI only: it
-// has no credential for REST reads such as the open-PR list.
+// errBitbucketNoREST reports that a Bitbucket host has no REST credential, so
+// it reads through its CLI only and has no open-PR list to read.
 var errBitbucketNoREST = errors.New("no Bitbucket API credentials")
 
 // bitbucketRESTCredentials returns the credential for one repository's REST

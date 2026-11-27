@@ -28,6 +28,17 @@ func (e headCheckEvidence) settled() bool {
 	return e.Complete && (e.Result == "SUCCESS" || e.Result == "FAILURE")
 }
 
+// statusBBCachedHeadChecks is the last check evidence kept for a head, at
+// any age.
+func statusBBCachedHeadChecks(ctx context.Context, slug, head string) (headCheckEvidence, bool) {
+	var saved headCheckEvidence
+	raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head)
+	if !ok || json.Unmarshal(raw, &saved) != nil || saved.Head != head {
+		return headCheckEvidence{}, false
+	}
+	return saved, true
+}
+
 func unknownHeadChecks(head string) headCheckEvidence {
 	return headCheckEvidence{Head: head, Result: "UNKNOWN", ObservedAt: time.Now().UTC().Format(time.RFC3339), Requiredness: "unknown"}
 }
@@ -307,11 +318,8 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 	// Each HTTP page owns its admission; the aggregate must not spend a token.
 	cached := unknownHeadChecks(head)
 	readCached := func() {
-		if raw, ok := statusReadForgeEntryAnyContext(ctx, "checks", "bitbucket.org", slug, head); ok {
-			var saved headCheckEvidence
-			if json.Unmarshal(raw, &saved) == nil && saved.Head == head {
-				cached = saved
-			}
+		if saved, ok := statusBBCachedHeadChecks(ctx, slug, head); ok {
+			cached = saved
 		}
 	}
 	readCached()
