@@ -291,8 +291,8 @@ func moduleVersion(readInfo func() (*debug.BuildInfo, bool)) string {
 }
 
 // describeBuild names a build without a release version (a plain go build),
-// similar to wtc dev install: below the next patch release after the newest
-// release it embeds notes for, with its commit, the commit's time and .dirty
+// using the target of the newest embedded prerelease or the patch after the
+// newest embedded stable release. It includes the commit, its time and .dirty
 // for uncommitted changes, as far as Go recorded them.
 func describeBuild(readInfo func() (*debug.BuildInfo, bool)) string {
 	base := ""
@@ -304,7 +304,11 @@ func describeBuild(readInfo func() (*debug.BuildInfo, bool)) string {
 			}
 		}
 		if newest != nil {
-			base = fmt.Sprintf("%d.%d.%d-dev", newest.Major(), newest.Minor(), newest.Patch()+1)
+			patch := newest.Patch()
+			if newest.Prerelease() == "" {
+				patch++
+			}
+			base = fmt.Sprintf("%d.%d.%d-dev", newest.Major(), newest.Minor(), patch)
 		}
 	}
 	if base == "" {

@@ -377,8 +377,8 @@ func releaseNoteInRange(v, from, to *semver.Version, prerelease bool) bool {
 }
 
 // CutReleaseNotes writes <version>.md in dir from the unreleased fragments.
-// Only a stable cut removes the fragments. It
-// refuses an existing release file and an empty fragment set.
+// Only a stable cut removes the fragments. An existing release file or an
+// empty fragment set prevents a cut.
 func CutReleaseNotes(dir, version string) (string, error) {
 	v, err := releaseVersion(version)
 	if err != nil {
