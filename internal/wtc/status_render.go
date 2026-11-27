@@ -17,7 +17,8 @@ import (
 // recheck keeps that closure readable; the freshness mark says how old it is.
 // A row that was never observed, or a provider observation whose time is
 // missing, malformed or in the future, never establishes closure, and a later
-// observation of a reopen replaces the state. Closure is presentation only: it grants no merge, cleanup or branch
+// observation of a reopen replaces the state. Closure is presentation only:
+// it sorts the row with completed work but grants no merge, cleanup or branch
 // action, and archiving stays the collector's decision.
 func StatusPRKnownClosure(row StatusPRRow, now time.Time) bool {
 	if row.State != "CLOSED" && row.State != "DECLINED" {

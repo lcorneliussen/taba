@@ -260,6 +260,15 @@ func TestStatusRetainedClosure545CollectorToRender(t *testing.T) {
 		if row.StateSource != "detail-cache" || !strings.Contains(wtc.StatusPRObservationDetail(row), "recheck reason shared-budget") {
 			t.Fatalf("deferred closure provenance: %+v", row)
 		}
+		// The retained closure sorts with completed work, after an open PR and
+		// the never-observed one.
+		open := wtc.StatusPRRow{Repo: "widget", Number: "9", State: "OPEN", Title: "Active", Freshness: "live", ObservedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		if ordered := wtc.StatusPRsByPriority(append(deferred.PRs, open)); ordered[len(ordered)-1].Number != "7" {
+			t.Fatalf("retained closure not ordered with completed work: %+v", ordered)
+		}
+		if ordered := wtc.StatusPRsByPriority([]wtc.StatusPRRow{row, open}); ordered[0].Number != "9" {
+			t.Fatalf("retained closure ordered before an open PR: %+v", ordered)
+		}
 		never := retained545Row(t, deferred, "8")
 		if wtc.StatusPRKnownClosure(never, time.Now()) || never.ObservedAt != "" {
 			t.Fatalf("never-observed row: %+v", never)
