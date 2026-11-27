@@ -20,6 +20,14 @@ type headCheckEvidence struct {
 	Requiredness string `json:"requiredness"`
 }
 
+// settled evidence of a head is reused at any age by background reads: a
+// finished run does not change without a new one. Pending, partial and
+// empty evidence is read again after the cache age, since checks may not
+// have started yet. An explicit refresh reads it again.
+func (e headCheckEvidence) settled() bool {
+	return e.Complete && (e.Result == "SUCCESS" || e.Result == "FAILURE")
+}
+
 func unknownHeadChecks(head string) headCheckEvidence {
 	return headCheckEvidence{Head: head, Result: "UNKNOWN", ObservedAt: time.Now().UTC().Format(time.RFC3339), Requiredness: "unknown"}
 }
@@ -337,6 +345,12 @@ func statusBBHeadChecksContext(ctx context.Context, intent StatusRefreshIntent, 
 				return evidence, nil
 			}
 		}
+		if cached.settled() {
+			if err := ctx.Err(); err != nil {
+				return fallback(err)
+			}
+			return cached, nil
+		}
 	}
 	started := time.Now()
 	raw, err := fetch()
@@ -456,7 +470,7 @@ func resolveBBCheckHeadContext(ctx context.Context, intent StatusRefreshIntent, 
 // inside the HTTP helper; the aggregate never consumes an additional token.
 func statusBBCheckRead(ctx context.Context, intent StatusRefreshIntent, endpoint, user, pass string) ([]byte, error) {
 	if intent != StatusRefreshForeground {
-		raw, _, _, err := statusWithForgeAdmissionContext(ctx, "bitbucket.org", nil, func() ([]byte, error) { return statusBBGETContext(ctx, intent, endpoint, user, pass) })
+		raw, _, _, err := statusWithForgeAdmissionContext(ctx, intent, "bitbucket.org", nil, func() ([]byte, error) { return statusBBGETContext(ctx, intent, endpoint, user, pass) })
 		return raw, err
 	}
 	if err := statusTakeForegroundToken(ctx, "bitbucket.org"); err != nil {

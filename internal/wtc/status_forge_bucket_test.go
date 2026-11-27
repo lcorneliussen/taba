@@ -50,7 +50,7 @@ func TestStatusForgeBucketCeilingCooldownAndNoIdleTokens(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, live, refused, err := statusWithForgeAdmissionContext(context.Background(), forge, nil, func() ([]byte, error) {
+				_, live, refused, err := statusWithForgeAdmissionContext(context.Background(), StatusRefreshBackground, forge, nil, func() ([]byte, error) {
 					reads.Add(1)
 					if i >= limitFrom && limited.CompareAndSwap(false, true) {
 						return nil, fmt.Errorf("HTTP 429 Retry-After: %d", int(retryAfter.Seconds()))

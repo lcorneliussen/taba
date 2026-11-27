@@ -33,7 +33,7 @@ func TestStatusResourcePipelineRedirectPaysPerHop(t *testing.T) {
 	defer func() { statusBBAPI = old }()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, _, _, err := statusWithForgeAdmissionContext(ctx, "bitbucket.org", nil, func() ([]byte, error) {
+	_, _, _, err := statusWithForgeAdmissionContext(ctx, StatusRefreshBackground, "bitbucket.org", nil, func() ([]byte, error) {
 		return statusBBPipelinesContext(ctx, "example", "widget", "main", "fixture", "synthetic")
 	})
 	t.Logf("actualHTTP=%d err=%v", calls.Load(), err)
@@ -95,7 +95,7 @@ func TestStatusResourcePipelineRedirectContracts(t *testing.T) {
 			old := statusBBAPI
 			statusBBAPI = server.URL
 			defer func() { statusBBAPI = old }()
-			raw, live, _, err := statusWithForgeAdmissionContext(ctx, "bitbucket.org", nil, func() ([]byte, error) {
+			raw, live, _, err := statusWithForgeAdmissionContext(ctx, StatusRefreshBackground, "bitbucket.org", nil, func() ([]byte, error) {
 				return statusBBPipelinesContext(ctx, "example", "widget", "main", "fixture", "synthetic")
 			})
 			switch mode {

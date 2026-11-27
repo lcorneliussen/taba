@@ -227,7 +227,6 @@ func TestStatusGitHubDiscoveryFallsBackWhenTheListIsFull(t *testing.T) {
 
 func TestStatusCappedListDoesNotRefetchAnOpenPullRequest(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 	views := filepath.Join(t.TempDir(), "views")
 	t.Setenv("WTC_TEST_GH_VIEWS", views)
 	var items []string
@@ -247,9 +246,8 @@ func TestStatusCappedListDoesNotRefetchAnOpenPullRequest(t *testing.T) {
 	}
 }
 
-func TestStatusCappedListStillAudits(t *testing.T) {
+func TestStatusCappedListDoesNotReadPRsBeyondIt(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "60")
 	views := filepath.Join(t.TempDir(), "views")
 	t.Setenv("WTC_TEST_GH_VIEWS", views)
 	var items []string
@@ -263,13 +261,13 @@ func TestStatusCappedListStillAudits(t *testing.T) {
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	statusWriteForgeCache("github.com", "example/widget", "7", []byte(`{"number":7,"state":"OPEN","title":"Saved"}`))
-	detail := statusEnrichRecord(PRRecord{Number: "7"}, "example/widget", "github.com")
-	if detail.Title != "Audited" || statusTestFileLines(t, views) != 1 {
-		t.Fatalf("capped list skipped the audit: %+v views=%d", detail, statusTestFileLines(t, views))
-	}
-	again := statusEnrichRecord(PRRecord{Number: "7"}, "example/widget", "github.com")
-	if again.Title != "Audited" || statusTestFileLines(t, views) != 1 {
-		t.Fatalf("capped audit repeated inside the interval: %+v views=%d", again, statusTestFileLines(t, views))
+	// A list cut short at its limit says nothing about a PR beyond it: the PR
+	// keeps its last observation, not current, and is not read on its own.
+	for pass := 0; pass < 2; pass++ {
+		detail := statusEnrichRecord(PRRecord{Number: "7"}, "example/widget", "github.com")
+		if detail.Title != "Saved" || detail.Freshness != "deferred" || detail.Reason != "list-truncated" || statusTestFileLines(t, views) != 0 {
+			t.Fatalf("pass %d beyond a capped list: %+v views=%d", pass, detail, statusTestFileLines(t, views))
+		}
 	}
 }
 

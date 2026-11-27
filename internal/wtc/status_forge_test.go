@@ -110,6 +110,7 @@ func TestMergedPRRegistryStopsRefreshingFinalFacts(t *testing.T) {
 	calls := filepath.Join(t.TempDir(), "calls")
 	t.Setenv("WTC_TEST_GH_CALLS", calls)
 	script := `#!/bin/sh
+if [ "$2" = list ]; then printf '[]'; exit 0; fi
 printf 'called\n' >> "$WTC_TEST_GH_CALLS"
 printf '%s\n' '{"number":7,"state":"MERGED","title":"Finished change","mergedAt":"2026-09-30T12:00:00Z","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}]}'
 `
@@ -155,7 +156,7 @@ printf '%s\n' '{"number":7,"state":"MERGED","title":"Finished change","mergedAt"
 		t.Fatalf("recorded merge was counted as a live check: %v", progress)
 	}
 	callData, err := os.ReadFile(calls)
-	if err != nil || strings.Count(string(callData), "called") != 2 {
+	if err != nil || strings.Count(string(callData), "called") != 1 {
 		t.Fatalf("merged PR was fetched again: %s %v", callData, err)
 	}
 	if err := c.UnlistPR("widget", "7"); err != nil {
@@ -203,6 +204,7 @@ func TestStatusScopedCollectorRecordsMergesPreviewsDoNot(t *testing.T) {
 	}
 	bin := t.TempDir()
 	script := `#!/bin/sh
+if [ "$2" = list ]; then printf '[]'; exit 0; fi
 printf '%s\n' '{"number":7,"state":"MERGED","title":"Finished change","mergedAt":"2026-09-30T12:00:00Z","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}]}'
 `
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0755); err != nil {
@@ -277,6 +279,7 @@ func TestUnsettledMergedCacheRefreshesAfterLiveAge(t *testing.T) {
 	calls := filepath.Join(t.TempDir(), "calls")
 	t.Setenv("WTC_TEST_GH_CALLS", calls)
 	script := `#!/bin/sh
+if [ "$2" = list ]; then printf '[]'; exit 0; fi
 printf 'called\n' >> "$WTC_TEST_GH_CALLS"
 printf '%s\n' '{"number":7,"state":"MERGED","mergedAt":"2026-09-30T12:00:00Z","statusCheckRollup":[{"conclusion":"SUCCESS","status":"COMPLETED"}]}'
 `
@@ -295,7 +298,7 @@ printf '%s\n' '{"number":7,"state":"MERGED","mergedAt":"2026-09-30T12:00:00Z","s
 		t.Fatalf("unsettled merged cache hid fresh forge result: %+v", detail)
 	}
 	data, err := os.ReadFile(calls)
-	if err != nil || strings.Count(string(data), "called") != 2 {
+	if err != nil || strings.Count(string(data), "called") != 1 {
 		t.Fatalf("unsettled merge was not refreshed: %s %v", data, err)
 	}
 	// Use a separate repository identity for the missing-time case.
@@ -306,7 +309,7 @@ printf '%s\n' '{"number":7,"state":"MERGED","mergedAt":"2026-09-30T12:00:00Z","s
 	}
 	detail = statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge)
 	data, err = os.ReadFile(calls)
-	if err != nil || detail.MergedOn != "2026-09-30T12:00:00Z" || strings.Count(string(data), "called") != 4 {
+	if err != nil || detail.MergedOn != "2026-09-30T12:00:00Z" || strings.Count(string(data), "called") != 2 {
 		t.Fatalf("untimed merged cache hid real merge time: %+v %s %v", detail, data, err)
 	}
 }

@@ -20,8 +20,6 @@ func resourceCancellationFixture(t *testing.T) {
 	t.Setenv("TABA_CONFIG_ROOT", "")
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
 	t.Setenv("TABA_FORGE_MIN_INTERVAL", "")
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "60")
-	t.Setenv("TABA_FORGE_FULL_REFRESH", "60")
 }
 
 func TestStatusResourceCanceledSnapshotNeverPublishes(t *testing.T) {
@@ -65,7 +63,7 @@ func TestStatusResourceCanceledBackgroundNeverDispatches(t *testing.T) {
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	statusRefreshRecord(ctx, StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com")
+	statusEnrichRecordMetadataContext(ctx, StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com")
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatal("canceled background collector dispatched")
 	}
@@ -206,7 +204,7 @@ func TestStatusResourceOpenListCancellationBeforePublication(t *testing.T) {
 }
 
 func TestStatusResourceBitbucketTransportCancellation(t *testing.T) {
-	for _, kind := range []string{"list", "build", "audit"} {
+	for _, kind := range []string{"list", "build"} {
 		t.Run(kind, func(t *testing.T) {
 			resourceCancellationFixture(t)
 			t.Setenv("BB_API_USER", "fixture")
@@ -235,8 +233,6 @@ func TestStatusResourceBitbucketTransportCancellation(t *testing.T) {
 				_, _, _ = statusOpenPRsContext(ctx, "bitbucket.org", "example/widget")
 			case "build":
 				_, _ = statusBBBuildContext(ctx, "example/widget", "main")
-			case "audit":
-				statusConfirmFullBuildContext(ctx, "example/widget", "main", nil, "synthetic", "fixture", "synthetic")
 			}
 			select {
 			case <-entered:
@@ -246,7 +242,7 @@ func TestStatusResourceBitbucketTransportCancellation(t *testing.T) {
 			if ctx.Err() == nil || time.Since(start) > time.Second {
 				t.Fatal("HTTP read did not honor caller cancellation")
 			}
-			for _, entry := range [][2]string{{"openprs", "open"}, {"pipelines", "recent"}, {"build", "main"}, {"full", "build:main"}} {
+			for _, entry := range [][2]string{{"openprs", "open"}, {"pipelines", "recent"}, {"build", "main"}} {
 				if _, ok := statusReadForgeEntryAny(entry[0], "bitbucket.org", "example/widget", entry[1]); ok {
 					t.Fatalf("canceled read published %v", entry)
 				}
@@ -273,9 +269,9 @@ func TestStatusResourceCanceledRecordLockKeepsCommittedMerge(t *testing.T) {
 			defer cancel()
 			var got statusPRDetail
 			if path == "listed" {
-				got = statusEnrichListedContext(ctx, record, slug, forge, statusOpenPR{})
+				got = statusEnrichListedContext(ctx, record, slug, forge, statusOpenPR{}, false)
 			} else {
-				got = statusViewPRWithLiveContext(ctx, record, slug, forge, true, false, nil)
+				got = statusReadUnlistedContext(ctx, StatusRefreshBackground, record, slug, forge, time.Now())
 			}
 			if got.State != "MERGED" || got.ObservedAt != before.ObservedAt || got.Freshness != "unavailable" {
 				t.Fatalf("canceled waiter lost confirmed authority: before=%+v after=%+v", before, got)

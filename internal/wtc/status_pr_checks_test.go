@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -152,21 +151,16 @@ func TestStatusPRChecksRefreshOutsideUnchangedPRMetadata(t *testing.T) {
 	raw := []byte(`{"id":7,"state":"OPEN","source":{"commit":{"hash":"` + checkHeadB + `"}}}`)
 	list, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Fingerprint: "same", Raw: raw}}, false, time.Now())
 	statusWriteForgeEntry("openprs", "bitbucket.org", "example/widget", "open", list)
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 	got := statusEnrichRecord(record, "example/widget", "bitbucket.org")
 	if got.Checks != "FAILURE" || calls != 2 {
 		t.Fatalf("PR row lost checks: %+v calls=%d", got, calls)
 	}
 }
 
-func TestStatusPRPipelineSourceTargetSurvivesBranchAudit(t *testing.T) {
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
+func TestStatusPRPipelineSourceTargetBuildsItsBranch(t *testing.T) {
 	hits := 0
 	setupHeadCheckServer(t, func(w http.ResponseWriter, r *http.Request) {
 		hits++
-		if hits > 1 && r.URL.Query().Get("target.branch") != "topic" {
-			t.Errorf("branch audit must include PR source targets: %s", r.URL.RawQuery)
-		}
 		fmt.Fprintf(w, `{"values":[{"build_number":12,"state":{"name":"COMPLETED","result":{"name":"FAILED"}},"target":{"type":"pipeline_pullrequest_target","source":"topic","selector":{"type":"pull-requests","pattern":"**"},"commit":{"hash":%q}}}]}`, checkHeadB)
 	})
 	build, err := statusBBBuild("example/widget", "topic")
@@ -176,14 +170,10 @@ func TestStatusPRPipelineSourceTargetSurvivesBranchAudit(t *testing.T) {
 	if branches := statusPipelinePageBranches([]byte(`{"values":[{"target":{"source":"topic","selector":{"type":"pull-requests"}}}]}`)); len(branches) != 1 || branches[0] != "topic" {
 		t.Fatalf("PR source not cached: %v", branches)
 	}
-	// Force the periodic targeted audit, which must not erase the shared-page PR run.
-	old := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(statusForgeEntryPath("full", "bitbucket.org", "example/widget", "build:topic"), old, old); err != nil {
-		t.Fatal(err)
-	}
+	// The shared page is the only read; a second pass within its age reuses it.
 	build, err = statusBBBuild("example/widget", "topic")
-	if err != nil || build == nil || *build.Checks != "FAILURE" || hits != 3 {
-		t.Fatalf("targeted audit lost PR source: %+v hits=%d err=%v", build, hits, err)
+	if err != nil || build == nil || *build.Checks != "FAILURE" || hits != 1 {
+		t.Fatalf("shared page not reused: %+v hits=%d err=%v", build, hits, err)
 	}
 }
 

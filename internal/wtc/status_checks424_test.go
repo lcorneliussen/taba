@@ -29,9 +29,12 @@ func TestStatusChecks424ForegroundStatesAndCost(t *testing.T) {
 				hits := 0
 				setupHeadCheckServer(t, func(w http.ResponseWriter, r *http.Request) {
 					hits++
-					if strings.Contains(r.URL.Path, "/statuses") && check != "" {
+					switch {
+					case strings.HasSuffix(r.URL.Path, "/pullrequests"):
+						fmt.Fprintf(w, `{"values":[{"id":7,"state":"OPEN","draft":%v,"source":{"commit":{"hash":%q}}}]}`, state == "DRAFT", checkHeadB)
+					case strings.Contains(r.URL.Path, "/statuses") && check != "":
 						fmt.Fprintf(w, `{"values":[{"state":%q}]}`, check)
-					} else {
+					default:
 						fmt.Fprint(w, `{"values":[]}`)
 					}
 				})
@@ -39,19 +42,21 @@ func TestStatusChecks424ForegroundStatesAndCost(t *testing.T) {
 				t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
 				checks424Seed(t, checkHeadB, "FAILURE")
 				foreground424Budget(t, "bitbucket.org", 8, time.Now())
-				got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "bitbucket.org")
+				got := statusEnrichRecordContext(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "bitbucket.org")
 				want := map[string]string{"FAILED": "FAILURE", "INPROGRESS": "PENDING", "SUCCESSFUL": "SUCCESS", "": "NONE"}[check]
 				if state == "DRAFT" && want == "NONE" {
 					want = "draft"
 				}
-				if got.Checks != want || got.State != state || hits != 2 || foreground424Count(calls) != 1 || out.Freshness != "live" {
-					t.Fatalf("detail=%+v outcome=%+v hits=%d", got, out, hits)
+				// An explicit refresh reads the open list and the head's two
+				// check pages; the PR itself is not read.
+				if got.Checks != want || got.State != state || hits != 3 || foreground424Count(calls) != 0 || got.Freshness != "live" {
+					t.Fatalf("detail=%+v hits=%d", got, hits)
 				}
 				raw, _ := os.ReadFile(statusForgeStatePath("budget", "bitbucket.org"))
 				var tokens int
 				fmt.Sscanf(string(raw), "%d", &tokens)
 				if tokens != 5 {
-					t.Fatalf("want exactly metadata+2 pages, budget=%s", raw)
+					t.Fatalf("want exactly list+2 pages, budget=%s", raw)
 				}
 			})
 		}
@@ -88,9 +93,11 @@ func TestStatusChecks424FallbackMetadataFailureKeepsChecks(t *testing.T) {
 	raw := []byte(fmt.Sprintf(`{"id":7,"state":"OPEN","source":{"commit":{"hash":%q}}}`, checkHeadB))
 	at := time.Now().Add(-time.Hour)
 	statusWriteForgeEntrySinceObserved("pr", "bitbucket.org", "example/widget", "7", raw, at, at)
-	got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "bitbucket.org")
-	if got.Checks != "FAILURE" || !got.ChecksUnsettled || out.Freshness == "live" || got.ObservedAt != at.UTC().Format(time.RFC3339Nano) || hits != 2 {
-		t.Fatalf("got=%+v out=%+v hits=%d", got, out, hits)
+	// The list read fails too (503): the PR keeps its last observation and
+	// the head keeps its known failure.
+	got := statusEnrichRecordContext(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "bitbucket.org")
+	if got.Checks != "FAILURE" || !got.ChecksUnsettled || got.Freshness == "live" || got.ObservedAt != at.UTC().Format(time.RFC3339Nano) || hits != 3 {
+		t.Fatalf("got=%+v hits=%d", got, hits)
 	}
 }
 

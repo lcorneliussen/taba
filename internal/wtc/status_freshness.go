@@ -49,10 +49,9 @@ func statusObserveDetailContext(ctx context.Context, detail statusPRDetail, slug
 }
 
 // A list that confirms an unchanged open state does not itself rewrite the
-// detail entry (its checks and reviews keep their own age; a due full refresh
-// in the same pass still can). The confirmation itself is kept separately, so
-// a later fallback reports the newest observation of that state rather than
-// the older detail read.
+// detail entry (its checks and reviews keep their own age). The confirmation
+// itself is kept separately, so a later fallback reports the newest
+// observation of that state rather than the older detail read.
 func statusListedValue(detail statusPRDetail) []byte {
 	head := detail.HeadCommit
 	if !statusListedHead(head) {

@@ -3,6 +3,7 @@ package wtc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -98,6 +99,10 @@ func statusParseGHBuild(raw []byte, slug, branch string) (*StatusBuild, error) {
 // statusBBAPI is the Bitbucket REST root; tests point it at a local server.
 var statusBBAPI = "https://api.bitbucket.org/2.0"
 
+// errBitbucketNoREST is a host that reads Bitbucket through its CLI only: it
+// has no credential for REST reads such as the open-PR list.
+var errBitbucketNoREST = errors.New("no Bitbucket API credentials")
+
 // bitbucketRESTCredentials returns the credential for one repository's REST
 // reads in this operation. With a host read credential (#471) it is that
 // repository's token as a bearer token: user is empty and pass holds it, for
@@ -118,7 +123,7 @@ func bitbucketRESTCredentials(ctx context.Context, slug string) (user, pass stri
 	}
 	user, pass = bitbucketCredentials()
 	if user == "" || pass == "" {
-		return "", "", fmt.Errorf("no Bitbucket API credentials (set BB_USERNAME and BB_API_TOKEN, or opt this host into %s=git-credential)", bitbucketReadCredentialVariable)
+		return "", "", fmt.Errorf("%w (set BB_USERNAME and BB_API_TOKEN, or opt this host into %s=git-credential)", errBitbucketNoREST, bitbucketReadCredentialVariable)
 	}
 	return user, pass, nil
 }
@@ -187,17 +192,10 @@ func statusBBBuildContext(ctx context.Context, slug, branch string) (*StatusBuil
 		return nil, err
 	}
 	if build != nil {
-		if audited, found := statusPreferAuditedBuildContext(ctx, slug, branch, build); found {
-			return audited, nil
-		}
-		return statusConfirmFullBuildContext(ctx, slug, branch, build, "page", user, pass), nil
+		return build, nil
 	}
 	if saved, ok := statusReadForgeEntryAnyContext(ctx, "build", "bitbucket.org", slug, branch); ok {
-		savedBuild, parseErr := statusParseBBBuild(saved, slug, branch)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		return statusConfirmFullBuildContext(ctx, slug, branch, savedBuild, "saved", user, pass), nil
+		return statusParseBBBuild(saved, slug, branch)
 	}
 	raw, err = statusSingleFlightContext(ctx, "build", "bitbucket.org", slug, branch, func() ([]byte, error) {
 		return statusBBPipelinesContext(ctx, parts[0], parts[1], branch, user, pass)
@@ -205,12 +203,7 @@ func statusBBBuildContext(ctx context.Context, slug, branch string) (*StatusBuil
 	if err != nil {
 		return nil, err
 	}
-	build, err = statusParseBBBuild(raw, slug, branch)
-	if err != nil {
-		return nil, err
-	}
-	statusMarkFullRefreshContext(ctx, "bitbucket.org", slug, "build:"+branch)
-	return build, nil
+	return statusParseBBBuild(raw, slug, branch)
 }
 
 func statusBBPipelinesContext(ctx context.Context, workspace, repo, branch, user, pass string) ([]byte, error) {
@@ -235,7 +228,7 @@ func statusSaveLivePipelinePageContext(ctx context.Context, slug string, raw []b
 			return
 		}
 		build, err := statusParseBBBuild(raw, slug, branch)
-		if err == nil && build != nil && !statusPageAuditAppliesContext(ctx, slug, branch, build) {
+		if err == nil && build != nil {
 			statusResourceWriteSince(ctx, "build", "bitbucket.org", slug, branch, raw, started)
 		}
 		unlock()
@@ -274,15 +267,6 @@ func statusPipelinePageBranches(raw []byte) []string {
 		branches = append(branches, name)
 	}
 	return branches
-}
-
-func statusPageAuditAppliesContext(ctx context.Context, slug, branch string, pageBuild *StatusBuild) bool {
-	ctx = statusAuthOperation(ctx)
-	if pageBuild == nil {
-		return false
-	}
-	raw, ok := statusReadForgeEntryAnyContext(ctx, "full", "bitbucket.org", slug, "build:"+branch)
-	return ok && string(raw) == statusBuildFingerprint(pageBuild)
 }
 
 func statusParseBBBuild(raw []byte, slug, branch string) (*StatusBuild, error) {

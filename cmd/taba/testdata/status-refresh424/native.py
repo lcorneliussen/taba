@@ -31,13 +31,12 @@ with tempfile.TemporaryDirectory(prefix="status-refresh-") as temporary:
 import json,os,pathlib,sys
 root=pathlib.Path(os.environ['NATIVE_424_ROOT'])
 args=sys.argv[1:]
-if args[:2]==['pr','view']:
- with (root/'views').open('a') as f:f.write('view\\n')
+if args[:2] in (['pr','view'],['pr','list']):
+ with (root/args[1]).open('a') as f:f.write(args[1]+'\\n')
  if (root/'limited').exists():
   print('HTTP 429 Retry-After: 60',file=sys.stderr);sys.exit(1)
- print((root/'response.json').read_text())
-elif args[:2]==['pr','list']:
- raw=json.loads((root/'response.json').read_text());print(json.dumps([raw]))
+ raw=json.loads((root/'response.json').read_text())
+ print(json.dumps(raw if args[1]=='view' else [raw]))
 elif args[:2]==['auth','token']:print('synthetic-token')
 else:print('{}')
 ''')
@@ -86,11 +85,12 @@ else:print('{}')
 
     try:
         wait_for(lambda: snapshot_state().get("state") == "DRAFT" and b"q quit" in output, "initial draft did not render")
-        initial_views = (root / "views").read_text().count("view") if (root / "views").exists() else 0
+        count = lambda name: (root / name).read_text().count(name) if (root / name).exists() else 0
+        initial_views, initial_lists = count("view"), count("list")
         response.write_text(json.dumps(dict(number=7, state="OPEN", isDraft=False, title="Synthetic ready")))
         os.write(master, b"r")
         wait_for(lambda: snapshot_state().get("state") == "OPEN" and b"Synthetic ready" in output, "explicit refresh reused draft/list/TTL")
-        assert (root / "views").read_text().count("view") == initial_views + 1, "explicit refresh must spend exactly one metadata request"
+        assert count("list") == initial_lists + 1 and count("view") == initial_views, "explicit refresh must read the open list once and no PR on its own"
         os.write(master, b"l")
         wait_for(lambda: b"1 live, 0 deferred" in output, "confirmed foreground outcome missing")
         (root / "limited").touch()
@@ -108,7 +108,7 @@ else:print('{}')
                 assert os.waitstatus_to_exitcode(status) == 0, "UI quit failed"
                 break
         assert reaped, "UI did not quit"
-        print("native Refresh: draft->open, one accounted metadata request, cooldown reason/retry, preserved facts, quit: PASS")
+        print("native Refresh: draft->open, one list read, cooldown reason/retry, preserved facts, quit: PASS")
     finally:
         if not reaped:
             os.kill(pid, signal.SIGTERM)

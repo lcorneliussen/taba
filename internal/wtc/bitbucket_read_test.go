@@ -189,7 +189,7 @@ func assertNoPoison(t *testing.T, where, text string) {
 func TestBitbucketReadsWithoutBBUseTWGByDefault(t *testing.T) {
 	h := newNoBBHost(t)
 	ctx := statusAuthOperation(context.Background())
-	raw, err := statusFetchPRRawContext(ctx, PRRecord{Repo: "alpha", Number: "7"}, "acme/alpha", "bitbucket.org")
+	raw, err := statusFetchPRContext(ctx, PRRecord{Repo: "alpha", Number: "7"}, "acme/alpha", "bitbucket.org")
 	if err != nil {
 		t.Fatalf("status PR read without bb: %v", err)
 	}
@@ -822,7 +822,7 @@ func TestStatusRowNamesARefusedBitbucketRead(t *testing.T) {
 	newNoBBHost(t)
 	t.Setenv("FAKE_TWG_MODE", "denied")
 	t.Setenv("FAKE_TWG_STATUS", "404")
-	_, err := statusFetchPRRawContext(statusAuthOperation(context.Background()), PRRecord{Repo: "alpha", Number: "7"}, "acme/alpha", "bitbucket.org")
+	_, err := statusFetchPRContext(statusAuthOperation(context.Background()), PRRecord{Repo: "alpha", Number: "7"}, "acme/alpha", "bitbucket.org")
 	if got := statusObservationFailure(err); got.Freshness != "unavailable" || got.Reason != "bitbucket-not-visible" {
 		t.Fatalf("observation = %+v (%v)", got, err)
 	}

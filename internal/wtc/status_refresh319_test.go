@@ -13,11 +13,10 @@ import (
 
 func TestStatus319RetainedMergeRejectsActiveWriters(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
-		for _, writer := range []string{"list", "view", "full-audit", "shared-fetch"} {
+		for _, writer := range []string{"list", "view", "shared-fetch"} {
 			t.Run(forge+"/"+writer, func(t *testing.T) {
 				t.Setenv("TMPDIR", t.TempDir())
 				t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-				t.Setenv("WTC_FORGE_FULL_REFRESH", "60")
 				record, slug := PRRecord{Number: "7"}, "example/widget"
 				merged := []byte(`{"number":7,"id":7,"state":"MERGED"}`)
 				active := []byte(`{"number":7,"id":7,"state":"OPEN"}`)
@@ -37,9 +36,7 @@ func TestStatus319RetainedMergeRejectsActiveWriters(t *testing.T) {
 				case "list":
 					got, _, _ = statusDetailFromOpenItem(record, slug, forge, statusOpenPR{Number: "7", Fingerprint: "changed", Raw: active, Started: time.Now()})
 				case "view":
-					got = statusViewPRWithLive(record, slug, forge, true, true, nil)
-				case "full-audit":
-					got = statusConfirmFullPR(record, slug, forge, before, "merged-cache")
+					got = statusReadUnlistedContext(context.Background(), StatusRefreshBackground, record, slug, forge, time.Now())
 				case "shared-fetch":
 					raw, live, err := statusFetchShared("pr", forge, slug, "7", func() ([]byte, error) { return active, nil })
 					if err != nil || live {
@@ -53,7 +50,7 @@ func TestStatus319RetainedMergeRejectsActiveWriters(t *testing.T) {
 				if writer != "shared-fetch" && got.ObservedAt != before.ObservedAt {
 					t.Fatalf("merge observation redated: before=%+v after=%+v", before, got)
 				}
-				if writer == "view" || writer == "full-audit" {
+				if writer == "view" {
 					if got.Freshness != "unavailable" {
 						t.Fatalf("conflicting response claimed confirmed: %+v", got)
 					}
@@ -140,10 +137,15 @@ func TestStatus319ConfirmationFailuresPreserveFacts(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
 			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
 			forge, slug := "bitbucket.org", "example/widget"
-			list, _ := statusEncodeOpenPRs(nil, false, time.Now())
-			statusWriteForgeEntry("openprs", forge, slug, "open", list)
 			original := []byte(`{"id":7,"state":"OPEN","draft":true}`)
 			statusWriteForgeCache(forge, slug, "7", original)
+			past := time.Now().Add(-time.Minute)
+			if err := os.Chtimes(statusForgeCachePath(forge, slug, "7"), past, past); err != nil {
+				t.Fatal(err)
+			}
+			// The list that omits the draft was read after it.
+			list, _ := statusEncodeOpenPRs(nil, false, time.Now())
+			statusWriteForgeEntry("openprs", forge, slug, "open", list)
 			dir := t.TempDir()
 			script := "#!/bin/sh\n"
 			switch mode {
@@ -200,7 +202,6 @@ func TestStatus319FreshUnchangedListKeepsStateCurrent(t *testing.T) {
 		for _, draft := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/draft=%t", forge, draft), func(t *testing.T) {
 				t.Setenv("TMPDIR", t.TempDir())
-				t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
 				slug := "example/widget"
 				record := PRRecord{Number: "7"}
 				body := []byte(fmt.Sprintf(`{"id":7,"state":"OPEN","draft":%t,"title":"Full"}`, draft))
@@ -212,7 +213,6 @@ func TestStatus319FreshUnchangedListKeepsStateCurrent(t *testing.T) {
 				if err := os.Chtimes(statusForgeCachePath(forge, slug, "7"), past, past); err != nil {
 					t.Fatal(err)
 				}
-				statusMarkFullRefresh(forge, slug, "7")
 				statusWriteForgeEntry("stamp", forge, slug, "7", []byte("unchanged"))
 				started := time.Now()
 				raw, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Fingerprint: "unchanged", Raw: body}}, false, started)
@@ -287,9 +287,13 @@ func TestStatus319OmittedConfirmationCoalescesAcrossPanes(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
 	t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
 	forge, slug := "bitbucket.org", "example/widget"
+	statusWriteForgeCache(forge, slug, "7", []byte(`{"id":7,"state":"OPEN","draft":true}`))
+	past := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(statusForgeCachePath(forge, slug, "7"), past, past); err != nil {
+		t.Fatal(err)
+	}
 	list, _ := statusEncodeOpenPRs(nil, false, time.Now())
 	statusWriteForgeEntry("openprs", forge, slug, "open", list)
-	statusWriteForgeCache(forge, slug, "7", []byte(`{"id":7,"state":"OPEN","draft":true}`))
 	dir := t.TempDir()
 	views, started, release := dir+"/views", dir+"/started", dir+"/release"
 	defer os.WriteFile(release, []byte("release"), 0600)
@@ -364,9 +368,13 @@ func TestStatus319CoolingRecoversWithFullValidResponse(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
 			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
 			forge, slug := "bitbucket.org", "example/widget"
+			statusWriteForgeCache(forge, slug, "7", []byte(fmt.Sprintf(`{"id":7,"state":"OPEN","draft":%t}`, draft)))
+			past := time.Now().Add(-time.Minute)
+			if err := os.Chtimes(statusForgeCachePath(forge, slug, "7"), past, past); err != nil {
+				t.Fatal(err)
+			}
 			list, _ := statusEncodeOpenPRs(nil, false, time.Now())
 			statusWriteForgeEntry("openprs", forge, slug, "open", list)
-			statusWriteForgeCache(forge, slug, "7", []byte(fmt.Sprintf(`{"id":7,"state":"OPEN","draft":%t}`, draft)))
 			fakeLargeBB(t, map[string]string{"view": `{"id":7,"state":"MERGED","draft":true,"merged_on":"2026-11-04T10:01:00Z"}`})
 			statusForgeCool(forge, time.Minute)
 			before := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
@@ -458,7 +466,6 @@ func TestStatusStaleListPublicationKeepsObservation(t *testing.T) {
 					t.Run(fmt.Sprintf("%s/draft=%v/prior=%v/cooling=%v", forge, draft, prior, cooling), func(t *testing.T) {
 						t.Setenv("TMPDIR", t.TempDir())
 						t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-						t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
 						record := PRRecord{Number: "7"}
 						slug := "example/widget"
 						old := time.Now().Add(-3 * time.Minute)
@@ -494,7 +501,7 @@ func TestStatusStaleListPublicationKeepsObservation(t *testing.T) {
 							if !ok || !statusObservationUnavailable(saved.Freshness) {
 								t.Errorf("cache lost list age: %+v ok=%v", saved, ok)
 							}
-							if _, active := statusReadCachedDetail(record, slug, forge); active {
+							if _, active := statusReadForgeCache(forge, slug, "7"); active {
 								t.Error("expired list became active detail cache")
 							}
 						}
@@ -528,7 +535,6 @@ func TestStatusUnconfirmedTerminalProducerRows(t *testing.T) {
 					}
 				}
 				t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-				t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 				bin := t.TempDir()
 				for _, name := range []string{"gh", "bb"} {
 					fixtureFile(t, filepath.Join(bin, name), "#!/bin/sh\nexit 97\n", 0700)
@@ -548,8 +554,13 @@ func TestStatusUnconfirmedTerminalProducerRows(t *testing.T) {
 				if err := os.Chtimes(statusForgeCachePath(tc.forge, "example/widget", "7"), past, past); err != nil {
 					t.Fatal(err)
 				}
-				list, _ := statusEncodeOpenPRs(nil, false, time.Now())
+				// The list that would confirm the closure is served stale after a
+				// refused read, so the closure is not current.
+				list, _ := statusEncodeOpenPRs(nil, false, past)
 				statusWriteForgeEntry("openprs", tc.forge, "example/widget", "open", list)
+				if err := os.Chtimes(statusForgeEntryPath("openprs", tc.forge, "example/widget", "open"), past, past); err != nil {
+					t.Fatal(err)
+				}
 				if statusTakeForgeToken(context.Background(), tc.forge) != nil {
 					t.Fatal("initial token")
 				}
@@ -578,8 +589,10 @@ func TestStatusUnconfirmedTerminalProducerRows(t *testing.T) {
 						}
 					}
 				}
-				// Confirmed closures remain inspectable; the existing orphan warning stays.
-				statusWriteForgeEntrySince("pr", tc.forge, "example/widget", "7", raw, time.Now())
+				// A current list that omits the PR confirms the closure; it stays
+				// inspectable and the existing orphan warning stays.
+				list, _ = statusEncodeOpenPRs(nil, false, time.Now())
+				statusWriteForgeEntry("openprs", tc.forge, "example/widget", "open", list)
 				confirmed, err := c.statusForgePreview(false, false)
 				if err != nil {
 					t.Fatal(err)
@@ -615,7 +628,6 @@ func TestStatusOlderListPreservesNewerDetailObservation(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
 			t.Setenv("TMPDIR", t.TempDir())
-			t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 			record := PRRecord{Number: "7"}
 			slug := "example/widget"
 			current := []byte(`{"number":7,"id":7,"state":"OPEN","isDraft":true,"draft":true,"title":"Newer full detail"}`)
@@ -725,7 +737,6 @@ func TestStatusListStateMustMatchObservation(t *testing.T) {
 						t.Fatal(err)
 					}
 					t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
-					t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
 					listRaw, _ := json.Marshal(map[string]any{"number": 7, "id": 7, "state": "OPEN", "isDraft": draft, "draft": draft, "title": "Synthetic list"})
 					fullDraft := draft
 					if !matches {
@@ -740,16 +751,12 @@ func TestStatusListStateMustMatchObservation(t *testing.T) {
 					t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 					old := time.Now().Add(-3 * time.Minute)
 					item := statusOpenPR{Number: "7", Branch: "topic", Raw: listRaw, Fingerprint: "unchanged", Started: old}
-					audited := statusEnrichListed(record, "example/widget", forge, item)
+					// A detail read earlier, whose summary the list stamp still matches.
+					statusWriteForgeEntrySinceObserved("pr", forge, "example/widget", "7", fullRaw, old, old)
+					statusWriteForgeEntry("stamp", forge, "example/widget", "7", []byte("unchanged"))
 					want := "OPEN"
 					if fullDraft {
 						want = "DRAFT"
-					}
-					if audited.State != want || audited.Title != "Synthetic full audit" {
-						t.Fatalf("full audit did not publish conflicting detail: %+v", audited)
-					}
-					if err := os.Chtimes(statusForgeCachePath(forge, "example/widget", "7"), old, old); err != nil {
-						t.Fatal(err)
 					}
 					now := time.Now()
 					listed, err := statusEncodeOpenPRs([]statusOpenPR{item}, false, now)
@@ -817,7 +824,6 @@ func TestStatusRejectedURLBlocksLocalBranchActions(t *testing.T) {
 			head := fixtureGit(t, "-C", worktree, "rev-parse", "HEAD")
 			before := fixtureGit(t, "-C", worktree, "status", "--porcelain")
 			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-			t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 			statusForgeCool("github.com", time.Hour)
 			statusForgeCool("bitbucket.org", time.Hour)
 			bin := t.TempDir()

@@ -17,8 +17,8 @@ import (
 // Status talks to Bitbucket and GitHub from every open status pane. Those
 // forges bill the calls to one user. A shared cache, one in-flight fetch per
 // record, and one token bucket per forge keep the panes from spending the
-// hour on the first few minutes. Every provider read takes one token or is
-// refused; nothing is queued or reserved. A rate-limit response pauses that
+// hour on the first few minutes. Every status provider read takes one token
+// or is refused; nothing is queued or reserved. A rate-limit response pauses that
 // forge for its Retry-After and status keeps showing the last saved record.
 
 const (
@@ -288,7 +288,7 @@ func statusLockCache(path string) (func(), error) {
 }
 
 func statusWithForgeBudget(forge string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, err error) {
-	body, live, _, err = statusWithForgeAdmissionContext(context.Background(), forge, stale, fetch)
+	body, live, _, err = statusWithForgeAdmissionContext(context.Background(), StatusRefreshBackground, forge, stale, fetch)
 	return body, live, err
 }
 
@@ -321,10 +321,16 @@ func statusRefusalFor(err error) statusRefusal {
 	return refusal
 }
 
-func statusWithForgeAdmissionContext(ctx context.Context, forge string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, refused statusRefusal, err error) {
+// An explicit refresh waits for the next refill (statusTakeForegroundToken);
+// background reads take a token or are refused.
+func statusWithForgeAdmissionContext(ctx context.Context, intent StatusRefreshIntent, forge string, stale []byte, fetch func() ([]byte, error)) (body []byte, live bool, refused statusRefusal, err error) {
 	ctx = statusAuthOperation(ctx)
 	selected := statusAuthForContext(ctx, forge)
-	if err := statusTakeForgeToken(ctx, forge); err != nil {
+	take := statusTakeForgeToken
+	if intent == StatusRefreshForeground {
+		take = statusTakeForegroundToken
+	}
+	if err := take(ctx, forge); err != nil {
 		if ctx.Err() != nil {
 			return nil, false, statusRefusalFor(ctx.Err()), ctx.Err()
 		}
@@ -406,7 +412,7 @@ func statusFetchSharedAdmissionContext(ctx context.Context, kind, forge, slug, k
 		return data, false, statusRefusal{}, nil
 	}
 	started := time.Now()
-	raw, live, refused, err := statusWithForgeAdmissionContext(ctx, forge, stale, fetch)
+	raw, live, refused, err := statusWithForgeAdmissionContext(ctx, StatusRefreshBackground, forge, stale, fetch)
 	if err != nil {
 		return nil, false, refused, err
 	}

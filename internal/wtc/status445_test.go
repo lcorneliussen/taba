@@ -278,48 +278,8 @@ func TestStatus445CollectorNotPreviewReturnsMergedCheckout(t *testing.T) {
 	}
 }
 
-// A stale open list that still lists a PR whose branch is gone locally must not
-// hide that PR from a detail read. When the list is served stale after a
-// refused read, the PR is confirmed as an omitted one; with the budget spent
-// it is deferred with its reason on both forges. Local
-// evidence schedules the read; it never becomes a MERGED claim by itself.
-func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
-	for _, forge := range []string{"github.com", "bitbucket.org"} {
-		t.Run(forge, func(t *testing.T) {
-			f := newFixture445(t, forge, "MERGED", true)
-			t.Setenv("WTC_STATUS_RETURN_MERGED", "off")
-			old := time.Now().Add(-90 * time.Minute)
-			raw := []byte(`{"id":7,"number":7,"state":"OPEN","title":"Synthetic change","headRefOid":"` + f.head + `","source":{"commit":{"hash":"` + f.head + `"}}}`)
-			ctx := statusAuthOperation(context.Background())
-			statusWriteForgeEntrySinceObservedContext(ctx, "pr", forge, f.slug, "7", raw, old, old)
-			list, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: raw, Fingerprint: "same"}}, false, old)
-			statusWriteForgeEntrySinceObservedContext(ctx, "openprs", forge, f.slug, "open", list, old, old)
-			statusWriteForgeEntryObservedContext(ctx, "stamp", forge, f.slug, "7", []byte("same"), old)
-			// The allowance is spent: the list read is refused and served
-			// stale, and the PR's own read is deferred with its reason rather
-			// than waiting for the refill one second away.
-			t.Setenv("WTC_FORGE_MIN_INTERVAL", "1")
-			foreground424Budget(t, forge, 0, time.Now())
-			snapshot, err := f.c.StatusForgePreview()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(snapshot.PRs) != 1 {
-				t.Fatalf("rows: %+v", snapshot.PRs)
-			}
-			row := snapshot.PRs[0]
-			if row.LocalMergeEvidence != "upstream-gone; head in origin/main" || f.listHits.Load() != 0 {
-				t.Fatalf("evidence=%q list requests=%d", row.LocalMergeEvidence, f.listHits.Load())
-			}
-			if row.State != "OPEN" || row.Freshness != "deferred" || row.ObservationReason != "shared-budget" || len(f.providerCalls()) != 0 {
-				t.Fatalf("deferral: %+v calls=%v", row, f.providerCalls())
-			}
-		})
-	}
-}
-
 // A current open list is trusted: with an allowance available, the live list
-// read omits the merged PR and the existing omission confirmation reads it.
+// read omits the merged PR, which is then read on its own once.
 func TestStatus445GoneBranchTrustsCurrentList(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
@@ -394,14 +354,14 @@ func TestStatus445NewerListObservationOutlivesOlderDetail(t *testing.T) {
 			raw := []byte(`{"id":7,"number":7,"state":"OPEN","title":"Synthetic change"}`)
 			statusWriteForgeEntrySinceObservedContext(ctx, "pr", forge, f.slug, "7", raw, detailAt, detailAt)
 			statusWriteForgeEntryObservedContext(ctx, "stamp", forge, f.slug, "7", []byte("same"), detailAt)
-			listed := statusEnrichListedContext(ctx, PRRecord{Number: "7"}, f.slug, forge, statusOpenPR{Number: "7", Raw: raw, Fingerprint: "same", Started: listAt})
+			listed := statusEnrichListedContext(ctx, PRRecord{Number: "7"}, f.slug, forge, statusOpenPR{Number: "7", Raw: raw, Fingerprint: "same", Started: listAt}, false)
 			if listed.StateSource != "open-list" {
 				t.Fatalf("list did not date matching state: %+v", listed)
 			}
 			// A by-number read is then refused by the shared budget.
 			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
 			foreground424Budget(t, forge, 0, time.Now())
-			got := statusViewPRWithLiveContext(statusAuthOperation(context.Background()), PRRecord{Number: "7"}, f.slug, forge, true, false, nil)
+			got := statusReadUnlistedContext(statusAuthOperation(context.Background()), StatusRefreshBackground, PRRecord{Number: "7"}, f.slug, forge, time.Now())
 			at, _ := time.Parse(time.RFC3339Nano, got.ObservedAt)
 			if got.Freshness != "deferred" || got.StateSource != "open-list" || !at.Equal(listAt.Truncate(time.Second)) && !at.Equal(listAt) {
 				t.Fatalf("older detail replaced newer list observation: freshness=%s source=%s observed=%s want≈%s", got.Freshness, got.StateSource, got.ObservedAt, listAt.UTC().Format(time.RFC3339Nano))
@@ -623,7 +583,7 @@ func TestStatus445LockRefusalsAreClassified(t *testing.T) {
 	if err := os.Mkdir(path+".lock", 0700); err != nil {
 		t.Fatal(err)
 	}
-	got := statusViewPRWithLiveContext(ctx, PRRecord{Number: "7"}, f.slug, "github.com", true, false, nil)
+	got := statusReadUnlistedContext(ctx, StatusRefreshBackground, PRRecord{Number: "7"}, f.slug, "github.com", time.Now())
 	if got.Freshness != "deferred" || got.Reason != "cache-lock" {
 		t.Fatalf("unusable lock: %+v", got)
 	}
@@ -637,7 +597,7 @@ func TestStatus445LockRefusalsAreClassified(t *testing.T) {
 	defer unlock()
 	short, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
-	got = statusViewPRWithLiveContext(short, PRRecord{Number: "7"}, f.slug, "github.com", true, false, nil)
+	got = statusReadUnlistedContext(short, StatusRefreshBackground, PRRecord{Number: "7"}, f.slug, "github.com", time.Now())
 	if got.Freshness != "deferred" || got.Reason != "deadline" {
 		t.Fatalf("held lock: %+v", got)
 	}
@@ -646,8 +606,8 @@ func TestStatus445LockRefusalsAreClassified(t *testing.T) {
 	}
 }
 
-// A PR that stays open after its branch was deleted is read at most once per
-// cache interval, not on every pass.
+// A PR that stays open after its branch was deleted, missing from the open
+// list, is read once per list, not on every pass.
 func TestStatus445GoneBranchReadIsBoundedPerInterval(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {
 		t.Run(forge, func(t *testing.T) {
@@ -720,8 +680,8 @@ func TestStatus445BitbucketRetainedMergeTime(t *testing.T) {
 	}
 }
 
-// A failed provider read leaves an earlier DECLINED observation unavailable;
-// the decline is still final and keeps archive treatment by its closure time.
+// An earlier DECLINED observation of a PR that a current open list omits is
+// final: it is not read again and keeps archive treatment by its closure time.
 func TestStatus445UnavailableDeclineKeepsArchive(t *testing.T) {
 	f := newFixture445(t, "bitbucket.org", "DECLINED", false)
 	fixtureFile(t, filepath.Join(f.c.Collection, ".wtc-prs"), "widget 7 other-branch\n", 0644)
@@ -736,7 +696,7 @@ func TestStatus445UnavailableDeclineKeepsArchive(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := snapshot.PRs[0]
-	if row.State != "DECLINED" || row.Freshness != "unavailable" || !row.Archived || f.detailCalls() != 1 {
-		t.Fatalf("unavailable decline: %+v calls=%v", row, f.providerCalls())
+	if row.State != "DECLINED" || statusObservationUnavailable(row.Freshness) || !row.Archived || f.detailCalls() != 0 {
+		t.Fatalf("final decline: %+v calls=%v", row, f.providerCalls())
 	}
 }

@@ -44,7 +44,7 @@ func TestStatusClosedArchiveCollectorToNativeFrames(t *testing.T) {
 			bin := t.TempDir()
 			raw := fmt.Sprintf(`{"number":7,"id":7,"state":%q,"title":"Synthetic closure","closedAt":"2020-01-01T00:00:00Z","updated_on":"2020-01-01T00:00:00Z"}`, tc.state)
 			for _, name := range []string{"gh", "bb"} {
-				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf '%s' '"+raw+"'\n"), 0700); err != nil {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nif [ \"$2\" = list ]; then printf '[]'; exit 0; fi\nprintf '%s' '"+raw+"'\n"), 0700); err != nil {
 					t.Fatal(err)
 				}
 			}

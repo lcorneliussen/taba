@@ -13,7 +13,7 @@ func TestStatusClosedArchiveCollector(t *testing.T) {
 		for _, date := range []string{"2020-01-01T00:00:00Z", time.Now().UTC().Format(time.RFC3339), "", "malformed", time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)} {
 			t.Run(tc.forge+"/"+date, func(t *testing.T) {
 				raw := fmt.Sprintf(`{"number":7,"id":7,"state":%q,"title":"Synthetic closure","closedAt":%q,"updated_on":%q}`, tc.state, date, date)
-				foreground424Fixture(t, "printf '%s' '"+raw+"'\n")
+				foreground424Fixture(t, "if [ \"$2\" = list ]; then printf '[]'; exit 0; fi\nprintf '%s' '"+raw+"'\n")
 				c := collector424Collection(t, tc.forge)
 				got, err := c.StatusForegroundSnapshot(context.Background())
 				if err != nil {

@@ -14,7 +14,7 @@ import (
 
 const (
 	statusOpenListLimit = 100
-	statusGHOpenFields  = "number,title,state,isDraft,updatedAt,reviewDecision,mergeStateStatus,mergeable,baseRefName,headRefName,statusCheckRollup,reviewRequests,latestReviews"
+	statusGHOpenFields  = "number,title,state,isDraft,updatedAt,reviewDecision,mergeStateStatus,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,reviewRequests,latestReviews"
 )
 
 type statusOpenPR struct {
@@ -25,44 +25,101 @@ type statusOpenPR struct {
 	Started     time.Time       `json:"-"`
 }
 
+// statusOpenList is one repository's open pull requests, shared by every
+// pane for statusOpenListAge: the only routine status read of its PRs.
+type statusOpenList struct {
+	prs       map[string]statusOpenPR
+	truncated bool      // more PRs are open than the list holds
+	started   time.Time // when the list read began
+	live      bool      // read by this status operation
+	// refused is set when older bytes were served after a refused read; such
+	// a list is not current, and a PR's absence from it means nothing.
+	refused statusRefusal
+}
+
 func statusOpenPRs(forge, slug string) (map[string]statusOpenPR, bool, error) {
 	return statusOpenPRsContext(context.Background(), forge, slug)
 }
 
 func statusOpenPRsContext(ctx context.Context, forge, slug string) (map[string]statusOpenPR, bool, error) {
-	byNumber, truncated, _, err := statusOpenPRsCurrentContext(ctx, forge, slug)
-	return byNumber, truncated, err
+	list, err := statusOpenListContext(ctx, forge, slug)
+	return list.prs, list.truncated, err
 }
 
-// statusOpenPRsCurrentContext also reports whether the list is current: read
-// live, or a cache entry within its age. Older bytes served after a refused
-// read are not current.
-func statusOpenPRsCurrentContext(ctx context.Context, forge, slug string) (map[string]statusOpenPR, bool, bool, error) {
-	raw, _, refused, err := statusFetchSharedAdmissionContext(ctx, "openprs", forge, slug, "open", func() ([]byte, error) {
-		switch forge {
-		case "github.com":
-			return statusFetchGHOpenListContext(ctx, slug)
-		case "bitbucket.org":
-			return statusFetchBBOpenListContext(ctx, slug)
-		default:
-			return nil, fmt.Errorf("unsupported forge")
-		}
+// statusOpenListContext reads the shared list: a cache entry within its age,
+// or one read under the shared budget.
+func statusOpenListContext(ctx context.Context, forge, slug string) (statusOpenList, error) {
+	raw, live, refused, err := statusFetchSharedAdmissionContext(ctx, "openprs", forge, slug, "open", func() ([]byte, error) {
+		return statusFetchOpenListContext(ctx, forge, slug)
 	})
 	if err != nil {
-		return nil, false, false, err
+		return statusOpenList{refused: refused}, err
 	}
-	list, truncated, started, err := statusParseOpenPRs(raw)
+	list, err := statusDecodeOpenList(raw)
+	list.live, list.refused = live, refused
+	return list, err
+}
+
+// statusOpenListReadContext reads the list again before its age is up, at
+// most once per status operation: for an explicit refresh, and for a PR the
+// cached list may predate. The read replaces the shared entry for every pane.
+func statusOpenListReadContext(ctx context.Context, intent StatusRefreshIntent, forge, slug string) (statusOpenList, error) {
+	ctx = statusAuthOperation(ctx)
+	raw, err := statusOperationShared(ctx, "openprs-read\x00"+forge+"\x00"+slug, func() ([]byte, error) {
+		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "openprs", forge, slug, "open"))
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
+		started := time.Now()
+		raw, _, refused, err := statusWithForgeAdmissionContext(ctx, intent, forge, nil, func() ([]byte, error) {
+			return statusFetchOpenListContext(ctx, forge, slug)
+		})
+		if err != nil && refused.reason == "provider-cooldown" {
+			// A rate-limited read is a cooldown with its retry time.
+			return nil, &statusAdmissionError{cause: errForgeCooling, retry: refused.retry}
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !statusResourceWriteSince(ctx, "openprs", forge, slug, "open", raw, started) {
+			if winner, ok := statusReadForgeEntryAnyContext(ctx, "openprs", forge, slug, "open"); ok {
+				return winner, nil
+			}
+		}
+		return raw, ctx.Err()
+	})
 	if err != nil {
-		return nil, false, false, err
+		return statusOpenList{}, err
 	}
-	byNumber := make(map[string]statusOpenPR, len(list))
-	for _, pr := range list {
+	list, err := statusDecodeOpenList(raw)
+	list.live = true
+	return list, err
+}
+
+func statusFetchOpenListContext(ctx context.Context, forge, slug string) ([]byte, error) {
+	switch forge {
+	case "github.com":
+		return statusFetchGHOpenListContext(ctx, slug)
+	case "bitbucket.org":
+		return statusFetchBBOpenListContext(ctx, slug)
+	}
+	return nil, fmt.Errorf("unsupported forge")
+}
+
+func statusDecodeOpenList(raw []byte) (statusOpenList, error) {
+	prs, truncated, started, err := statusParseOpenPRs(raw)
+	if err != nil {
+		return statusOpenList{}, err
+	}
+	list := statusOpenList{prs: make(map[string]statusOpenPR, len(prs)), truncated: truncated, started: started}
+	for _, pr := range prs {
 		if pr.Number != "" {
 			pr.Started = started
-			byNumber[pr.Number] = pr
+			list.prs[pr.Number] = pr
 		}
 	}
-	return byNumber, truncated, refused.reason == "", nil
+	return list, nil
 }
 
 func statusParseOpenPRs(raw []byte) ([]statusOpenPR, bool, time.Time, error) {

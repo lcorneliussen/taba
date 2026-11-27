@@ -186,7 +186,7 @@ func TestStatusResourceBackgroundChecksPageCancelKeepsFailure(t *testing.T) {
 				path := statusForgeEntryPath("checks", "bitbucket.org", "example/widget", checkHeadB)
 				var before []byte
 				if source == "cached" {
-					checks424Seed(t, checkHeadB, "FAILURE")
+					resourceChecksPartialFailure(t)
 					past := time.Now().Add(-time.Hour)
 					if err := os.Chtimes(path, past, past); err != nil {
 						t.Fatal(err)
@@ -287,6 +287,17 @@ func TestStatusResourceBackgroundChecksCommitSurvivesCancellation(t *testing.T) 
 	}
 }
 
+// resourceChecksPartialFailure seeds a failure seen by an incomplete read. It
+// is not settled, so a background pass reads the head again.
+func resourceChecksPartialFailure(t *testing.T) headCheckEvidence {
+	t.Helper()
+	e := checks424Seed(t, checkHeadB, "FAILURE")
+	e.Complete = false
+	raw, _ := json.Marshal(e)
+	statusWriteForgeEntry("checks", "bitbucket.org", "example/widget", checkHeadB, raw)
+	return e
+}
+
 func TestStatusResourceBackgroundChecksNewerPartialKeepsKnownFailure(t *testing.T) {
 	for _, complete := range []bool{false, true} {
 		t.Run(fmt.Sprint(complete), func(t *testing.T) {
@@ -306,7 +317,7 @@ func TestStatusResourceBackgroundChecksNewerPartialKeepsKnownFailure(t *testing.
 				}
 				fmt.Fprint(w, `{"values":[{"state":"SUCCESSFUL"}]}`)
 			})
-			before := checks424Seed(t, checkHeadB, "FAILURE")
+			before := resourceChecksPartialFailure(t)
 			path := statusForgeEntryPath("checks", "bitbucket.org", "example/widget", checkHeadB)
 			past := time.Now().Add(-time.Hour)
 			if err := os.Chtimes(path, past, past); err != nil {
