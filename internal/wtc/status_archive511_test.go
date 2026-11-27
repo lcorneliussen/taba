@@ -416,7 +416,7 @@ func TestStatusArchive511DeclineReadOncePerOperation(t *testing.T) {
 	for operation := 1; operation <= 3; operation++ {
 		ctx := statusAuthOperation(context.Background())
 		before := archive511TWGReads(t, h, "activity")
-		detail := statusEnrichRecordContext(ctx, record, "acme/alpha", "bitbucket.org")
+		detail := statusEnrichRecordContext(ctx, StatusRefreshBackground, record, "acme/alpha", "bitbucket.org")
 		statusBBCompleteMergeTimeContext(ctx, detail, "acme/alpha") // the collector's pass
 		if detail.State != "DECLINED" || detail.ClosedAt != "" {
 			t.Fatalf("operation %d: %+v", operation, detail)
@@ -527,6 +527,12 @@ case "$*" in
 esac
 `, 0755)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// With REST credentials the open list comes from a local API that lists
+	// nothing, so the PR is read through bb.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, `{"values":[]}`) }))
+	old := statusBBAPI
+	statusBBAPI = server.URL
+	t.Cleanup(func() { statusBBAPI = old; server.Close() })
 	return calls
 }
 

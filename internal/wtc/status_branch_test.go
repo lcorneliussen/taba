@@ -199,7 +199,7 @@ func TestStatusGitHubDiscoveryFallsBackWhenTheListIsFull(t *testing.T) {
 	var lists, heads int
 	bin := t.TempDir()
 	var items []string
-	for i := 0; i < statusOpenListLimit; i++ {
+	for i := 0; i <= statusOpenListLimit; i++ {
 		items = append(items, fmt.Sprintf(`{"number":%d,"headRefName":"other-%d","state":"OPEN","title":"Other"}`, i+1, i))
 	}
 	full := "[" + strings.Join(items, ",") + "]"
@@ -227,11 +227,10 @@ func TestStatusGitHubDiscoveryFallsBackWhenTheListIsFull(t *testing.T) {
 
 func TestStatusCappedListDoesNotRefetchAnOpenPullRequest(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 	views := filepath.Join(t.TempDir(), "views")
 	t.Setenv("WTC_TEST_GH_VIEWS", views)
 	var items []string
-	for i := 0; i < statusOpenListLimit; i++ {
+	for i := 0; i <= statusOpenListLimit; i++ {
 		items = append(items, fmt.Sprintf(`{"number":%d,"state":"OPEN","title":"Other","headRefName":"other-%d"}`, i+101, i))
 	}
 	script := "#!/bin/sh\ncase \"$2\" in\n  list) printf '%s\\n' '[" + strings.Join(items, ",") + "]' ;;\n  view) printf 'viewed\\n' >> \"$WTC_TEST_GH_VIEWS\"; printf '%s\\n' '{\"number\":7,\"state\":\"OPEN\",\"title\":\"Still open\"}' ;;\n  *) exit 2 ;;\nesac\n"
@@ -247,29 +246,32 @@ func TestStatusCappedListDoesNotRefetchAnOpenPullRequest(t *testing.T) {
 	}
 }
 
-func TestStatusCappedListStillAudits(t *testing.T) {
+func TestStatusCappedListDoesNotReadPRsBeyondIt(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "60")
 	views := filepath.Join(t.TempDir(), "views")
 	t.Setenv("WTC_TEST_GH_VIEWS", views)
+	// 150 PRs are open; like gh, the fake returns at most --limit of them.
 	var items []string
-	for i := 0; i < statusOpenListLimit; i++ {
+	for i := 0; i < 150; i++ {
 		items = append(items, fmt.Sprintf(`{"number":%d,"state":"OPEN","title":"Other","headRefName":"other-%d"}`, i+101, i))
 	}
-	script := "#!/bin/sh\ncase \"$2\" in\n  list) printf '%s\\n' '[" + strings.Join(items, ",") + "]' ;;\n  view) printf 'viewed\\n' >> \"$WTC_TEST_GH_VIEWS\"; printf '%s\\n' '{\"number\":7,\"state\":\"OPEN\",\"title\":\"Audited\"}' ;;\n  *) exit 2 ;;\nesac\n"
+	open := filepath.Join(t.TempDir(), "open")
+	fixtureFile(t, open, strings.Join(items, "\n")+"\n", 0600)
+	t.Setenv("WTC_TEST_GH_OPEN", open)
+	script := "#!/bin/sh\nlimit=30 prev=\nfor arg in \"$@\"; do [ \"$prev\" = --limit ] && limit=$arg; prev=$arg; done\ncase \"$2\" in\n  list) printf '['; head -n \"$limit\" \"$WTC_TEST_GH_OPEN\" | paste -sd, -; printf ']\\n' ;;\n  view) printf 'viewed\\n' >> \"$WTC_TEST_GH_VIEWS\"; printf '%s\\n' '{\"number\":7,\"state\":\"OPEN\",\"title\":\"Audited\"}' ;;\n  *) exit 2 ;;\nesac\n"
 	bin := t.TempDir()
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	statusWriteForgeCache("github.com", "example/widget", "7", []byte(`{"number":7,"state":"OPEN","title":"Saved"}`))
-	detail := statusEnrichRecord(PRRecord{Number: "7"}, "example/widget", "github.com")
-	if detail.Title != "Audited" || statusTestFileLines(t, views) != 1 {
-		t.Fatalf("capped list skipped the audit: %+v views=%d", detail, statusTestFileLines(t, views))
-	}
-	again := statusEnrichRecord(PRRecord{Number: "7"}, "example/widget", "github.com")
-	if again.Title != "Audited" || statusTestFileLines(t, views) != 1 {
-		t.Fatalf("capped audit repeated inside the interval: %+v views=%d", again, statusTestFileLines(t, views))
+	// A list cut short at its limit says nothing about a PR beyond it: the PR
+	// keeps its last observation, not current, and is not read on its own.
+	for pass := 0; pass < 2; pass++ {
+		detail := statusEnrichRecord(PRRecord{Number: "7"}, "example/widget", "github.com")
+		if detail.Title != "Saved" || detail.Freshness != "deferred" || detail.Reason != "list-truncated" || statusTestFileLines(t, views) != 0 {
+			t.Fatalf("pass %d beyond a capped list: %+v views=%d", pass, detail, statusTestFileLines(t, views))
+		}
 	}
 }
 
@@ -396,5 +398,23 @@ func TestStatusBranchFallbackProviderDeadline(t *testing.T) {
 				t.Fatalf("provider fallback did not honor deadline: %v (%v)", err, time.Since(started))
 			}
 		})
+	}
+}
+
+func TestStatusGitHub562ListOfExactlyTheLimitIsComplete(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	bin := t.TempDir()
+	var items []string
+	for i := 0; i < statusOpenListLimit; i++ {
+		items = append(items, fmt.Sprintf(`{"number":%d,"headRefName":"b-%d","state":"OPEN","title":"T"}`, i+1, i))
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' '[" + strings.Join(items, ",") + "]'\n"
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	listed, truncated, err := statusOpenPRs("github.com", "example/widget")
+	if err != nil || truncated || len(listed) != statusOpenListLimit {
+		t.Fatalf("a list of exactly the limit: listed=%d truncated=%v err=%v", len(listed), truncated, err)
 	}
 }

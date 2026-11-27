@@ -46,21 +46,22 @@ func TestStatusMergedPRCacheOutlivesActiveCache(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A merge is final: past a day it is still shown, and not read again.
 	t.Setenv("WTC_TEST_GH_DETAIL", `{"number":7,"state":"MERGED","title":"Refreshed detail"}`)
-	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.Title != "Refreshed detail" {
-		t.Fatalf("merged detail did not refresh after a day: %+v", detail)
+	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "MERGED" || detail.Title == "Refreshed detail" {
+		t.Fatalf("merged PR read again after a day: %+v", detail)
 	}
 	// Use a separate PR identity for the unrelated active-cache expiry checks.
 	number = "8"
 	path = statusForgeCachePath(forge, slug, number)
 	t.Setenv("WTC_TEST_GH_DETAIL", "")
 	cache(`{"number":8,"state":"OPEN"}`)
-	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "UNKNOWN" {
+	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); !statusObservationUnavailable(detail.Freshness) {
 		t.Fatalf("stale active result was trusted: %+v", detail)
 	}
 	cache(`{"number":8,"state":"MERGED"}`)
 	t.Setenv("WTC_FORGE_CACHE_AGE", "1")
-	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); detail.State != "UNKNOWN" {
+	if detail := statusEnrichRecord(PRRecord{Repo: "widget", Number: number}, slug, forge); !statusObservationUnavailable(detail.Freshness) {
 		t.Fatalf("explicit short cache age was ignored: %+v", detail)
 	}
 	if err := os.Remove(path); err != nil {

@@ -104,7 +104,6 @@ func TestStatus319RefreshProcess(t *testing.T) {
 		interval = "3600"
 	}
 	os.Setenv("WTC_FORGE_MIN_INTERVAL", interval)
-	os.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 	os.Setenv("WTC_STATUS_RETURN_MERGED", "true")
 	var output sync.Mutex
 	emit := func(event status319Event) {
@@ -1004,7 +1003,8 @@ func TestStatus319ProductionExpiredListProvenance(t *testing.T) {
 				blocked = repo.PRUnconfirmed && repo.Next == nil
 			}
 		}
-		if !blocked || !strings.Contains(event.Markdown, "stale forge observation") {
+		// The list served after the refused read names the cooldown.
+		if !blocked || !strings.Contains(event.Markdown, "deferred forge observation") {
 			t.Errorf("pass%d producer/native safety gate missing: %+v", pass, event.Snapshot.Repos)
 		}
 	}
@@ -1132,7 +1132,6 @@ func TestStatus319ProductionReleasedCacheWriter(t *testing.T) {
 						break
 					}
 					status319Opportunity(t)
-					status319Age(t, "omit", "example/widget", "7")
 					status319Age(t, "pr", "example/widget", "7")
 					merged = status319Refresh(t, c, server.URL, bin, false)
 				}

@@ -22,54 +22,6 @@ func collector424Collection(t *testing.T, forge string) *Context {
 	return c
 }
 
-func TestStatusCollector424ExplicitTransitionsAndAccounting(t *testing.T) {
-	for _, forge := range []string{"github.com", "bitbucket.org"} {
-		for _, transition := range []string{"merged", "ready"} {
-			t.Run(forge+"/"+transition, func(t *testing.T) {
-				state := "MERGED"
-				if transition == "ready" {
-					state = "OPEN"
-				}
-				raw := fmt.Sprintf(`{"number":7,"id":7,"state":%q,"isDraft":false,"draft":false,"title":"Current title","mergedAt":"2026-11-16T10:00:00Z","merged_on":"2026-11-16T10:00:00Z"}`, state)
-				calls := foreground424Fixture(t, "printf '%s' '"+raw+"'\n")
-				c := collector424Collection(t, forge)
-				old := []byte(`{"number":7,"id":7,"state":"OPEN","isDraft":true,"draft":true,"title":"Cached title"}`)
-				at := time.Now()
-				statusWriteForgeEntrySinceObserved("pr", forge, "example/widget", "7", old, at, at)
-				list, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: old, Fingerprint: "cached"}}, false, at)
-				statusWriteForgeEntry("openprs", forge, "example/widget", "open", list)
-				statusMarkFullRefresh(forge, "example/widget", "7")
-				burst, _ := statusForgeAllowance(forge)
-				foreground424Budget(t, forge, burst, at)
-				snapshot, err := c.StatusForegroundSnapshot(context.Background())
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(snapshot.PRs) != 1 || snapshot.PRs[0].State != state || snapshot.PRs[0].Draft || snapshot.PRs[0].Title != "Current title" || snapshot.PRs[0].Freshness != "live" || foreground424Count(calls) != 1 {
-					t.Fatalf("snapshot=%+v calls=%d", snapshot, foreground424Count(calls))
-				}
-				observed := snapshot.PRs[0].ObservedAt
-				cache, err := c.ReadStatusSnapshot()
-				if err != nil || cache.PRs[0].ObservedAt != observed {
-					t.Fatalf("cache=%+v err=%v", cache, err)
-				}
-				budget, _ := os.ReadFile(statusForgeStatePath("budget", forge))
-				var tokens int
-				fmt.Sscanf(string(budget), "%d", &tokens)
-				if tokens != burst-1 {
-					t.Fatalf("budget=%s", budget)
-				}
-				if state == "MERGED" {
-					again, err := c.StatusForegroundSnapshot(context.Background())
-					if err != nil || again.PRs[0].State != "MERGED" || foreground424Count(calls) != 1 {
-						t.Fatalf("retained merge=%+v err=%v", again, err)
-					}
-				}
-			})
-		}
-	}
-}
-
 func TestStatusCollector424CooldownAndCancelledWait(t *testing.T) {
 	for _, cancelWait := range []bool{false, true} {
 		t.Run(fmt.Sprint(cancelWait), func(t *testing.T) {
@@ -197,61 +149,6 @@ func TestStatus424NewFailureKeepsOlderFactsWithoutClaimingLive(t *testing.T) {
 	got := StatusPreferNewerObservations(incoming, current).PRs[0]
 	if got.State != "OPEN" || got.Title != "Known title" || got.ObservedAt != current.PRs[0].ObservedAt || got.Freshness != "deferred" || got.ObservationReason != "shared-budget" || got.RetryAt == "" {
 		t.Fatalf("%+v", got)
-	}
-}
-
-func TestStatusCollector424PhaseDeadlineReturnsPartialOutcomes(t *testing.T) {
-	// The short phase may expire during process startup. The second phase permits
-	// one real response but expires before the unchanged eight-second refill.
-	for _, budget := range []time.Duration{150 * time.Millisecond, 2 * time.Second} {
-		t.Run(budget.String(), func(t *testing.T) {
-			calls := foreground424Fixture(t, `printf '{"id":%s,"state":"OPEN","title":"Observed now"}' "$3"`)
-			forge := "bitbucket.org"
-			c := collector424Collection(t, forge)
-			file, err := os.OpenFile(c.PRFile(), os.O_APPEND|os.O_WRONLY, 0600)
-			if err != nil {
-				t.Fatal(err)
-			}
-			fmt.Fprintln(file, "widget 8 - https://bitbucket.org/example/widget/pull-requests/8 Other title")
-			file.Close()
-			observed := time.Now().Add(-time.Hour)
-			for _, number := range []string{"7", "8"} {
-				raw := []byte(fmt.Sprintf(`{"id":%s,"state":"OPEN","draft":true,"title":"Cached draft"}`, number))
-				statusWriteForgeEntrySinceObserved("pr", forge, "example/widget", number, raw, observed, observed)
-			}
-			foreground424Budget(t, forge, 1, time.Now())
-			got, err := c.statusForegroundSnapshot(context.Background(), budget)
-			if err != nil {
-				t.Fatal(err)
-			}
-			live, deferred := 0, 0
-			for _, row := range got.PRs {
-				switch row.Freshness {
-				case "live":
-					live++
-					if row.Title != "Observed now" || row.State != "OPEN" {
-						t.Fatalf("%+v", row)
-					}
-				case "deferred":
-					deferred++
-					if row.Title != "Cached draft" || row.State != "DRAFT" || row.ObservedAt != observed.UTC().Format(time.RFC3339Nano) || row.ObservationReason != "deadline" {
-						t.Fatalf("%+v", row)
-					}
-				default:
-					t.Fatalf("%+v", row)
-				}
-			}
-			if live+deferred != 2 || deferred < 1 || foreground424Count(calls) > 1 {
-				t.Fatalf("live%d deferred%d calls%d rows=%+v", live, deferred, foreground424Count(calls), got.PRs)
-			}
-			if budget == 2*time.Second && (live != 1 || deferred != 1 || foreground424Count(calls) != 1) {
-				t.Fatalf("completed observation discarded: live%d deferred%d calls%d", live, deferred, foreground424Count(calls))
-			}
-			saved, err := c.ReadStatusSnapshot()
-			if err != nil || len(saved.PRs) != 2 {
-				t.Fatalf("%+v %v", saved, err)
-			}
-		})
 	}
 }
 

@@ -84,7 +84,7 @@ func TestStatusSnapshotNextAndRetainedMergedWork(t *testing.T) {
 	}
 	c.Registry.Repos[0].Remote = "https://github.com/example/harness.git"
 	bin := t.TempDir()
-	script := "#!/bin/sh\nprintf '%s' '{\"number\":7,\"state\":\"MERGED\",\"title\":\"First round\",\"mergeCommit\":{\"oid\":\"" + merged + "\"}}'\n"
+	script := "#!/bin/sh\nif [ \"$2\" = list ]; then printf '[]'; exit 0; fi\nprintf '%s' '{\"number\":7,\"state\":\"MERGED\",\"title\":\"First round\",\"mergeCommit\":{\"oid\":\"" + merged + "\"}}'\n"
 	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}

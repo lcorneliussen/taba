@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,14 @@ func foreground424Fixture(t *testing.T, script string) string {
 		fixtureFile(t, filepath.Join(bin, name), "#!/bin/sh\nprintf 'request\\n' >> \"$STATUS_424_CALLS\"\n"+script, 0700)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	// A local Bitbucket API that lists no open PRs and reports no checks, so
+	// no Bitbucket read leaves the machine.
+	t.Setenv("BB_API_USER", "synthetic")
+	t.Setenv("BB_API_PASS", "synthetic")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, `{"values":[]}`) }))
+	old := statusBBAPI
+	statusBBAPI = server.URL
+	t.Cleanup(func() { statusBBAPI = old; server.Close() })
 	return calls
 }
 func foreground424Budget(t *testing.T, forge string, tokens int, at time.Time) {
@@ -35,87 +45,11 @@ func foreground424Count(path string) int {
 	return strings.Count(string(raw), "request")
 }
 
-func TestStatusForeground424ConfirmsTransitionsDespiteStaleList(t *testing.T) {
-	for _, forge := range []string{"github.com", "bitbucket.org"} {
-		for _, transition := range []string{"merged", "ready"} {
-			t.Run(forge+"/"+transition, func(t *testing.T) {
-				state := "MERGED"
-				draft := false
-				if transition == "ready" {
-					state = "OPEN"
-					draft = true
-				}
-				response := fmt.Sprintf(`{"id":7,"number":7,"state":%q,"draft":false,"isDraft":false,"title":"Current title","merged_on":"2026-11-16T10:00:00Z","mergedAt":"2026-11-16T10:00:00Z"}`, state)
-				calls := foreground424Fixture(t, "printf '%s' '"+response+"'\n")
-				now := time.Now()
-				old := now.Add(-time.Hour)
-				slug := "example/widget"
-				raw := []byte(fmt.Sprintf(`{"id":7,"number":7,"state":"OPEN","draft":%v,"isDraft":%v,"title":"Old title"}`, draft, draft))
-				statusWriteForgeEntrySinceObserved("pr", forge, slug, "7", raw, old, old)
-				list, _ := statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Raw: raw, Fingerprint: "old"}}, false, old)
-				statusWriteForgeEntrySinceObserved("openprs", forge, slug, "open", list, old, old)
-				statusMarkFullRefresh(forge, slug, "7") // foreground also bypasses a recent audit
-				burst, _ := statusForgeAllowance(forge)
-				foreground424Budget(t, forge, burst, now)
-				got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge)
-				if got.State != state || !out.ProviderConfirmed || out.Freshness != "live" || foreground424Count(calls) != 1 {
-					t.Fatalf("detail=%+v outcome=%+v calls=%d", got, out, foreground424Count(calls))
-				}
-				saved, at, ok := statusReadForgeEntryObserved("pr", forge, slug, "7", time.Hour)
-				if !ok || !strings.Contains(string(saved), "Current title") || at.Before(now) || at.After(time.Now()) || got.ObservedAt != at.UTC().Format(time.RFC3339Nano) {
-					t.Fatalf("provider time not persisted: at=%v detail=%+v", at, got)
-				}
-				// Shared readers preserve the observation and do not run the provider.
-				observed, ok := statusReadObservedDetail(PRRecord{Number: "7"}, slug, forge, time.Hour)
-				if !ok || observed.State != state || observed.ObservedAt != got.ObservedAt || foreground424Count(calls) != 1 {
-					t.Fatalf("cache reuse: %+v", observed)
-				}
-				var tokens int
-				budget, _ := os.ReadFile(statusForgeStatePath("budget", forge))
-				fmt.Sscanf(string(budget), "%d", &tokens)
-				if tokens != burst-1 {
-					t.Fatalf("foreground spent %d tokens; want one", burst-tokens)
-				}
-			})
-		}
-	}
-}
-
-func TestStatusForeground424BypassesFreshTTL(t *testing.T) {
-	for _, forge := range []string{"github.com", "bitbucket.org"} {
-		t.Run(forge, func(t *testing.T) {
-			calls := foreground424Fixture(t, `printf '%s' '{"id":7,"number":7,"state":"OPEN","title":"Observed now"}'`)
-			statusWriteForgeCache(forge, "example/widget", "7", []byte(`{"id":7,"number":7,"state":"OPEN","title":"Cached"}`))
-			statusMarkFullRefresh(forge, "example/widget", "7")
-			got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", forge)
-			if got.Title != "Observed now" || !out.ProviderConfirmed || foreground424Count(calls) != 1 {
-				t.Fatalf("%+v %+v", got, out)
-			}
-		})
-	}
-}
-
-func TestStatusForeground424RecordedAndRetainedMergeDoNotFetchMetadata(t *testing.T) {
-	for _, retained := range []bool{false, true} {
-		t.Run(fmt.Sprint(retained), func(t *testing.T) {
-			calls := foreground424Fixture(t, "exit 99\n")
-			record := PRRecord{Number: "7", Title: "Finished"}
-			at := time.Now().Add(-time.Hour)
-			if retained {
-				statusWriteForgeEntrySinceObserved("pr", "github.com", "example/widget", "7", []byte(`{"number":7,"state":"MERGED"}`), at, at)
-			} else {
-				record.MergedOn = "2020-01-01T00:00:00Z"
-				record.FinalChecks = "SUCCESS"
-			}
-			got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, record, "example/widget", "github.com")
-			if got.State != "MERGED" || out.ProviderConfirmed || foreground424Count(calls) != 0 {
-				t.Fatalf("%+v %+v", got, out)
-			}
-			if retained && got.ObservedAt != at.UTC().Format(time.RFC3339Nano) {
-				t.Fatal("retained merge redated")
-			}
-		})
-	}
+// foreground424Refresh is an explicit refresh of one PR row: its open list
+// is read again in the foreground.
+func foreground424Refresh(ctx context.Context, record PRRecord, slug, forge string) (statusPRDetail, StatusObservation) {
+	detail := statusEnrichRecordMetadataContext(ctx, StatusRefreshForeground, record, slug, forge)
+	return detail, statusDetailObservation(detail)
 }
 
 func TestStatusForeground424CooldownAndCustomBudgetAreHonest(t *testing.T) {
@@ -130,9 +64,9 @@ func TestStatusForeground424CooldownAndCustomBudgetAreHonest(t *testing.T) {
 					t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
 					foreground424Budget(t, forge, 0, time.Now())
 				}
-				got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", forge)
+				got, out := foreground424Refresh(context.Background(), PRRecord{Number: "7"}, "example/widget", forge)
 				retry, err := time.Parse(time.RFC3339Nano, out.RetryAt)
-				if got.State != "OPEN" || got.Freshness != "deferred" || out.Reason != reason || err != nil || !retry.After(time.Now()) || out.ProviderConfirmed || foreground424Count(calls) != 0 {
+				if got.State != "OPEN" || got.Freshness != "deferred" || out.Reason != reason || err != nil || !retry.After(time.Now()) || foreground424Count(calls) != 0 {
 					t.Fatalf("%+v %+v retryError=%v", got, out, err)
 				}
 			})
@@ -143,25 +77,25 @@ func TestStatusForeground424CooldownAndCustomBudgetAreHonest(t *testing.T) {
 func TestStatusForeground424ProviderRetryAfter(t *testing.T) {
 	calls := foreground424Fixture(t, "echo 'HTTP 429 Retry-After: 30' >&2\nexit 1\n")
 	before := time.Now()
-	_, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com")
+	_, out := foreground424Refresh(context.Background(), PRRecord{Number: "7"}, "example/widget", "github.com")
 	retry, err := time.Parse(time.RFC3339Nano, out.RetryAt)
 	if err != nil || retry.Before(before.Add(30*time.Second)) || retry.After(time.Now().Add(31*time.Second)) || out.Reason != "provider-cooldown" || foreground424Count(calls) != 1 {
 		t.Fatalf("%+v %v", out, err)
 	}
-	_, out = statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com")
+	_, out = foreground424Refresh(context.Background(), PRRecord{Number: "7"}, "example/widget", "github.com")
 	if out.Reason != "provider-cooldown" || foreground424Count(calls) != 1 {
 		t.Fatal("cooldown bypassed")
 	}
 }
 
 func TestStatusForeground424CancellationNeverStartsLater(t *testing.T) {
-	for _, blocked := range []string{"record-lock", "budget-lock", "refill"} {
+	for _, blocked := range []string{"list-lock", "budget-lock", "refill"} {
 		t.Run(blocked, func(t *testing.T) {
 			calls := foreground424Fixture(t, `printf '%s' '{"number":7,"state":"OPEN"}'`)
 			forge := "github.com"
 			var unlock func()
-			if blocked == "record-lock" {
-				unlock, _ = statusLockCache(statusForgeEntryPath("pr", forge, "example/widget", "7"))
+			if blocked == "list-lock" {
+				unlock, _ = statusLockCache(statusForgeEntryPath("openprs", forge, "example/widget", "open"))
 			} else if blocked == "budget-lock" {
 				unlock, _ = statusLockCache(statusForgeStatePath("budget", forge))
 			} else {
@@ -169,7 +103,7 @@ func TestStatusForeground424CancellationNeverStartsLater(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
 			defer cancel()
-			_, out := statusRefreshRecord(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", forge)
+			_, out := foreground424Refresh(ctx, PRRecord{Number: "7"}, "example/widget", forge)
 			if unlock != nil {
 				unlock()
 			}
@@ -182,7 +116,7 @@ func TestStatusForeground424CancellationNeverStartsLater(t *testing.T) {
 	calls := foreground424Fixture(t, "exit 99\n")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, out := statusRefreshRecord(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com")
+	_, out := foreground424Refresh(ctx, PRRecord{Number: "7"}, "example/widget", "github.com")
 	if out.Reason != "cancelled" || foreground424Count(calls) != 0 {
 		t.Fatalf("%+v", out)
 	}
@@ -229,9 +163,10 @@ func TestStatusForeground424UnsafeLockFailsClosed(t *testing.T) {
 	if err := os.Symlink(target, statusForgeStatePath("budget", forge)+".lock"); err != nil {
 		t.Fatal(err)
 	}
-	_, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", forge)
+	_, out := foreground424Refresh(context.Background(), PRRecord{Number: "7"}, "example/widget", forge)
 	raw, _ := os.ReadFile(target)
-	if out.Reason != "refresh-failed" || foreground424Count(calls) != 0 || string(raw) != "unchanged" {
+	// A budget that cannot be accounted admits nothing.
+	if out.Reason != "shared-budget" || foreground424Count(calls) != 0 || string(raw) != "unchanged" {
 		t.Fatalf("%+v", out)
 	}
 }

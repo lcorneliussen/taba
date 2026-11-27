@@ -264,7 +264,7 @@ plugin write and is left out.
 | Audience | repository visibility for review audience | R | adapter (`twg repo get`) | 15 s; any error = unknown; never cached |
 | Status | open PR list | R | REST, paginated (`next`, ≤10 pages) | budget; auth-scoped cache; truncation marked |
 | Status | PR by source branch (after a truncated list) | R | REST, one page | budget; auth-scoped cache |
-| Status | PR detail, foreground and full refresh | R | adapter (`twg … get`) | 30 s; budget; auth-scoped cache, operation-private through TWG |
+| Status | PR detail, once after the PR leaves the open list | R | adapter (`twg … get`) | 30 s; budget; auth-scoped cache, operation-private through TWG |
 | Status | merge time from activity | R | adapter (`twg … activity`) | 30 s; auth-scoped cache, operation-private through TWG |
 | Status | commit build statuses and pipelines for a head | R | REST, paginated (≤10 pages) | budget; incomplete evidence never passes |
 | Status | abbreviated head resolution | R | REST | budget; cached |

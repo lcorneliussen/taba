@@ -35,8 +35,8 @@ printf '%s' '{"number":7,"state":"OPEN","title":"Delayed"}'
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
 			go func() {
-				d, o := statusRefreshRecord(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge)
-				done <- result{d, o}
+				d := statusReadUnlistedContext(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge, time.Now())
+				done <- result{d, statusDetailObservation(d)}
 			}()
 			deadline := time.Now().Add(2 * time.Second)
 			for {
@@ -57,7 +57,7 @@ printf '%s' '{"number":7,"state":"OPEN","title":"Delayed"}'
 			}
 			fixtureFile(t, release, "", 0600)
 			got := <-done
-			if got.detail.State != winnerState || got.detail.Title != "Newer" || got.detail.ObservedAt != at.UTC().Format(time.RFC3339Nano) || got.outcome.ProviderConfirmed || got.outcome.Reason != "conflicting-observation" || foreground424Count(calls) != 1 {
+			if got.detail.State != winnerState || got.detail.Title != "Newer" || got.detail.ObservedAt != at.UTC().Format(time.RFC3339Nano) || got.outcome.Freshness == "live" || foreground424Count(calls) != 1 {
 				t.Fatalf("%+v %+v", got.detail, got.outcome)
 			}
 			saved, savedAt, ok := statusReadForgeEntryObserved("pr", forge, slug, "7", time.Hour)
@@ -77,9 +77,9 @@ func TestStatusObservation424SecondProcessReusesExactTime(t *testing.T) {
 		return
 	}
 	calls := foreground424Fixture(t, `printf '%s' '{"number":7,"state":"OPEN","title":"Provider title"}'`)
-	got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com")
-	if !out.ProviderConfirmed {
-		t.Fatalf("%+v", out)
+	got := statusReadUnlistedContext(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com", time.Now())
+	if got.Freshness != "live" {
+		t.Fatalf("%+v", got)
 	}
 	exe, _ := os.Executable()
 	cmd := exec.Command(exe, "-test.run=^TestStatusObservation424SecondProcessReusesExactTime$")
@@ -100,8 +100,9 @@ func TestStatusObservation424FailureDoesNotRedateFacts(t *testing.T) {
 			old := time.Now().Add(-time.Hour)
 			forge, slug := "github.com", "example/widget"
 			statusWriteForgeEntrySinceObserved("pr", forge, slug, "7", []byte(`{"number":7,"state":"OPEN","title":"Saved"}`), old, old)
-			got, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge)
-			if got.State != "OPEN" || got.Title != "Saved" || got.Freshness != "unavailable" || got.ObservedAt != old.UTC().Format(time.RFC3339Nano) || out.ObservedAt != got.ObservedAt || out.Reason != "refresh-failed" || out.RetryAt != "" || out.ProviderConfirmed {
+			got := statusReadUnlistedContext(context.Background(), StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge, time.Now())
+			out := statusDetailObservation(got)
+			if got.State != "OPEN" || got.Title != "Saved" || got.Freshness != "unavailable" || got.ObservedAt != old.UTC().Format(time.RFC3339Nano) || out.ObservedAt != got.ObservedAt || out.Reason != "refresh-failed" || out.RetryAt != "" {
 				t.Fatalf("%+v %+v", got, out)
 			}
 			_, at, _ := statusReadForgeEntryObserved("pr", forge, slug, "7", 24*time.Hour)
@@ -125,7 +126,7 @@ func TestStatusObservation424ReasonIsNeverInventedFromAge(t *testing.T) {
 		{statusPRDetail{State: "OPEN", Freshness: "cached", ObservedAt: old}, ""},
 	} {
 		out := statusDetailObservation(tc.detail)
-		if out.Reason != tc.reason || out.RetryAt != "" || out.ProviderConfirmed {
+		if out.Reason != tc.reason || out.RetryAt != "" {
 			t.Fatalf("%+v", out)
 		}
 		raw, _ := json.Marshal(out)
@@ -151,9 +152,9 @@ func TestStatusObservation424CooldownDoesNotShorten(t *testing.T) {
 func TestStatusObservation424InvalidIdentityNeverDispatches(t *testing.T) {
 	calls := foreground424Fixture(t, "exit 99\n")
 	for _, record := range []PRRecord{{Number: "../7"}, {Number: "0"}, {Number: "7;echo"}} {
-		_, out := statusRefreshRecord(context.Background(), StatusRefreshForeground, record, "example/widget", "github.com")
-		if out.Reason != "refresh-failed" || foreground424Count(calls) != 0 {
-			t.Fatalf("%+v", out)
+		got := statusEnrichRecordMetadataContext(context.Background(), StatusRefreshForeground, record, "example/widget", "github.com")
+		if got.State != "UNKNOWN" || foreground424Count(calls) != 0 {
+			t.Fatalf("%+v", got)
 		}
 	}
 }
@@ -170,10 +171,10 @@ func TestStatusObservation424BlockedMergePublicationDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	started := time.Now()
-	_, out := statusRefreshRecord(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge)
+	out := statusDetailObservation(statusReadUnlistedContext(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge, time.Now()))
 	elapsed := time.Since(started)
 	<-released
-	if elapsed > 1500*time.Millisecond || out.Reason != "deadline" || out.ProviderConfirmed || foreground424Count(calls) != 1 {
+	if elapsed > 1500*time.Millisecond || out.Reason != "deadline" || foreground424Count(calls) != 1 {
 		t.Fatalf("deadline=1s held lock=2s elapsed=%s outcome=%+v calls=%d", elapsed, out, foreground424Count(calls))
 	}
 	if _, ok := statusReadForgeEntryAny("pr", forge, slug, "7"); ok {
@@ -199,9 +200,9 @@ func TestStatusObservation424CancelledLegacyMergeMigrationPreservesOriginalTime(
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
-	_, out := statusRefreshRecord(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge)
+	out := statusDetailObservation(statusReadUnlistedContext(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, slug, forge, time.Now()))
 	unlock()
-	if out.Reason != "deadline" || out.ProviderConfirmed || foreground424Count(calls) != 0 {
+	if out.Reason != "deadline" || foreground424Count(calls) != 0 {
 		t.Fatalf("%+v", out)
 	}
 	if _, ok := statusReadForgeEntryAny("merge", forge, slug, "7"); ok {
@@ -326,11 +327,11 @@ func TestStatusObservation424CooldownPublicationHonorsDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	started := time.Now()
-	_, out := statusRefreshRecord(ctx, StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", forge)
+	_, out := foreground424Refresh(ctx, PRRecord{Number: "7"}, "example/widget", forge)
 	elapsed := time.Since(started)
 	<-released
 	retry, parseErr := time.Parse(time.RFC3339Nano, out.RetryAt)
-	if elapsed > 1500*time.Millisecond || out.Reason != "provider-cooldown-unrecorded" || out.ProviderConfirmed || foreground424Count(calls) != 1 || parseErr != nil || retry.Before(started.Add(30*time.Second)) {
-		t.Fatalf("deadline=1s held cooldown lock=2s elapsed=%s outcome=%+v retry=%v calls=%d", elapsed, out, parseErr, foreground424Count(calls))
+	if elapsed > 1500*time.Millisecond || out.Freshness != "deferred" || out.Reason != "provider-cooldown" || foreground424Count(calls) != 1 || parseErr != nil || retry.Before(started.Add(30*time.Second)) {
+		t.Fatalf("deadline=1s held cooldown lock=2s elapsed=%s outcome=%+v calls=%d", elapsed, out, foreground424Count(calls))
 	}
 }

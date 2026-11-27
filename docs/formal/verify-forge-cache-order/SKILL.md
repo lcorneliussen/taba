@@ -31,10 +31,10 @@ The sync commit is in the coverage record below. List the covered files that
 differ from it, committed or not:
 
 ```sh
-git diff --stat db84783749b0c8b8018617779513549f4c485e35 -- \
+git diff --stat 82c18ebf49b1685bbf3f21a66cef394ae054a511 -- \
 	internal/wtc/status_cache.go internal/wtc/status_forge_budget.go \
 	internal/wtc/status_open_list.go internal/wtc/status_enlisted.go \
-	internal/wtc/status_full_refresh.go internal/wtc/status_build_forge.go \
+	internal/wtc/status_build_forge.go \
 	internal/wtc/status_freshness.go internal/wtc/status_resource_provider.go \
 	internal/wtc/pr_identity_schedule.go
 ```
@@ -47,7 +47,7 @@ rg -n 'statusWriteForgeEntrySince(Observed)?(Context)?\(|statusResourceWriteSinc
 ```
 
 Every hit for a pr or build entry must map to a row of the coverage record.
-At the sync commit, `statusWriteForgeCache` (`status_cache.go:152`) writes a pr
+At the sync commit, `statusWriteForgeCache` (`status_cache.go:169`) writes a pr
 entry with no check, and only tests call it. A production caller of it, or of
 `statusWriteForgeEntry` for a pr or build entry, repeats the 9274035 bug.
 
@@ -104,7 +104,7 @@ Do these steps when `main.cfg` fails or a replay config holds.
 2. Replay the path against the real code as a Go test in `internal/wtc`, with
    one call per step. `TestStatusOlderListDoesNotReplaceANewerPullRequest` and
    `TestStatusOlderPipelinePageDoesNotReplaceANewerBuild` in
-   `status_full_refresh_test.go` replay the 9274035 path, and
+   `status_cache_order_test.go` replay the 9274035 path, and
    `TestStatusOlderListDoesNotReplaceANewerPullRequestAfterALostReceipt` the
    1b4a2d6 path. To lose a receipt in a test, replace the file at
    `statusForgeEntryPath("since", forge, slug, "pr:7")` with a directory before
@@ -134,7 +134,7 @@ the replay tests. Fix the model.
 
 ## Coverage record
 
-Sync commit: `db84783749b0c8b8018617779513549f4c485e35` (2026-11-23). Line
+Sync commit: `82c18ebf49b1685bbf3f21a66cef394ae054a511` (2026-11-27). Line
 numbers are at that commit.
 
 | Model action | Code in `internal/wtc` |
@@ -142,12 +142,12 @@ numbers are at that commit.
 | `ListFetch` | `statusFetchGHOpenListContext`, `statusFetchBBOpenListContext` (`status_open_list.go`, `item.Started`). The recent pipelines page in `statusBBBuildContext` (`status_build_forge.go`). |
 | `Lock`, `Unlock` | `statusLockCacheContext` (`status_forge_budget.go`) on the entry path, with a deferred unlock, in every writer below. |
 | `LockFails` | The `if lockErr == nil { defer unlock() }` pattern before 4764f64. On main a failed lock ends the write path. |
-| `LockedFetch`, `Refused` | `statusFetchSharedAdmissionContext` (`status_forge_budget.go`; pr entries from `statusViewPRWithLiveContext`, build entries from `statusSingleFlightContext`), `statusViewPRWithLiveContext` with `bypassCache` (`status_enlisted.go`), `statusRefreshRecord`, `statusConfirmFullPRLockedContext` and `statusConfirmFullBuildContext` (`status_full_refresh.go`), `prIdentityOrdinary` (`pr_identity_schedule.go`). |
-| `Check` | `statusWriteForgeEntrySinceObservedContext`, `status_cache.go:198-219`, with `statusRetainedMergeContext` (`status_freshness.go`) for a known merge. |
-| `RetainMerge` | `statusRetainMergeObservationContext` (`status_cache.go:222-231`). |
-| `Receipt` | The receipt rename at `status_cache.go:238`. A failure ends the write (`:239`). |
-| `Publish` | `statusWriteForgeEntryObservedContext` renames the data file (`status_cache.go:242`). List writers reach it through `statusDetailFromOpenItemContext` under `statusEnrichListedContext`, and through `statusSaveLivePipelinePageContext`. |
-| `Interrupt` | A failed receipt (`status_cache.go:238-240`), a failed data rename (`:242-244`), or a process death between the two. |
+| `LockedFetch`, `Refused` | `statusFetchSharedAdmissionContext` (`status_forge_budget.go`; build entries from `statusSingleFlightContext`), `statusReadUnlistedContext` (`status_enlisted.go`; the read of a PR that left its open list), `prIdentityOrdinary` (`pr_identity_schedule.go`). |
+| `Check` | `statusWriteForgeEntrySinceObservedContext`, `status_cache.go:215-236`, with `statusRetainedMergeContext` (`status_freshness.go`) for a known merge. |
+| `RetainMerge` | `statusRetainMergeObservationContext` (`status_cache.go:239-248`). |
+| `Receipt` | The receipt rename at `status_cache.go:255`. A failure ends the write (`:256`). |
+| `Publish` | `statusWriteForgeEntryObservedContext` renames the data file (`status_cache.go:259`). List writers reach it through `statusDetailFromOpenItemContext` under `statusEnrichListedContext`, and through `statusSaveLivePipelinePageContext`. |
+| `Interrupt` | A failed receipt (`status_cache.go:255-257`), a failed data rename (`:259-261`), or a process death between the two. |
 
 ## Bounds and assumptions
 

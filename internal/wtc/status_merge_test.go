@@ -30,7 +30,6 @@ func TestStatusBitbucketPredictsExactPRCommits(t *testing.T) {
 			t.Setenv("HOME", t.TempDir())
 			t.Setenv("BB_USERNAME", "fixture")
 			t.Setenv("BB_API_TOKEN", "fixture-token")
-			t.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 			c := newWorkspaceFixture(t)
 			dir := c.Harness
 			root := fixtureGit(t, "-C", dir, "rev-parse", "HEAD")

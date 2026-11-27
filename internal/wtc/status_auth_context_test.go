@@ -146,9 +146,9 @@ printf '{"number":7,"state":"OPEN","title":"%s"}\n' "$title"
 `, 0700)
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	t.Setenv("GH_TOKEN", "synthetic-A")
-	a := statusViewPRWithLiveContext(context.Background(), PRRecord{Number: "7"}, "example/widget", "github.com", false, false, nil)
+	a := statusReadUnlistedContext(context.Background(), StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com", time.Time{})
 	t.Setenv("GH_TOKEN", "synthetic-B")
-	b := statusViewPRWithLiveContext(context.Background(), PRRecord{Number: "7"}, "example/widget", "github.com", false, false, nil)
+	b := statusReadUnlistedContext(context.Background(), StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com", time.Time{})
 	if a.Title != "Context A" || b.Title != "Context B" {
 		t.Fatalf("collector crossed credential contexts: A=%q B=%q", a.Title, b.Title)
 	}
@@ -343,7 +343,6 @@ func TestStatusAuth441ProcessIsolation(t *testing.T) {
 
 func TestStatusAuth441KeychainOnlyLiveAvailabilityAndCost(t *testing.T) {
 	auth441Fixture(t)
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "")
 	home := os.Getenv("HOME")
 	fixtureFile(t, filepath.Join(home, ".config", "gh", "hosts.yml"), "github.com:\n  user: synthetic-keychain-account\n", 0600)
 	bin := t.TempDir()
@@ -364,7 +363,7 @@ fi
 		t.Fatal("keychain credential identity falsely established")
 	}
 	for _, number := range []string{"7", "8"} {
-		detail := statusEnrichRecordMetadataContext(ctx, PRRecord{Number: number}, "example/widget", "github.com")
+		detail := statusEnrichRecordMetadataContext(ctx, StatusRefreshBackground, PRRecord{Number: number}, "example/widget", "github.com")
 		if detail.State != "OPEN" || detail.ObservedAt == "" || !strings.HasPrefix(detail.Title, "Live ") {
 			t.Fatalf("keychain-only live status unavailable: %+v", detail)
 		}
@@ -374,7 +373,7 @@ fi
 		t.Fatalf("one operation repeated list work: %d", len(calls))
 	}
 	next := statusAuthOperation(context.Background())
-	detail := statusEnrichRecordMetadataContext(next, PRRecord{Number: "7"}, "example/widget", "github.com")
+	detail := statusEnrichRecordMetadataContext(next, StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com")
 	if detail.State != "OPEN" {
 		t.Fatal("next keychain-only refresh nonfunctional")
 	}
@@ -382,9 +381,9 @@ fi
 	if len(calls) != 2 {
 		t.Fatalf("another operation reused unknown credential observations: %d", len(calls))
 	}
-	detail, observation := statusRefreshRecord(statusAuthOperation(context.Background()), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com")
-	if detail.State != "OPEN" || observation.Freshness != "live" || !observation.ProviderConfirmed {
-		t.Fatalf("unknown foreground unavailable: %+v %+v", detail, observation)
+	detail = statusEnrichRecordMetadataContext(statusAuthOperation(context.Background()), StatusRefreshForeground, PRRecord{Number: "7"}, "example/widget", "github.com")
+	if detail.State != "OPEN" || detail.Freshness != "live" {
+		t.Fatalf("unknown foreground unavailable: %+v", detail)
 	}
 	files, _ := os.ReadDir(statusForgeCacheDir())
 	for _, file := range files {

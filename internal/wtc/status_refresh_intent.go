@@ -7,8 +7,9 @@ import (
 )
 
 // StatusRefreshIntent distinguishes a requested observation from periodic work.
-// Foreground bypasses ordinary detail TTL and periodic reuse for active records;
-// recorded and retained merges still bypass provider reads. Accounting and cooldowns apply.
+// Foreground reads the open lists and Bitbucket checks again before their age
+// is up, and waits for a refill instead of being refused. Recorded and retained
+// merges still bypass provider reads. Accounting and cooldowns apply.
 type StatusRefreshIntent uint8
 
 const (
@@ -23,12 +24,11 @@ const statusForegroundTimeout = 30 * time.Second
 // decision. Missing admission or budget reasons in older snapshots stay unknown;
 // observation age can independently establish expiration.
 type StatusObservation struct {
-	Freshness         string `json:"freshness,omitempty"`
-	Reason            string `json:"reason,omitempty"`
-	RetryAt           string `json:"retry_at,omitempty"`
-	ObservedAt        string `json:"observed_at,omitempty"`
-	Source            string `json:"source,omitempty"`
-	ProviderConfirmed bool   `json:"provider_confirmed,omitempty"`
+	Freshness  string `json:"freshness,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	RetryAt    string `json:"retry_at,omitempty"`
+	ObservedAt string `json:"observed_at,omitempty"`
+	Source     string `json:"source,omitempty"`
 }
 
 type statusAdmissionError struct {

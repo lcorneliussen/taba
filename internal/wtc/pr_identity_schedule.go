@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -118,7 +119,7 @@ func (c *Context) prIdentityOrdinary(records []PRRecord, indices []int, state *p
 		}
 		raw, fresh := statusReadForgeCacheContext(ctx, forge, slug, record.Number)
 		detail, parseErr := statusParseForgeDetail(forge, raw, record)
-		if fresh && parseErr == nil && detail.State != "" && detail.State != "UNKNOWN" && !statusFullRefreshDueContext(ctx, forge, slug, record.Number) {
+		if fresh && parseErr == nil && detail.State != "" && detail.State != "UNKNOWN" {
 			unlock()
 			continue
 		}
@@ -136,13 +137,34 @@ func (c *Context) prIdentityOrdinary(records []PRRecord, indices []int, state *p
 		if err == nil {
 			if _, parseErr := statusParseForgeDetail(forge, raw, record); parseErr == nil {
 				statusResourceWriteSince(ctx, "pr", forge, slug, record.Number, raw, started)
-				statusMarkFullRefreshContext(ctx, forge, slug, record.Number)
 			}
 		}
 		unlock()
 		return issued, err
 	}
 	return false, nil
+}
+
+// statusFetchPRRawWithRequestContext takes one shared token and reads the PR.
+// onRequest runs once the request is about to be sent.
+func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, slug, forge string, onRequest func()) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if forge != "github.com" && forge != "bitbucket.org" {
+		return nil, fmt.Errorf("unsupported forge")
+	}
+	if err := statusTakeForgeToken(ctx, forge); err != nil {
+		return nil, err
+	}
+	if onRequest != nil {
+		onRequest()
+	}
+	raw, err := statusFetchPRContext(ctx, record, slug, forge)
+	if err != nil && statusRateLimited(err) {
+		_, _ = statusForgeCoolContext(ctx, forge, statusRetryAfter(err))
+	}
+	return raw, err
 }
 
 func (c *Context) prIdentityRepair(records []PRRecord, indices []int, state *prIdentitySchedule) (bool, error) {

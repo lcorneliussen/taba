@@ -211,41 +211,67 @@ separate preservation blockers from unknown coverage; see
 
 ## Freshness, missing facts and controls
 
-The live header shows refresh timing and the running CLI version. Active PR
-facts normally use a 90-second forge cache. The open-PR list of a repository is
-read once and shared by every pane for 90 seconds on GitHub and 180 seconds on
-Bitbucket, whose hourly allowance is much smaller; `WTC_FORGE_CACHE_AGE` sets one
-age for both. In the collection view, `r` explicitly
-rechecks active enlisted PR metadata by number, bypassing detail TTL and stale
-open-list membership. It uses the same shared request budget and provider
-cooldown as background readers. When the budget is empty it waits for the next
-refill, at most one refill interval at a time, without priority over background
-reads. Repeated keys
-coalesce; a request made during collection runs immediately after that collection.
-Manual Refresh is not delayed by the background interval. A 30-second metadata
-phase budget returns completed live observations alongside deferred deadline
-outcomes for unfinished records; it does not date their old facts as new reads. Recorded/retained
-merges are reused without metadata queries. A Bitbucket decline is recorded
-in `.wtc-prs` (`# declined-pr repo number updated-on [declined-at]`) the
-first time a pass observes it, and later background refreshes read nothing
-for it but the repository's shared open list. Bitbucket can reopen a declined
-PR, and a reopened PR is open again, so a current open list that carries the
-PR (even a capped one) shows it open and removes the record; a failed list,
-one served stale after a refused read, or a provider cooldown keeps the
-recorded decline, and so does a pass that gives the PR no turn. `r` still rereads it by number, and is the only repair
-when a PR was reopened and merged without any current list seeing it open.
-GitHub closures are not recorded. A by-number read of a PR missing from its
-open list also counts as that PR's full-refresh check, so another pane does
-not repeat it. Never-observed and active PRs are
-read first, in enlistment order; PRs whose last observation is terminal (merged,
-declined, closed or superseded) are rechecked only after them, in explicit and periodic
-refreshes alike, so a deadline defers those rechecks rather than open work. A
-PR without a turn keeps its last observed state, marked deferred. Bitbucket active-PR checks are
-rechecked for the reported commit under the same phase budget, charging each
-page, head-resolution request and redirect separately. Incomplete checks cannot
-claim success or absence; a known failure for that exact head keeps its original
-observation time when fresh checks are unavailable. Periodic collection still
-includes branch discovery, local refs, runtime and build facts.
+The live header shows refresh timing and the running CLI version. The open-PR
+list of a repository is the only routine forge read for its pull requests. It
+is read once and shared by every pane for 90 seconds on GitHub and 180 seconds
+on Bitbucket, whose hourly allowance is much smaller. `WTC_FORGE_CACHE_AGE`
+sets one age for both. A PR on the list takes its state, draft flag, head and
+title from it; on GitHub also its checks, reviews and mergeability.
+
+A PR missing from a current, complete list is no longer open. Status reads it
+by number once per list to learn how it ended, and shows a read made by another
+pane since that list instead of repeating it. A PR whose last observation is
+closed, declined, or merged with settled checks is not read again by background
+refresh. A reopened PR shows open again when it is back on the list. A merge
+whose checks are still running is read once per list until they settle.
+Recorded merges and declines are reused without any read. A Bitbucket decline
+is recorded in `.wtc-prs` (`# declined-pr repo number updated-on
+[declined-at]`) the first time a pass observes it. A current open list that
+carries the PR again, even a capped one, shows it open and removes the record.
+A failed list, one served stale after a refused read, or a provider cooldown
+keeps the recorded decline. GitHub closures are not recorded; their last
+observation is kept in the forge cache.
+
+A PR that was never observed and is missing from a complete list cached before
+the pass may be newer than the list. Status then reads the list again and shows
+the PR from it without a read of its own. A list that still lacks the PR is not
+read again for it, so the PR's own read gets the next token.
+
+A list cut short by its page limit confirms nothing about the PRs beyond it.
+Those keep their last observation, `deferred` with reason `list-truncated`, and
+are not read on their own in the background; `r` reads each of them once. When
+a list read is refused, every PR of that repository keeps its last observation,
+`deferred` with the refusal as the reason. When a list read fails, the PRs keep it as `unavailable`. A Bitbucket
+host without a REST credential reads PRs through its CLI only and has no open
+list. Status reads its PRs by number instead, at most once per 90-second cache
+age in a known credential context, and in every pass in an unknown one
+([status-auth-cache.md](status-auth-cache.md)).
+
+In the collection view, `r` explicitly reads every open-PR list of the pane
+again, even when the lists are still current. It reads a PR on its own only
+when the PR is missing from its list and its last observation is not a merge:
+a closed or declined PR can have been reopened and merged between two lists.
+`r` also reads the checks of every open Bitbucket head again. It uses the same
+shared request budget and provider cooldown as background readers. When the
+budget is empty it waits for the next refill, at most one refill interval at a
+time, without priority over background reads. Repeated keys coalesce, and a
+request made during collection runs immediately after that collection. Manual
+Refresh is not delayed by the background interval. A 30-second phase budget
+returns completed live observations alongside deferred outcomes for unfinished
+records. It does not date their old facts as new reads. A PR without a turn
+keeps its last observed state, marked deferred.
+
+Bitbucket checks are read for the head commit the list reports, charging each
+page, head-resolution request and redirect separately. Passed or failed checks
+of an unchanged head are kept and not read again by background refresh. Pending,
+incomplete or empty checks are read again after the 90-second cache age, since
+a run may not have started yet. A rerun on the same head shows after `r` or the
+next push. Incomplete checks cannot claim success or absence; a known failure
+for that exact head keeps its original observation time when fresh checks are
+unavailable. Periodic collection still includes branch discovery, local refs,
+runtime and build facts. A Bitbucket branch build comes from the shared recent
+pipelines page, or from one read for that branch when the page does not cover
+it.
 
 Active PR state observations expire on screen using their original observation
 time and the open-list age of their forge, even between background refreshes.
@@ -266,14 +292,11 @@ cancellation or a deadline names that reason; its older facts are `deferred`.
 `observed_at` is the newest observation of the PR's state: a later open-list
 confirmation of the same open state can supply it, without renewing freshness,
 checks or reviews. When an enlisted PR's branch is checked out and its upstream
-is gone, an open list served stale after a refused read does not keep that PR
-open: status confirms it with its own read, deferred with its reason until
-admitted, and
-JSON reports `local_merge_evidence` (for example `upstream-gone; head in
-origin/main`). That evidence is never a merge: it records nothing and returns
-no worktree. A Bitbucket decline keeps archive treatment by its closure time
-from any observation, even when the next read is deferred; a GitHub close
-needs a current read.
+is gone, JSON reports `local_merge_evidence` (for example `upstream-gone; head
+in origin/main`). That evidence is never a merge. It records nothing, schedules
+no read and returns no worktree. A Bitbucket decline keeps archive treatment by
+its closure time from any observation, even when the next read is deferred; a
+GitHub close needs a current observation.
 
 Interactive startup paints a loading frame before expensive collection or service
 discovery. Saved rows appear only after receiving scope validates. Their ages

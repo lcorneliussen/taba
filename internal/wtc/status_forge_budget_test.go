@@ -52,7 +52,6 @@ func forgeFixtures() (cleanup func() error) {
 
 func statusTurnOffSharedForgeBudgetAndAudit() {
 	os.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
-	os.Setenv("WTC_FORGE_FULL_REFRESH", "0")
 }
 
 func TestStatusRateLimitedRecognizesGitHubAndBitbucket(t *testing.T) {

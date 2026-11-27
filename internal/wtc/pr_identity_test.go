@@ -599,32 +599,6 @@ func fixtureRenameRegistry(t *testing.T, c *Context, remote string) {
 	c.Registry.Repos = append(c.Registry.Repos, Repo{Name: "reference", Remote: remote})
 }
 
-func TestStatusOmittedCacheHitDoesNotCertifyFullRequest(t *testing.T) {
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
-	f := newRenameProviderFixture(t, "github.com")
-	t.Setenv("GH_TOKEN", "synthetic-session-a")
-	record := PRRecord{Repo: "reference", Number: "42", URL: "https://github.com/example/new-name/pull/42"}
-	raw, _ := os.ReadFile(filepath.Join(f.dir, "detail"))
-	statusWriteForgeCache("github.com", "example/new-name", "42", raw)
-	listed, _ := statusEncodeOpenPRs(nil, false, time.Now())
-	statusWriteForgeEntry("openprs", "github.com", "example/new-name", "open", listed)
-	statusWriteForgeEntry("omit", "github.com", "example/new-name", "42", []byte("ok"))
-	t.Setenv("WTC_FORGE_MIN_INTERVAL", "60")
-	if statusTakeForgeToken(context.Background(), "github.com") != nil {
-		t.Fatal("budget setup")
-	}
-	if detail := statusEnrichRecordMetadata(record, "example/new-name", "github.com"); detail.State != "OPEN" {
-		t.Fatal("cached facts unavailable")
-	}
-	if !statusFullRefreshDue("github.com", "example/new-name", "42") {
-		t.Fatal("cache-only omitted-list result certified a full request that never happened")
-	}
-	calls, _ := os.ReadFile(filepath.Join(f.dir, "calls"))
-	if strings.Contains(string(calls), "pr view ") {
-		t.Fatal("fixture unexpectedly dispatched detail")
-	}
-}
-
 func TestAtomicRenameRejectsPartialErrorsAndWrongURL(t *testing.T) {
 	for _, mode := range []string{"errors", "old-null", "current-null", "base-null", "wrong-url", "different-current", "fork-base"} {
 		t.Run(mode, func(t *testing.T) {
@@ -719,7 +693,6 @@ func advanceRenameMinute(t *testing.T) {
 
 func fairAtomicFixture(t *testing.T, listMode string) (*Context, renameProviderFixture, string) {
 	t.Helper()
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
 	c, f, _ := stagedRenameFixture(t, "github.com")
 	for _, n := range []int{43, 44, 45, 46} {
 		f.put(t, fmt.Sprintf("base-%d", n), renameBaseJSON("github.com", renameRepositoryJSON("github.com", "example/new-name", false), n))

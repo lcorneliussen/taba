@@ -1,7 +1,6 @@
 package wtc
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -193,7 +192,6 @@ func TestStatusExpiredBitbucketDraftRefreshesAfterListOmission(t *testing.T) {
 				t.Setenv("WTC_CONFIG_ROOT", c.ConfigRoot)
 				t.Setenv("WTC_STATUS_RETURN_MERGED", "off")
 				t.Setenv("WTC_FORGE_CACHE_AGE", "")
-				t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
 				t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
 				t.Setenv("BB_USERNAME", "synthetic")
 				t.Setenv("BB_API_TOKEN", "synthetic")
@@ -270,6 +268,19 @@ esac
 					t.Fatalf("merged snapshot: %+v %v", got, err)
 				}
 				row := got.PRs[0]
+				if capped {
+					// A list cut short says nothing about the PRs beyond it: the
+					// draft keeps its last observation, not current, unread.
+					if row.State != "DRAFT" || row.Freshness != "deferred" || row.ObservationReason != "list-truncated" || statusTestFileLines(t, views) != initialViews {
+						t.Fatalf("PR beyond a truncated list: %+v views=%d", row, statusTestFileLines(t, views))
+					}
+					// `r` is the one way to learn how it ended: one read of its own.
+					explicit, err := c.statusForgePreviewWithIntent(c.resourceContext(), StatusRefreshForeground, false, false, 30*time.Second)
+					if err != nil || len(explicit.PRs) != 1 || explicit.PRs[0].State != "MERGED" || statusTestFileLines(t, views) != initialViews+1 {
+						t.Fatalf("explicit refresh beyond a truncated list: %+v views=%d err=%v", explicit.PRs, statusTestFileLines(t, views), err)
+					}
+					return
+				}
 				if row.State != "MERGED" || row.Draft || row.MergedOn == nil || row.OnBranch || row.Base != base {
 					t.Fatalf("expired draft survived list omission: %+v", row)
 				}
@@ -282,148 +293,6 @@ esac
 				}
 			})
 		}
-	}
-}
-
-func TestStatusCappedPRCacheRespectsFreshnessAndAllowance(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		cached, fresh bool
-		draft         bool
-		mode, want    string
-		views         int
-	}{
-		{"fresh-draft-budget-denied", true, true, true, "budget", "DRAFT", 0},
-		{"fresh-open-budget-denied", true, true, false, "budget", "OPEN", 0},
-		{"expired-draft-budget-denied", true, false, true, "budget", "", 0},
-		{"expired-draft-cooling", true, false, true, "cooling", "", 0},
-		{"expired-draft-view-failure", true, false, true, "error", "UNKNOWN", 1},
-		{"uncached-view-failure", false, false, false, "error", "UNKNOWN", 1},
-		{"uncached-malformed-view", false, false, false, "malformed", "UNKNOWN", 1},
-		{"uncached-cooling", false, false, false, "cooling", "", 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("TMPDIR", t.TempDir())
-			statusHideBitbucketLogin(t)
-			t.Setenv("BB_USERNAME", "synthetic-cache-user")
-			t.Setenv("BB_API_TOKEN", "synthetic-cache-token")
-			t.Setenv("WTC_FORGE_CACHE_AGE", "")
-			t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
-			t.Setenv("WTC_FORGE_MIN_INTERVAL", "0")
-			forge, slug := "bitbucket.org", "example/widget"
-			raw, err := statusEncodeOpenPRs(nil, true, time.Now())
-			if err != nil {
-				t.Fatal(err)
-			}
-			statusWriteForgeEntry("openprs", forge, slug, "open", raw)
-			statusMarkFullRefresh(forge, slug, "7")
-			if tc.cached {
-				statusWriteForgeCache(forge, slug, "7", []byte(fmt.Sprintf(`{"id":7,"state":"OPEN","draft":%t,"destination":{"branch":{"name":"beta"}}}`, tc.draft)))
-				if !tc.fresh {
-					past := time.Now().Add(-2 * time.Minute)
-					if err := os.Chtimes(statusForgeEntryPath("pr", forge, slug, "7"), past, past); err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			if tc.mode == "budget" {
-				t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-				if statusTakeForgeToken(context.Background(), forge) != nil {
-					t.Fatal("could not consume synthetic allowance")
-				}
-			}
-			if tc.mode == "cooling" {
-				statusForgeCool(forge, time.Hour)
-			}
-			dir := t.TempDir()
-			views := filepath.Join(dir, "views")
-			t.Setenv("WTC_TEST_BB_VIEWS", views)
-			body, exit := `{"id":7,"state":"MERGED","merged_on":"2026-11-04T10:01:00Z"}`, "0"
-			if tc.mode == "error" {
-				exit = "1"
-			}
-			if tc.mode == "malformed" {
-				body = "not-json"
-			}
-			fixtureFile(t, filepath.Join(dir, "view.json"), body, 0600)
-			t.Setenv("WTC_TEST_BB_VIEW", filepath.Join(dir, "view.json"))
-			fixtureFile(t, filepath.Join(dir, "bb"), "#!/bin/sh\nprintf 'view\\n' >> \"$WTC_TEST_BB_VIEWS\"\ncat \"$WTC_TEST_BB_VIEW\"\nexit "+exit+"\n", 0700)
-			t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-			detail := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
-			if detail.State != tc.want || (tc.want == "" && detail.Checks != "UNKNOWN") {
-				t.Fatalf("unavailable or fresh facts misrepresented: %+v, want state=%q", detail, tc.want)
-			}
-			if count := statusTestFileLines(t, views); count != tc.views {
-				t.Fatalf("by-number calls=%d, want %d", count, tc.views)
-			}
-		})
-	}
-}
-
-func TestStatusCappedExpiredPRLookupIsShared(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_CACHE_AGE", "")
-	t.Setenv("WTC_FORGE_FULL_REFRESH", "600")
-	t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-	forge, slug := "bitbucket.org", "example/widget"
-	raw, err := statusEncodeOpenPRs(nil, true, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	statusWriteForgeEntry("openprs", forge, slug, "open", raw)
-	statusMarkFullRefresh(forge, slug, "7")
-	statusWriteForgeCache(forge, slug, "7", []byte(`{"id":7,"state":"OPEN","draft":true}`))
-	past := time.Now().Add(-2 * time.Minute)
-	if err := os.Chtimes(statusForgeEntryPath("pr", forge, slug, "7"), past, past); err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	views, started, release := filepath.Join(dir, "views"), filepath.Join(dir, "started"), filepath.Join(dir, "release")
-	defer os.WriteFile(release, []byte("release"), 0600)
-	t.Setenv("WTC_TEST_BB_VIEWS", views)
-	t.Setenv("WTC_TEST_BB_STARTED", started)
-	t.Setenv("WTC_TEST_BB_RELEASE", release)
-	fixtureFile(t, filepath.Join(dir, "bb"), `#!/bin/sh
-printf 'view\n' >> "$WTC_TEST_BB_VIEWS"
-touch "$WTC_TEST_BB_STARTED"
-while [ ! -f "$WTC_TEST_BB_RELEASE" ]; do sleep 0.01; done
-printf '%s\n' '{"id":7,"state":"MERGED","merged_on":"2026-11-04T10:01:00Z"}'
-`, 0700)
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	ready, begin, results := make(chan struct{}, 2), make(chan struct{}), make(chan statusPRDetail, 2)
-	for range 2 {
-		go func() {
-			ready <- struct{}{}
-			<-begin
-			results <- statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
-		}()
-	}
-	<-ready
-	<-ready
-	close(begin)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(started); err == nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if _, err := os.Stat(started); err != nil {
-		t.Fatal("expired detail did not start its shared lookup")
-	}
-	fixtureFile(t, release, "release", 0600)
-	for range 2 {
-		select {
-		case detail := <-results:
-			if detail.State != "MERGED" {
-				t.Fatalf("shared refresh returned %+v", detail)
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("shared lookup did not finish")
-		}
-	}
-	if count := statusTestFileLines(t, views); count != 1 || statusTakeForgeToken(context.Background(), forge) == nil {
-		t.Fatalf("coalesced lookup used %d views or bypassed its single-token allowance", count)
 	}
 }
 

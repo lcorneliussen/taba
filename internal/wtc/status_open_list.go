@@ -14,7 +14,7 @@ import (
 
 const (
 	statusOpenListLimit = 100
-	statusGHOpenFields  = "number,title,state,isDraft,updatedAt,reviewDecision,mergeStateStatus,mergeable,baseRefName,headRefName,statusCheckRollup,reviewRequests,latestReviews"
+	statusGHOpenFields  = "number,title,state,isDraft,updatedAt,reviewDecision,mergeStateStatus,mergeable,baseRefName,headRefName,headRefOid,statusCheckRollup,reviewRequests,latestReviews"
 )
 
 type statusOpenPR struct {
@@ -25,44 +25,108 @@ type statusOpenPR struct {
 	Started     time.Time       `json:"-"`
 }
 
-func statusOpenPRs(forge, slug string) (map[string]statusOpenPR, bool, error) {
-	return statusOpenPRsContext(context.Background(), forge, slug)
+// statusOpenList is one repository's open pull requests, shared by every
+// pane for statusOpenListAge: the only routine status read of its PRs where
+// the host has a list. A Bitbucket host without a REST credential reads each
+// PR by number once per cache age instead (statusEnrichRecordMetadataContext).
+type statusOpenList struct {
+	prs       map[string]statusOpenPR
+	truncated bool      // more PRs are open than the list holds
+	started   time.Time // when the list read began
+	live      bool      // read by this status operation
+	// refused is set when older bytes were served after a refused read; such
+	// a list is not current, and a PR's absence from it means nothing.
+	refused statusRefusal
 }
 
 func statusOpenPRsContext(ctx context.Context, forge, slug string) (map[string]statusOpenPR, bool, error) {
-	byNumber, truncated, _, err := statusOpenPRsCurrentContext(ctx, forge, slug)
-	return byNumber, truncated, err
+	list, err := statusOpenListContext(ctx, forge, slug)
+	return list.prs, list.truncated, err
 }
 
-// statusOpenPRsCurrentContext also reports whether the list is current: read
-// live, or a cache entry within its age. Older bytes served after a refused
-// read are not current.
-func statusOpenPRsCurrentContext(ctx context.Context, forge, slug string) (map[string]statusOpenPR, bool, bool, error) {
-	raw, _, refused, err := statusFetchSharedAdmissionContext(ctx, "openprs", forge, slug, "open", func() ([]byte, error) {
-		switch forge {
-		case "github.com":
-			return statusFetchGHOpenListContext(ctx, slug)
-		case "bitbucket.org":
-			return statusFetchBBOpenListContext(ctx, slug)
-		default:
-			return nil, fmt.Errorf("unsupported forge")
-		}
+// statusOpenListContext reads the shared list: a cache entry within its age,
+// or one read under the shared budget.
+func statusOpenListContext(ctx context.Context, forge, slug string) (statusOpenList, error) {
+	raw, live, refused, err := statusFetchSharedAdmissionContext(ctx, "openprs", forge, slug, "open", func() ([]byte, error) {
+		return statusFetchOpenListContext(ctx, StatusRefreshBackground, forge, slug)
 	})
 	if err != nil {
-		return nil, false, false, err
+		return statusOpenList{refused: refused}, err
 	}
-	list, truncated, started, err := statusParseOpenPRs(raw)
+	list, err := statusDecodeOpenList(raw)
+	list.live, list.refused = live, refused
+	return list, err
+}
+
+// statusOpenListReadContext reads the list again before its age is up, at
+// most once per status operation: for an explicit refresh, and for a PR the
+// cached list may predate. The read replaces the shared entry for every pane.
+// A list another pane began reading after the given time stands in for the
+// read.
+func statusOpenListReadContext(ctx context.Context, intent StatusRefreshIntent, forge, slug string, after time.Time) (statusOpenList, error) {
+	ctx = statusAuthOperation(ctx)
+	raw, err := statusOperationShared(ctx, "openprs-read\x00"+forge+"\x00"+slug, func() ([]byte, error) {
+		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "openprs", forge, slug, "open"))
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
+		if raw, ok := statusReadForgeEntryAnyContext(ctx, "openprs", forge, slug, "open"); ok {
+			if list, err := statusDecodeOpenList(raw); err == nil && list.started.After(after) {
+				return raw, nil
+			}
+		}
+		started := time.Now()
+		raw, _, refused, err := statusWithForgeAdmissionContext(ctx, intent, forge, nil, func() ([]byte, error) {
+			return statusFetchOpenListContext(ctx, intent, forge, slug)
+		})
+		if err != nil && refused.reason == "provider-cooldown" {
+			// A rate-limited read is a cooldown with its retry time.
+			return nil, &statusAdmissionError{cause: errForgeCooling, retry: refused.retry}
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !statusResourceWriteSince(ctx, "openprs", forge, slug, "open", raw, started) {
+			if winner, ok := statusReadForgeEntryAnyContext(ctx, "openprs", forge, slug, "open"); ok {
+				return winner, nil
+			}
+		}
+		return raw, ctx.Err()
+	})
 	if err != nil {
-		return nil, false, false, err
+		return statusOpenList{}, err
 	}
-	byNumber := make(map[string]statusOpenPR, len(list))
-	for _, pr := range list {
+	list, err := statusDecodeOpenList(raw)
+	list.live = true
+	return list, err
+}
+
+// statusFetchOpenListContext reads a list; a Bitbucket list's later pages
+// are admitted with the same intent as its first.
+func statusFetchOpenListContext(ctx context.Context, intent StatusRefreshIntent, forge, slug string) ([]byte, error) {
+	switch forge {
+	case "github.com":
+		return statusFetchGHOpenListContext(ctx, slug)
+	case "bitbucket.org":
+		return statusFetchBBOpenListContext(ctx, intent, slug)
+	}
+	return nil, fmt.Errorf("unsupported forge")
+}
+
+func statusDecodeOpenList(raw []byte) (statusOpenList, error) {
+	prs, truncated, started, err := statusParseOpenPRs(raw)
+	if err != nil {
+		return statusOpenList{}, err
+	}
+	list := statusOpenList{prs: make(map[string]statusOpenPR, len(prs)), truncated: truncated, started: started}
+	for _, pr := range prs {
 		if pr.Number != "" {
 			pr.Started = started
-			byNumber[pr.Number] = pr
+			list.prs[pr.Number] = pr
 		}
 	}
-	return byNumber, truncated, refused.reason == "", nil
+	return list, nil
 }
 
 func statusParseOpenPRs(raw []byte) ([]statusOpenPR, bool, time.Time, error) {
@@ -181,7 +245,7 @@ func (p statusGHListItem) fingerprint() string {
 
 func statusFetchGHOpenListContext(ctx context.Context, slug string) ([]byte, error) {
 	started := time.Now()
-	raw, err := statusJSONContext(ctx, "gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", strconv.Itoa(statusOpenListLimit), "--json", statusGHOpenFields)
+	raw, err := statusJSONContext(ctx, "gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", strconv.Itoa(statusOpenListLimit+1), "--json", statusGHOpenFields)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +266,8 @@ func statusFetchGHOpenListContext(ctx context.Context, slug string) ([]byte, err
 			Raw:         rawItem,
 		})
 	}
-	return statusEncodeOpenPRs(prs, len(items) >= statusOpenListLimit, started)
+	// One item past the limit shows that more PRs are open than the list holds.
+	return statusEncodeOpenPRs(prs, len(items) > statusOpenListLimit, started)
 }
 
 type statusBBListItem struct {
@@ -260,11 +325,7 @@ func (p statusBBListItem) fingerprint() string {
 	}, "|")
 }
 
-func statusFetchBBOpenList(slug string) ([]byte, error) {
-	return statusFetchBBOpenListContext(context.Background(), slug)
-}
-
-func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, error) {
+func statusFetchBBOpenListContext(ctx context.Context, intent StatusRefreshIntent, slug string) ([]byte, error) {
 	started := time.Now()
 	user, pass, err := bitbucketRESTCredentials(ctx, slug)
 	if err != nil {
@@ -287,11 +348,15 @@ func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, err
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if page > 0 && statusTakeForgeToken(ctx, "bitbucket.org") != nil {
+		take := statusTakeForgeToken
+		if intent == StatusRefreshForeground {
+			take = statusTakeForegroundToken
+		}
+		if page > 0 && take(ctx, "bitbucket.org") != nil {
 			truncated = true
 			break
 		}
-		raw, err := statusBBGETContext(ctx, StatusRefreshBackground, endpoint, user, pass)
+		raw, err := statusBBGETContext(ctx, intent, endpoint, user, pass)
 		if err != nil {
 			if page == 0 || ctx.Err() != nil {
 				return nil, err

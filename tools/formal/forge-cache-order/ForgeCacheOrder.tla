@@ -126,14 +126,10 @@ LockFails(w) ==
 
 (***************************************************************************)
 (* A locked writer starts its request after it takes the entry lock:       *)
-(* statusFetchSharedAdmissionContext (status_forge_budget.go: pr entries   *)
-(* from statusViewPRWithLiveContext, build entries from                    *)
-(* statusSingleFlightContext), statusViewPRWithLiveContext with            *)
-(* bypassCache (status_enlisted.go), statusRefreshRecord,                  *)
-(* statusConfirmFullPRLockedContext (the full refresh) and                 *)
-(* statusConfirmFullBuildContext (confirm-full-build) in                   *)
-(* status_full_refresh.go, and prIdentityOrdinary                          *)
-(* (pr_identity_schedule.go).                                              *)
+(* statusFetchSharedAdmissionContext (status_forge_budget.go: build        *)
+(* entries from statusSingleFlightContext), statusReadUnlistedContext      *)
+(* (status_enlisted.go: the read of a PR that left its open list), and     *)
+(* prIdentityOrdinary (pr_identity_schedule.go).                           *)
 (***************************************************************************)
 LockedFetch(w) ==
     /\ w \in LockedWriters
@@ -161,7 +157,7 @@ Refused(w) ==
 Known == retained \/ content.state = "merged"
 
 (***************************************************************************)
-(* statusWriteForgeEntrySinceObservedContext, status_cache.go:198-219.     *)
+(* statusWriteForgeEntrySinceObservedContext, status_cache.go:215-236.     *)
 (* With MergeRules, a known merge rejects a non-merged response, and the   *)
 (* first confirmed merge (promotesMerge) skips the receipt check. With     *)
 (* SinceGuard, a receipt from a later request rejects the response         *)
@@ -181,7 +177,7 @@ Check(w) ==
                     ELSE "passed"]
     /\ UNCHANGED <<clock, resp, holder, content, since, retained, replaced>>
 
-\* statusRetainMergeObservationContext (status_cache.go:222-231) writes the
+\* statusRetainMergeObservationContext (status_cache.go:239-248) writes the
 \* "merge" entry under that entry's own lock, before the pr entry.
 RetainMerge(w) ==
     /\ pc[w] = "merging"
@@ -191,7 +187,7 @@ RetainMerge(w) ==
 
 (***************************************************************************)
 (* The receipt: statusWriteForgeEntryObservedContext renames the request's *)
-(* start stamp into the "since" entry (status_cache.go:238). With          *)
+(* start stamp into the "since" entry (status_cache.go:255). With          *)
 (* ReceiptFirst it precedes the data. Before 1b4a2d6 it followed the data  *)
 (* and its result was ignored.                                             *)
 (***************************************************************************)
@@ -202,7 +198,7 @@ Receipt(w) ==
     /\ UNCHANGED <<clock, resp, holder, content, retained, replaced>>
 
 \* statusWriteForgeEntryObservedContext renames the data file into place
-\* (status_cache.go:242). It runs after cancellation that arrives during the
+\* (status_cache.go:259). It runs after cancellation that arrives during the
 \* receipt. Without SinceGuard there is no receipt.
 Publish(w) ==
     /\ pc[w] = IF ReceiptFirst THEN "receipted" ELSE "passed"
@@ -215,7 +211,7 @@ Publish(w) ==
 (***************************************************************************)
 (* The write path ends before its next rename: that rename fails, or the   *)
 (* process dies and the kernel releases its flock. Since 1b4a2d6 a failed  *)
-(* receipt ends the write before the data (status_cache.go:238-240).       *)
+(* receipt ends the write before the data (status_cache.go:255-257).       *)
 (* Before it, a lost receipt after the data rename went unnoticed.         *)
 (***************************************************************************)
 Interrupt(w) ==
@@ -259,7 +255,7 @@ Spec == Init /\ [][Next]_vars
 (* The property. A publication never replaces the response of a request    *)
 (* that started later, except that a confirmed merge replaces a response   *)
 (* that is not a merge (the comment on statusWriteForgeEntrySince,         *)
-(* status_cache.go:156-160).                                               *)
+(* status_cache.go:173-177).                                               *)
 (***************************************************************************)
 NoEarlierOverwrite ==
     \/ replaced = None
