@@ -10,4 +10,5 @@
   instead of every PR. A PR beyond a capped list is shown deferred
   (`list-truncated`) rather than read by number. `WTC_FORGE_FULL_REFRESH` and
   `incremental-misses.log` are gone
-  ([#562](https://github.com/lcorneliussen/taba/issues/562)).
+  ([#562](https://github.com/lcorneliussen/taba/issues/562),
+  [#566](https://github.com/lcorneliussen/taba/pull/566)).
