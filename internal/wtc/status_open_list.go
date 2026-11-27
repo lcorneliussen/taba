@@ -26,7 +26,9 @@ type statusOpenPR struct {
 }
 
 // statusOpenList is one repository's open pull requests, shared by every
-// pane for statusOpenListAge: the only routine status read of its PRs.
+// pane for statusOpenListAge: the only routine status read of its PRs where
+// the host has a list. A Bitbucket host without a REST credential reads each
+// PR by number once per cache age instead (statusEnrichRecordMetadataContext).
 type statusOpenList struct {
 	prs       map[string]statusOpenPR
 	truncated bool      // more PRs are open than the list holds
@@ -35,10 +37,6 @@ type statusOpenList struct {
 	// refused is set when older bytes were served after a refused read; such
 	// a list is not current, and a PR's absence from it means nothing.
 	refused statusRefusal
-}
-
-func statusOpenPRs(forge, slug string) (map[string]statusOpenPR, bool, error) {
-	return statusOpenPRsContext(context.Background(), forge, slug)
 }
 
 func statusOpenPRsContext(ctx context.Context, forge, slug string) (map[string]statusOpenPR, bool, error) {
@@ -50,7 +48,7 @@ func statusOpenPRsContext(ctx context.Context, forge, slug string) (map[string]s
 // or one read under the shared budget.
 func statusOpenListContext(ctx context.Context, forge, slug string) (statusOpenList, error) {
 	raw, live, refused, err := statusFetchSharedAdmissionContext(ctx, "openprs", forge, slug, "open", func() ([]byte, error) {
-		return statusFetchOpenListContext(ctx, forge, slug)
+		return statusFetchOpenListContext(ctx, StatusRefreshBackground, forge, slug)
 	})
 	if err != nil {
 		return statusOpenList{refused: refused}, err
@@ -63,7 +61,9 @@ func statusOpenListContext(ctx context.Context, forge, slug string) (statusOpenL
 // statusOpenListReadContext reads the list again before its age is up, at
 // most once per status operation: for an explicit refresh, and for a PR the
 // cached list may predate. The read replaces the shared entry for every pane.
-func statusOpenListReadContext(ctx context.Context, intent StatusRefreshIntent, forge, slug string) (statusOpenList, error) {
+// A list another pane began reading after the given time stands in for the
+// read.
+func statusOpenListReadContext(ctx context.Context, intent StatusRefreshIntent, forge, slug string, after time.Time) (statusOpenList, error) {
 	ctx = statusAuthOperation(ctx)
 	raw, err := statusOperationShared(ctx, "openprs-read\x00"+forge+"\x00"+slug, func() ([]byte, error) {
 		unlock, err := statusLockCacheContext(ctx, statusForgeEntryPathContext(ctx, "openprs", forge, slug, "open"))
@@ -71,9 +71,14 @@ func statusOpenListReadContext(ctx context.Context, intent StatusRefreshIntent, 
 			return nil, err
 		}
 		defer unlock()
+		if raw, ok := statusReadForgeEntryAnyContext(ctx, "openprs", forge, slug, "open"); ok {
+			if list, err := statusDecodeOpenList(raw); err == nil && list.started.After(after) {
+				return raw, nil
+			}
+		}
 		started := time.Now()
 		raw, _, refused, err := statusWithForgeAdmissionContext(ctx, intent, forge, nil, func() ([]byte, error) {
-			return statusFetchOpenListContext(ctx, forge, slug)
+			return statusFetchOpenListContext(ctx, intent, forge, slug)
 		})
 		if err != nil && refused.reason == "provider-cooldown" {
 			// A rate-limited read is a cooldown with its retry time.
@@ -97,12 +102,14 @@ func statusOpenListReadContext(ctx context.Context, intent StatusRefreshIntent, 
 	return list, err
 }
 
-func statusFetchOpenListContext(ctx context.Context, forge, slug string) ([]byte, error) {
+// statusFetchOpenListContext reads a list; a Bitbucket list's later pages
+// are admitted with the same intent as its first.
+func statusFetchOpenListContext(ctx context.Context, intent StatusRefreshIntent, forge, slug string) ([]byte, error) {
 	switch forge {
 	case "github.com":
 		return statusFetchGHOpenListContext(ctx, slug)
 	case "bitbucket.org":
-		return statusFetchBBOpenListContext(ctx, slug)
+		return statusFetchBBOpenListContext(ctx, intent, slug)
 	}
 	return nil, fmt.Errorf("unsupported forge")
 }
@@ -318,11 +325,7 @@ func (p statusBBListItem) fingerprint() string {
 	}, "|")
 }
 
-func statusFetchBBOpenList(slug string) ([]byte, error) {
-	return statusFetchBBOpenListContext(context.Background(), slug)
-}
-
-func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, error) {
+func statusFetchBBOpenListContext(ctx context.Context, intent StatusRefreshIntent, slug string) ([]byte, error) {
 	started := time.Now()
 	user, pass, err := bitbucketRESTCredentials(ctx, slug)
 	if err != nil {
@@ -345,11 +348,15 @@ func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, err
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if page > 0 && statusTakeForgeToken(ctx, "bitbucket.org") != nil {
+		take := statusTakeForgeToken
+		if intent == StatusRefreshForeground {
+			take = statusTakeForegroundToken
+		}
+		if page > 0 && take(ctx, "bitbucket.org") != nil {
 			truncated = true
 			break
 		}
-		raw, err := statusBBGETContext(ctx, StatusRefreshBackground, endpoint, user, pass)
+		raw, err := statusBBGETContext(ctx, intent, endpoint, user, pass)
 		if err != nil {
 			if page == 0 || ctx.Err() != nil {
 				return nil, err

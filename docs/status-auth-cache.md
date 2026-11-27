@@ -26,8 +26,8 @@ observation and age. A newer observation replaces the row, changed credential
 inputs remove it, and a kept row grants no actions.
 Because unknown observations are not kept, a pass in an unknown context reads
 its own open lists. It also reads a PR that left its list in every pass, unless
-a recorded merge or decline covers the PR. The same aggregate request limits apply; a deferred
-refresh stays visibly deferred.
+a recorded merge or decline covers the PR. The same aggregate request limits
+apply; a deferred refresh stays visibly deferred.
 This does not add an authentication probe on a frame, cache hit or status pane.
 
 Detail, lists, checks, builds, terminal observations, ordering receipts and
