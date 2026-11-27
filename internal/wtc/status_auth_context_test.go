@@ -72,6 +72,10 @@ func TestStatusAuth441StoreAndLegacyBoundary(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GH_CONFIG_DIR", dir)
 	path := filepath.Join(dir, "hosts.yml")
+	fixtureFile(t, path, "github.com:\n  git_protocol: https\n", 0600)
+	if statusResolveAuthContext("github.com").known {
+		t.Fatal("a hosts entry without user or token established a context")
+	}
 	fixtureFile(t, path, "github.com:\n  user: synthetic\n", 0600)
 	keychain := statusResolveAuthContext("github.com")
 	if !keychain.known {
@@ -372,7 +376,7 @@ fi
 	for _, number := range []string{"7", "8"} {
 		detail := statusEnrichRecordMetadataContext(ctx, StatusRefreshBackground, PRRecord{Number: number}, "example/widget", "github.com")
 		if detail.State != "OPEN" || detail.ObservedAt == "" || !strings.HasPrefix(detail.Title, "Live ") {
-			t.Fatalf("keychain-only live status unavailable: %+v", detail)
+			t.Fatalf("unknown-context live status unavailable: %+v", detail)
 		}
 	}
 	calls, _ := os.ReadFile(counter)
@@ -382,7 +386,7 @@ fi
 	next := statusAuthOperation(context.Background())
 	detail := statusEnrichRecordMetadataContext(next, StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com")
 	if detail.State != "OPEN" {
-		t.Fatal("next keychain-only refresh nonfunctional")
+		t.Fatal("next unknown-context refresh nonfunctional")
 	}
 	calls, _ = os.ReadFile(counter)
 	if len(calls) != 2 {

@@ -505,7 +505,7 @@ func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHea
 // StatusPreferNewerObservations protects presentation from an older collector
 // completion. It never grants local action authority from retained UI facts.
 // A pane keeps rows it read itself across passes with equal credential inputs,
-// also when the credential is unreadable (keychain storage, #562).
+// also in an unknown credential context, whose observations are not shared.
 func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnapshot {
 	if incoming.Collection != current.Collection || statusSnapshotAuthInputs(incoming) != statusSnapshotAuthInputs(current) {
 		return incoming

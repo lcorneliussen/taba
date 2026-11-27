@@ -12,10 +12,13 @@ GitHub environment tokens, locally stored selected tokens and keychain logins
 establish a context without an identity API call. A keychain login is keyed by
 the gh configuration that selects it: the config directory, the host and user
 in `hosts.yml`, and `config.yml`. A token replaced in the keychain for the same
-account keeps the context. A hosts file that names another host, or `GH_HOST`
-naming another host, leaves the context unknown. Bitbucket includes the local candidates used by direct HTTP reads
-and the external CLI; OAuth refresh credentials are not treated as an established
-stable context. Unknown contexts cannot reuse known or legacy observations.
+account keeps the context, even one with narrower permission scopes (a
+fine-grained token, or one without SSO authorization): it is then served lists
+cached under the earlier token. Both belong to the same account and OS user. A
+hosts file that names another host, or `GH_HOST` naming another host, leaves
+the context unknown. Bitbucket includes the local candidates used by direct
+HTTP reads and the external CLI; OAuth refresh credentials are not treated as
+an established stable context. Unknown contexts cannot reuse known or legacy observations.
 Unknown credentials can still supply live status. Their observations and
 inflight work live only in the current collection operation's memory, allowing
 one live list to enrich several PRs without refetching the list. They are never

@@ -501,9 +501,8 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	// update time, check rollup, reviews and mergeability; Bitbucket: update
 	// time and participants, with checks read per head elsewhere). Its time
 	// therefore dates the row and its action-gating freshness. The persisted
-	// confirmation only dates
-	// the state of later observations without a list item, and never
-	// improves their freshness.
+	// confirmation only dates the state of later observations without a list
+	// item, and never improves their freshness.
 	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
 	if listed.State == detail.State && (detail.State == "OPEN" || detail.State == "DRAFT") {
 		statusRecordListedContext(ctx, forge, slug, listed, item.Started)

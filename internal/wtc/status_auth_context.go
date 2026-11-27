@@ -84,9 +84,11 @@ func statusAuthCacheKey() []byte {
 	return key
 }
 
-// Unknown selection is deliberately distinct from an authenticated context.
-// In particular, a login name in a config file cannot identify a keychain
-// credential or distinguish two tokens with different permission scopes.
+// Unknown selection is deliberately distinct from an authenticated context and
+// never reuses observations. A known context is keyed by the configuration
+// that selects the credential, not by the token: a token replaced in the
+// keychain for the same account, even one with narrower permission scopes,
+// shares the account's observations.
 type statusAuthContext struct {
 	scope string
 	known bool
