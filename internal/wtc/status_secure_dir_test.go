@@ -79,7 +79,10 @@ func TestStatusSecureCacheDir568RejectsUnsafeEntries(t *testing.T) {
 
 func TestStatusSecureCacheDir568TightensChangedPermissions(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "cache")
-	if err := os.Mkdir(dir, 0755); err != nil {
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	if !statusSecureCacheDir(dir) {
@@ -106,5 +109,20 @@ func TestStatusSecureCacheDir568ConcurrentInitialization(t *testing.T) {
 	wg.Wait()
 	if rejected.Load() != 0 {
 		t.Fatalf("%d concurrent initializers rejected the directory", rejected.Load())
+	}
+}
+
+func TestStatusSecureCacheDir568AcceptsDirectoryCreatedByAnotherProcess(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "cache")
+	original := statusMkdirCacheDir
+	statusMkdirCacheDir = func(path string, perm os.FileMode) error {
+		if err := original(path, perm); err != nil {
+			return err
+		}
+		return original(path, perm) // another process created it first: EEXIST
+	}
+	t.Cleanup(func() { statusMkdirCacheDir = original })
+	if !statusSecureCacheDir(dir) {
+		t.Fatal("directory created between Lstat and mkdir was rejected")
 	}
 }
