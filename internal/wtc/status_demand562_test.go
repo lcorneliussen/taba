@@ -237,7 +237,7 @@ func TestStatusDemand562RoutineBitbucketReads(t *testing.T) {
 		prs[slug] = map[string]string{"11": "OPEN", "12": "DECLINED", "13": "MERGED"}
 	}
 	d := newDemand562(t, 3, prs)
-	const interval = 90 * time.Second
+	interval := statusOpenListAge("bitbucket.org")
 	const passes = 20
 	for i := 0; i < passes; i++ {
 		if i > 0 {
@@ -299,7 +299,7 @@ func TestStatusDemand562PrivateContextReadsTerminalPRsOncePerPane(t *testing.T) 
 	demand562Unknown(t)
 	for i := 0; i < 10; i++ {
 		if i > 0 {
-			d.advance(91 * time.Second)
+			d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 		}
 		for _, snapshot := range d.pass() {
 			if !strings.HasPrefix(snapshot.authContext, "unknown-") {
@@ -328,7 +328,7 @@ func TestStatusDemand562ReopenedDeclineIsOpenAgain(t *testing.T) {
 	// bb reports no reliable activity page, so the decline event is unknown;
 	// updated_on still dates archive eligibility.
 	d.setPR("example/r1", "12", "OPEN")
-	d.advance(91 * time.Second)
+	d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 	row := demand562Row(t, d.pass()[0], "r1", "12")
 	if row.State != "OPEN" {
 		t.Fatalf("reopened PR on the open list kept its recorded decline: %+v", row)
@@ -337,11 +337,11 @@ func TestStatusDemand562ReopenedDeclineIsOpenAgain(t *testing.T) {
 		t.Fatalf("reopen did not clear the recorded decline: %+v %v", records, err)
 	}
 	d.setPR("example/r1", "12", "DECLINED")
-	d.advance(91 * time.Second)
+	d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "DECLINED" {
 		t.Fatalf("second decline: %+v", row)
 	}
-	d.advance(91 * time.Second)
+	d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "DECLINED" || row.Freshness != "recorded" {
 		t.Fatalf("second decline not recorded: %+v", row)
 	}
@@ -358,12 +358,12 @@ func TestStatusDemand562RecordedDeclineSurvivesListFailureAndCooldown(t *testing
 	d.pass()
 	reads := d.reads("view", "r1", "12")
 	d.failLists = true
-	d.advance(91 * time.Second)
+	d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "DECLINED" || row.Freshness != "recorded" {
 		t.Fatalf("list failure: %+v", row)
 	}
 	d.failLists = false
-	d.advance(91 * time.Second)
+	d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 	if until, err := statusForgeCoolContext(context.Background(), "bitbucket.org", 10*time.Minute); err != nil || until.IsZero() {
 		t.Fatalf("cooldown not recorded: %v %v", until, err)
 	}
@@ -388,7 +388,7 @@ func TestStatusDemand562RecordedDeclineListEvidence(t *testing.T) {
 		d.pass()
 		d.setPR("example/r1", "12", "OPEN")
 		d.capLists = true
-		d.advance(91 * time.Second)
+		d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 		if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "OPEN" {
 			t.Fatalf("capped current list carrying the PR: %+v", row)
 		}
@@ -406,9 +406,9 @@ func TestStatusDemand562RecordedDeclineListEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 		fixtureFile(t, registry, string(raw)+"# declined-pr r1 12 2026-11-20T10:00:00Z\n", 0600)
-		d.advance(91 * time.Second)
+		d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 		t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-		statusTakeForgeToken("bitbucket.org")
+		_ = statusTakeForgeToken(context.Background(), "bitbucket.org")
 		views := d.reads("view", "r1", "12")
 		if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "DECLINED" || row.Freshness != "recorded" {
 			t.Fatalf("stale list overrode the recorded decline: %+v", row)
@@ -426,7 +426,7 @@ func TestStatusDemand562ExplicitRefreshRepairsAMergeAfterReopen(t *testing.T) {
 	d := newDemand562(t, 1, map[string]map[string]string{"example/r1": {"12": "DECLINED"}})
 	d.pass()
 	d.setPR("example/r1", "12", "MERGED")
-	d.advance(91 * time.Second)
+	d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "DECLINED" || row.Freshness != "recorded" {
 		t.Fatalf("background refresh: %+v", row)
 	}
@@ -451,7 +451,7 @@ func TestStatusDemand562ExplicitRefreshRepairsAMergeAfterReopen(t *testing.T) {
 	if err != nil || strings.Contains(string(raw), "# declined-pr r1 12 ") {
 		t.Fatalf("decline row left after the merge:\n%s %v", raw, err)
 	}
-	d.advance(91 * time.Second)
+	d.advance(statusOpenListAge("bitbucket.org") + time.Second)
 	if row := demand562Row(t, d.pass()[0], "r1", "12"); row.State != "MERGED" || d.reads("view", "r1", "12") != views+1 {
 		t.Fatalf("recorded merge: %+v", row)
 	}

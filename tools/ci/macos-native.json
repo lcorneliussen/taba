@@ -29,8 +29,8 @@
         "TestStatusForgeCacheIsPrivateFreshAndDoesNotReadSymlinks",
         "TestDevFollowBuildLockAndSharedSuccessfulGeneration",
         "TestDevFollowRetirementRejectsWaitingAndReplacementLocks",
-        "TestStatus319FIFOAndAbandonedPane",
-        "TestStatus319QueueIsBoundedAndDoesNotFollowSymlinks"
+        "TestStatusForgeBucketCeilingCooldownAndNoIdleTokens",
+        "TestStatusForeground424UnsafeLockFailsClosed"
       ]
     },
     {

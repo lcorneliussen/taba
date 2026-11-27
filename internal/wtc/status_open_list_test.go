@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -158,7 +159,7 @@ esac
 		t.Fatalf("list did not replace the view: %+v hits=%d views=%d", first, listHits.Load(), statusTestFileLines(t, views))
 	}
 	phase.Store(1)
-	past := time.Now().Add(-2 * time.Minute)
+	past := time.Now().Add(-4 * time.Minute) // past the 180 s Bitbucket list age
 	if err := os.Chtimes(statusForgeEntryPath("openprs", "bitbucket.org", slug, "open"), past, past); err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +259,7 @@ esac
 				fixtureFile(t, view, merged, 0600)
 				fixtureGit(t, "-C", c.Harness, "checkout", "--detach", "origin/"+base)
 				fixtureGit(t, "-C", c.Harness, "branch", "-d", "topic")
-				past := time.Now().Add(-2 * time.Minute)
+				past := time.Now().Add(-4 * time.Minute) // past the 180 s Bitbucket list age
 				for kind, key := range map[string]string{"pr": "7", "openprs": "open"} {
 					if err := os.Chtimes(statusForgeEntryPath(kind, "bitbucket.org", "example/widget", key), past, past); err != nil {
 						t.Fatal(err)
@@ -327,7 +328,7 @@ func TestStatusCappedPRCacheRespectsFreshnessAndAllowance(t *testing.T) {
 			}
 			if tc.mode == "budget" {
 				t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-				if !statusTakeForgeToken(forge) {
+				if statusTakeForgeToken(context.Background(), forge) != nil {
 					t.Fatal("could not consume synthetic allowance")
 				}
 			}
@@ -421,7 +422,7 @@ printf '%s\n' '{"id":7,"state":"MERGED","merged_on":"2026-11-04T10:01:00Z"}'
 			t.Fatal("shared lookup did not finish")
 		}
 	}
-	if count := statusTestFileLines(t, views); count != 1 || statusTakeForgeToken(forge) {
+	if count := statusTestFileLines(t, views); count != 1 || statusTakeForgeToken(context.Background(), forge) == nil {
 		t.Fatalf("coalesced lookup used %d views or bypassed its single-token allowance", count)
 	}
 }

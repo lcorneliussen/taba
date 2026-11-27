@@ -131,7 +131,7 @@ func TestStatusResourcePresentationExpiry(t *testing.T) {
 		{"legacy", "", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := StatusPRPresentationFreshness(tc.freshness, tc.stamp, now); got != tc.want {
+			if got := StatusPRPresentationFreshness(tc.freshness, tc.stamp, "", now); got != tc.want {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
 		})

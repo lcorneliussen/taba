@@ -212,10 +212,15 @@ separate preservation blockers from unknown coverage; see
 ## Freshness, missing facts and controls
 
 The live header shows refresh timing and the running CLI version. Active PR
-facts normally use a 90-second forge cache. In the collection view, `r` explicitly
+facts normally use a 90-second forge cache. The open-PR list of a repository is
+read once and shared by every pane for 90 seconds on GitHub and 180 seconds on
+Bitbucket, whose hourly allowance is much smaller; `WTC_FORGE_CACHE_AGE` sets one
+age for both. In the collection view, `r` explicitly
 rechecks active enlisted PR metadata by number, bypassing detail TTL and stale
 open-list membership. It uses the same shared request budget and provider
-cooldown as background readers, with finite foreground priority. Repeated keys
+cooldown as background readers. When the budget is empty it waits for the next
+refill, at most one refill interval at a time, without priority over background
+reads. Repeated keys
 coalesce; a request made during collection runs immediately after that collection.
 Manual Refresh is not delayed by the background interval. A 30-second metadata
 phase budget returns completed live observations alongside deferred deadline
@@ -243,7 +248,7 @@ observation time when fresh checks are unavailable. Periodic collection still
 includes branch discovery, local refs, runtime and build facts.
 
 Active PR state observations expire on screen using their original observation
-time and the configured forge cache age, even between background refreshes.
+time and the open-list age of their forge, even between background refreshes.
 Expiry does not make a provider request or change saved evidence. Missing or
 future observation times cannot establish currentness. Confirmed merges retain
 their terminal authority; checks and reviews remain separate observations.
@@ -262,8 +267,8 @@ cancellation or a deadline names that reason; its older facts are `deferred`.
 confirmation of the same open state can supply it, without renewing freshness,
 checks or reviews. When an enlisted PR's branch is checked out and its upstream
 is gone, an open list served stale after a refused read does not keep that PR
-open: status confirms it with its own read (on Bitbucket, in the existing
-confirmation queue; on GitHub, deferred with its reason until admitted), and
+open: status confirms it with its own read, deferred with its reason until
+admitted, and
 JSON reports `local_merge_evidence` (for example `upstream-gone; head in
 origin/main`). That evidence is never a merge: it records nothing and returns
 no worktree. A Bitbucket decline keeps archive treatment by its closure time
@@ -287,7 +292,7 @@ observations sooner. Unchanged service declarations reuse validated local
 inventory instead of running Git discovery on every service read. Working-tree
 changes without a local change signal are caught by the bounded full refresh.
 `WTC_STATUS_WATCH` and `WTC_STATUS_WATCH_BG` tune full refresh intervals; manual
-`r` keeps its foreground admission, coalescing and shared cooldown behavior.
+`r` keeps its bounded budget wait, coalescing and shared cooldown behavior.
 Read-only identity requests share a process-local cache of at most 128 entries.
 Each reuse rechecks current canonical paths, ownership, worktree and Git
 configuration inputs; it does not reuse branch, working-tree, provider,
@@ -309,21 +314,17 @@ status reports deferred or unavailable observations instead of dispatching
 without shared accounting. The same rule applies to background and one-shot
 status reads; it does not increase provider limits.
 
-Ordinary Bitbucket reads (lists, checks, builds, PR details) share the budget
-with the confirmation queue without starving behind it. Queued confirmations
-keep first-in, first-out order and hold back one token each, never the whole
-burst, so with a burst above one a full bucket always admits an ordinary read. A
-refused ordinary read waits in order with the others, keyed by what it reads (a
-shared-cache read by its cache entry, a full-detail audit by its PR). Once the
-first has waited longer than one full refill, confirmations leave the last token
-for it, which admits at most one ordinary read per refill window, in that order.
-A waiter that has not asked for five minutes, counted from its turn opening or
-its last request, whichever is later, moves to the back. The burst, refill rate
-and cooldowns are unchanged. Reads that are not keyed (paged list and check
-reads, pipeline pages) share one place and compete among themselves first come.
-This holds while waiters keep asking and the queues stay bounded; clients from
-older releases share the budget but not the waiting order, and can still delay
-ordinary reads. A deferred PR that was never observed shows its checks as
+Each forge has one request budget, shared by every status pane of the user: a
+burst of 8 Bitbucket reads refilled at one every 8 seconds (450 an hour), and a
+burst of 16 GitHub reads refilled at one every 2 seconds. Every provider read
+(list pages, checks, builds, PR details, redirects) takes one token or is
+deferred. Nothing is queued or held back for a later read, so no token stays
+unspent while a read is deferred. A rate-limit response pauses that forge for
+every pane for its `Retry-After`, or 15 minutes when it gives none.
+`WTC_FORGE_MIN_INTERVAL` replaces the budget with one read per that many seconds;
+`0` turns it off. Older releases share the same budget file and lock; the
+confirmation and waiter files they still write are ignored. A deferred PR that
+was never observed shows its checks as
 `UNKNOWN` (`·` in the interactive view), not pending, and names the actual
 refusal reason and the earliest retry time instead of only `never-observed`.
 

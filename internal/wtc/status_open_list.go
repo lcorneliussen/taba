@@ -129,7 +129,7 @@ func statusDetailFromOpenItemContext(ctx context.Context, record PRRecord, slug,
 		}
 	}
 	statusResourceWriteEntry(ctx, "stamp", forge, slug, record.Number, []byte(item.Fingerprint))
-	return statusObserveAt(detail, item.Started, "open-list"), true, false
+	return statusObserveAt(detail, item.Started, "open-list", forge), true, false
 }
 
 type statusGHListItem struct {
@@ -287,7 +287,7 @@ func statusFetchBBOpenListContext(ctx context.Context, slug string) ([]byte, err
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		if page > 0 && (statusForgeCooling("bitbucket.org") || !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "")) {
+		if page > 0 && statusTakeForgeToken(ctx, "bitbucket.org") != nil {
 			truncated = true
 			break
 		}
@@ -384,8 +384,8 @@ func statusParseBBBranchList(raw []byte, branch string) (string, error) {
 	return "", nil
 }
 
-// The caller pays for the initial/page request. Redirects are additional forge
-// reads and must compete with ordinary reads for unreserved allowance.
+// The caller pays for the initial/page request. Each redirect is another
+// forge read and takes its own token from the shared bucket.
 func statusBBGET(endpoint, user, pass string) ([]byte, error) {
 	return statusBBGETContext(context.Background(), StatusRefreshBackground, endpoint, user, pass)
 }
@@ -440,13 +440,8 @@ func statusBBGETWithOptionsContext(parent context.Context, intent StatusRefreshI
 				if err := statusTakeForegroundToken(ctx, "bitbucket.org"); err != nil {
 					return nil, err
 				}
-			} else {
-				if statusForgeCooling("bitbucket.org") {
-					return nil, errForgeCooling
-				}
-				if !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "") {
-					return nil, errForgeBudget
-				}
+			} else if err := statusTakeForgeToken(ctx, "bitbucket.org"); err != nil {
+				return nil, err
 			}
 			endpoint = location.String()
 			continue

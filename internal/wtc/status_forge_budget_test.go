@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -107,7 +108,7 @@ func TestStatusForgeBudgetStopsTheSecondCall(t *testing.T) {
 	if _, err := statusSingleFlight("probe", "bitbucket.org", "example/widget", "one", fetch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := statusSingleFlight("probe", "bitbucket.org", "example/widget", "two", fetch); err != errForgeBudget {
+	if _, err := statusSingleFlight("probe", "bitbucket.org", "example/widget", "two", fetch); !errors.Is(err, errForgeBudget) {
 		t.Fatalf("second call = %v, calls %d", err, calls)
 	}
 	if calls != 1 {
@@ -154,7 +155,7 @@ func TestStatusBitbucketBuildIsCachedAndARateLimitKeepsIt(t *testing.T) {
 	if hits != 2 {
 		t.Fatalf("hits = %d", hits)
 	}
-	if _, err := statusBBBuild("team/widget", "other"); err != errForgeCooling {
+	if _, err := statusBBBuild("team/widget", "other"); !errors.Is(err, errForgeCooling) {
 		t.Fatalf("cooling did not stop the next repository: %v", err)
 	}
 	if hits != 2 {

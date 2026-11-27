@@ -33,7 +33,7 @@ func TestStatusResourcePipelineRedirectPaysPerHop(t *testing.T) {
 	defer func() { statusBBAPI = old }()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	_, _, err := statusWithForgeBudgetKeyContext(ctx, "bitbucket.org", "", nil, func() ([]byte, error) {
+	_, _, _, err := statusWithForgeAdmissionContext(ctx, "bitbucket.org", nil, func() ([]byte, error) {
 		return statusBBPipelinesContext(ctx, "example", "widget", "main", "fixture", "synthetic")
 	})
 	t.Logf("actualHTTP=%d err=%v", calls.Load(), err)
@@ -95,7 +95,7 @@ func TestStatusResourcePipelineRedirectContracts(t *testing.T) {
 			old := statusBBAPI
 			statusBBAPI = server.URL
 			defer func() { statusBBAPI = old }()
-			raw, live, err := statusWithForgeBudgetKeyContext(ctx, "bitbucket.org", "", nil, func() ([]byte, error) {
+			raw, live, _, err := statusWithForgeAdmissionContext(ctx, "bitbucket.org", nil, func() ([]byte, error) {
 				return statusBBPipelinesContext(ctx, "example", "widget", "main", "fixture", "synthetic")
 			})
 			switch mode {
@@ -103,7 +103,7 @@ func TestStatusResourcePipelineRedirectContracts(t *testing.T) {
 				if err != nil || !live || string(raw) != `{"values":[]}` || calls.Load() != 2 {
 					t.Fatalf("result %s %v %v hits%d", raw, live, err, calls.Load())
 				}
-				if !statusTakeForgeToken("bitbucket.org") || statusTakeForgeToken("bitbucket.org") {
+				if statusTakeForgeToken(context.Background(), "bitbucket.org") != nil || statusTakeForgeToken(context.Background(), "bitbucket.org") == nil {
 					t.Fatal("per-hop debit incorrect")
 				}
 			case "cross-origin", "userinfo":
@@ -115,7 +115,7 @@ func TestStatusResourcePipelineRedirectContracts(t *testing.T) {
 					t.Fatal(err, calls.Load())
 				}
 			case "429":
-				if live || !statusForgeCooling("bitbucket.org") || calls.Load() != 2 {
+				if live || !statusForgeNow().Before(statusForgeCoolingUntil("bitbucket.org")) || calls.Load() != 2 {
 					t.Fatal(live, err, calls.Load())
 				}
 			case "cancel":

@@ -273,13 +273,7 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 		return statusUnknownDetail(record)
 	}
 	if detail, ok := statusResourceSettledMerge(ctx, record, slug, forge); ok {
-		statusForgetConfirmation(forge, slug+"#"+record.Number)
 		return detail
-	}
-	if _, known := statusResourceRetainedMerge(ctx, record, slug, forge); known {
-		// State confirmation is complete even if ancillary merge time/checks
-		// still need their own admitted refreshes.
-		statusForgetConfirmation(forge, slug+"#"+record.Number)
 	}
 	if record.DeclinedOn != "" && forge == "bitbucket.org" {
 		// A recorded decline costs no PR read (#562). Bitbucket can reopen a
@@ -293,7 +287,6 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 		if item, ok := listed[record.Number]; err == nil && current && ok {
 			return statusEnrichListedContext(ctx, record, slug, forge, item)
 		}
-		statusForgetConfirmation(forge, slug+"#"+record.Number)
 		return statusRecordedDeclineDetail(record)
 	}
 	if listed, truncated, current, err := statusOpenPRsCurrentContext(ctx, forge, slug); err == nil {
@@ -301,12 +294,11 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 			// A checked-out branch whose upstream is gone is likely merged or
 			// declined. An open list served stale after a refused read cannot
 			// confirm it is still open; confirm the PR itself as for an
-			// omitted PR (Bitbucket keeps its confirmation queue place), at
-			// most once per cache interval. A current list is trusted.
+			// omitted PR, at most once per cache interval. A current list is
+			// trusted.
 			return statusViewPRWithLiveContext(ctx, record, slug, forge, true, false, nil)
 		}
 		if item, ok := listed[record.Number]; ok {
-			statusForgetConfirmation(forge, slug+"#"+record.Number)
 			return statusEnrichListedContext(ctx, record, slug, forge, item)
 		}
 		if truncated {
@@ -416,7 +408,7 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 		// still observed it, so equal time also dates the row.
 		if !item.Started.Before(observed) {
 			detail.Freshness = ""
-			detail = statusObserveAt(detail, item.Started, "open-list")
+			detail = statusObserveAt(detail, item.Started, "open-list", forge)
 		}
 	}
 	unlock()
@@ -469,7 +461,7 @@ func statusViewPRWithLiveContext(ctx context.Context, record PRRecord, slug, for
 		}
 		stale, _ := statusReadForgeEntryAnyContext(ctx, "pr", forge, slug, record.Number)
 		started := time.Now()
-		raw, live, refused, err = statusWithForgeAdmissionContext(ctx, forge, slug+"#"+record.Number, stale, fetch)
+		raw, live, refused, err = statusWithForgeAdmissionContext(ctx, forge, stale, fetch)
 		if live && len(raw) > 0 {
 			if !statusResourceWriteSince(ctx, "pr", forge, slug, record.Number, raw, started) {
 				if winner, ok := statusResourceObservedDetail(ctx, record, slug, forge, 365*24*time.Hour); ok {

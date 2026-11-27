@@ -211,7 +211,7 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
 		return fallback, outcome
 	}
-	// Cancellation after admission can waste a token, never start queued work.
+	// Cancellation after admission can waste a token, never start a read.
 	if err := ctx.Err(); err != nil {
 		outcome := statusObservationFailure(err)
 		fallback.Freshness = outcome.Freshness
@@ -314,7 +314,7 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	case "github.com":
 		name, args = "gh", []string{"pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,closedAt,baseRefName,mergeCommit,headRefOid"}
 	case "bitbucket.org":
-		if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
+		if until := statusForgeCoolingUntil(forge); statusForgeNow().Before(until) {
 			return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
 		}
 		raw, err := bitbucketReadPR(ctx, slug, record.Number)
@@ -328,7 +328,7 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	default:
 		return nil, fmt.Errorf("unsupported forge")
 	}
-	if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
+	if until := statusForgeCoolingUntil(forge); statusForgeNow().Before(until) {
 		return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
 	}
 	cmd := forgecli.CommandContext(ctx, name, args...)
@@ -351,13 +351,7 @@ func statusFetchPRRawWithRequestContext(ctx context.Context, record PRRecord, sl
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if statusForgeCooling(forge) {
-		return nil, errForgeCooling
-	}
-	if !statusTakeForgeTokenForContext(statusOrdinaryRead(ctx, "pr", forge, slug, record.Number), forge, "") {
-		return nil, errForgeBudget
-	}
-	if err := ctx.Err(); err != nil {
+	if err := statusTakeForgeToken(ctx, forge); err != nil {
 		return nil, err
 	}
 	var raw []byte
@@ -452,7 +446,7 @@ func statusConfirmFullBuildContext(ctx context.Context, slug, branch string, inc
 	if len(parts) != 2 {
 		return fallback
 	}
-	if statusForgeCooling("bitbucket.org") || !statusTakeForgeTokenForContext(ctx, "bitbucket.org", "") {
+	if statusTakeForgeToken(ctx, "bitbucket.org") != nil {
 		return fallback
 	}
 	started := time.Now()

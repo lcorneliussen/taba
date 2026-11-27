@@ -30,7 +30,7 @@ This does not add an authentication probe on a frame, cache hit or status pane.
 Detail, lists, checks, builds, terminal observations, ordering receipts and
 inflight record locks use the same partition. An observation operation pins its
 context and revalidates local selection before publication. Shared request
-budgets, cooldowns and confirmation queues remain conservative across contexts,
+budgets and cooldowns remain conservative across contexts,
 including consumers from 0.2.7; changing accounts does not grant a new burst.
 
 Legacy unscoped response files are neither renamed nor promoted. Canonical

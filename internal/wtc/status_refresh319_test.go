@@ -1,6 +1,7 @@
 package wtc
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -100,7 +101,7 @@ func TestStatus319OmittedObservationIsDeferred(t *testing.T) {
 			if err := os.Chtimes(statusForgeCachePath(forge, slug, "7"), past, past); err != nil {
 				t.Fatal(err)
 			}
-			if !statusTakeForgeToken(forge) {
+			if statusTakeForgeToken(context.Background(), forge) != nil {
 				t.Fatal("initial token")
 			}
 			got := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
@@ -124,158 +125,12 @@ func TestStatus319OmittedObservationIsDeferred(t *testing.T) {
 	}
 }
 
-func TestStatus319CompetingPanesEventuallyConfirm(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-	forge, slug := "bitbucket.org", "example/widget"
-	raw, _ := statusEncodeOpenPRs(nil, false, time.Now())
-	statusWriteForgeEntry("openprs", forge, slug, "open", raw)
-	statusWriteForgeCache(forge, slug, "7", []byte(`{"id":7,"state":"OPEN","draft":true}`))
-	dir := t.TempDir()
-	fixtureFile(t, dir+"/bb", "#!/bin/sh\nprintf '%s' '{\"id\":7,\"state\":\"MERGED\",\"merged_on\":\"2026-11-04T10:01:00Z\"}'\n", 0700)
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	for tick := 0; tick < 3; tick++ {
-		// A competing pane attempts admission before confirmation on each interval.
-		if err := os.WriteFile(statusForgeStatePath("budget", forge), []byte("1 "+fmt.Sprint(time.Now().UnixNano())), 0600); err != nil {
-			t.Fatal(err)
-		}
-		_, _ = statusSingleFlight("openprs", forge, fmt.Sprintf("example/competitor%d", tick), "open", func() ([]byte, error) { return []byte(`{"prs":[]}`), nil })
-		got := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
-		if got.State == "MERGED" {
-			return
-		}
-	}
-	t.Fatal("omitted draft starved behind competing panes for every replenished token")
-}
-
 func status319Refill(t *testing.T, forge string) {
 	t.Helper()
 	_, every := statusForgeAllowance(forge)
 	raw := fmt.Sprintf("0 %d\n", time.Now().Add(-every).UnixNano())
 	if err := os.WriteFile(statusForgeStatePath("budget", forge), []byte(raw), 0600); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestStatus319FIFOAndAbandonedPane(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-	forge := "bitbucket.org"
-	if !statusTakeForgeToken(forge) {
-		t.Fatal("initial token")
-	}
-	keys := []string{statusConfirmationKey("example/widget#7"), statusConfirmationKey("example/widget#8")}
-	for _, key := range keys {
-		if statusTakeForgeTokenFor(forge, key) {
-			t.Fatal("ceiling bypass")
-		}
-	}
-	// A retry of the first pane must keep its place without adding another reservation.
-	if statusTakeForgeTokenFor(forge, keys[0]) {
-		t.Fatal("spent token reused")
-	}
-	for _, key := range keys {
-		status319Refill(t, forge)
-		if statusTakeForgeToken(forge) {
-			t.Fatal("ordinary pane stole reserved token")
-		}
-		if key == keys[0] && statusTakeForgeTokenFor(forge, keys[1]) {
-			t.Fatal("later confirmation jumped queue")
-		}
-		if !statusTakeForgeTokenFor(forge, key) || statusTakeForgeToken(forge) {
-			t.Fatal("FIFO or ceiling failed")
-		}
-	}
-	status319Refill(t, forge)
-	if !statusTakeForgeToken(forge) {
-		t.Fatal("ordinary traffic did not resume")
-	}
-	if statusTakeForgeTokenFor(forge, keys[0]) {
-		t.Fatal("spent token reused")
-	}
-	queue := statusReadPendingConfirmations(forge, time.Now())
-	queue[0].Seen = time.Now().Add(-statusPendingLifetime - time.Second)
-	statusSavePendingConfirmations(forge, queue)
-	status319Refill(t, forge)
-	if !statusTakeForgeToken(forge) {
-		t.Fatal("abandoned pane blocked ordinary traffic")
-	}
-}
-
-func TestStatus319GitHubIgnoresBitbucketReservations(t *testing.T) {
-	for _, present := range []bool{false, true} {
-		t.Run(fmt.Sprint(present), func(t *testing.T) {
-			t.Setenv("TMPDIR", t.TempDir())
-			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-			forge := "github.com"
-			path := statusForgeStatePath("pending", forge)
-			raw, _ := json.Marshal([]statusPendingConfirmation{{Key: statusConfirmationKey("example/widget#7"), Seen: time.Now()}})
-			if present {
-				statusWriteForgeEntry("pending", forge, "", "", raw)
-			}
-			if !statusTakeForgeToken(forge) || statusTakeForgeToken(forge) {
-				t.Fatal("GitHub admission changed or request ceiling exceeded")
-			}
-			got, err := os.ReadFile(path)
-			if present {
-				if err != nil || string(got) != string(raw) {
-					t.Fatalf("unrelated pending state changed: %s %v", got, err)
-				}
-			} else if !os.IsNotExist(err) {
-				t.Fatalf("GitHub token take created a queue file: %s %v", got, err)
-			}
-		})
-	}
-}
-
-func TestStatus319QueueIsBoundedAndDoesNotFollowSymlinks(t *testing.T) {
-	for _, mode := range []string{"corrupt", "oversize", "directory", "symlink", "too-many", "future"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Setenv("TMPDIR", t.TempDir())
-			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-			forge := "bitbucket.org"
-			if !statusSecureCacheDir(statusForgeCacheDir()) {
-				t.Fatal("cache directory")
-			}
-			path := statusForgeStatePath("pending", forge)
-			victim := t.TempDir() + "/victim"
-			fixtureFile(t, victim, "unchanged", 0600)
-			switch mode {
-			case "corrupt":
-				fixtureFile(t, path, "{bad", 0600)
-			case "oversize":
-				fixtureFile(t, path, strings.Repeat(" ", 65537), 0600)
-			case "directory":
-				if err := os.Mkdir(path, 0700); err != nil {
-					t.Fatal(err)
-				}
-			case "symlink":
-				if err := os.Symlink(victim, path); err != nil {
-					t.Fatal(err)
-				}
-			case "too-many":
-				queue := make([]statusPendingConfirmation, statusPendingLimit+1)
-				for i := range queue {
-					queue[i] = statusPendingConfirmation{Key: statusConfirmationKey(fmt.Sprint(i)), Seen: time.Now()}
-				}
-				statusSavePendingConfirmations(forge, queue)
-			case "future":
-				statusSavePendingConfirmations(forge, []statusPendingConfirmation{{Key: statusConfirmationKey("future"), Seen: time.Now().Add(time.Hour)}})
-			}
-			if !statusTakeForgeToken(forge) {
-				t.Fatal("invalid queue blocked ordinary request")
-			}
-			raw, err := os.ReadFile(victim)
-			if err != nil || string(raw) != "unchanged" {
-				t.Fatal("queue write followed symlink")
-			}
-			if mode != "directory" {
-				info, err := os.Lstat(path)
-				if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
-					t.Fatal("queue is not a private regular file")
-				}
-			}
-		})
 	}
 }
 
@@ -320,9 +175,6 @@ func TestStatus319ConfirmationFailuresPreserveFacts(t *testing.T) {
 			}
 			if _, ok := statusReadForgeEntry("omit", forge, slug, "7"); ok {
 				t.Fatal("failure marked confirmed")
-			}
-			if len(statusReadPendingConfirmations(forge, time.Now())) != 0 {
-				t.Fatal("completed request retained reservation")
 			}
 		})
 	}
@@ -403,7 +255,7 @@ func TestStatus319SettledHistoricalMergeKeepsAuthority(t *testing.T) {
 			}
 			list, _ := statusEncodeOpenPRs(nil, false, time.Now())
 			statusWriteForgeEntry("openprs", forge, slug, "open", list)
-			if !statusTakeForgeToken(forge) {
+			if statusTakeForgeToken(context.Background(), forge) != nil {
 				t.Fatal("initial token")
 			}
 			record := PRRecord{Repo: "widget", Number: "7", Branch: "topic"}
@@ -478,7 +330,7 @@ printf '%s' '{"id":7,"state":"MERGED","draft":true,"merged_on":"2026-11-04T10:01
 			t.Fatal("confirmation did not finish")
 		}
 	}
-	if count := statusTestFileLines(t, views); count != 1 || statusTakeForgeToken(forge) {
+	if count := statusTestFileLines(t, views); count != 1 || statusTakeForgeToken(context.Background(), forge) == nil {
 		t.Fatalf("coalescing/ceiling: %d reads", count)
 	}
 }
@@ -506,37 +358,6 @@ func TestStatus319StaleMergedFactsCannotReturnBranch(t *testing.T) {
 	}
 }
 
-func TestStatus319ResolvedConfirmationReleasesReservation(t *testing.T) {
-	for _, resolved := range []string{"listed", "settled"} {
-		t.Run(resolved, func(t *testing.T) {
-			t.Setenv("TMPDIR", t.TempDir())
-			t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-			forge, slug := "bitbucket.org", "example/widget"
-			list, _ := statusEncodeOpenPRs(nil, false, time.Now())
-			statusWriteForgeEntry("openprs", forge, slug, "open", list)
-			body := []byte(`{"id":7,"state":"OPEN","draft":true}`)
-			statusWriteForgeCache(forge, slug, "7", body)
-			if !statusTakeForgeToken(forge) {
-				t.Fatal("initial token")
-			}
-			if got := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge); got.Freshness != "deferred" {
-				t.Fatal(got)
-			}
-			if resolved == "listed" {
-				list, _ = statusEncodeOpenPRs([]statusOpenPR{{Number: "7", Fingerprint: "current", Raw: body}}, false, time.Now())
-				statusWriteForgeEntry("openprs", forge, slug, "open", list)
-			} else {
-				statusWriteForgeCache(forge, slug, "7", []byte(`{"id":7,"state":"MERGED","merged_on":"2026-11-04T10:01:00Z"}`))
-			}
-			status319Refill(t, forge)
-			got := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
-			if statusObservationUnavailable(got.Freshness) || !statusTakeForgeToken(forge) {
-				t.Fatalf("resolved %s confirmation blocked ordinary traffic: %+v", resolved, got)
-			}
-		})
-	}
-}
-
 func TestStatus319CoolingRecoversWithFullValidResponse(t *testing.T) {
 	for _, draft := range []bool{false, true} {
 		t.Run(fmt.Sprint(draft), func(t *testing.T) {
@@ -558,7 +379,7 @@ func TestStatus319CoolingRecoversWithFullValidResponse(t *testing.T) {
 			}
 			status319Refill(t, forge)
 			after := statusEnrichRecordMetadata(PRRecord{Number: "7"}, slug, forge)
-			if after.State != "MERGED" || after.Freshness != "live" || after.ObservedAt == "" || statusTakeForgeToken(forge) {
+			if after.State != "MERGED" || after.Freshness != "live" || after.ObservedAt == "" || statusTakeForgeToken(context.Background(), forge) == nil {
 				t.Fatalf("recovery lost state/full response or exceeded allowance: %+v", after)
 			}
 		})
@@ -604,41 +425,6 @@ func TestStatus319RetirementRequiresConfirmedTerminalState(t *testing.T) {
 				})
 			}
 		}
-	}
-}
-
-func TestStatus319ReservationLeavesSpareBurstCapacity(t *testing.T) {
-	t.Setenv("TMPDIR", t.TempDir())
-	t.Setenv("WTC_FORGE_MIN_INTERVAL", "3600")
-	forge := "bitbucket.org"
-	burst, _ := statusForgeAllowance(forge)
-	for range burst {
-		if !statusTakeForgeToken(forge) {
-			t.Fatal("initial burst")
-		}
-	}
-	key := statusConfirmationKey("example/widget#7")
-	if statusTakeForgeTokenFor(forge, key) {
-		t.Fatal("exhausted budget admitted confirmation")
-	}
-	// The hour-long interval refuses admission without waiting for a refill.
-	// Restore the standard interval.
-	t.Setenv("WTC_FORGE_MIN_INTERVAL", "")
-	burst, _ = statusForgeAllowance(forge)
-	// Refill the fixture budget while the confirmation remains queued.
-	if err := os.WriteFile(statusForgeStatePath("budget", forge), []byte(fmt.Sprintf("%d %d", burst, time.Now().UnixNano())), 0600); err != nil {
-		t.Fatal(err)
-	}
-	for range burst - 1 {
-		if !statusTakeForgeToken(forge) {
-			t.Fatal("abandoned reservation idled unreserved burst tokens")
-		}
-	}
-	if statusTakeForgeToken(forge) {
-		t.Fatal("ordinary traffic spent the reserved token")
-	}
-	if !statusTakeForgeTokenFor(forge, key) || statusTakeForgeToken(forge) {
-		t.Fatal("reservation or ceiling was lost")
 	}
 }
 
@@ -691,7 +477,7 @@ func TestStatusStaleListPublicationKeepsObservation(t *testing.T) {
 						}
 						if cooling {
 							statusForgeCool(forge, time.Hour)
-						} else if !statusTakeForgeToken(forge) {
+						} else if statusTakeForgeToken(context.Background(), forge) != nil {
 							t.Fatal("initial token")
 						}
 						want := "OPEN"
@@ -764,7 +550,7 @@ func TestStatusUnconfirmedTerminalProducerRows(t *testing.T) {
 				}
 				list, _ := statusEncodeOpenPRs(nil, false, time.Now())
 				statusWriteForgeEntry("openprs", tc.forge, "example/widget", "open", list)
-				if !statusTakeForgeToken(tc.forge) {
+				if statusTakeForgeToken(context.Background(), tc.forge) != nil {
 					t.Fatal("initial token")
 				}
 				snapshot, err := c.statusForgePreview(false, false)

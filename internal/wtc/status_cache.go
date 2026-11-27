@@ -24,6 +24,17 @@ func statusForgeCacheAge() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+// statusOpenListAge is how long one shared open-PR list serves every pane,
+// and so how long a PR state observation counts as current. The Bitbucket
+// budget allows a quarter of GitHub's reads an hour, so its list lives
+// longer. An explicit WTC_FORGE_CACHE_AGE applies to every forge.
+func statusOpenListAge(forge string) time.Duration {
+	if forge == "bitbucket.org" && envcompat.Getenv("WTC_FORGE_CACHE_AGE") == "" {
+		return 180 * time.Second
+	}
+	return statusForgeCacheAge()
+}
+
 func statusMergedCacheAge() time.Duration {
 	// Explicit cache-age overrides apply to both active and merged PRs.
 	if envcompat.Getenv("WTC_FORGE_CACHE_AGE") != "" {
@@ -94,7 +105,11 @@ func statusReadForgeEntryContext(ctx context.Context, kind, forge, slug, key str
 	if !statusAuthSharedKind(kind) {
 		ctx = statusAuthOperation(ctx)
 	}
-	return statusReadForgeEntryWithAgeContext(ctx, kind, forge, slug, key, statusForgeCacheAge())
+	age := statusForgeCacheAge()
+	if kind == "openprs" {
+		age = statusOpenListAge(forge)
+	}
+	return statusReadForgeEntryWithAgeContext(ctx, kind, forge, slug, key, age)
 }
 
 func statusReadForgeEntryAny(kind, forge, slug, key string) ([]byte, bool) {

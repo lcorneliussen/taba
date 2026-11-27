@@ -45,7 +45,7 @@ func statusObserveDetailContext(ctx context.Context, detail statusPRDetail, slug
 	if err != nil || saved.State != detail.State || saved.HeadCommit != detail.HeadCommit {
 		return detail
 	}
-	return statusNewerListedContext(ctx, statusObserveAt(detail, observed, "detail-cache"), slug, forge)
+	return statusNewerListedContext(ctx, statusObserveAt(detail, observed, "detail-cache", forge), slug, forge)
 }
 
 // A list that confirms an unchanged open state does not itself rewrite the
@@ -109,17 +109,17 @@ func statusNewerListedContext(ctx context.Context, detail statusPRDetail, slug, 
 		return detail
 	}
 	freshness := detail.Freshness
-	detail = statusObserveAt(detail, at, "open-list")
+	detail = statusObserveAt(detail, at, "open-list", forge)
 	detail.Freshness = freshness
 	return detail
 }
 
-func statusObserveAt(detail statusPRDetail, observed time.Time, source string) statusPRDetail {
+func statusObserveAt(detail statusPRDetail, observed time.Time, source, forge string) statusPRDetail {
 	detail.ObservedAt = observed.UTC().Format(time.RFC3339Nano)
 	detail.StateSource = source
 	if detail.Freshness == "" {
 		detail.Freshness = "cached"
-		if time.Since(observed) >= statusForgeCacheAge() {
+		if time.Since(observed) >= statusOpenListAge(forge) {
 			detail.Freshness = "stale"
 		}
 	}
@@ -177,7 +177,7 @@ func statusReadObservedDetailKindContext(ctx context.Context, kind string, recor
 	if err != nil {
 		return statusPRDetail{}, false
 	}
-	detail = statusObserveAt(detail, observed, "detail-cache")
+	detail = statusObserveAt(detail, observed, "detail-cache", forge)
 	if kind == "pr" {
 		detail = statusNewerListedContext(ctx, detail, slug, forge)
 	}

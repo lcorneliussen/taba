@@ -1446,7 +1446,7 @@ func statusTUIRepoPRCell(pr *wtc.StatusPRFacts, width int, styled bool, numberWi
 	}
 	if pr.Merge != "MERGED" {
 		copy := *pr
-		copy.Freshness = wtc.StatusPRPresentationFreshness(copy.Freshness, copy.ObservedAt, time.Now())
+		copy.Freshness = wtc.StatusPRPresentationFreshness(copy.Freshness, copy.ObservedAt, copy.URL, time.Now())
 		pr = &copy
 	}
 	n := ansi.StringWidth(statusTUIPRNumber(pr.Number))
@@ -1877,7 +1877,11 @@ func statusTUIPresentationRow(row wtc.StatusPRRow, now time.Time) wtc.StatusPRRo
 		return row
 	}
 	old := row.Freshness
-	row.Freshness = wtc.StatusPRPresentationFreshness(old, row.ObservedAt, now)
+	url := ""
+	if row.URL != nil {
+		url = *row.URL
+	}
+	row.Freshness = wtc.StatusPRPresentationFreshness(old, row.ObservedAt, url, now)
 	if row.Freshness != old {
 		row.ObservationReason = "unknown"
 		if row.Freshness == "stale" {
