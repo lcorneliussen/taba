@@ -1,0 +1,43 @@
+version: 2
+project_name: taba
+# Edge builds (docs/edge-builds.md): the stable builds and archives, built with
+# `release --snapshot` so GoReleaser publishes nothing. The edge workflow
+# verifies the output and, only when publication is enabled, creates the
+# GitHub prerelease itself. No brews section: edge never reaches the tap.
+# tools/edge-release keeps builds and archives in step with .goreleaser.yaml.
+before:
+  hooks:
+    - python3 -B tools/release-provenance/check.py preflight
+builds:
+  - &build
+    id: taba
+    main: ./cmd/taba
+    binary: taba
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    hooks:
+      post:
+        - python3 -B tools/release-provenance/check.py binary {{ .Path }}
+  - <<: *build
+    id: wtc
+    binary: wtc
+archives:
+  - id: taba
+    ids: [taba, wtc]
+    formats: [tar.gz]
+    name_template: 'taba_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+checksum:
+  name_template: checksums.txt
+# The workflow computes the edge version with tools/edge-release version.
+snapshot:
+  version_template: '{{ .Env.TABA_EDGE_VERSION }}'
+release:
+  disable: true

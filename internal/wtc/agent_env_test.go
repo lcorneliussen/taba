@@ -120,6 +120,51 @@ func TestAgentToolchainPathConfiguredBinsAndConfigRefresh(t *testing.T) {
 	}
 }
 
+// A collection-local mise selection, such as an edge build, replaces the
+// cached toolchain when it appears and when it is removed again.
+func TestAgentToolchainPathFollowsCollectionLocalMiseSelection(t *testing.T) {
+	c := fixture(t)
+	root := t.TempDir()
+	pinned, edge := filepath.Join(root, "pinned-bin"), filepath.Join(root, "edge-bin")
+	for _, dir := range []string{pinned, edge, filepath.Join(root, "bin")} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(c.Collection, "mise.toml"), []byte("[tools]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	local := filepath.Join(c.Collection, "mise.local.toml")
+	shim := "#!/bin/sh\ncase \"$1\" in trust) exit 0;; esac\n" +
+		"if [ -f '" + local + "' ]; then printf '%s\\n' '" + edge + "'; else printf '%s\\n' '" + pinned + "'; fi\n"
+	if err := os.WriteFile(filepath.Join(root, "bin", "mise"), []byte(shim), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
+	base, err := agentEnvConfigFingerprint(c.Harness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := withLocalMiseOverride(base, c.Collection); err != nil || got != base {
+		t.Fatalf("fingerprint without a local selection changed: %q, %v", got, err)
+	}
+	if got, err := c.AgentToolchainPath(false); err != nil || got != pinned {
+		t.Fatalf("pinned path = %q, %v", got, err)
+	}
+	if err := os.WriteFile(local, []byte("[tools]\n\"github:lcorneliussen/taba\" = \"0.2.12-edge.20261127151200.g5f525fa5abcd\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.AgentToolchainPath(false); err != nil || got != edge {
+		t.Fatalf("local selection ignored by the cache: %q, %v", got, err)
+	}
+	if err := os.Remove(local); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.AgentToolchainPath(false); err != nil || got != pinned {
+		t.Fatalf("cache kept the removed local selection: %q, %v", got, err)
+	}
+}
+
 func TestAgentEnvEvalAndWrap(t *testing.T) {
 	eval := AgentEnvEval("/tmp/a'b:/tmp/c")
 	if !strings.Contains(eval, "WTC_TOOLCHAIN_PATH='/tmp/a'\\''b:/tmp/c'") || !strings.Contains(eval, "export WTC_AGENT_ENV") || !strings.Contains(eval, "TABA_TOOLCHAIN_PATH=\"$WTC_TOOLCHAIN_PATH\"") {

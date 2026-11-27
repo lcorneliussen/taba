@@ -84,6 +84,11 @@ func TestCompatibility(t *testing.T) {
 		{">=0.4.1,<0.5", "0.4.2-dev.3+dev.gabc1234", true},
 		{">=0.4.1,<0.5", "0.4.1+dev.gabc1234.dirty", true},
 		{">=0.4,<0.5", "0.5.1-dev.1+dev.gabc1234", false},
+		// Edge builds (docs/edge-builds.md) sit inside ranges like other prereleases.
+		{">=0.4.1,<0.5", "0.4.2-edge.20261127151200.g5f525fa5abcd", true},
+		// A prerelease of the next minor sorts below it, as dev builds do.
+		{">=0.4,<0.5", "0.5.0-edge.20261127151200.g5f525fa5abcd", true},
+		{">=0.4,<0.5", "0.5.1-edge.20261127151200.g5f525fa5abcd", false},
 	}
 	for _, c := range cases {
 		if got := compatible(c.requirement, c.version); got != c.want {

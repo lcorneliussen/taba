@@ -151,6 +151,9 @@ func (c *Context) Upgrade(opt UpgradeOptions) (UpgradeResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if edgeBuild(to) {
+		return result, fmt.Errorf("%s is an edge build: select it for one collection instead of pinning it (docs/edge-builds.md)", to)
+	}
 	result.To = to.String()
 	if !to.GreaterThan(from) {
 		return result, fmt.Errorf("the harness already pins %s; %s is not newer", result.From, result.To)
@@ -400,4 +403,10 @@ func (c *Context) upgradeRootSelection(result *UpgradeResult) {
 	if err != nil {
 		result.RootSelectionError = err.Error()
 	}
+}
+
+// edgeBuild reports an opt-in edge build of main (docs/edge-builds.md). Edge
+// builds are never pinned, so upgrade refuses them before writing anything.
+func edgeBuild(v *semver.Version) bool {
+	return strings.HasPrefix(v.Prerelease(), "edge.")
 }
