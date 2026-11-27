@@ -84,8 +84,9 @@ func statusAuthCacheKey() []byte {
 	return key
 }
 
-// Unknown selection is deliberately distinct from an authenticated context and
-// never reuses observations. A known context is keyed by the configuration
+// Unknown selection is deliberately distinct from an authenticated context: its
+// observations live only in the current operation, never in the shared cache
+// or a later operation. A known context is keyed by the configuration
 // that selects the credential, not by the token: a token replaced in the
 // keychain for the same account, even one with narrower permission scopes,
 // shares the account's observations.
