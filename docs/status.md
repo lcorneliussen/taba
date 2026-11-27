@@ -146,10 +146,16 @@ not cleared merely because it merged, and are not a new post-merge gate.
 Its title and JSON give the fuller explanation. Older merged entries move
 behind the `a` archive toggle after the configured age; hiding does not delete.
 Confirmed closed and declined PRs use the same archive age and `a` toggle as
-merged entries. Unmerged closures retain a `closed`/`declined` label and, once
-the closure is confirmed, show struck-through links and titles in supporting
-terminals, both before and after they are archived. NO_COLOR
-keeps the textual state and links. GitHub uses its closure date; Bitbucket uses
+merged entries. Unmerged closures retain a `closed`/`declined` label and
+show struck-through links and titles in supporting terminals, both before and
+after they are archived. NO_COLOR keeps the textual state and links. The label
+is the last known lifecycle, kept apart from refresh freshness: a closure the
+provider reported at a valid past time, or a recorded Bitbucket decline, stays
+`closed`/`declined` through a stale, deferred or failed recheck, with the
+freshness mark (such as `d:7m`) before the title and the reason in help, until
+a newer read observes the PR open again. A PR never observed, or one without a
+valid observation time, is never shown as closed. Closed rows show no check,
+merge or review signals; that history is not an active PR's state. GitHub uses its closure date; Bitbucket uses
 its last update conservatively, so later updates can delay archival. Missing,
 malformed or future dates stay unarchived. A still-checked-out branch also stays
 unarchived with the existing orphan warning; closure does not establish landing

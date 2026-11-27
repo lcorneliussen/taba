@@ -10,8 +10,31 @@ import (
 	"taba.sh/taba/internal/branding"
 )
 
+// StatusPRKnownClosure reports the last known lifecycle of a row, apart from
+// its refresh freshness: a GitHub closure or Bitbucket decline the provider
+// reported at a valid, past observation time, or a decline from the PR
+// registry. A deferred, stale or failed recheck keeps that closure readable;
+// the freshness mark says how old it is. A row that was never observed, or
+// whose observation time is missing, malformed or in the future, never
+// establishes closure, and a later observation of a reopen replaces the
+// state. Closure is presentation only: it grants no merge, cleanup or branch
+// action, and archiving stays the collector's decision.
+func StatusPRKnownClosure(row StatusPRRow, now time.Time) bool {
+	if row.State != "CLOSED" && row.State != "DECLINED" {
+		return false
+	}
+	switch row.Freshness {
+	case "recorded":
+		return true
+	case "live", "cached", "stale", "deferred", "unavailable", "refreshing":
+		at, err := time.Parse(time.RFC3339Nano, row.ObservedAt)
+		return err == nil && !at.After(now)
+	}
+	return false
+}
+
 func statusClosedObservation(row StatusPRRow) bool {
-	return (row.State == "CLOSED" || row.State == "DECLINED") && (row.Freshness == "live" || row.Freshness == "cached" || row.Freshness == "recorded")
+	return StatusPRKnownClosure(row, time.Now())
 }
 
 // StatusPRsByPriority keeps inventory order within each visible group while
@@ -315,9 +338,10 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			if label := statusFreshnessLabel(row.Freshness, row.ObservedAt); label != "" {
 				bits = append(bits, label)
 			}
+			closed := !row.OnBranch && statusClosedObservation(row)
 			if row.OnBranch {
 				bits = append(bits, "⚠ MERGED — "+row.LandingLabel())
-			} else if statusClosedObservation(row) {
+			} else if closed {
 				bits = append(bits, strings.ToLower(row.State))
 			} else if row.Draft {
 				bits = append(bits, "◇ draft")
@@ -329,7 +353,9 @@ func (s StatusSnapshot) markdown(includePRs bool) string {
 			if !row.OnBranch && (merge == "FOLLOW" || merge == "MERGED") {
 				bits = append(bits, "_merged_")
 			}
-			if !row.OnBranch {
+			// A closed PR's checks, mergeability and reviews are history; showing
+			// them would make the row read as an active PR.
+			if !row.OnBranch && !closed {
 				if row.Checks != nil {
 					if g := statusShownGlyph(*row.Checks); g != "" {
 						bits = append(bits, g)

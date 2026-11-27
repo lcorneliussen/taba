@@ -46,8 +46,10 @@ func statusClosedStrikeRow(t *testing.T, row wtc.StatusPRRow, width int) (string
 	return found, strings.TrimSpace(ansi.Cut(ansi.Strip(found), start, start+l.state))
 }
 
-// A confirmed unmerged closure is styled as closed at once, before archive
-// eligibility; archive visibility remains a separate fact.
+// A known unmerged closure is styled as closed at once, before archive
+// eligibility; archive visibility remains a separate fact. Lifecycle is not
+// freshness: a closure retained through a stale, deferred or failed recheck
+// keeps its label and strike, with the freshness mark beside the title.
 func TestStatusClosedStrikeBeforeArchive(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	observed := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano)
@@ -57,7 +59,7 @@ func TestStatusClosedStrikeBeforeArchive(t *testing.T) {
 	} {
 		for _, archived := range []bool{false, true} {
 			for _, draft := range []bool{false, true} {
-				for _, freshness := range []string{"live", "cached", "recorded"} {
+				for _, freshness := range []string{"live", "cached", "recorded", "stale", "deferred", "unavailable"} {
 					name := fmt.Sprintf("%s/archived=%v/draft=%v/%s", forge.state, archived, draft, freshness)
 					t.Run(name, func(t *testing.T) {
 						url := forge.url
@@ -74,6 +76,9 @@ func TestStatusClosedStrikeBeforeArchive(t *testing.T) {
 							}
 							if !strings.Contains(line, "\x1b]8;;"+url) {
 								t.Errorf("width=%d: hyperlink lost", width)
+							}
+							if mark := wtc.StatusPRFreshnessMark(freshness, observed, time.Now()); mark != "" && !strings.Contains(ansi.Strip(line), mark+" ") {
+								t.Errorf("width=%d: retained closure hides its freshness %q: %q", width, mark, ansi.Strip(line))
 							}
 							t.Setenv("NO_COLOR", "1")
 							plainLine, plainState := statusClosedStrikeRow(t, row, width)
@@ -93,29 +98,35 @@ func TestStatusClosedStrikeBeforeArchive(t *testing.T) {
 	}
 }
 
-// Observations that do not confirm a closure never gain closure styling.
+// Observations that do not establish a closure never gain closure styling: a
+// reopen, a row never observed, or a closure without a valid past observation
+// time or freshness.
 func TestStatusClosedStrikeControls(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("NO_COLOR", "")
 	observed := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339Nano)
+	future := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
 	merged := "MERGED"
 	for _, tc := range []struct {
-		name string
-		row  wtc.StatusPRRow
+		name, at string
+		row      wtc.StatusPRRow
 	}{
-		{"open", wtc.StatusPRRow{State: "OPEN", Freshness: "live"}},
-		{"open-draft", wtc.StatusPRRow{State: "OPEN", Draft: true, Freshness: "live"}},
-		{"reopened", wtc.StatusPRRow{State: "OPEN", Freshness: "live", ObservationReason: "provider-confirmed"}},
-		{"unknown", wtc.StatusPRRow{State: "UNKNOWN", Freshness: "live"}},
-		{"merged", wtc.StatusPRRow{State: "MERGED", Merge: &merged, Freshness: "live"}},
-		{"closed-stale", wtc.StatusPRRow{State: "CLOSED", Freshness: "stale"}},
-		{"declined-deferred", wtc.StatusPRRow{State: "DECLINED", Freshness: "deferred"}},
-		{"closed-unavailable", wtc.StatusPRRow{State: "CLOSED", Freshness: "unavailable"}},
+		{"open", observed, wtc.StatusPRRow{State: "OPEN", Freshness: "live"}},
+		{"open-draft", observed, wtc.StatusPRRow{State: "OPEN", Draft: true, Freshness: "live"}},
+		{"reopened", observed, wtc.StatusPRRow{State: "OPEN", Freshness: "live", ObservationReason: "provider-confirmed"}},
+		{"reopened-deferred", observed, wtc.StatusPRRow{State: "OPEN", Freshness: "deferred", ObservationReason: "shared-budget"}},
+		{"unknown", observed, wtc.StatusPRRow{State: "UNKNOWN", Freshness: "live"}},
+		{"merged", observed, wtc.StatusPRRow{State: "MERGED", Merge: &merged, Freshness: "live"}},
+		{"never-observed-deferred", "", wtc.StatusPRRow{Freshness: "deferred", ObservationReason: "shared-budget"}},
+		{"closed-without-observation", "", wtc.StatusPRRow{State: "CLOSED", Freshness: "deferred"}},
+		{"declined-malformed-time", "malformed", wtc.StatusPRRow{State: "DECLINED", Freshness: "stale"}},
+		{"closed-future-time", future, wtc.StatusPRRow{State: "CLOSED", Freshness: "unavailable"}},
+		{"closed-without-freshness", observed, wtc.StatusPRRow{State: "CLOSED"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			url := "https://github.com/example/widget/pull/7"
 			row := tc.row
-			row.Repo, row.Number, row.Title, row.ObservedAt, row.URL = "widget", "7", "Synthetic control", observed, &url
+			row.Repo, row.Number, row.Title, row.ObservedAt, row.URL = "widget", "7", "Synthetic control", tc.at, &url
 			for _, width := range []int{34, 120} {
 				line, state := statusClosedStrikeRow(t, row, width)
 				if statusStrikeSGR.MatchString(line) {

@@ -173,10 +173,17 @@ func TestStatusClosedArchiveExpiryDoesNotConfirmUnknownOrReopenedRows(t *testing
 	for _, state := range []string{"CLOSED", "DECLINED", "OPEN", "UNKNOWN"} {
 		for _, freshness := range []string{"stale", "deferred", "unavailable", ""} {
 			row := wtc.StatusPRRow{Repo: "widget", Number: "7", State: state, Title: "Synthetic fact", Freshness: freshness, ObservedAt: old}
+			// A provider-observed closure stays the last known lifecycle through
+			// a stale, deferred or failed recheck; anything else never gains one.
+			retained := (state == "CLOSED" || state == "DECLINED") && freshness != ""
 			for _, width := range []int{34, 120} {
 				frame := strings.Join(statusTUIPRLines(wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{row}}, width, false, false), "\n")
-				if strings.Contains(frame, "closed") || strings.Contains(frame, "declined") {
-					t.Fatalf("unconfirmed/reopened row gained closure: %+v\n%s", row, frame)
+				closed := strings.Contains(frame, "closed") || strings.Contains(frame, "declined")
+				if closed != retained || retained && !strings.Contains(frame, strings.ToLower(state)) {
+					t.Fatalf("closure presentation (want retained=%v): %+v\n%s", retained, row, frame)
+				}
+				if mark := wtc.StatusPRFreshnessMark(freshness, old, time.Now()); retained && !strings.Contains(frame, mark+" ") {
+					t.Fatalf("retained closure hides freshness %q:\n%s", mark, frame)
 				}
 			}
 		}
