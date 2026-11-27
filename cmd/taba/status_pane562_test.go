@@ -12,10 +12,11 @@ import (
 	"taba.sh/taba/internal/wtc"
 )
 
-// A pane whose GitHub login lives in the system keychain has an unknown
-// credential context. A background pass that the forge refuses must not turn
-// the rows the pane already showed back into never-observed ones.
-func TestStatusPane562KeychainPaneKeepsObservedPRRows(t *testing.T) {
+// A pane in an unknown credential context keeps no shared observations: here
+// gh's hosts file names a second host, so the keychain credential in use is
+// unresolved. A background pass that the forge refuses must not turn the rows
+// the pane already showed back into never-observed ones.
+func TestStatusPane562UnknownContextPaneKeepsObservedPRRows(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("TMPDIR", t.TempDir())
@@ -23,9 +24,10 @@ func TestStatusPane562KeychainPaneKeepsObservedPRRows(t *testing.T) {
 		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_HOST", "GH_REPO", "XDG_CONFIG_HOME"} {
 		t.Setenv(name, "")
 	}
-	// gh's default storage: hosts.yml names the account, the token is in the keychain.
+	// gh's default storage (account in hosts.yml, token in the keychain), with
+	// a second host configured.
 	ghConfig := filepath.Join(home, "gh")
-	pane562Write(t, filepath.Join(ghConfig, "hosts.yml"), "github.com:\n    git_protocol: https\n    users:\n        synthetic-user:\n    user: synthetic-user\n", 0600)
+	pane562Write(t, filepath.Join(ghConfig, "hosts.yml"), "github.com:\n    git_protocol: https\n    users:\n        synthetic-user:\n    user: synthetic-user\nghe.example.com:\n    user: synthetic-enterprise\n", 0600)
 	t.Setenv("GH_CONFIG_DIR", ghConfig)
 
 	root := t.TempDir()
