@@ -111,8 +111,12 @@ func statusResolveAuthContextWith(forge string, selection bitbucketReadSelection
 	known := false
 	switch forge {
 	case "github.com":
-		// Include both supported sources and store provenance conservatively. No
-		// equality claim is made for a credential hidden in encrypted storage.
+		// The context is the configuration that selects the credential: the
+		// environment tokens, the gh config directory and its hosts.yml and
+		// config.yml. A keychain login names its host and user in hosts.yml, so
+		// it is a known context too (#562); switching account, host or store
+		// changes the digest. A token replaced inside the keychain for the same
+		// account does not, and observations are shared across it.
 		token := os.Getenv("GH_TOKEN")
 		if token == "" {
 			token = os.Getenv("GITHUB_TOKEN")
@@ -138,9 +142,10 @@ func statusResolveAuthContextWith(forge string, selection bitbucketReadSelection
 		if token == "" && hostsOK && configOK {
 			var hostsConfig map[string]struct {
 				Token string `yaml:"oauth_token"`
+				User  string `yaml:"user"`
 			}
 			if yaml.Unmarshal(hosts, &hostsConfig) == nil {
-				known = hostsConfig[forge].Token != ""
+				known = hostsConfig[forge].Token != "" || hostsConfig[forge].User != ""
 			}
 		}
 		// Unresolved host routing cannot establish which host's keychain is used.

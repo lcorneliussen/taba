@@ -3,14 +3,17 @@
 Status response caches belong to a selected local credential context. The
 partition includes the forge host, credential-store selection and credential
 material, compared through an HMAC using a random private key in the disposable
-OS-user response cache. Usernames alone do not establish equality. Rotating a
-token, changing stores or logging out prevents reuse of the previous context's
-observations. Credential values and store paths do not appear in cache names.
+OS-user response cache. Rotating a token held in a file or the environment,
+switching accounts, changing stores or logging out prevents reuse of the
+previous context's observations. Credential values and store paths do not appear in cache names.
 Losing the cache key invalidates cached observations.
 
-GitHub environment tokens and locally stored selected tokens can establish a
-context without an identity API call. A keychain-only login is unknown to this
-local reader. Bitbucket includes the local candidates used by direct HTTP reads
+GitHub environment tokens, locally stored selected tokens and keychain logins
+establish a context without an identity API call. A keychain login is keyed by
+the gh configuration that selects it: the config directory, the host and user
+in `hosts.yml`, and `config.yml`. A token replaced in the keychain for the same
+account keeps the context. A hosts file that names another host, or `GH_HOST`
+naming another host, leaves the context unknown. Bitbucket includes the local candidates used by direct HTTP reads
 and the external CLI; OAuth refresh credentials are not treated as an established
 stable context. Unknown contexts cannot reuse known or legacy observations.
 Unknown credentials can still supply live status. Their observations and
