@@ -27,9 +27,14 @@ type PRRecord struct {
 	MergeCommit string `json:"merge_commit,omitempty"`
 	MergeBase   string `json:"merge_base,omitempty"`
 	MergeHead   string `json:"merge_head,omitempty"`
+	// DeclinedOn and DeclinedAt record a Bitbucket decline (updated_on and,
+	// when known, the decline event). Background refresh trusts the record
+	// until a current open list (even a capped one) shows the PR again.
+	DeclinedOn string `json:"declined_on,omitempty"`
+	DeclinedAt string `json:"declined_at,omitempty"`
 }
 
-const prHeader = "# Local PR enlistment for this collection (not committed; dies with retire).\n# Format: repo  number  [branch]  [url]  [title…]\n# Final merges: # merged-pr repo number merged-at checks\n# Merge commits: # merged-commit repo number sha [base]\n# Merged heads: # merged-head repo number merge-sha head-sha\n# Manage: wtc pr enlist|unlist|list\n"
+const prHeader = "# Local PR enlistment for this collection (not committed; dies with retire).\n# Format: repo  number  [branch]  [url]  [title…]\n# Final merges: # merged-pr repo number merged-at checks\n# Merge commits: # merged-commit repo number sha [base]\n# Merged heads: # merged-head repo number merge-sha head-sha\n# Bitbucket declines: # declined-pr repo number updated-on [declined-at]\n# Manage: wtc pr enlist|unlist|list\n"
 
 var prNumber = regexp.MustCompile(`^[0-9]+$`)
 var prRepoName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -104,6 +109,25 @@ func parseMergedPR(line string) (repo, number, mergedOn, checks string, ok bool)
 	return "", "", "", "", false
 }
 
+// parseDeclinedPR reads a recorded Bitbucket decline: updated_on of the
+// observed decline and, when the activity log dated it, the decline event.
+func parseDeclinedPR(line string) (repo, number, declinedOn, declinedAt string, ok bool) {
+	fields := strings.Fields(line)
+	if (len(fields) != 5 && len(fields) != 6) || fields[0] != "#" || fields[1] != "declined-pr" || ValidatePRIdentity(fields[2], fields[3]) != nil {
+		return "", "", "", "", false
+	}
+	if _, err := time.Parse(time.RFC3339, fields[4]); err != nil {
+		return "", "", "", "", false
+	}
+	if len(fields) == 6 {
+		if _, err := time.Parse(time.RFC3339, fields[5]); err != nil {
+			return "", "", "", "", false
+		}
+		declinedAt = fields[5]
+	}
+	return fields[2], fields[3], fields[4], declinedAt, true
+}
+
 // parseMergeCommit reads the commit a merge landed as. It is a separate row so
 // that older readers, which require exactly six merged-pr fields, keep working.
 func parseMergeCommit(line string) (repo, number, sha, base string, ok bool) {
@@ -134,6 +158,7 @@ func (c *Context) ListPRs() ([]PRRecord, error) {
 	merged := map[string]PRRecord{}
 	commits := map[string][2]string{}
 	heads := map[string][2]string{}
+	declined := map[string][2]string{}
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		if record, ok := parsePR(s.Text()); ok {
@@ -144,6 +169,8 @@ func (c *Context) ListPRs() ([]PRRecord, error) {
 			heads[prRecordKey(repo, number)] = [2]string{merge, head}
 		} else if repo, number, sha, base, ok := parseMergeCommit(s.Text()); ok {
 			commits[prRecordKey(repo, number)] = [2]string{sha, base}
+		} else if repo, number, on, at, ok := parseDeclinedPR(s.Text()); ok {
+			declined[prRecordKey(repo, number)] = [2]string{on, at}
 		}
 	}
 	if err := s.Err(); err != nil {
@@ -157,6 +184,8 @@ func (c *Context) ListPRs() ([]PRRecord, error) {
 			if head := heads[prRecordKey(records[i].Repo, records[i].Number)]; head[0] == commit[0] {
 				records[i].MergeHead = head[1]
 			}
+		} else if decline, ok := declined[prRecordKey(records[i].Repo, records[i].Number)]; ok {
+			records[i].DeclinedOn, records[i].DeclinedAt = decline[0], decline[1]
 		}
 	}
 	return records, nil
@@ -282,6 +311,9 @@ func (c *Context) rewritePRsLocked(removeRepo, removeNumber string, add *PRRecor
 			continue
 		}
 		if repo, number, _, _, ok := parseMergedPR(line); ok && matching[repo] && number == removeNumber && add == nil {
+			continue
+		}
+		if repo, number, _, _, ok := parseDeclinedPR(line); ok && matching[repo] && number == removeNumber && add == nil {
 			continue
 		}
 		fmt.Fprintln(&out, line)
@@ -424,6 +456,115 @@ func (c *Context) recordMergedPRsLocked(records []PRRecord, updates map[string]s
 		return 0, nil
 	}
 	return count, c.writePRFile(out.Bytes())
+}
+
+// statusDeclineUpdate is one change to a recorded Bitbucket decline: a new
+// record (DeclinedOn set) or its removal once the PR is seen open or merged.
+type statusDeclineUpdate struct {
+	DeclinedOn, DeclinedAt string
+}
+
+// recordDeclinedPRs records Bitbucket declines observed by this pass, so
+// background refresh does not read them again, and removes the record of a
+// PR observed open or merged since. bitbucket[i] reports whether records[i] is a
+// Bitbucket PR; other forges are left alone (a GitHub close is not read from
+// an open list here).
+func (c *Context) recordDeclinedPRs(records []PRRecord, details []statusPRDetail, bitbucket []bool) (recorded, cleared int, err error) {
+	if len(records) != len(details) || len(records) != len(bitbucket) {
+		return 0, 0, fmt.Errorf("PR records and details differ in length")
+	}
+	updates := map[string]statusDeclineUpdate{}
+	for i, record := range records {
+		detail := details[i]
+		if !bitbucket[i] || record.MergedOn != "" || statusObservationUnavailable(detail.Freshness) || detail.StateSource == "registry" {
+			continue
+		}
+		key := prRecordKey(record.Repo, record.Number)
+		switch detail.State {
+		case "DECLINED":
+			on, at := detail.ClosedOn, detail.ClosedAt
+			if _, err := time.Parse(time.RFC3339, on); err != nil || strings.ContainsAny(on, " \t\r\n") {
+				continue
+			}
+			if _, err := time.Parse(time.RFC3339, at); err != nil || strings.ContainsAny(at, " \t\r\n") {
+				at = ""
+			}
+			if on != record.DeclinedOn || at != "" && at != record.DeclinedAt {
+				updates[key] = statusDeclineUpdate{DeclinedOn: on, DeclinedAt: at}
+			}
+		case "OPEN", "DRAFT", "MERGED":
+			// Open again, or merged after a reopen (seen by an explicit
+			// refresh): the recorded decline no longer holds.
+			if record.DeclinedOn != "" {
+				updates[key] = statusDeclineUpdate{}
+			}
+		}
+	}
+	if len(updates) == 0 {
+		return 0, 0, nil
+	}
+	err = c.withPRLock(func() error {
+		var err error
+		recorded, cleared, err = c.recordDeclinedPRsLocked(updates)
+		return err
+	})
+	return recorded, cleared, err
+}
+
+func (c *Context) recordDeclinedPRsLocked(updates map[string]statusDeclineUpdate) (recorded, cleared int, err error) {
+	path, err := c.prInput()
+	if err != nil {
+		return 0, 0, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return 0, 0, fmt.Errorf("refusing non-regular PR file: %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	var out bytes.Buffer
+	rows := map[string]PRRecord{}
+	var order []string
+	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+		if repo, number, _, _, ok := parseDeclinedPR(line); ok {
+			if update, change := updates[prRecordKey(repo, number)]; change {
+				if update.DeclinedOn == "" {
+					cleared++
+				}
+				continue
+			}
+		}
+		if record, ok := parsePR(line); ok {
+			key := prRecordKey(record.Repo, record.Number)
+			if _, seen := rows[key]; !seen {
+				order = append(order, key)
+			}
+			rows[key] = record
+		}
+		fmt.Fprintln(&out, line)
+	}
+	for _, key := range order {
+		update, change := updates[key]
+		if !change || update.DeclinedOn == "" {
+			continue
+		}
+		record := rows[key]
+		line := fmt.Sprintf("# declined-pr %s %s %s", record.Repo, record.Number, update.DeclinedOn)
+		if update.DeclinedAt != "" {
+			line += " " + update.DeclinedAt
+		}
+		fmt.Fprintln(&out, line)
+		recorded++
+	}
+	if recorded == 0 && cleared == 0 {
+		return 0, 0, nil
+	}
+	return recorded, cleared, c.writePRFile(out.Bytes())
 }
 
 func (c *Context) EnlistPR(r PRRecord) (PRRecord, error) {
