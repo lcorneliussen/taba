@@ -74,11 +74,20 @@ func statusForgeEntryPathContext(ctx context.Context, kind, forge, slug, key str
 	return path
 }
 
+// statusMkdirCacheDir creates a missing cache directory. A test replaces it to
+// count creation attempts.
+var statusMkdirCacheDir = os.Mkdir
+
+// statusSecureCacheDir accepts a private cache directory, creating it only when
+// it is missing. A healthy existing directory costs one Lstat.
 func statusSecureCacheDir(path string) bool {
-	if err := os.Mkdir(path, 0700); err != nil && !os.IsExist(err) {
-		return false
-	}
 	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		if err := statusMkdirCacheDir(path, 0700); err != nil && !os.IsExist(err) {
+			return false
+		}
+		info, err = os.Lstat(path)
+	}
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return false
 	}
