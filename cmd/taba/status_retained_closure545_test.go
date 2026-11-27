@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -155,6 +156,12 @@ func retained545Row(t *testing.T, snapshot wtc.StatusSnapshot, number string) wt
 	return wtc.StatusPRRow{}
 }
 
+func retained545ActiveSignals(row wtc.StatusPRRow) wtc.StatusPRRow {
+	checks, merge, review := "FAILURE", "CONFLICTING", "changes"
+	row.Checks, row.Merge, row.Review = &checks, &merge, &review
+	return row
+}
+
 // retained545Expect is what one collector pass must show for PR 7.
 type retained545Expect struct {
 	state, freshness, reason string
@@ -179,7 +186,11 @@ func retained545Render(t *testing.T, step string, snapshot wtc.StatusSnapshot, w
 		t.Fatalf("%s: known closure %v, want %v", step, got, closed)
 	}
 	label := strings.ToLower(want.state)
-	mark := wtc.StatusPRFreshnessMark(row.Freshness, row.ObservedAt, time.Now())
+	// The age ticks while frames render; match the mark's kind, not its value.
+	var mark *regexp.Regexp
+	if m := wtc.StatusPRFreshnessMark(row.Freshness, row.ObservedAt, time.Now()); m != "" {
+		mark = regexp.MustCompile(regexp.QuoteMeta(m[:2]) + `(\d+[smhd]|\?) `)
+	}
 	for _, width := range []int{34, 80, 120} {
 		for _, noColor := range []string{"", "1"} {
 			t.Setenv("NO_COLOR", noColor)
@@ -191,19 +202,30 @@ func retained545Render(t *testing.T, step string, snapshot wtc.StatusSnapshot, w
 			if struck := statusStrikeSGR.MatchString(line); struck != (closed && noColor == "") {
 				t.Fatalf("%s width=%d NO_COLOR=%q: strike %v: %q", step, width, noColor, struck, line)
 			}
-			if mark != "" && !strings.Contains(plain, mark+" ") {
-				t.Fatalf("%s width=%d: freshness %q missing: %q", step, width, mark, plain)
+			if mark != nil && !mark.MatchString(plain) {
+				t.Fatalf("%s width=%d: freshness %s missing: %q", step, width, mark, plain)
 			}
 			if width == 120 {
 				if row.Title == "" || !strings.Contains(plain, row.Title) {
 					t.Fatalf("%s: title displaced: %q", step, plain)
 				}
-				l := statusTUIPRLayout(width, row)
+				// Historical evidence that would read as an active, failing PR:
+				// a closed row shows only the neutral placeholder (as completed
+				// merges do) and keeps its label; an open row shows the signals.
+				active := retained545ActiveSignals(row)
+				activeLine, activeState := statusClosedStrikeRow(t, active, width)
+				activePlain := ansi.Strip(activeLine)
+				l := statusTUIPRLayout(width, active)
 				start := l.number + 1 + l.repo + 1 + l.state + 1
-				signals := strings.TrimSpace(ansi.Cut(plain, start, start+l.signalWidths[0]+l.signalWidths[1]+l.signalWidths[2]+3))
-				// Only the neutral placeholder, as for completed merges.
-				if closed && strings.Trim(signals, "· ") != "" {
-					t.Fatalf("%s: closed row shows active signals %q: %q", step, signals, plain)
+				signals := strings.TrimSpace(ansi.Cut(activePlain, start, start+l.signalWidths[0]+l.signalWidths[1]+l.signalWidths[2]+3))
+				if neutral := strings.Trim(signals, "· ") == ""; neutral != closed {
+					t.Fatalf("%s: signals %q (closed=%v): %q", step, signals, closed, activePlain)
+				}
+				if closed && activeState != label {
+					t.Fatalf("%s: historical conflict replaced the closure label: %q", step, activePlain)
+				}
+				if md := (wtc.StatusSnapshot{PRs: []wtc.StatusPRRow{active}}).Markdown(); strings.Contains(md, "✗") != !closed {
+					t.Fatalf("%s: Markdown signals (closed=%v):\n%s", step, closed, md)
 				}
 			}
 		}
@@ -248,8 +270,19 @@ func TestStatusRetainedClosure545CollectorToRender(t *testing.T) {
 				t.Fatalf("never-observed row claims a lifecycle: %q", line)
 			}
 		}
-		// A pane holding the live closure keeps it through the deferred pass.
-		retained545Render(t, "pane-deferred", wtc.StatusPreferNewerObservations(deferred, live), retained545Expect{"CLOSED", "deferred", "shared-budget"})
+		// A pane holding the live closure keeps it through a deferred pass that
+		// brought no observation of its own.
+		unobserved := deferred
+		unobserved.PRs = append([]wtc.StatusPRRow(nil), deferred.PRs...)
+		for i := range unobserved.PRs {
+			if unobserved.PRs[i].Number == "7" {
+				unobserved.PRs[i].State, unobserved.PRs[i].ObservedAt, unobserved.PRs[i].StateSource = "", "", ""
+			}
+		}
+		pane := retained545Render(t, "pane-deferred", wtc.StatusPreferNewerObservations(unobserved, live), retained545Expect{"CLOSED", "deferred", "shared-budget"})
+		if pane.ObservedAt != retained545Row(t, live, "7").ObservedAt {
+			t.Fatalf("pane retention changed the observation time: %+v", pane)
+		}
 
 		stale := deferred
 		stale.PRs = append([]wtc.StatusPRRow(nil), deferred.PRs...)

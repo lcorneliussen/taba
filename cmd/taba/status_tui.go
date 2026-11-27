@@ -2043,7 +2043,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		if merged && !row.OnBranch {
 			linkTone = statusToneDim
 		}
-		// A confirmed closure is struck through at once; archiving only
+		// A known closure is struck through at once; archiving only
 		// decides whether the row is listed.
 		if closed {
 			linkTone = statusToneDim + ";9"
@@ -2063,7 +2063,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		stateCell := statusTUIFit(state, l.state)
 		signals := statusTUIPRSignals(row.Checks, row.Merge, row.Review, styled)
-		// Completed work carries no active check, merge or review signals:
+		// Completed or closed work carries no active check, merge or review signals:
 		// their scope is historical.
 		if merged && !row.OnBranch || closed {
 			signals = statusTUIPRSignals(nil, nil, nil, styled)

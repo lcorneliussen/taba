@@ -12,12 +12,12 @@ import (
 
 // StatusPRKnownClosure reports the last known lifecycle of a row, apart from
 // its refresh freshness: a GitHub closure or Bitbucket decline the provider
-// reported at a valid, past observation time, or a decline from the PR
-// registry. A deferred, stale or failed recheck keeps that closure readable;
-// the freshness mark says how old it is. A row that was never observed, or
-// whose observation time is missing, malformed or in the future, never
-// establishes closure, and a later observation of a reopen replaces the
-// state. Closure is presentation only: it grants no merge, cleanup or branch
+// reported at a valid, past observation time, or a decline recorded in the PR
+// registry (which carries no observation time). A deferred, stale or failed
+// recheck keeps that closure readable; the freshness mark says how old it is.
+// A row that was never observed, or a provider observation whose time is
+// missing, malformed or in the future, never establishes closure, and a later
+// observation of a reopen replaces the state. Closure is presentation only: it grants no merge, cleanup or branch
 // action, and archiving stays the collector's decision.
 func StatusPRKnownClosure(row StatusPRRow, now time.Time) bool {
 	if row.State != "CLOSED" && row.State != "DECLINED" {
