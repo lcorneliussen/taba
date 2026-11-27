@@ -1,0 +1,8 @@
+{
+  "name": "taba-openclaw-compat",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test audit.test.mjs" },
+  "dependencies": { "typescript": "5.9.3" }
+}
