@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -18,6 +17,7 @@ type openOptions struct {
 	All, List, DryRun, Focus, Full, Trim                        bool
 	NoAgent, NoBrowse, NoStatus, NoFirstPrompt, NoRemoteControl bool
 	Session, Agent, AgentArgs                                   string
+	Multiplexer                                                 string // "" is herdr
 	AgentArgsSet                                                bool
 	Layout                                                      string
 	LayoutSet                                                   bool
@@ -95,16 +95,17 @@ func addOpenCommand(root *cobra.Command, asJSON *bool) {
 		if !cmd.Flags().Changed("full") && statusSetting(c, "WTC_PANES") == "full" {
 			opt.Tools = openWantedTools(true, opt.Add)
 		}
-		if _, err := exec.LookPath("herdr"); err != nil {
-			return errors.New("herdr is not installed")
+		if host := newTerminalHost(opt.Multiplexer, ""); host.Available() != nil {
+			return errors.New(host.Kind() + " is not installed")
 		}
 		names, err := openSelectedCollections(c, opt.All, args)
 		if err != nil {
 			return err
 		}
 		opt.Session = openSession(c, opt.Session)
-		running := openSessionRunning(opt.Session)
-		budget, low := openPtyReport()
+		host := openHostFor(opt)
+		running := host.Running()
+		budget, low := openPtyReport(host)
 		if low && !*asJSON {
 			fmt.Fprintln(os.Stderr, "warning: "+budget)
 		}
@@ -112,7 +113,7 @@ func addOpenCommand(root *cobra.Command, asJSON *bool) {
 			return openTrimCommand(c, names, opt, running, asJSON)
 		}
 		if !running && !opt.List && !opt.DryRun {
-			if err := openEnsureSession(opt.Session); err != nil {
+			if err := host.EnsureRunning(); err != nil {
 				return err
 			}
 			running = true
@@ -143,7 +144,7 @@ func addOpenCommand(root *cobra.Command, asJSON *bool) {
 				fmt.Println("pty budget: " + budget)
 			}
 			if opt.List && !running {
-				fmt.Printf("herdr session %q: not running\n", opt.Session)
+				fmt.Printf("%s session %q: not running\n", host.Kind(), opt.Session)
 			} else {
 				for _, item := range items {
 					fmt.Printf("==> %s: %s — %s\n", item.Collection, item.Workspace, strings.Join(item.Actions, ", "))
@@ -152,7 +153,7 @@ func addOpenCommand(root *cobra.Command, asJSON *bool) {
 					}
 				}
 			}
-			fmt.Printf("attach: herdr --session %s\n", opt.Session)
+			fmt.Printf("attach: %s\n", host.AttachHint())
 		}
 		if failures != 0 {
 			return fmt.Errorf("%d collection(s) could not be opened", failures)
@@ -236,7 +237,7 @@ func openDesiredLayout(c *wtc.Context, opt openOptions, running bool) string {
 		return preference
 	}
 	if running {
-		if width := openSessionWidth(opt.Session); width > 0 {
+		if width := openHostFor(opt).SessionWidth(); width > 0 {
 			at, err := strconv.Atoi(statusSetting(c, "WTC_LAYOUT_NARROW_AT"))
 			if err != nil || at <= 0 {
 				at = 140

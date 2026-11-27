@@ -246,7 +246,7 @@ func run() error {
 			path, err := exec.LookPath(name)
 			checks = append(checks, map[string]any{"name": name, "ok": err == nil, "detail": path})
 		}
-		if budget, low := openPtyReport(); budget != "" {
+		if budget, low := openPtyReport(newTerminalHost("", "")); budget != "" {
 			checks = append(checks, map[string]any{"name": "pty", "ok": !low, "detail": budget})
 		}
 		if c.Config.Compatibility.Requires != "" {

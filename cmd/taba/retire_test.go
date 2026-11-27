@@ -74,7 +74,7 @@ func TestSelfRetireHandsOffToCleanupWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(calls)
-	if !strings.Contains(text, "workspace create --label --cleanup-- --cwd "+c.Workspace+" --no-focus") || !strings.Contains(text, "pane run cleanup:p1 ") || !strings.Contains(text, " retire-worker 'finished'") {
+	if !strings.Contains(text, "workspace create --cwd "+c.Workspace+" --label --cleanup-- --no-focus") || !strings.Contains(text, "pane run cleanup:p1 ") || !strings.Contains(text, " retire-worker 'finished'") {
 		t.Fatalf("cleanup handoff incomplete: %s", text)
 	}
 	if strings.Contains(text, "workspace close") {
@@ -95,7 +95,7 @@ func TestSelfRetireReusesCleanupWorkspaceAndRejectsWrongSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(calls), "tab create --workspace cleanup-id --label finished") || !strings.Contains(string(calls), "pane run cleanup:p2 ") {
+	if !strings.Contains(string(calls), "tab create --workspace cleanup-id --cwd "+c.Workspace+" --label finished") || !strings.Contains(string(calls), "pane run cleanup:p2 ") {
 		t.Fatalf("existing cleanup workspace was not reused: %s", calls)
 	}
 	t.Setenv("RETIRE_TEST_SOURCE_ID", "some-other-workspace")

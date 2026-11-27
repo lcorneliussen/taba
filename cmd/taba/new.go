@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -97,24 +96,25 @@ func runNewAtRoot(root string, opt wtc.NewOptions, open, noOpen, asJSON bool) er
 func openAfterNew(source *wtc.Context, collection string, explicitOpen, noOpen bool) error {
 	shouldOpen := explicitOpen
 	if !explicitOpen && !noOpen {
-		if _, err := exec.LookPath("herdr"); err == nil {
-			shouldOpen = openSessionRunning(openSession(source, ""))
+		if host := newTerminalHost("", openSession(source, "")); host.Available() == nil {
+			shouldOpen = host.Running()
 		}
 	}
 	if !shouldOpen {
 		return nil
 	}
-	if _, err := exec.LookPath("herdr"); err != nil {
-		return fmt.Errorf("collection created at %s, but herdr is unavailable: %w", collection, err)
+	if host := newTerminalHost("", ""); host.Available() != nil {
+		return fmt.Errorf("collection created at %s, but %s is unavailable: %w", collection, host.Kind(), host.Available())
 	}
 	target, err := wtc.OpenCollection(collection)
 	if err != nil {
 		return fmt.Errorf("collection created at %s, but cannot read its configuration: %w", collection, err)
 	}
 	opt := openOptions{Session: openSession(target, ""), Tools: openWantedTools(statusSetting(target, "WTC_PANES") == "full", nil)}
-	running := openSessionRunning(opt.Session)
+	host := openHostFor(opt)
+	running := host.Running()
 	if !running {
-		if err := openEnsureSession(opt.Session); err != nil {
+		if err := host.EnsureRunning(); err != nil {
 			return fmt.Errorf("collection created at %s, but opening failed: %w", collection, err)
 		}
 		running = true

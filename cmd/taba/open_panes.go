@@ -22,7 +22,7 @@ func openPtyHint() string {
 
 func openTrimCommand(c *wtc.Context, names []string, opt openOptions, running bool, asJSON *bool) error {
 	if !running {
-		return fmt.Errorf("herdr session %q is not running", opt.Session)
+		return fmt.Errorf("%s session %q is not running", openHostFor(opt).Kind(), opt.Session)
 	}
 	items := make([]openItem, 0, len(names))
 	failures := 0
@@ -55,7 +55,8 @@ func openTrimCommand(c *wtc.Context, names []string, opt openOptions, running bo
 // workspace that nobody is using. Agent and status panes are never touched.
 func openTrimCollection(source *wtc.Context, name string, opt openOptions) openItem {
 	item := openItem{Collection: name, Actions: []string{}}
-	workspaces, err := openWorkspaces(opt.Session)
+	host := openHostFor(opt)
+	workspaces, err := host.Workspaces()
 	if err != nil {
 		item.Error = err.Error()
 		return item
@@ -70,7 +71,7 @@ func openTrimCollection(source *wtc.Context, name string, opt openOptions) openI
 		item.Actions = append(item.Actions, "no workspace")
 		return item
 	}
-	panes, err := openPanes(opt.Session, item.Workspace)
+	panes, err := host.Panes(item.Workspace)
 	if err != nil {
 		item.Error = err.Error()
 		return item
@@ -80,7 +81,7 @@ func openTrimCollection(source *wtc.Context, name string, opt openOptions) openI
 		if pane.Label != "browse" && pane.Label != "shell" && pane.Label != "review" {
 			continue
 		}
-		reason, err := openTrimKeep(opt.Session, pane, socket)
+		reason, err := openTrimKeep(host, pane, socket)
 		if err != nil {
 			item.Actions = append(item.Actions, pane.Label+" kept (inspection failed)")
 			item.Error = strings.TrimPrefix(item.Error+"; "+pane.Label+": "+err.Error(), "; ")
@@ -94,7 +95,7 @@ func openTrimCollection(source *wtc.Context, name string, opt openOptions) openI
 			item.Actions = append(item.Actions, "would close "+pane.Label)
 			continue
 		}
-		if _, err := openHerdr(opt.Session, "pane", "close", pane.ID); err != nil {
+		if err := host.ClosePane(pane.ID); err != nil {
 			item.Error = strings.TrimPrefix(item.Error+"; "+pane.Label+": "+err.Error(), "; ")
 			continue
 		}
@@ -109,18 +110,18 @@ func openTrimCollection(source *wtc.Context, name string, opt openOptions) openI
 // openTrimKeep returns why a tool pane stays open, or "" when it is idle: a
 // shell or review pane at its prompt, or a browse Neovim with no unsaved buffers.
 // A focused pane, a running command, or a Neovim that does not answer stays.
-func openTrimKeep(session string, pane openPaneInfo, socket string) (string, error) {
+func openTrimKeep(host terminalHost, pane openPaneInfo, socket string) (string, error) {
 	if pane.Focused {
 		return "focused", nil
 	}
-	argv, err := openPaneCommand(session, pane.ID)
+	argv, err := host.Foreground(pane.ID)
 	if err != nil {
 		return "", err
 	}
 	if openShellCommand(argv) {
 		return "", nil
 	}
-	state, _ := openPaneState(session, pane)
+	state, _ := openPaneState(host, pane)
 	if pane.Label != "browse" || !openBrowseCommand(argv) {
 		return "running " + state, nil
 	}
@@ -131,7 +132,7 @@ func openTrimKeep(session string, pane openPaneInfo, socket string) (string, err
 	// A second wtc browse starts a Neovim without the socket, so the one that
 	// answers may belong to another terminal. The socket is served by the
 	// --embed child of the Neovim the pane runs.
-	pids, err := openPaneProcessIDs(session, pane.ID)
+	pids, err := host.ProcessIDs(pane.ID)
 	if err != nil {
 		return "", err
 	}
@@ -155,18 +156,6 @@ func openBrowseCommand(argv []string) bool {
 	}
 	name := strings.TrimSuffix(filepath.Base(argv[0]), ".exe")
 	return (name == "wtc" || name == "taba") && len(argv) > 1 && argv[1] == "browse"
-}
-
-func openPaneProcessIDs(session, pane string) (map[int]bool, error) {
-	result, err := openHerdr(session, "pane", "process-info", "--pane", pane)
-	if err != nil {
-		return nil, err
-	}
-	pids := map[int]bool{}
-	for _, process := range result.Result.ProcessInfo.Processes {
-		pids[process.PID] = true
-	}
-	return pids, nil
 }
 
 // openNvimModified reports the PID of the Neovim on socket and its parent,
@@ -210,9 +199,9 @@ func openPtyLow(used, max int) bool {
 	return max > 0 && max-used < max/8
 }
 
-// openPtyReport describes the pty budget, and when it is low names the herdr
+// openPtyReport describes the pty budget, and when it is low names the
 // sessions and pane kinds that hold the most.
-func openPtyReport() (string, bool) {
+func openPtyReport(host terminalHost) (string, bool) {
 	used, max := openPtyCounts()
 	if max == 0 {
 		return "", false
@@ -221,36 +210,22 @@ func openPtyReport() (string, bool) {
 	if !openPtyLow(used, max) {
 		return report, false
 	}
-	if holders := openPtyHolders(); holders != "" {
+	if holders := openPtyHolders(host); holders != "" {
 		report += "; most panes: " + holders
 	}
 	return report + branding.Text("; close idle tool panes with {{command}} open --trim --all"), true
 }
 
-func openPtyHolders() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "herdr", "session", "list").Output()
-	if err != nil {
-		return ""
-	}
+func openPtyHolders(host terminalHost) string {
 	type holder struct {
 		session string
 		total   int
 		kinds   map[string]int
 	}
 	var holders []holder
-	for _, line := range strings.Split(string(out), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 || fields[1] != "running" {
-			continue
-		}
-		panes, err := openHerdr(fields[0], "pane", "list")
-		if err != nil {
-			continue
-		}
-		h := holder{session: fields[0], total: len(panes.Result.Panes), kinds: map[string]int{}}
-		for _, pane := range panes.Result.Panes {
+	for _, session := range host.SessionPanes() {
+		h := holder{session: session.Session, total: len(session.Panes), kinds: map[string]int{}}
+		for _, pane := range session.Panes {
 			switch pane.Label {
 			case "agent", "browse", "shell", "status":
 				h.kinds[pane.Label]++
