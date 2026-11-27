@@ -72,9 +72,18 @@ func TestStatusAuth441StoreAndLegacyBoundary(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GH_CONFIG_DIR", dir)
 	path := filepath.Join(dir, "hosts.yml")
-	fixtureFile(t, path, "github.com:\n  user: synthetic\n", 0600)
+	fixtureFile(t, path, "github.com:\n  git_protocol: https\n", 0600)
 	if statusResolveAuthContext("github.com").known {
-		t.Fatal("login name equated keychain credentials")
+		t.Fatal("a hosts entry without user or token established a context")
+	}
+	fixtureFile(t, path, "github.com:\n  user: synthetic\n", 0600)
+	keychain := statusResolveAuthContext("github.com")
+	if !keychain.known {
+		t.Fatal("keychain login unknown")
+	}
+	fixtureFile(t, path, "github.com:\n  user: synthetic-other\n", 0600)
+	if other := statusResolveAuthContext("github.com"); !other.known || other.scope == keychain.scope {
+		t.Fatal("account switch shared the keychain context")
 	}
 	fixtureFile(t, path, "github.com:\n  user: synthetic\n  oauth_token: synthetic-A\n", 0600)
 	a := statusResolveAuthContext("github.com")
@@ -341,10 +350,12 @@ func TestStatusAuth441ProcessIsolation(t *testing.T) {
 	}
 }
 
-func TestStatusAuth441KeychainOnlyLiveAvailabilityAndCost(t *testing.T) {
+// A hosts file that also names another host leaves the keychain credential
+// in use unresolved: the context is unknown.
+func TestStatusAuth441UnknownContextLiveAvailabilityAndCost(t *testing.T) {
 	auth441Fixture(t)
 	home := os.Getenv("HOME")
-	fixtureFile(t, filepath.Join(home, ".config", "gh", "hosts.yml"), "github.com:\n  user: synthetic-keychain-account\n", 0600)
+	fixtureFile(t, filepath.Join(home, ".config", "gh", "hosts.yml"), "github.com:\n  user: synthetic-keychain-account\nghe.example.com:\n  user: synthetic-enterprise\n", 0600)
 	bin := t.TempDir()
 	counter := filepath.Join(bin, "calls")
 	t.Setenv("WTC_TEST_441_CALLS", counter)
@@ -360,12 +371,12 @@ fi
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	ctx := statusAuthOperation(context.Background())
 	if statusAuthForContext(ctx, "github.com").known {
-		t.Fatal("keychain credential identity falsely established")
+		t.Fatal("credential identity falsely established with two hosts")
 	}
 	for _, number := range []string{"7", "8"} {
 		detail := statusEnrichRecordMetadataContext(ctx, StatusRefreshBackground, PRRecord{Number: number}, "example/widget", "github.com")
 		if detail.State != "OPEN" || detail.ObservedAt == "" || !strings.HasPrefix(detail.Title, "Live ") {
-			t.Fatalf("keychain-only live status unavailable: %+v", detail)
+			t.Fatalf("unknown-context live status unavailable: %+v", detail)
 		}
 	}
 	calls, _ := os.ReadFile(counter)
@@ -375,7 +386,7 @@ fi
 	next := statusAuthOperation(context.Background())
 	detail := statusEnrichRecordMetadataContext(next, StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com")
 	if detail.State != "OPEN" {
-		t.Fatal("next keychain-only refresh nonfunctional")
+		t.Fatal("next unknown-context refresh nonfunctional")
 	}
 	calls, _ = os.ReadFile(counter)
 	if len(calls) != 2 {
@@ -536,5 +547,37 @@ printf '%s\n' '[{"number":7,"headRefName":"topic","state":"OPEN","title":"Synthe
 	}
 	if _, err := os.Stat(c.PRFile()); !os.IsNotExist(err) {
 		t.Fatal("discovery wrote enlistment")
+	}
+}
+
+// A keychain login is keyed by the gh configuration that selects it: a later
+// operation reuses its list, and switching account reads again.
+func TestStatusAuth562KeychainLoginSharesObservations(t *testing.T) {
+	auth441Fixture(t)
+	hosts := filepath.Join(os.Getenv("HOME"), ".config", "gh", "hosts.yml")
+	fixtureFile(t, hosts, "github.com:\n  user: synthetic-keychain-account\n", 0600)
+	bin := t.TempDir()
+	counter := filepath.Join(bin, "calls")
+	t.Setenv("WTC_TEST_562_CALLS", counter)
+	fixtureFile(t, filepath.Join(bin, "gh"), `#!/bin/sh
+if [ "$1" = auth ]; then exit 9; fi
+printf x >> "$WTC_TEST_562_CALLS"
+printf '%s\n' '[{"number":7,"state":"OPEN","title":"Live seven","headRefName":"topic","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]'
+`, 0700)
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	calls := func() int { raw, _ := os.ReadFile(counter); return len(raw) }
+	for pass := 0; pass < 2; pass++ {
+		detail := statusEnrichRecordMetadataContext(statusAuthOperation(context.Background()), StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com")
+		if detail.State != "OPEN" || detail.Title != "Live seven" {
+			t.Fatalf("keychain login pass %d: %+v", pass, detail)
+		}
+	}
+	if calls() != 1 {
+		t.Fatalf("a second operation did not reuse the keychain login's list: %d reads", calls())
+	}
+	fixtureFile(t, hosts, "github.com:\n  user: synthetic-other-account\n", 0600)
+	statusEnrichRecordMetadataContext(statusAuthOperation(context.Background()), StatusRefreshBackground, PRRecord{Number: "7"}, "example/widget", "github.com")
+	if calls() != 2 {
+		t.Fatalf("another account reused the list: %d reads", calls())
 	}
 }

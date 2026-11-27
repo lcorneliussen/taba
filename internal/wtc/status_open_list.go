@@ -28,7 +28,7 @@ type statusOpenPR struct {
 // statusOpenList is one repository's open pull requests, shared by every
 // pane for statusOpenListAge: the only routine status read of its PRs where
 // the host has a list. A Bitbucket host without a REST credential reads each
-// PR by number once per cache age instead (statusEnrichRecordMetadataContext).
+// PR by number instead (statusEnrichRecordMetadataContext).
 type statusOpenList struct {
 	prs       map[string]statusOpenPR
 	truncated bool      // more PRs are open than the list holds
