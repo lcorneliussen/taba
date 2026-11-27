@@ -73,7 +73,8 @@ type Config struct {
 		Requires string `toml:"requires"`
 	} `toml:"compatibility"`
 	Mise struct {
-		Tools map[string]string `toml:"tools"`
+		Tools    map[string]string `toml:"tools"`
+		Settings any               `toml:"settings"`
 	} `toml:"mise"`
 	AgentEnv struct {
 		PrependPaths []string `toml:"prepend_paths"`

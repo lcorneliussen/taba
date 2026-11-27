@@ -20,6 +20,19 @@ bun = "1.2.3"
 "npm:example-cli" = "4.5.6"
 ```
 
+`[mise.settings]` becomes `[settings]` in each collection's `mise.toml`, copied
+as written, nested tables included. For example, a harness that pins tools from
+private GitHub repositories can keep their names away from mise's public
+versions host while other tools still use it:
+
+```toml
+[mise.settings]
+versions_host_exclude = ["example-org/*"]
+```
+
+mise ignores `github.credential_command` in a project `mise.toml`, so GitHub
+tokens stay in each developer's own mise configuration.
+
 For collection-local commands outside mise, list existing directories relative
 to the collection root. `taba agent-env` puts these paths before sibling mise
 bins, skips absent directories, and refreshes `.env.toolchain` when the config file

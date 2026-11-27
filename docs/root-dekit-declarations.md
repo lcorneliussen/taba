@@ -178,5 +178,14 @@ connections, and existing definitions keep their digests.
 ```
 
 `source` keeps its meaning: an absolute path, which for a managed tunnel is its
-policy file. A task rendered before this field existed gains `declaration` when
-its file still declares it.
+policy file.
+
+`tags` are the task's dekit tags as written, in order, `endpoint` and
+`accessory` included; a task without tags has no `tags`. Tags the runner adds,
+such as `autostart`, are not listed. A value that is not a list of strings is
+refused, as dekit refuses it.
+
+A task rendered before `declaration` existed gains it when its file still
+declares it. `tags` of a rendered task are those it was rendered with, so tags
+added since, or a task rendered before `tags` existed, show after the next
+render.
