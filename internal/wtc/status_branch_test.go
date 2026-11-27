@@ -199,7 +199,7 @@ func TestStatusGitHubDiscoveryFallsBackWhenTheListIsFull(t *testing.T) {
 	var lists, heads int
 	bin := t.TempDir()
 	var items []string
-	for i := 0; i < statusOpenListLimit; i++ {
+	for i := 0; i <= statusOpenListLimit; i++ {
 		items = append(items, fmt.Sprintf(`{"number":%d,"headRefName":"other-%d","state":"OPEN","title":"Other"}`, i+1, i))
 	}
 	full := "[" + strings.Join(items, ",") + "]"
@@ -230,7 +230,7 @@ func TestStatusCappedListDoesNotRefetchAnOpenPullRequest(t *testing.T) {
 	views := filepath.Join(t.TempDir(), "views")
 	t.Setenv("WTC_TEST_GH_VIEWS", views)
 	var items []string
-	for i := 0; i < statusOpenListLimit; i++ {
+	for i := 0; i <= statusOpenListLimit; i++ {
 		items = append(items, fmt.Sprintf(`{"number":%d,"state":"OPEN","title":"Other","headRefName":"other-%d"}`, i+101, i))
 	}
 	script := "#!/bin/sh\ncase \"$2\" in\n  list) printf '%s\\n' '[" + strings.Join(items, ",") + "]' ;;\n  view) printf 'viewed\\n' >> \"$WTC_TEST_GH_VIEWS\"; printf '%s\\n' '{\"number\":7,\"state\":\"OPEN\",\"title\":\"Still open\"}' ;;\n  *) exit 2 ;;\nesac\n"
@@ -251,7 +251,7 @@ func TestStatusCappedListDoesNotReadPRsBeyondIt(t *testing.T) {
 	views := filepath.Join(t.TempDir(), "views")
 	t.Setenv("WTC_TEST_GH_VIEWS", views)
 	var items []string
-	for i := 0; i < statusOpenListLimit; i++ {
+	for i := 0; i <= statusOpenListLimit; i++ {
 		items = append(items, fmt.Sprintf(`{"number":%d,"state":"OPEN","title":"Other","headRefName":"other-%d"}`, i+101, i))
 	}
 	script := "#!/bin/sh\ncase \"$2\" in\n  list) printf '%s\\n' '[" + strings.Join(items, ",") + "]' ;;\n  view) printf 'viewed\\n' >> \"$WTC_TEST_GH_VIEWS\"; printf '%s\\n' '{\"number\":7,\"state\":\"OPEN\",\"title\":\"Audited\"}' ;;\n  *) exit 2 ;;\nesac\n"
@@ -394,5 +394,23 @@ func TestStatusBranchFallbackProviderDeadline(t *testing.T) {
 				t.Fatalf("provider fallback did not honor deadline: %v (%v)", err, time.Since(started))
 			}
 		})
+	}
+}
+
+func TestStatusGitHub562ListOfExactlyTheLimitIsComplete(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	bin := t.TempDir()
+	var items []string
+	for i := 0; i < statusOpenListLimit; i++ {
+		items = append(items, fmt.Sprintf(`{"number":%d,"headRefName":"b-%d","state":"OPEN","title":"T"}`, i+1, i))
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' '[" + strings.Join(items, ",") + "]'\n"
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	listed, truncated, err := statusOpenPRs("github.com", "example/widget")
+	if err != nil || truncated || len(listed) != statusOpenListLimit {
+		t.Fatalf("a list of exactly the limit: listed=%d truncated=%v err=%v", len(listed), truncated, err)
 	}
 }

@@ -238,7 +238,7 @@ func (p statusGHListItem) fingerprint() string {
 
 func statusFetchGHOpenListContext(ctx context.Context, slug string) ([]byte, error) {
 	started := time.Now()
-	raw, err := statusJSONContext(ctx, "gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", strconv.Itoa(statusOpenListLimit), "--json", statusGHOpenFields)
+	raw, err := statusJSONContext(ctx, "gh", "pr", "list", "--repo", slug, "--state", "open", "--limit", strconv.Itoa(statusOpenListLimit+1), "--json", statusGHOpenFields)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +259,8 @@ func statusFetchGHOpenListContext(ctx context.Context, slug string) ([]byte, err
 			Raw:         rawItem,
 		})
 	}
-	return statusEncodeOpenPRs(prs, len(items) >= statusOpenListLimit, started)
+	// One item past the limit shows that more PRs are open than the list holds.
+	return statusEncodeOpenPRs(prs, len(items) > statusOpenListLimit, started)
 }
 
 type statusBBListItem struct {

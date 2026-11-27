@@ -274,6 +274,11 @@ esac
 					if row.State != "DRAFT" || row.Freshness != "deferred" || row.ObservationReason != "list-truncated" || statusTestFileLines(t, views) != initialViews {
 						t.Fatalf("PR beyond a truncated list: %+v views=%d", row, statusTestFileLines(t, views))
 					}
+					// `r` is the one way to learn how it ended: one read of its own.
+					explicit, err := c.statusForgePreviewWithIntent(c.resourceContext(), StatusRefreshForeground, false, false, 30*time.Second)
+					if err != nil || len(explicit.PRs) != 1 || explicit.PRs[0].State != "MERGED" || statusTestFileLines(t, views) != initialViews+1 {
+						t.Fatalf("explicit refresh beyond a truncated list: %+v views=%d err=%v", explicit.PRs, statusTestFileLines(t, views), err)
+					}
 					return
 				}
 				if row.State != "MERGED" || row.Draft || row.MergedOn == nil || row.OnBranch || row.Base != base {

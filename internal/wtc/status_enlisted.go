@@ -234,8 +234,9 @@ func statusEnrichRecordMetadata(record PRRecord, slug, forge string) (result sta
 }
 
 // statusEnrichRecordMetadataContext observes one PR through its repository's
-// open list, the only routine read. A listed PR takes its state from the
-// list; a PR missing from it is resolved by statusUnlistedContext.
+// open list, the only routine read where a list exists. A listed PR takes its
+// state from the list; a PR missing from it is resolved by
+// statusUnlistedContext.
 func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (result statusPRDetail) {
 	ctx = statusAuthOperation(ctx)
 	if ctx.Err() != nil {
@@ -413,6 +414,10 @@ func statusUnlistedContext(ctx context.Context, intent StatusRefreshIntent, reco
 			known = notCurrent(known)
 		}
 		return known
+	case intent == StatusRefreshForeground && listErr == nil && list.refused.reason == "" && list.truncated:
+		// A PR beyond a capped list is read on its own only under `r`:
+		// nothing else would ever observe how it ended.
+		return statusReadUnlistedContext(ctx, intent, record, slug, forge, list.started)
 	case !current && seen:
 		return notCurrent(known)
 	case !current && refused.reason != "":

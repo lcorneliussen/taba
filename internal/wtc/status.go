@@ -171,9 +171,8 @@ type StatusPRRow struct {
 	ObservationReason string `json:"observation_reason,omitempty"`
 	RetryAt           string `json:"retry_at,omitempty"`
 	// LocalMergeEvidence reports local Git hints (a gone upstream, a head
-	// contained in the development tip) in JSON. It schedules a provider read
-	// only when the open list is served stale; it is never a forge state and
-	// grants no action.
+	// contained in the development tip) in JSON as evidence only: it schedules
+	// no provider read, is never a forge state and grants no action.
 	LocalMergeEvidence string `json:"local_merge_evidence,omitempty"`
 }
 
