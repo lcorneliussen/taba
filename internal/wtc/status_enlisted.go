@@ -238,7 +238,8 @@ func statusWithBBChecks(detail statusPRDetail, evidence headCheckEvidence) statu
 // open list, the only routine read where a list exists. A listed PR takes its
 // state from the list; a PR missing from it is resolved by
 // statusUnlistedContext. A Bitbucket host without a REST credential has no
-// list, and reads the PR by number once per cache age (errBitbucketNoREST).
+// list, and reads the PR by number (errBitbucketNoREST): once per cache age in
+// a known credential context, every pass in an unknown one.
 func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefreshIntent, record PRRecord, slug, forge string) (result statusPRDetail) {
 	ctx = statusAuthOperation(ctx)
 	if ctx.Err() != nil {
@@ -255,7 +256,9 @@ func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefresh
 	list, err := statusPRListContext(ctx, intent, record, slug, forge)
 	if errors.Is(err, errBitbucketNoREST) && !declined {
 		// Without a REST credential there is no open list to read. The PR is
-		// read by number instead, at most once per cache age; `r` reads it now.
+		// read by number instead: at most once per cache age where the cache is
+		// shared (a known credential context), every pass otherwise; `r` reads
+		// it now.
 		since := time.Now()
 		if intent != StatusRefreshForeground {
 			since = since.Add(-statusForgeCacheAge())
@@ -292,8 +295,9 @@ func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefresh
 	return statusUnlistedContext(ctx, intent, record, slug, forge, list, err)
 }
 
-// statusLastObservationContext is a PR's row once its operation has ended:
-// its last observation, deferred with the reason, and no read.
+// statusLastObservationContext is a PR's row once its operation has ended,
+// with no read: a recorded decline as recorded, a retained merge marked
+// unavailable, otherwise the last observation deferred with the reason.
 func statusLastObservationContext(ctx context.Context, record PRRecord, slug, forge string) statusPRDetail {
 	refused := statusRefusalFor(ctx.Err())
 	if known, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
@@ -416,8 +420,9 @@ func statusUnlistedContext(ctx context.Context, intent StatusRefreshIntent, reco
 		return detail
 	}
 	// An explicit refresh reads a close once more: it can have been undone
-	// and merged between two lists. A merge is final, except a GitHub merge
-	// without its time, which cannot be recorded until a read supplies it.
+	// and merged between two lists. A merge is final once its checks have
+	// settled (statusFinal), except a GitHub merge without its time, which
+	// cannot be recorded until a read supplies it.
 	untimed := forge == "github.com" && known.State == "MERGED" && known.MergedOn == ""
 	final := seen && statusFinal(known) && !untimed && (intent != StatusRefreshForeground || known.State == "MERGED")
 	switch {
@@ -495,8 +500,8 @@ func statusEnrichListedContext(ctx context.Context, record PRRecord, slug, forge
 	// unchanged stamp means its fingerprinted summary is unchanged too (GitHub:
 	// update time, check rollup, reviews and mergeability; Bitbucket: update
 	// time and participants, with checks read per head elsewhere). Its time
-	// therefore dates the row and its action-gating freshness. Conflicting
-	// audit detail keeps its own age. The persisted confirmation only dates
+	// therefore dates the row and its action-gating freshness. The persisted
+	// confirmation only dates
 	// the state of later observations without a list item, and never
 	// improves their freshness.
 	observed, _ := time.Parse(time.RFC3339Nano, detail.ObservedAt)
