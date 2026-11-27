@@ -74,8 +74,9 @@ embedded directly; they are also passed to GoReleaser as the release body.
    ```
 
    This writes `<version>.md`, headed `# taba/wtc <version>` (without `v`;
-   `# taba <version>` from 0.3.0), from the fragments and deletes them.
-   Commit both in one change.
+   `# taba <version>` from 0.3.0), from the fragments. Prerelease cuts retain the
+   fragments for the final release. The stable cut assembles them into one
+   set of notes and removes them.
 3. Edit `<version>.md` into the release notes: order and merge the topics,
    add a summary, compatibility changes, harness adoption steps, and relevant
    limitations. Use generic public examples.
@@ -83,8 +84,9 @@ embedded directly; they are also passed to GoReleaser as the release body.
    for public safety. Commit the numbered notes **before** creating the tag.
 5. Follow the repository's normal review and release authorization procedure.
 
-The tag workflow rejects missing or mismatched notes, and fragments left in
-`unreleased/`, before publishing binaries.
+The tag workflow rejects missing or mismatched notes before publishing
+binaries. Stable tags also require an empty `unreleased/` directory apart
+from its README.
 It publishes the same file that is embedded in the tagged binary. Fix future
 guidance in source rather than editing only the GitHub body: already downloaded
 binaries keep their original notes. Historical files here were imported from

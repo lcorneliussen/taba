@@ -376,8 +376,8 @@ func releaseNoteInRange(v, from, to *semver.Version, prerelease bool) bool {
 		(!(prerelease || v.Prerelease() != "") || v.Equal(to))
 }
 
-// CutReleaseNotes writes <version>.md in dir from the unreleased fragments and
-// deletes them in one working-tree change, for the caller to commit. It
+// CutReleaseNotes writes <version>.md in dir from the unreleased fragments.
+// Only a stable cut removes the fragments. It
 // refuses an existing release file and an empty fragment set.
 func CutReleaseNotes(dir, version string) (string, error) {
 	v, err := releaseVersion(version)
@@ -402,6 +402,9 @@ func CutReleaseNotes(dir, version string) (string, error) {
 	}
 	if err != nil {
 		return "", err
+	}
+	if v.Prerelease() != "" {
+		return path, nil
 	}
 	for _, fragment := range fragments {
 		if err := os.Remove(filepath.Join(dir, UnreleasedDir, fragment.Name)); err != nil {
