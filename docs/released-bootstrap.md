@@ -2,8 +2,9 @@
 
 This is the populated-harness path, including v0.1.38. The
 [minimal scaffold](getting-started.md#minimal-harness) is available from
-v0.1.39. Start with your own harness repository adapted from the optional
-[reference harness](https://github.com/lcorneliussen/taba-boilerplate).
+v0.1.39. Start with your own harness repository adapted from the archived
+[reference harness](https://github.com/lcorneliussen/wtc-boilerplate); that
+repository is kept as a historical example and is no longer maintained.
 
 Git and WTC are required. Authenticate Git for your forge before cloning.
 Mise is useful for version pins and environment loading. Herdr, Neovim, an
