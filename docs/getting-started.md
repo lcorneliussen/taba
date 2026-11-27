@@ -81,9 +81,10 @@ normal workspace bootstrap clones the harness from your forge.
 
 ## Existing populated harness
 
-Your own adaptation of the optional
-[reference harness](https://github.com/lcorneliussen/taba-boilerplate) remains
-supported. Follow the [populated-harness bootstrap](released-bootstrap.md)
+Your own adaptation of the archived
+[reference harness](https://github.com/lcorneliussen/wtc-boilerplate) remains
+supported; that repository is kept as a historical example and is no longer
+maintained. Follow the [populated-harness bootstrap](released-bootstrap.md)
 for its first bare owner and collection. That path also works with v0.1.38.
 Use the [upgrade notes](release-notes.md) when changing an existing harness pin.
 
