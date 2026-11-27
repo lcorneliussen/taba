@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Masterminds/semver/v3"
+
 	"taba.sh/taba/internal/wtc"
 )
 
@@ -375,5 +377,16 @@ func TestDevOrdinaryStartupCapturesAmbient(t *testing.T) {
 	}
 	if devAmbientExecutable != self {
 		t.Fatalf("ordinary startup lost ambient executable: got %q, want %q", devAmbientExecutable, self)
+	}
+}
+
+func TestDevVersionBase(t *testing.T) {
+	for _, tt := range []struct{ newest, want string }{
+		{"0.2.12-rc.1", "0.2.12-dev"},
+		{"0.2.12", "0.2.13-dev"},
+	} {
+		if got := devVersionBase(semver.MustParse(tt.newest)); got != tt.want {
+			t.Errorf("dev version after %s = %s, want %s", tt.newest, got, tt.want)
+		}
 	}
 }

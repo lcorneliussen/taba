@@ -304,11 +304,7 @@ func describeBuild(readInfo func() (*debug.BuildInfo, bool)) string {
 			}
 		}
 		if newest != nil {
-			patch := newest.Patch()
-			if newest.Prerelease() == "" {
-				patch++
-			}
-			base = fmt.Sprintf("%d.%d.%d-dev", newest.Major(), newest.Minor(), patch)
+			base = devVersionBase(newest)
 		}
 	}
 	if base == "" {
@@ -334,6 +330,14 @@ func describeBuild(readInfo func() (*debug.BuildInfo, bool)) string {
 		return base
 	}
 	return base + "+" + strings.Join(meta, ".")
+}
+
+func devVersionBase(newest *semver.Version) string {
+	patch := newest.Patch()
+	if newest.Prerelease() == "" {
+		patch++
+	}
+	return fmt.Sprintf("%d.%d.%d-dev", newest.Major(), newest.Minor(), patch)
 }
 
 func addDevCommands(root *cobra.Command, asJSON *bool) {
