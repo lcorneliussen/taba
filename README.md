@@ -72,6 +72,7 @@ Real commands against synthetic local repositories:
 | Set up a team harness | [Handbook](https://taba.sh/docs/team-harness/), [harness design](docs/harness-design.md) |
 | Configure hooks, environment, secrets, or services | [Embedded customization guide](internal/wtc/defaults/instructions/customize.md), `taba docs` |
 | Understand a release or upgrade | [Release notes and upgrades](docs/release-notes.md), `taba release-notes --since <old-pin>` |
+| Try an unreleased main build in one collection | [Edge builds](docs/edge-builds.md) |
 | The rename from wtc | [Environment compatibility](docs/rename-compatibility.md), [configuration inputs](docs/rename-config-inputs.md), [command names](docs/rename-invocation.md), [rename announcement](https://taba.sh/wtc-is-now-taba/) |
 | Build, test, or contribute | [Development and validation](docs/development.md) |
 | Report a bug | [Issues](https://github.com/lcorneliussen/taba/issues) — include version, host mode, and a redacted reproduction |

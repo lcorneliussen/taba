@@ -20,6 +20,9 @@ func (c *Context) AgentToolchainPath(force bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if fingerprint, err = withLocalMiseOverride(fingerprint, c.Collection); err != nil {
+		return "", err
+	}
 	matchingConfig := readToolchainCacheField(cache, "# Config-SHA256=") == fingerprint
 	if !force && matchingConfig && toolchainCacheFresh(c.Collection, cache) {
 		return readToolchainCache(cache), nil
@@ -68,6 +71,34 @@ func agentEnvConfigFingerprint(harness string) (string, error) {
 	hash := sha256.New()
 	fmt.Fprintf(hash, "%s\x00%t\x00", config, err == nil)
 	hash.Write(data)
+	return fmt.Sprintf("%x", hash.Sum(nil)), nil
+}
+
+// localMiseOverrides are the collection's own, uncommitted mise selections,
+// such as an edge build (docs/edge-builds.md). Adding, changing or removing
+// one changes the toolchain, so it changes the fingerprint. Without one the
+// fingerprint is unchanged, so existing caches stay valid.
+var localMiseOverrides = []string{"mise.local.toml", ".mise.local.toml"}
+
+func withLocalMiseOverride(fingerprint, collection string) (string, error) {
+	hash := sha256.New()
+	found := false
+	for _, name := range localMiseOverrides {
+		data, err := os.ReadFile(filepath.Join(collection, name))
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		found = true
+		fmt.Fprintf(hash, "%s\x00%d\x00", name, len(data))
+		hash.Write(data)
+	}
+	if !found {
+		return fingerprint, nil
+	}
+	fmt.Fprintf(hash, "%s\x00", fingerprint)
 	return fmt.Sprintf("%x", hash.Sum(nil)), nil
 }
 

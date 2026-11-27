@@ -1,0 +1,173 @@
+name: Edge
+# Opt-in edge builds of one green main commit (docs/edge-builds.md).
+# A pull request that touches the packaging builds and verifies an
+# unpublished edge package. A manual run from main checks the commit's CI
+# evidence and packages it; it publishes only while the repository variable
+# TABA_EDGE_PUBLISH is 'true', through the protected `edge` environment.
+# Edge never creates a v* tag, release notes or a Homebrew formula.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full commit SHA on main whose CI push run succeeded
+        required: true
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/edge.yml
+      - .goreleaser.edge.yaml
+      - .goreleaser.yaml
+      - tools/edge-release/**
+      - tools/release-provenance/**
+permissions:
+  contents: read
+concurrency:
+  group: edge-${{ github.event_name }}-${{ inputs.sha || github.ref }}
+  cancel-in-progress: false
+jobs:
+  evidence:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Require the trusted main workflow
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          [ "$REF" = refs/heads/main ] || { echo "::error::Run edge builds from main, not $REF"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check the commit is on main with successful CI
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Expected a full lowercase commit SHA"; exit 1; }
+          git merge-base --is-ancestor "$SHA" HEAD || { echo "::error::$SHA is not on main"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&branch=main&per_page=100" > "$RUNNER_TEMP/runs.json"
+          run="$(go run ./tools/edge-release evidence -sha "$SHA" -repo "$GITHUB_REPOSITORY" -runs "$RUNNER_TEMP/runs.json")"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: evidence
+    if: >-
+      !cancelled() && (needs.evidence.result == 'success' ||
+      (github.event_name == 'pull_request' && needs.evidence.result == 'skipped'))
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.evidence.outputs.sha || github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - name: Verify locked embedded devtunnel helper
+        run: bash tools/release-provenance/verify-helper.sh
+      - name: Name the edge build
+        id: version
+        run: |
+          sha="$(git rev-parse HEAD)"
+          version="$(go run ./tools/edge-release version -sha "$sha" -time "$(git show -s --format=%ct HEAD)")"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # Run before --clean so unexpected files cannot be silently removed.
+      - name: Check release source and owned outputs
+        run: python3 -B tools/release-provenance/check.py preflight
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: 'v2.19.0'
+          args: release --snapshot --clean --config .goreleaser.edge.yaml
+        env:
+          TABA_EDGE_VERSION: ${{ steps.version.outputs.version }}
+      - name: Verify the package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.version.outputs.sha }}
+          EVIDENCE: ${{ needs.evidence.outputs.run }}
+        run: |
+          go run ./tools/edge-release verify -dist dist -version "$VERSION" -sha "$SHA" -evidence "$EVIDENCE" \
+            -manifest dist/edge.json -notes dist/edge-notes.md
+          (cd dist && sha256sum --check checksums.txt)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: taba-edge-${{ steps.version.outputs.version }}
+          if-no-files-found: error
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/edge.json
+            dist/edge-notes.md
+
+  publish:
+    needs: [evidence, package]
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' &&
+      vars.TABA_EDGE_PUBLISH == 'true' &&
+      needs.evidence.result == 'success' && needs.package.result == 'success'
+    runs-on: ubuntu-latest
+    environment: edge
+    concurrency:
+      group: edge-publish
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: taba-edge-${{ needs.package.outputs.version }}
+          path: edge
+      - name: Recheck the package against the evidence
+        env:
+          VERSION: ${{ needs.package.outputs.version }}
+          SHA: ${{ needs.evidence.outputs.sha }}
+          BUILT: ${{ needs.package.outputs.sha }}
+        working-directory: edge
+        run: |
+          [ "$SHA" = "$BUILT" ] || { echo "::error::Packaged $BUILT, evidence is for $SHA"; exit 1; }
+          [ "$(jq -r .source_sha edge.json)" = "$SHA" ] && [ "$(jq -r .version edge.json)" = "$VERSION" ] || { echo "::error::Manifest does not match"; exit 1; }
+          case "$VERSION" in v*|*[!0-9A-Za-z.-]*) echo "::error::Unexpected edge tag $VERSION"; exit 1 ;; esac
+          sha256sum --check checksums.txt
+      # Immutable: an existing tag or release is never replaced.
+      - name: Refuse an existing edge tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag $VERSION already exists; edge builds are never replaced"; exit 1
+          fi
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: edge/checksums.txt
+      - name: Publish the edge prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          SHA: ${{ needs.evidence.outputs.sha }}
+        working-directory: edge
+        run: |
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$SHA" \
+            --prerelease --latest=false --title "taba edge $VERSION" --notes-file edge-notes.md \
+            taba_*.tar.gz checksums.txt edge.json

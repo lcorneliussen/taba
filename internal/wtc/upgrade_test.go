@@ -145,6 +145,22 @@ esac
 	}
 }
 
+func TestUpgradeRefusesEdgeBuilds(t *testing.T) {
+	c, _ := upgradeFixture(t)
+	pin := filepath.Join(c.Harness, ".wtc-cli-version")
+	for _, opt := range []UpgradeOptions{
+		{Version: "0.1.12-edge.20261127151200.g5f525fa5abcd"},
+		{Version: "0.1.12-edge.20261127151200.g5f525fa5abcd", DryRun: true},
+	} {
+		if _, err := c.Upgrade(opt); err == nil || !strings.Contains(err.Error(), "edge build") {
+			t.Fatalf("edge build accepted as a pin (dry run %t): %v", opt.DryRun, err)
+		}
+	}
+	if data, _ := os.ReadFile(pin); string(data) != "0.1.9\n" {
+		t.Fatalf("edge build wrote the pin: %q", data)
+	}
+}
+
 func TestUpgradeRefusesAdHocCollection(t *testing.T) {
 	c := &Context{AdHoc: true}
 	if _, err := c.Upgrade(UpgradeOptions{}); err == nil || !strings.Contains(err.Error(), "harness collection") {
