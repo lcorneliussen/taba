@@ -179,6 +179,10 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 	if _, valid := statusPRInventoryKey(forge, slug, record.Number); !valid {
 		return fallback, statusObservationFailure(fmt.Errorf("invalid PR identity"))
 	}
+	if record.DeclinedOn != "" && forge == "bitbucket.org" {
+		// The read below still runs; a refused or late one keeps the record.
+		fallback = statusRecordedDeclineDetail(record)
+	}
 	// Pure cache reads retain known facts even if cancellation prevents lock
 	// admission. The locked path below still revalidates retained scoped evidence.
 	if known, ok := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge()); ok && known.State == "MERGED" {

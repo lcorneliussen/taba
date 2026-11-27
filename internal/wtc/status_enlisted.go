@@ -85,8 +85,9 @@ func statusBBDeclineEventTime(raw []byte) string {
 // states and known times cost no read, and an unavailable read leaves the
 // time unknown.
 //
-// A decline, unlike a merge, is not recorded and can be reopened, so it is
-// dated only where one read can serve every later run:
+// A decline, unlike a merge, can be reopened (a recorded decline holds only
+// until the open list shows the PR again), so it is dated only where one read
+// can serve every later run:
 //   - a known credential context (a TWG environment token or a host read
 //     credential), whose cache is fingerprinted and dies with the credential;
 //     a TWG profile or bb is not one (docs/status-auth-cache.md), and
@@ -182,6 +183,12 @@ func statusUnknownDetail(record PRRecord) statusPRDetail {
 	return statusPRDetail{Number: record.Number, State: "UNKNOWN", Freshness: "unavailable", Checks: "NONE", Merge: "UNKNOWN", Review: "none", Title: record.Title}
 }
 
+// statusRecordedDeclineDetail is a Bitbucket decline from the PR registry.
+func statusRecordedDeclineDetail(record PRRecord) statusPRDetail {
+	return statusPRDetail{Number: record.Number, State: "DECLINED", Checks: "NONE", Merge: "UNKNOWN", Review: "none",
+		Title: record.Title, ClosedOn: record.DeclinedOn, ClosedAt: record.DeclinedAt, Freshness: "recorded", StateSource: "registry"}
+}
+
 // No provider read happened, so checks are unknown.
 func statusDeferredDetail(record PRRecord) statusPRDetail {
 	return statusPRDetail{Number: record.Number, Freshness: "deferred", Checks: "UNKNOWN", Title: record.Title}
@@ -249,6 +256,10 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 			known.Freshness = "unavailable"
 			return known
 		}
+		if record.DeclinedOn != "" && forge == "bitbucket.org" {
+			// Recorded like a merge: no read is needed to show it.
+			return statusRecordedDeclineDetail(record)
+		}
 		if slug != "" && forge != "" {
 			// The last observation keeps the row's known state, deferred (#535).
 			if known, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
@@ -263,6 +274,20 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 	}
 	if detail, ok := statusResourceSettledMerge(ctx, record, slug, forge); ok {
 		return detail
+	}
+	if record.DeclinedOn != "" && forge == "bitbucket.org" {
+		// A recorded decline costs no PR read (#562). Bitbucket can reopen a
+		// declined PR, and a reopened PR is open again: a current open list
+		// that carries it overrides the record, even when the list was capped
+		// (presence is evidence; only absence from a capped list is not). A
+		// failed list, or one served stale after a refused read (which may
+		// predate the decline), keeps the record. A PR reopened and merged
+		// with no current list seeing it open stays declined until `r`.
+		listed, _, current, err := statusOpenPRsCurrentContext(ctx, forge, slug)
+		if item, ok := listed[record.Number]; err == nil && current && ok {
+			return statusEnrichListedContext(ctx, record, slug, forge, item)
+		}
+		return statusRecordedDeclineDetail(record)
 	}
 	if listed, truncated, current, err := statusOpenPRsCurrentContext(ctx, forge, slug); err == nil {
 		if _, ok := listed[record.Number]; ok && !current && statusLocalEvidenceHinted(ctx, forge, slug, record.Number) {
@@ -286,10 +311,15 @@ func statusEnrichRecordMetadataContext(ctx context.Context, record PRRecord, slu
 			return statusConfirmFullPRContext(ctx, record, slug, forge, detail, "list-omitted")
 		}
 		return statusViewPRWithLiveContext(ctx, record, slug, forge, true, false, func(viewed statusPRDetail) {
-			if statusFullRefreshDueContext(ctx, forge, slug, record.Number) && (viewed.State == "OPEN" || viewed.State == "DRAFT") {
-				statusLogIncrementalMiss(forge, slug, "#"+record.Number, "list-omitted", "state:"+viewed.State)
-				statusMarkFullRefreshContext(ctx, forge, slug, record.Number)
+			if !statusFullRefreshDueContext(ctx, forge, slug, record.Number) {
+				return
 			}
+			if viewed.State == "OPEN" || viewed.State == "DRAFT" {
+				statusLogIncrementalMiss(forge, slug, "#"+record.Number, "list-omitted", "state:"+viewed.State)
+			}
+			// This live by-number read is the full read, so another pane's
+			// cached copy does not repeat it as a full-refresh check.
+			statusMarkFullRefreshContext(ctx, forge, slug, record.Number)
 		})
 	}
 	if detail, ok := statusReadCachedDetailContext(ctx, record, slug, forge); ok {
@@ -659,6 +689,9 @@ func statusLastObservationTerminal(ctx context.Context, record PRRecord, slug, f
 	if slug == "" || forge == "" {
 		return false
 	}
+	if record.DeclinedOn != "" && forge == "bitbucket.org" {
+		return true
+	}
 	if detail, ok := statusReadObservedDetailKindContext(ctx, "merge", record, slug, forge, statusMergedCacheAge()); ok && detail.State == "MERGED" {
 		return true
 	}
@@ -680,6 +713,9 @@ func statusLastObservedDetail(ctx context.Context, record PRRecord, slug, forge 
 	if slug != "" && forge != "" {
 		if detail, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
 			return detail
+		}
+		if record.DeclinedOn != "" && forge == "bitbucket.org" {
+			return statusRecordedDeclineDetail(record)
 		}
 		if detail, ok := statusReadObservedDetailKindContext(ctx, "pr", record, slug, forge, 365*24*time.Hour); ok {
 			return detail
@@ -785,6 +821,16 @@ func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent Status
 		} else if count != 0 {
 			c.statusProgress(fmt.Sprintf("Recorded %d final merges", count))
 		}
+		bitbucket := make([]bool, len(records))
+		for i, record := range records {
+			_, forge, err := c.statusReadOnlyPRForge(c.prRepositories(), record)
+			bitbucket[i] = err == nil && forge == "bitbucket.org"
+		}
+		if recorded, cleared, err := c.recordDeclinedPRs(records, settled, bitbucket); err != nil {
+			c.statusProgress(fmt.Sprintf("Could not record declined pull requests: %v", err))
+		} else if recorded != 0 || cleared != 0 {
+			c.statusProgress(fmt.Sprintf("Recorded %d declines, cleared %d reopened", recorded, cleared))
+		}
 		c.statusReturnMerged(&snapshot, originalRecords, details)
 	}
 	repos := c.prRepositories()
@@ -848,10 +894,13 @@ func (c *Context) statusForgePreviewFinalized(ctx context.Context, intent Status
 			Merge: statusString(detail.Merge), Review: statusString(detail.Review), Title: detail.Title,
 			DisplayTitle: detail.Title, Slug: slug, URL: statusString(url), MergedOn: statusString(detail.MergedOn), ClosedAt: statusString(detail.ClosedAt),
 			Draft: detail.State == "DRAFT", OnBranch: detail.State == "MERGED" && branchRow >= 0, MergeCommit: detail.MergeCommit, HeadCommit: detail.HeadCommit, Base: detail.Base,
-			// A Bitbucket decline is final, so any observation of it (current,
-			// stale, deferred or unavailable) keeps archive treatment once its ClosedOn
-			// date is old enough. A GitHub close can be reopened and needs a current
-			// observation; neither grants actions.
+			// A Bitbucket decline holds until the PR is seen open again (a
+			// reopened PR returns to the open list, which ends the decline), so
+			// a DECLINED row keeps archive treatment once its ClosedOn date is
+			// old enough, whatever its freshness: recorded, live, or the last
+			// cached observation of a deferred or unavailable pass. A GitHub
+			// close is not followed that way and needs a current observation;
+			// neither grants actions.
 			Archived: branchRow < 0 &&
 				(detail.State == "MERGED" && statusArchived(detail.MergedOn, time.Now()) ||
 					(detail.State == "DECLINED" || detail.State == "CLOSED" && !statusObservationUnavailable(detail.Freshness)) && statusArchived(detail.ClosedOn, time.Now())),

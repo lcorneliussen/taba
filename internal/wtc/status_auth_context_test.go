@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"taba.sh/taba/internal/next"
 )
 
 func auth441Fixture(t *testing.T) {
@@ -448,13 +450,24 @@ func TestStatusAuth441UnknownHostSwitchStillInvalidates(t *testing.T) {
 	}
 }
 
-func TestStatusAuth441UnknownNeverRetainsPriorObservation(t *testing.T) {
+// A pane keeps what it saw under an unknown credential (#562), as display only.
+func TestStatusAuth441UnknownRetentionIsDisplayOnly(t *testing.T) {
 	url := "https://github.com/example/widget/pull/7"
-	old := StatusSnapshot{Collection: "fixture", authContext: "unknown-unavailable", PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "MERGED", Freshness: "live", Title: "Prior unknown context"}}}
-	incoming := old
-	incoming.PRs = []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "UNKNOWN", Freshness: "unavailable"}}
-	if got := StatusPreferNewerObservations(incoming, old); got.PRs[0].State != "UNKNOWN" || got.PRs[0].Title != "" {
-		t.Fatal("unknown stamp equality granted retained provider authority")
+	repo := StatusRepo{Collection: "fixture", Repo: "widget", Dir: "widget", Worktree: "checkout/widget", Slug: "example/widget", Forge: "github.com", BranchKind: "branch", Branch: "feature"}
+	old := StatusSnapshot{Collection: "fixture", authContext: "unknown-first", authInputs: "inputs-A", Repos: []StatusRepo{repo}, PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "MERGED", Freshness: "live", ObservedAt: time.Now().Format(time.RFC3339Nano), Title: "Prior unknown context"}}}
+	repo.Next, repo.Choices = &next.Step{}, &next.Choices{}
+	incoming := func(inputs string) StatusSnapshot {
+		return StatusSnapshot{Collection: "fixture", authContext: "unknown-second", authInputs: inputs, Repos: []StatusRepo{repo}, PRs: []StatusPRRow{{Repo: "widget", Number: "7", URL: &url, State: "UNKNOWN", Freshness: "unavailable"}}}
+	}
+	got := StatusPreferNewerObservations(incoming("inputs-A"), old)
+	if got.PRs[0].State != "MERGED" || got.PRs[0].Title != "Prior unknown context" {
+		t.Fatalf("pane forgot what it saw: %+v", got.PRs[0])
+	}
+	if !got.Repos[0].PRUnconfirmed || got.Repos[0].Next != nil || got.Repos[0].Choices != nil {
+		t.Fatal("retained unknown observation granted action authority")
+	}
+	if got := StatusPreferNewerObservations(incoming("inputs-B"), old); got.PRs[0].State != "UNKNOWN" || got.PRs[0].Title != "" {
+		t.Fatal("changed credential inputs retained another selection's observation")
 	}
 }
 
