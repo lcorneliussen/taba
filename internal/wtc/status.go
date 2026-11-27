@@ -505,8 +505,10 @@ func statusFactsWithHeads(ctx context.Context, r StatusRepo, readHeads statusHea
 
 // StatusPreferNewerObservations protects presentation from an older collector
 // completion. It never grants local action authority from retained UI facts.
+// A pane keeps rows it read itself across passes with equal credential inputs,
+// also when the credential is unreadable (keychain storage, #562).
 func StatusPreferNewerObservations(incoming, current StatusSnapshot) StatusSnapshot {
-	if incoming.Collection != current.Collection || incoming.authContext != current.authContext || strings.HasPrefix(incoming.authContext, "unknown-") {
+	if incoming.Collection != current.Collection || statusSnapshotAuthInputs(incoming) != statusSnapshotAuthInputs(current) {
 		return incoming
 	}
 	knownMerge := func(row StatusPRRow) bool {
@@ -639,11 +641,14 @@ func StatusSnapshotAuthCurrent(snapshot StatusSnapshot) bool {
 	if snapshot.authContext == "" {
 		return true
 	}
-	inputs := snapshot.authInputs
-	if inputs == "" {
-		inputs = snapshot.authContext
+	return statusSnapshotAuthInputs(snapshot) == statusAuthSnapshotScope(context.Background())
+}
+
+func statusSnapshotAuthInputs(snapshot StatusSnapshot) string {
+	if snapshot.authInputs != "" {
+		return snapshot.authInputs
 	}
-	return inputs == statusAuthSnapshotScope(context.Background())
+	return snapshot.authContext
 }
 
 // StatusWithoutChangedAuth removes provider observations and derived actions
