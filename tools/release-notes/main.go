@@ -2,12 +2,14 @@
 // repository root:
 //
 //	go run ./tools/release-notes cut <version>   # fragments -> <version>.md
-//	go run ./tools/release-notes check           # fail while fragments remain
+//	go run ./tools/release-notes check [<version>] # stable builds must consume fragments
 package main
 
 import (
 	"fmt"
 	"os"
+
+	"github.com/Masterminds/semver/v3"
 
 	"taba.sh/taba/internal/wtc"
 )
@@ -28,17 +30,25 @@ func run(dir string, args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("wrote %s and removed its fragments; edit it before tagging\n", path)
+		fmt.Printf("wrote %s; edit it before tagging\n", path)
 		return nil
-	case len(args) == 1 && args[0] == "check":
+	case (len(args) == 1 || len(args) == 2) && args[0] == "check":
+		prerelease := false
+		if len(args) == 2 {
+			version, err := semver.StrictNewVersion(args[1])
+			if err != nil {
+				return fmt.Errorf("invalid release version %q: %w", args[1], err)
+			}
+			prerelease = version.Prerelease() != ""
+		}
 		fragments, err := wtc.ReadReleaseFragments(os.DirFS(dir))
 		if err != nil {
 			return err
 		}
-		if len(fragments) > 0 {
+		if !prerelease && len(fragments) > 0 {
 			return fmt.Errorf("%d unreleased fragment(s) remain in %s/%s; cut them into the release notes before tagging", len(fragments), dir, wtc.UnreleasedDir)
 		}
 		return nil
 	}
-	return fmt.Errorf("usage: release-notes cut <version> | check")
+	return fmt.Errorf("usage: release-notes cut <version> | check [<version>]")
 }

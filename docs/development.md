@@ -198,7 +198,8 @@ fragment, `internal/wtc/release-notes/unreleased/<issue>-<slug>.md`; it never
 edits a shared file, so concurrent branches do not conflict over notes. Before
 tagging, `go run ./tools/release-notes cut <version>` turns the fragments into
 the numbered note; the release workflow publishes that exact file as the
-GitHub release body and fails while fragments remain.
+GitHub release body. Candidate cuts retain fragments. Stable publication
+requires that the stable cut has consumed them. See [release notes](release-notes.md).
 
 [Public demos](demos/README.md) record actual collection and bootstrap commands
 against synthetic local repositories. They need no forge account or agent.
