@@ -397,7 +397,7 @@ func TestEdgeWorkflowPublishesOnlyBehindItsGates(t *testing.T) {
 	}
 	var run strings.Builder
 	for _, s := range publish["steps"].([]any) {
-		run.WriteString(fmt.Sprint(s.(map[string]any)["run"]))
+		fmt.Fprint(&run, s.(map[string]any)["run"])
 	}
 	for _, want := range []string{"--prerelease", "--latest=false", "git/ref/tags/$VERSION", "sha256sum --check"} {
 		if !strings.Contains(run.String(), want) {

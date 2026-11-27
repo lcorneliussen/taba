@@ -48,8 +48,8 @@ refused.
 ## Use an edge build in one collection
 
 At the collection root (the folder that holds `harness/`, not a repository),
-add a local mise selection. The collection root is not in Git and `taba
-retire` removes it, so the file is never committed and leaves with the
+add a local mise selection. The collection root is not in Git, and
+`taba retire` removes it, so the file is never committed and leaves with the
 collection.
 
 ```sh
