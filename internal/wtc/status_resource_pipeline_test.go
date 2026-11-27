@@ -115,7 +115,7 @@ func TestStatusResourcePipelineRedirectContracts(t *testing.T) {
 					t.Fatal(err, calls.Load())
 				}
 			case "429":
-				if live || !statusForgeCooling("bitbucket.org") || calls.Load() != 2 {
+				if live || !statusForgeNow().Before(statusForgeCoolingUntil("bitbucket.org")) || calls.Load() != 2 {
 					t.Fatal(live, err, calls.Load())
 				}
 			case "cancel":

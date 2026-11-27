@@ -170,7 +170,7 @@ func TestStatusHTTPRedirectRateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 	raw, live, err := statusWithForgeBudget("bitbucket.org", []byte("stale"), func() ([]byte, error) { return statusBBGET(server.URL, "example", "secret") })
-	if err != nil || live || string(raw) != "stale" || calls.Load() != 2 || !statusForgeCooling("bitbucket.org") {
+	if err != nil || live || string(raw) != "stale" || calls.Load() != 2 || !statusForgeNow().Before(statusForgeCoolingUntil("bitbucket.org")) {
 		t.Fatalf("requests=%d live=%v body=%s err=%v", calls.Load(), live, raw, err)
 	}
 }

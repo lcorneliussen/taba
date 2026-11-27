@@ -83,10 +83,6 @@ func statusForgeStatePath(prefix, forge string) string {
 // statusForgeNow is the clock of the shared bucket and cooldown; tests drive it.
 var statusForgeNow = time.Now
 
-func statusForgeCooling(forge string) bool {
-	return statusForgeNow().Before(statusForgeCoolingUntil(forge))
-}
-
 func statusForgeCoolingUntil(forge string) time.Time {
 	raw, err := os.ReadFile(statusForgeStatePath("cool", forge))
 	if err != nil {
@@ -204,8 +200,8 @@ func statusWaitRefresh(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-// Context-aware acquisition keeps cancellation finite even behind another
-// process's refill wait. A failed lock is never permission for an unaccounted
+// Context-aware acquisition keeps cancellation finite while another process
+// holds the lock. A failed lock is never permission for an unaccounted
 // foreground request.
 func statusLockCacheContext(ctx context.Context, path string) (func(), error) {
 	if err := ctx.Err(); err != nil {

@@ -207,7 +207,7 @@ func statusRefreshRecord(ctx context.Context, intent StatusRefreshIntent, record
 		outcome.ObservedAt, outcome.Source = fallback.ObservedAt, fallback.StateSource
 		return fallback, outcome
 	}
-	// Cancellation after admission can waste a token, never start queued work.
+	// Cancellation after admission can waste a token, never start a read.
 	if err := ctx.Err(); err != nil {
 		outcome := statusObservationFailure(err)
 		fallback.Freshness = outcome.Freshness

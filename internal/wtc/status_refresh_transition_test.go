@@ -34,7 +34,7 @@ type status319Event struct {
 
 // Refresh children exercise the production collector and CLI transport without
 // a second collector. Released fixtures exercise the original budget and cache
-// publication contracts independently of the new queue and merge guard.
+// publication contracts independently of the merge guard.
 func TestStatus319RefreshProcess(t *testing.T) {
 	mode := os.Getenv("WTC_TEST_319_CHILD")
 	if mode == "" {
@@ -403,7 +403,7 @@ func status319Age(t *testing.T, kind, slug, key string) {
 
 func status319Opportunity(t *testing.T) {
 	t.Helper()
-	// Model exactly one elapsed allowance interval. No queue order is injected.
+	// Model exactly one elapsed allowance interval.
 	path := statusForgeStatePath("budget", "bitbucket.org")
 	fixtureFile(t, path, fmt.Sprintf("0 %d\n", time.Now().Add(-time.Hour).UnixNano()), 0600)
 }
