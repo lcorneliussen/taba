@@ -235,3 +235,19 @@ func TestStatusForeground424UnsafeLockFailsClosed(t *testing.T) {
 		t.Fatalf("%+v", out)
 	}
 }
+
+func TestStatusForeground562AdmittedAfterRefill(t *testing.T) {
+	foreground424Fixture(t, "exit 99\n")
+	t.Setenv("WTC_FORGE_MIN_INTERVAL", "1")
+	forge := "github.com"
+	foreground424Budget(t, forge, 0, time.Now())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := statusTakeForegroundToken(ctx, forge); err != nil {
+		t.Fatalf("foreground refresh not admitted after the refill: %v", err)
+	}
+	if waited := time.Since(start); waited < 500*time.Millisecond {
+		t.Fatalf("admitted after %s from an empty bucket; want a wait for the refill", waited)
+	}
+}

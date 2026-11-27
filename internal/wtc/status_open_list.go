@@ -384,8 +384,8 @@ func statusParseBBBranchList(raw []byte, branch string) (string, error) {
 	return "", nil
 }
 
-// The caller pays for the initial/page request. Redirects are additional forge
-// reads and must compete with ordinary reads for unreserved allowance.
+// The caller pays for the initial/page request. Each redirect is another
+// forge read and takes its own token from the shared bucket.
 func statusBBGET(endpoint, user, pass string) ([]byte, error) {
 	return statusBBGETContext(context.Background(), StatusRefreshBackground, endpoint, user, pass)
 }
