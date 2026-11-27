@@ -61,15 +61,17 @@ cat > mise.local.toml <<'EOF'
 EOF
 mise trust mise.local.toml
 mise install
-taba --version     # prints the edge version
+taba agent-env --write   # refresh the agent shells' cached toolchain path
+taba --version           # prints the edge version
 ```
 
 mise reads `mise.local.toml` after the generated `mise.toml`, so the edge
 version replaces the pin only in this collection. `taba env setup`, catch-up
-and `upgrade` regenerate `mise.toml` and leave `mise.local.toml` alone. Agent
-shells pick up the change by themselves: the cached toolchain path in
-`.env.toolchain` refreshes when a collection-local mise file appears, changes
-or disappears.
+and `upgrade` regenerate `mise.toml` and leave `mise.local.toml` alone. The
+cached toolchain path in `.env.toolchain` refreshes when a collection-local
+`mise.local.toml` or `.mise.local.toml` appears, changes or disappears. An
+agent shell that refreshes it between writing the file and `mise install` has
+no edge install to find, so run `taba agent-env --write` after installing.
 
 Processes that are already running keep the binary they started with.
 Restart the status pane and agents to run the edge build (see
@@ -77,8 +79,8 @@ Restart the status pane and agents to run the edge build (see
 still applies, and edge versions count like other prereleases. Like dev
 builds, a prerelease of the next minor (`0.3.0-edge.…`) still satisfies a
 `<0.3` range, because it sorts below `0.3.0`. Read the unreleased notes
-before you try one. A collection dev build (`taba dev status`) follows its own handover rules and
-can stand in for the edge build.
+before you try one. A collection dev build (`taba dev status`) follows its
+own handover rules and can stand in for the edge build.
 
 ## Verify it
 
@@ -99,6 +101,7 @@ taba --version && wtc --version                        # both print the edge ver
 ```sh
 cd <collection>
 rm mise.local.toml
+taba agent-env --write
 taba --version     # the harness pin again
 ```
 
@@ -135,9 +138,12 @@ gh workflow run edge.yml --ref main -f sha=<full commit SHA>
    is on `main`, and the protected `edge` environment approves it. It
    re-checks the artifact against the evidence and refuses an existing tag.
    Then it attests the archives and creates the prerelease with
-   `--latest=false`.
+   `--latest=false`. GitHub creates a missing environment without
+   protection rules when a job names it. So create the `edge` environment,
+   with required reviewers and only `main` allowed to deploy, **before**
+   you set the variable.
 
-A pull request that changes the edge packaging runs steps 2 and nothing
+A pull request that changes the edge packaging runs step 2 and nothing
 else, so every change to it builds an unpublished package. Only commits that
 contain this tooling can be built.
 

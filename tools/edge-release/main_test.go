@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -234,7 +235,7 @@ func TestVerifyAcceptsAnUnpublishedEdgePackage(t *testing.T) {
 			t.Fatalf("notes lack %q:\n%s", want, data)
 		}
 	}
-	if strings.Contains(string(data), "brew") && !strings.Contains(string(data), "no Homebrew") {
+	if strings.Contains(string(data), "brew install") || strings.Contains(string(data), "brew tap") {
 		t.Fatal("notes must not offer Homebrew")
 	}
 	var round Manifest
@@ -373,11 +374,22 @@ func TestEdgeWorkflowPublishesOnlyBehindItsGates(t *testing.T) {
 		}
 	}
 	publish := jobs["publish"].(map[string]any)
-	cond := fmt.Sprint(publish["if"])
-	for _, want := range []string{"github.event_name == 'workflow_dispatch'", "github.ref == 'refs/heads/main'",
-		"vars.TABA_EDGE_PUBLISH == 'true'", "needs.evidence.result == 'success'"} {
-		if !strings.Contains(cond, want) {
-			t.Errorf("publish condition lacks %q", want)
+	// The whole condition, so a weakened operator or a dropped gate fails.
+	const gate = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && " +
+		"vars.TABA_EDGE_PUBLISH == 'true' && needs.evidence.result == 'success' && needs.package.result == 'success'"
+	if cond := strings.Join(strings.Fields(fmt.Sprint(publish["if"])), " "); cond != gate {
+		t.Errorf("publish condition = %q, want %q", cond, gate)
+	}
+	if needs := fmt.Sprint(publish["needs"]); needs != "[evidence package]" {
+		t.Errorf("publish needs = %s", needs)
+	}
+	// Every action is pinned to a commit: the package job's output is attested and published.
+	pinned := regexp.MustCompile(`^[\w.-]+/[\w.-]+@[0-9a-f]{40}$`)
+	for name, j := range jobs {
+		for _, s := range j.(map[string]any)["steps"].([]any) {
+			if uses, ok := s.(map[string]any)["uses"].(string); ok && !pinned.MatchString(uses) {
+				t.Errorf("job %s uses unpinned action %s", name, uses)
+			}
 		}
 	}
 	if publish["environment"] != "edge" {

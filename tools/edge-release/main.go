@@ -5,8 +5,8 @@
 //	go run ./tools/edge-release evidence -sha <commit> -repo <owner/name> -runs <runs.json>
 //	go run ./tools/edge-release verify   -dist dist -version <v> -sha <commit> -manifest <edge.json> -notes <notes.md>
 //
-// Edge builds are not releases. Their version is a prerelease of the next
-// patch carrying the source commit, and is also the tag: it has no "v" prefix,
+// Edge builds are not releases. Their version is a prerelease of the
+// upcoming release (see Version) carrying the source commit, and is also the tag: it has no "v" prefix,
 // so the stable/RC tag workflow, `upgrade` and its release lookups never
 // select one.
 package main
@@ -42,7 +42,7 @@ const notesDir = "internal/wtc/release-notes"
 const ciWorkflow = ".github/workflows/ci.yml"
 
 // Platforms and executables match the stable GoReleaser configuration;
-// edge_test.go keeps the two configurations in step.
+// TestEdgeConfigMatchesStableBuildsWithoutPublishing keeps them in step.
 var (
 	platforms   = []string{"darwin_amd64", "darwin_arm64", "linux_amd64", "linux_arm64"}
 	executables = []string{"taba", "wtc"}
@@ -308,7 +308,8 @@ func fileSHA256(path string) (string, error) {
 }
 
 // checkArchive requires both executables at the archive root, regular and
-// executable, and no other executable. Documentation files may accompany them.
+// executable. Other entries must be regular, non-executable files, such as
+// the license and readme.
 // On the host platform it extracts and runs them.
 func checkArchive(path, version string, execute bool) error {
 	f, err := os.Open(path)
