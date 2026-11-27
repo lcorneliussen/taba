@@ -86,10 +86,10 @@ func statusAuthCacheKey() []byte {
 
 // Unknown selection is deliberately distinct from an authenticated context: its
 // observations live only in the current operation, never in the shared cache
-// or a later operation. A known context is keyed by the configuration
-// that selects the credential, not by the token: a token replaced in the
-// keychain for the same account, even one with narrower permission scopes,
-// shares the account's observations.
+// or a later operation. A known context is keyed by the configuration that
+// selects the credential. Environment and file tokens are part of it; a
+// keychain token is not, so a token replaced in the keychain for the same
+// account, even one with narrower permission scopes, keeps the context.
 type statusAuthContext struct {
 	scope string
 	known bool

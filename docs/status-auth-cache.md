@@ -22,8 +22,8 @@ an established stable context. Unknown contexts cannot reuse known or legacy
 observations. Unknown credentials can still supply live status. Their
 observations and inflight work live only in the current collection operation's
 memory, allowing one live list to enrich several PRs without refetching the
-list. They are never
-saved as active fallback or shared with a later operation or another pane.
+list. They are never saved as active fallback or shared with a later operation
+or another pane.
 A status pane keeps the PR rows it has shown. All passes of one pane share its
 credential inputs, so a pass that defers a PR leaves its row with the earlier
 observation and age. A newer observation replaces the row, changed credential

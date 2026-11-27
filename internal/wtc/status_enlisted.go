@@ -296,8 +296,8 @@ func statusEnrichRecordMetadataContext(ctx context.Context, intent StatusRefresh
 }
 
 // statusLastObservationContext is a PR's row once its operation has ended,
-// with no read: a recorded decline as recorded, a retained merge marked
-// unavailable, otherwise the last observation deferred with the reason.
+// with no read: a recorded Bitbucket decline as recorded, a retained merge
+// marked unavailable, otherwise the last observation deferred with the reason.
 func statusLastObservationContext(ctx context.Context, record PRRecord, slug, forge string) statusPRDetail {
 	refused := statusRefusalFor(ctx.Err())
 	if known, ok := statusResourceRetainedMerge(ctx, record, slug, forge); ok {
