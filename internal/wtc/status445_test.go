@@ -280,9 +280,8 @@ func TestStatus445CollectorNotPreviewReturnsMergedCheckout(t *testing.T) {
 
 // A stale open list that still lists a PR whose branch is gone locally must not
 // hide that PR from a detail read. When the list is served stale after a
-// refused read, the PR is confirmed as an omitted one: on Bitbucket it keeps
-// its confirmation queue place and is read at the next refill; on GitHub,
-// which has no confirmation queue, it is deferred with its reason. Local
+// refused read, the PR is confirmed as an omitted one; with the budget spent
+// it is deferred with its reason on both forges. Local
 // evidence schedules the read; it never becomes a MERGED claim by itself.
 func TestStatus445GoneBranchSchedulesDetailRead(t *testing.T) {
 	for _, forge := range []string{"github.com", "bitbucket.org"} {

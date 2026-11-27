@@ -710,7 +710,7 @@ func TestStatus319ProductionRefreshTransitionsAcrossProcesses(t *testing.T) {
 }
 
 // This independent fixture implements the released two-field budget protocol,
-// including its existing flock, and deliberately knows no pending-queue API.
+// including its existing flock.
 func status319ReleasedConsumer() {
 	digest := sha256.Sum256([]byte("budget\x00bitbucket.org\x00\x00"))
 	dir := filepath.Join(os.TempDir(), "wtc-status-"+strconv.Itoa(os.Getuid()))

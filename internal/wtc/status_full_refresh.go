@@ -310,7 +310,7 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	case "github.com":
 		name, args = "gh", []string{"pr", "view", record.Number, "--repo", slug, "--json", "number,state,title,isDraft,statusCheckRollup,reviewDecision,mergeStateStatus,mergeable,reviewRequests,latestReviews,mergedAt,closedAt,baseRefName,mergeCommit,headRefOid"}
 	case "bitbucket.org":
-		if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
+		if until := statusForgeCoolingUntil(forge); statusForgeNow().Before(until) {
 			return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
 		}
 		raw, err := bitbucketReadPR(ctx, slug, record.Number)
@@ -324,7 +324,7 @@ func statusFetchPRRawContext(ctx context.Context, record PRRecord, slug, forge s
 	default:
 		return nil, fmt.Errorf("unsupported forge")
 	}
-	if until := statusForgeCoolingUntil(forge); time.Now().Before(until) {
+	if until := statusForgeCoolingUntil(forge); statusForgeNow().Before(until) {
 		return nil, &statusAdmissionError{cause: errForgeCooling, retry: until}
 	}
 	cmd := forgecli.CommandContext(ctx, name, args...)
