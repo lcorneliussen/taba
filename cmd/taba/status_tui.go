@@ -1989,9 +1989,10 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 	}
 	lines := []string{"", heading, header}
 	for _, row := range visible {
-		// Expiry ages the observation, not an already confirmed closure. Keep
-		// the terminal label while showing its recheck age separately below.
-		confirmedClosed := (row.State == "CLOSED" || row.State == "DECLINED") && (row.Freshness == "live" || row.Freshness == "cached" || row.Freshness == "recorded")
+		// Lifecycle and freshness are separate: expiry, a deferred or a failed
+		// recheck ages the observation, not a known closure. Keep the terminal
+		// label while showing its recheck age separately below.
+		knownClosed := wtc.StatusPRKnownClosure(row, time.Now())
 		row = statusTUIPresentationRow(row, time.Now())
 		label := statusTUISafe(row.DisplayTitle)
 		if label == "" {
@@ -2009,7 +2010,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 			// follows only where it fits. Help repeats it for every retained branch.
 			label = title + " · " + row.LandingLabel()
 		}
-		closed := !merged && confirmedClosed && row.Freshness != "unavailable"
+		closed := !merged && knownClosed
 		if closed {
 			state = strings.ToLower(row.State)
 		} else if row.Merge != nil && (*row.Merge == "CONFLICTING" || *row.Merge == "DIRTY") {
@@ -2042,7 +2043,7 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		if merged && !row.OnBranch {
 			linkTone = statusToneDim
 		}
-		// A confirmed closure is struck through at once; archiving only
+		// A known closure is struck through at once; archiving only
 		// decides whether the row is listed.
 		if closed {
 			linkTone = statusToneDim + ";9"
@@ -2062,7 +2063,9 @@ func statusTUIPRLines(snapshot wtc.StatusSnapshot, width int, showArchived, styl
 		}
 		stateCell := statusTUIFit(state, l.state)
 		signals := statusTUIPRSignals(row.Checks, row.Merge, row.Review, styled)
-		if merged && !row.OnBranch {
+		// Completed or closed work carries no active check, merge or review signals:
+		// their scope is historical.
+		if merged && !row.OnBranch || closed {
 			signals = statusTUIPRSignals(nil, nil, nil, styled)
 		}
 		title := statusTUIFit(label, l.title)

@@ -264,7 +264,11 @@ func StatusPRObservationDetail(row StatusPRRow) string {
 		reason = "unknown"
 	}
 	reasonLabel := "; reason "
-	if row.State == "MERGED" && (row.Merge != nil && *row.Merge == "MERGED" || !statusObservationUnavailable(row.Freshness)) && row.ObservationReason != "" && row.ObservationReason != "provider-confirmed" {
+	// A retained terminal fact (a known merge or closure) is rechecked, not
+	// missing: the reason explains the recheck.
+	terminal := row.State == "MERGED" && (row.Merge != nil && *row.Merge == "MERGED" || !statusObservationUnavailable(row.Freshness)) ||
+		StatusPRKnownClosure(row, time.Now())
+	if terminal && row.ObservationReason != "" && row.ObservationReason != "provider-confirmed" {
 		reasonLabel = "; recheck reason "
 	}
 	text := row.Repo + "#" + row.Number + ": " + row.Freshness + "; " + observation + reasonLabel + reason
